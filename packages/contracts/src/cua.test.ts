@@ -18,6 +18,7 @@ import {
   CuaAgentBlock,
   cuaAgentBlockMessage,
   cuaAgentBlockUnder,
+  DesktopCuaGrants,
   DesktopCuaDriverReport,
   DesktopCuaWatch,
 } from "./cua.ts";
@@ -41,6 +42,21 @@ const decodeRequestResult = Schema.decodeUnknownSync(ComputerUseRequestResult);
 const decodeCallReservation = Schema.decodeUnknownSync(ComputerUseCallReservation);
 const decodeLeaseUpdate = Schema.decodeUnknownSync(ComputerUseLeaseUpdate);
 const decodeCallAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
+const decodeDesktopGrants = Schema.decodeUnknownSync(DesktopCuaGrants);
+// DesktopCuaGrants as it was before a failed read could say why it failed.
+const decodeDesktopGrantsBeforeUnanswered = Schema.decodeUnknownSync(
+  Schema.Union([
+    Schema.Struct({
+      principal: Schema.Literals(["helper", "app"]),
+      name: Schema.String,
+      bundlePath: Schema.optionalKey(Schema.String),
+      bundleId: Schema.String,
+      accessibility: Schema.Boolean,
+      screenRecording: Schema.Boolean,
+    }),
+    Schema.Struct({ principal: Schema.Literal("unusable"), message: Schema.String }),
+  ]),
+);
 
 const computerUse = {
   enabled: false,
@@ -595,6 +611,28 @@ describe("a macOS Automation block", () => {
       requestId: "r1",
       status: "unavailable",
       message: "Computer use cannot start.",
+    });
+  });
+});
+
+describe("a grant read that got no answer", () => {
+  const unanswered = {
+    principal: "unusable",
+    message: "GOAT Computer Use did not answer: it took too long.",
+    unanswered: "tookTooLong",
+  } as const;
+
+  it("keeps its reason on the wire, and a desktop from before the reason still decodes", () => {
+    expect(decodeDesktopGrants(unanswered)).toEqual(unanswered);
+    // An older desktop names no reason: its helper reads as unusable, as it did before.
+    const fromOlderDesktop = { principal: "unusable", message: "It cannot be used." };
+    expect(decodeDesktopGrants(fromOlderDesktop)).toEqual(fromOlderDesktop);
+  });
+
+  it("reads as an unusable helper with its message to a client from before the reason", () => {
+    expect(decodeDesktopGrantsBeforeUnanswered(unanswered)).toEqual({
+      principal: "unusable",
+      message: unanswered.message,
     });
   });
 });
