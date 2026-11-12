@@ -17,8 +17,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly message: string;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
-  /** An older remote's answer that goat_thread_launch takes no launchedBy: nothing ran there. */
-  readonly launchedByRefused?: true | undefined;
+  /** Arguments a remote refused goat_thread_launch for before creating anything; nothing ran. */
+  readonly undeclaredArguments?: ReadonlyArray<string> | undefined;
   /** A placement answer's classification (placement_not_started, placement_full, ...). */
   readonly remoteClassification?: string | undefined;
   /** The idle thread a not-started placement left on the remote. */
@@ -44,12 +44,12 @@ export const memoryRefusal = (message: string) =>
   });
 
 /**
- * A remote's answer that goat_thread_launch takes no launchedBy, so nothing ran: GOAT's admission
- * refusal of an undeclared argument (invalid_request), or an older schema's invalid params, each
- * before the handler and starting with that sentence. Bare text, another code or error, or the
- * phrase anywhere else may follow a create, so none of those count.
+ * The arguments a remote says goat_thread_launch does not take, so nothing ran: GOAT's admission
+ * refusal of undeclared arguments (invalid_request), or an older schema's own invalid-params
+ * message, each before the handler and starting with that sentence. Bare text, another code or
+ * error, a may-have-started answer, or the sentence anywhere else may follow a create.
  */
-export const isLaunchedByRefusal = (
+export const undeclaredLaunchArguments = (
   tool: string,
   said: {
     readonly message?: string | undefined;
@@ -57,13 +57,27 @@ export const isLaunchedByRefusal = (
     readonly code?: string | undefined;
     readonly mayHaveStarted?: boolean | undefined;
   },
-) =>
-  tool === "goat_thread_launch" &&
-  said.mayHaveStarted !== true &&
-  (said.rpcCode === -32602 || said.code === "invalid_request") &&
-  said.message
-    ?.replace(/^The remote goat_thread_launch refused: /u, "")
-    .startsWith("goat_thread_launch does not take launchedBy, so nothing ran") === true;
+): ReadonlyArray<string> | undefined => {
+  if (tool !== "goat_thread_launch" || said.mayHaveStarted === true) return undefined;
+  if (said.rpcCode !== -32602 && said.code !== "invalid_request") return undefined;
+  const named = /^goat_thread_launch does not take (\w+(?:, \w+)*), so nothing ran/u.exec(
+    said.message ?? "",
+  );
+  return named?.[1]?.split(", ");
+};
+
+/** What a failed call says of a launch: the RPC error's own message, never its data. */
+export const rpcLaunchFacts = (
+  tool: string,
+  error: { readonly rpcCode?: number | undefined; readonly rpcMessage?: string | undefined },
+) => {
+  const undeclared = undeclaredLaunchArguments(tool, {
+    rpcCode: error.rpcCode,
+    message: error.rpcMessage,
+  });
+  if (undeclared !== undefined) return { undeclaredArguments: undeclared };
+  return tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {};
+};
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });

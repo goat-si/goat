@@ -292,7 +292,11 @@ export const launchAgainst = (remote: {
                 content: [
                   {
                     type: "text",
-                    text: "goat_thread_launch does not take report, so nothing ran.",
+                    text: JSON.stringify({
+                      _tag: "OrchestratorMcpFailure",
+                      code: "invalid_request",
+                      message: "goat_thread_launch does not take report, so nothing ran.",
+                    }),
                   },
                 ],
               },

@@ -990,10 +990,9 @@ const make = Effect.gen(function* () {
           Effect.catch((error) => {
             if (
               !(error instanceof SshRemoteDispatch.SshRemoteDispatchError) ||
-              error.reason !== "remote_refused" ||
-              !/goat_thread_launch does not take (?:[^.]*, )?report\b[^.]*, so nothing ran/u.test(
-                error.message,
-              )
+              // Only the remote's own admission refusal of report, known to precede any create.
+              error.launchMayHaveStarted === true ||
+              error.undeclaredArguments?.includes("report") !== true
             ) {
               return Effect.fail(error);
             }

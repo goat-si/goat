@@ -1995,6 +1995,24 @@ it.effect(
       });
     }),
 );
+it.effect(
+  "regression F13-2: a refused-before-create code that says it may have started stays unknown",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* launchAgainst({
+        declaresLaunchedBy: true,
+        launchRefusal: {
+          _tag: "OrchestratorMcpFailure",
+          code: "invalid_request",
+          mayHaveStarted: true,
+          message: "the launch was rejected after its thread was written",
+        },
+      }).pipe(Effect.result);
+      expect(result._tag === "Failure" && result.failure).toMatchObject({
+        launchMayHaveStarted: true,
+      });
+    }),
+);
 it.effect("regression F2R-1: a missing-CLI refusal that may have started stays unknown", () =>
   withLaunchRemote(
     {
@@ -3870,6 +3888,16 @@ describe("SSH launcher transport", () => {
       name: "rpc-says-401",
       refusal: "upstream answered HTTP 401 after creating thread",
       rpcCode: -32603,
+      launchedBy: true,
+      expectedCalls: 1,
+      success: false,
+      uncertain: true,
+    },
+    {
+      // An RPC error's own message counts only when it starts with the admission sentence.
+      name: "rpc-wrapped-message",
+      refusal:
+        "The remote goat_thread_launch refused: goat_thread_launch does not take launchedBy, so nothing ran",
       launchedBy: true,
       expectedCalls: 1,
       success: false,

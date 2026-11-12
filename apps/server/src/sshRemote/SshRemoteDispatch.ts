@@ -80,7 +80,7 @@ import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
   describe,
   failure,
-  isLaunchedByRefusal,
+  rpcLaunchFacts,
   memoryRefusal,
   type RuntimeServices,
   SshRemoteDispatchError,
@@ -854,11 +854,7 @@ const make = Effect.gen(function* () {
               ? "host_unavailable"
               : "ssh_failed",
           message: `Calling ${input.tool} on ${input.target.alias} failed: ${describe(error)}`,
-          ...(isLaunchedByRefusal(input.tool, { rpcCode: error.rpcCode, message: error.rpcMessage })
-            ? { launchedByRefused: true }
-            : input.tool === "goat_thread_launch"
-              ? { launchMayHaveStarted: true }
-              : {}),
+          ...rpcLaunchFacts(input.tool, error),
         });
       }),
     );
@@ -1570,7 +1566,7 @@ const make = Effect.gen(function* () {
         Effect.catch((error) =>
           error instanceof SshRemoteDispatchError &&
           forwardLaunchedBy &&
-          error.launchedByRefused === true
+          error.undeclaredArguments?.includes("launchedBy") === true
             ? Effect.gen(function* () {
                 const retryAdmission = yield* launchAdmission();
                 const result = yield* launch(false, retryAdmission.memoryArguments);

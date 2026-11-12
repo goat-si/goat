@@ -4,7 +4,7 @@ import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentS
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Schema from "effect/Schema";
 
-import { isLaunchedByRefusal } from "./dispatchFailure.ts";
+import { undeclaredLaunchArguments } from "./dispatchFailure.ts";
 import { quoteRemote } from "./remoteText.ts";
 
 /**
@@ -79,11 +79,19 @@ export const toolRefusal = (
       ...(result.threadId === undefined ? {} : { remoteThreadId: result.threadId }),
       launchMayHaveStarted: result.mayHaveStarted !== false,
     };
-  if (isLaunchedByRefusal(tool, result)) return { launchedByRefused: true as const };
+  // A tool result's message carries this machine's "The remote ... refused: " prefix.
+  const undeclared = undeclaredLaunchArguments(tool, {
+    ...result,
+    message: result.message?.replace(/^The remote goat_thread_launch refused: /u, ""),
+  });
+  if (undeclared !== undefined) return { remoteCode: result.code, undeclaredArguments: undeclared };
   return {
     ...(result.code === undefined ? {} : { remoteCode: result.code }),
+    // A destination that says it may have started is believed over any refusal code.
     ...(tool === "goat_thread_launch" &&
-    (result.code === undefined || !REFUSED_BEFORE_CREATE.has(result.code))
+    (result.mayHaveStarted === true ||
+      result.code === undefined ||
+      !REFUSED_BEFORE_CREATE.has(result.code))
       ? { launchMayHaveStarted: true }
       : {}),
   };
