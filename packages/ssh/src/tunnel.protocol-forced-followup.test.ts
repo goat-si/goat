@@ -163,23 +163,25 @@ exec /bin/sleep "$@"
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("a start that fails after the forced stop says the earlier runtime was stopped", () =>
-      Effect.gen(function* () {
-        const f = yield* makeProtocolFixture(unverified);
-        yield* f.fs.writeFileString(`${f.test}/fail-start-${ARCHIVE.archiveVersion}`, "1");
-        const result = yield* f.run("launch", false, {
-          confirmReplacement: true,
-          replacementGraceSeconds: 5,
-          forceReplace: yield* approved(f),
-        });
-        assert.isTrue(Result.isFailure(result));
-        if (Result.isFailure(result))
-          assert.include(
-            String(result.failure),
-            `forced stop of PID ${f.pid}, and no earlier runtime could be started again`,
-          );
-        assert.isFalse(isAlive(f.pid));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    it.live(
+      "a supervisor failure after the forced stop says what happened and where the reason is",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture(unverified);
+          yield* f.fs.writeFileString(`${f.test}/fail-start-${ARCHIVE.archiveVersion}`, "1");
+          const result = yield* f.run("launch", false, {
+            confirmReplacement: true,
+            replacementGraceSeconds: 5,
+            forceReplace: yield* approved(f),
+          });
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result))
+            assert.include(
+              String(result.failure),
+              `after the approved forced stop of PID ${f.pid}, the detached supervisor reported a failure`,
+            );
+          assert.isFalse(isAlive(f.pid));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live(

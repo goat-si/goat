@@ -100,7 +100,8 @@ forced_stop_runtime() {
     forced_log_refusal "$forced_unproven"
     printf 'GOAT did not stop PID %s on the remote host: it cannot show this is the runtime it started (the start time recorded at its launch and its launch command must both match, and runtimes started before GOAT kept that record have none). Check it on the host and stop it yourself (kill %s), then update again.\\n' "$FORCE_PID" "$FORCE_PID" >&2; exit 1
   fi
-  forced_root_ticks="$(forced_ticks_of "$FORCE_PID")"
+  # The tick just matched against the launch record stays the reference for every later check.
+  forced_root_ticks="$forced_recorded_ticks"
   forced_parent_holds() {
     server_alive "$FORCE_PID" && [ "$(forced_start_of "$FORCE_PID")" = "$FORCE_START" ] &&
       [ "$(forced_ticks_of "$FORCE_PID")" = "$forced_root_ticks" ]
@@ -226,7 +227,7 @@ forced_supervise_start() {
     absent)
       printf 'GOAT stopped PID %s on the remote host for the approved forced update, but the detached supervisor left no result, so GOAT cannot tell whether a runtime is running there now. Check the host and %s; if nothing runs, update again (no approval is needed).\\n' "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
     *)
-      printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s, and no earlier runtime could be started again. Update again to retry; no approval is needed. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
+      printf 'GOAT %s is not running on the remote host: after the approved forced stop of PID %s, the detached supervisor reported a failure and no earlier runtime was started again. The reason is in %s. Check the host; if nothing runs, update again (no approval is needed).\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
   esac
 }
 # A confirmed drain that names an approved process goes only to that process: a runtime started in
