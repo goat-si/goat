@@ -1,0 +1,62 @@
+const POSIX_PATH_DELIMITER = ":";
+
+/** VS Code's default for the same probe (application.shellEnvironmentResolutionTimeout). */
+export const POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS = 10_000;
+
+/** Gaps before each further login-shell probe after one fails; the length bounds the retries. */
+export const LOGIN_SHELL_RETRY_DELAYS_MS: ReadonlyArray<number> = [30_000, 120_000, 600_000];
+
+/** Set by the desktop on its server until a login shell has answered with a PATH. */
+const SHELL_DISCOVERY_PENDING_ENV = "GOAT_DESKTOP_SHELL_DISCOVERY_PENDING";
+
+const LOGIN_SHELL_PATH_UNREAD_NOTE =
+  "GOAT has not been able to read the PATH from your login shell, so it searched only the folders it already knew and the standard install folders. If the CLI is installed somewhere else, set its full path as that provider's Binary path under Settings → Providers.";
+
+const withoutTrailingSlash = (entry: string): string => entry.trim().replace(/(?<=.)\/+$/u, "");
+
+/**
+ * Where vendor installers put CLIs without a shell profile's help: ~/.local/bin (Claude Code,
+ * Codex, Cursor), ~/.bun/bin (bun), Homebrew's default prefix, and npm's usual /usr/local.
+ * Absolute folders only, per-user first; empty off macOS and Linux.
+ */
+export function wellKnownCliDirs(
+  platform: NodeJS.Platform,
+  home: string | undefined,
+): ReadonlyArray<string> {
+  if (platform !== "darwin" && platform !== "linux") return [];
+  const root = withoutTrailingSlash(home ?? "");
+  const perUser = root.startsWith("/") && root !== "/";
+  return [
+    ...(perUser ? [`${root}/.local/bin`, `${root}/.bun/bin`] : []),
+    platform === "darwin" ? "/opt/homebrew/bin" : "/home/linuxbrew/.linuxbrew/bin",
+    "/usr/local/bin",
+  ];
+}
+
+/**
+ * Adds the well-known folders after everything already on PATH, so they never reorder or shadow
+ * what the person's shell chose. They are added whether or not they exist yet: an installer run
+ * later creates them. A missing PATH stays missing, since naming only these would hide /usr/bin.
+ */
+export function appendWellKnownCliDirs<Value extends string | null | undefined>(
+  pathValue: Value,
+  platform: NodeJS.Platform,
+  home: string | undefined,
+): Value | string {
+  if (!pathValue) return pathValue;
+  const present = new Set(pathValue.split(POSIX_PATH_DELIMITER).map(withoutTrailingSlash));
+  const missing = wellKnownCliDirs(platform, home).filter((directory) => !present.has(directory));
+  if (missing.length === 0) return pathValue;
+  return [pathValue.replace(/:+$/u, ""), ...missing].join(POSIX_PATH_DELIMITER);
+}
+
+export const loginShellPathUnread = (env: NodeJS.ProcessEnv): boolean =>
+  env[SHELL_DISCOVERY_PENDING_ENV] === "1";
+
+/** One sentence for every "CLI not found" message, so providers cannot drift apart. */
+export function withLoginShellPathNote(
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return loginShellPathUnread(env) ? `${message} ${LOGIN_SHELL_PATH_UNREAD_NOTE}` : message;
+}
