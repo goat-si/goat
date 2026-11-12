@@ -414,7 +414,8 @@ it("an older server's listing keeps cards for relative names, extensionless too,
   );
   await expect.element(screen.getByRole("button", { name: "Open README" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Open summary.md" }).elements()).toHaveLength(0);
-  expect(server.reads).toEqual(["README"]);
+  // README has no preview to draw, so its card reads nothing.
+  expect(server.reads).toEqual([]);
 });
 
 it("six cards under one reply all show previews; the oldest waiting card is not dropped while the first read is out", async () => {
@@ -558,4 +559,33 @@ it("an SVG preview is drawn as an image, so its scripts and external references 
   expect(card.querySelector("[inert] svg, script")).toBeNull();
   expect(document.title).toBe(title);
   expect(fetchedFrom(card)).toEqual({ elements: [], requests: [] });
+});
+it("a zip, a pdf and a code file get cards that read nothing, the code file named as text, while a text file still previews", async () => {
+  using test = setup([
+    ["q3.zip", { mimeType: "application/zip", text: "PK" }],
+    ["deck.pdf", { mimeType: "application/pdf", text: "%PDF" }],
+    ["deploy.yaml", { mimeType: "text/yaml", text: "replicas: 2" }],
+    ["notes.txt", { mimeType: "text/plain", text: "Remember the release notes" }],
+  ]);
+  await using screen = await render(
+    test.wrap(
+      <GoatBotOpenFileContext value={{ environmentId: EnvironmentId.make("env"), open: () => {} }}>
+        <GoatBotTimeline
+          rows={[reply("files", "Saved `q3.zip`, `deck.pdf`, `deploy.yaml` and `notes.txt`.")]}
+          onRetry={() => {}}
+        />
+      </GoatBotOpenFileContext>,
+    ),
+    { router: false }, // These replies have no links.
+  );
+  await expect.element(screen.getByText("Remember the release notes")).toBeInTheDocument();
+  expect(server.reads).toEqual(["notes.txt"]);
+  const kindOf = (name: string) =>
+    screen
+      .getByRole("button", { name: `Open ${name}` })
+      .element()
+      .textContent?.slice(name.length);
+  expect(kindOf("deploy.yaml")).toBe("Text");
+  expect(kindOf("q3.zip")).toBe("File");
+  expect(kindOf("deck.pdf")).toBe("File");
 });

@@ -1,4 +1,5 @@
 import {
+  botArtifactCardReadsFirstChunk,
   botArtifactName,
   botArtifactPreview,
   botArtifactPreviewSlot,
@@ -139,6 +140,8 @@ function GoatBotFileCard({
 }) {
   const name = botArtifactName(file.relativePath);
   const kind = botArtifactViewKind("", file.relativePath, file.size);
+  // A card with no preview to draw is named from the file's name and reads nothing.
+  const readsFirstChunk = botArtifactCardReadsFirstChunk(file.relativePath, file.size);
   const read = useAtomCommand(channelEnvironment.readBotArtifact, { reportFailure: false });
   const [preview, setPreview] = useState<Preview>(null);
   const readFirstChunk = useEffectEvent(() =>
@@ -154,6 +157,7 @@ function GoatBotFileCard({
   );
   // oxlint-disable-next-line goat/react-effect-budget -- The first chunk arrives after render; a card that goes leaves the queue and lets its image URL go.
   useEffect(() => {
+    if (!readsFirstChunk) return;
     let cancelled = false;
     let url: string | null = null;
     const pending = readFirstChunk();
@@ -171,7 +175,7 @@ function GoatBotFileCard({
       pending.cancel();
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, []);
+  }, [readsFirstChunk]);
   const shown = preview === null || preview.kind === "unavailable" ? kind : preview.kind;
   const slot = botArtifactPreviewSlot(file.relativePath, file.size);
   const Icon = shown === "image" ? ImageIcon : shown === "download" ? FileIcon : FileTextIcon;
