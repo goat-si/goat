@@ -37,6 +37,21 @@ const loggedRefusal = (f: Fixture, reason: string) =>
     );
   });
 
+/** nohup fails as on a host without it, either for every command or only for the supervisor. */
+const failingNohup = (f: Fixture, when: "always" | "supervise") =>
+  Effect.gen(function* () {
+    const bin = `${f.test}/nohup-bin`;
+    yield* f.fs.makeDirectory(bin);
+    yield* f.fs.writeFileString(
+      `${bin}/nohup`,
+      when === "always"
+        ? "#!/bin/sh\nexit 127\n"
+        : '#!/bin/sh\n[ "$1" = true ] && exit 0\nexit 127\n',
+    );
+    yield* f.fs.chmod(`${bin}/nohup`, 0o700);
+    f.setRemotePath(`${bin}:${f.home}/.test/identity-bin:${process.env.PATH ?? ""}`);
+  });
+
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH forced replacement only stops a process GOAT can show it started",
   () => {
@@ -309,6 +324,41 @@ exec /bin/mv "$@"
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a host that cannot run the detached supervisor stops nothing", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        yield* failingNohup(f, "always");
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: yield* approved(f),
+        });
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${f.pid}`);
+        assert.isTrue(isAlive(f.pid));
+        assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
+        yield* loggedRefusal(f, "the detached supervisor that starts the new runtime cannot run");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a supervisor that never ran after the stop is reported as such", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture(unverified);
+        yield* failingNohup(f, "supervise");
+        const result = yield* f.run("launch", false, {
+          confirmReplacement: true,
+          replacementGraceSeconds: 5,
+          forceReplace: yield* approved(f),
+        });
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result))
+          assert.include(
+            String(result.failure),
+            "the detached supervisor did not run, so nothing was started and the stopped runtime was not started again",
+          );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },

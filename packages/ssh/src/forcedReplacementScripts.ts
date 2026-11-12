@@ -154,6 +154,10 @@ GOAT_FORCED_RECORDS
   # The new runner is published before the first signal, so a failed publication stops nothing.
   publish_selected_runner
   FORCED_PUBLISHED=1
+  # The detached supervisor takes over the start and any rollback after the stop, so a host that
+  # cannot run it keeps its runtime.
+  nohup true >/dev/null 2>>"$LOG_FILE" </dev/null && [ -x "$RUNNER_FILE" ] ||
+    forced_refused "the detached supervisor that starts the new runtime cannot run"
   printf 'Stopping GOAT PID %s (started %s, port %s) for an approved forced update.\\n' "$FORCE_PID" "$FORCE_START" "$FORCE_PORT" >>"$LOG_FILE" 2>/dev/null || :
   if ! forced_parent_holds; then forced_refused "it changed before the signal"; fi
   if ! forced_signal_same TERM "$FORCE_PID" "" "$FORCE_START" "$forced_root_ticks" && server_alive "$FORCE_PID"; then
@@ -206,7 +210,7 @@ forced_supervise_start() {
   fi
   nohup "$RUNNER_FILE" __ssh-helper supervise --forced --old-pid "$FORCED_STOPPED_PID" --old-instance-id forced --port "$FORCE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --target-version "$TARGET_VERSION" --identity "$forced_spawn serve --host 127.0.0.1 --port $FORCE_PORT --base-dir $DEFAULT_SERVER_HOME" "$@" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$forced_result" >/dev/null 2>>"$LOG_FILE" </dev/null &
   wait "$!" || true
-  forced_status=failed; forced_new_pid=0; forced_new_version=
+  forced_status=absent; forced_new_pid=0; forced_new_version=
   if [ -f "$forced_result" ]; then read -r forced_status forced_new_pid forced_new_version <"$forced_result" || true; fi
   rm -f "$forced_result"
   case "$forced_status" in
@@ -217,6 +221,8 @@ forced_supervise_start() {
       printf 'GOAT %s, started as PID %s on the remote host, did not become ready and did not exit after SIGKILL; it was left running and nothing more was started. Check it on the host. See %s.\\n' "$forced_new_version" "$forced_new_pid" "$LOG_FILE" >&2; exit 1 ;;
     rolled-back)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s; GOAT %s was started again. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$forced_new_version" "$LOG_FILE" >&2; exit 1 ;;
+    absent)
+      printf 'GOAT %s did not start on the remote host: after the approved forced stop of PID %s, the detached supervisor did not run, so nothing was started and the stopped runtime was not started again. Update again to retry; no approval is needed. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
     *)
       printf 'GOAT %s did not start on the remote host after the approved forced stop of PID %s, and no earlier runtime could be started again. Update again to retry; no approval is needed. See %s.\\n' "$TARGET_VERSION" "$FORCED_STOPPED_PID" "$LOG_FILE" >&2; exit 1 ;;
   esac
