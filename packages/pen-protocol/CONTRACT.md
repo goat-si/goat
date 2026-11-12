@@ -487,7 +487,7 @@ mesh is unbound, or bound to an older login key, offers to bind it again (same q
 A node can hand a member's session to a local program that registered a name with it, and tell that program, with
 proof, which member is calling. GOAT is the first such program (name `goat`). Nothing here changes `tcp`, `mesh`,
 `join` or `account`: v1.2 adds no record type and no sync message, and leaves the version nodes announce in the sync
-hello as it was (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared epoch). Until
+hello as it was (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared epoch or while holding no records yet). Until
 a program registers, a node refuses every service stream.
 
 ### The service stream
@@ -664,7 +664,7 @@ A program that registered a name can let keys that are not members reach it: GOA
 A listed client key reaches only the service stream of the name whose registration lists it, and a service invite
 admits pairing handshakes for one pairing. Nothing here changes members, records, sync, `tcp`, `mesh` or `join`;
 `account` changes only in that kind 0x04 refuses a key any registration lists ("Admission of client keys"); and the version nodes announce in the sync hello is unchanged (`"pen":"1.1"`, or `"2.0"` in a mesh of the shared
-epoch). In v1.3 only a registration of the name `goat` may hold a client
+epoch or while holding no records yet). In v1.3 only a registration of the name `goat` may hold a client
 list or an invite. Until its holder sends a list no client key is admitted, and until it sends an invite no
 `service-pair` handshake is.
 
@@ -906,7 +906,8 @@ v1.2 member-only reader refuses both valid new forms.
 - v1.1 (2026-11-11): a mesh whose found record has `v` 2 is of the shared epoch (ADR-0026): all its records have `v` 2, a node of it announces `"pen":"2.0"` in the sync hello and closes 4509 when
   the peer does not, a record names its signer's previous record directly in `prev` or has no effect, and each
   admission lineage keeps fixed shares of records (structure/decisions/ADR-0026). Older nodes drop `v` 2 records.
-  A node holding no records yet (joining) may announce anything and is sent the records. `pen up` and `pen login`
+  A node holding no records yet (joining) cannot know the epoch: this version announces `"pen":"2.0"` then and is sent
+  the records, while an empty peer announcing anything else is closed 4509 like any other. `pen up` and `pen login`
   found meshes of this epoch.
 - v1.1 (2026-11-11): `pen relay serve` admits a client session only when its OPEN and CLOSE toward the uplink fit
   (else 4429), and past 8 pending sessions per node the address holding the most loses its oldest (4429). Go relay

@@ -82,8 +82,9 @@ func TestUnderSharesARecordWhoseOwnPreviousIsOnlyInItsPastHasNoEffect(t *testing
 	}
 }
 
-// A node of a mesh of the shared epoch closes a sync whose peer holds records but does not announce the
-// epoch, with 4509; a node that holds nothing yet (joining) gets the records and takes the epoch.
+// Protocol rule (#2987): a node of a mesh of the shared epoch closes 4509 every sync whose hello does not
+// announce "2.0", an empty 1.1 peer included, and sends it no records; this version announces "2.0" while
+// its set is empty, so a joining node of it gets the records and takes the epoch.
 func TestASharedMeshRefusesASyncFromANodeThatDoesNotAnnounceIt(t *testing.T) {
 	f := detID(1)
 	s, err := FoundV(EpochShared, nil, f, "f", 1)
@@ -100,11 +101,35 @@ func TestASharedMeshRefusesASyncFromANodeThatDoesNotAnnounceIt(t *testing.T) {
 	if err := SyncRespond(ctx, srv, s, nil, nil); relay.CodeOf(err) != wire.CodeEpoch {
 		t.Fatalf("sync with a 1.1 peer holding records returned %v, want a %d close", err, wire.CodeEpoch)
 	}
+	srv, cli = pipe()
+	empty := &Lines{L: cli}
+	if err := empty.Write(Msg{T: "hello", Pen: Version}); err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.Write(Msg{T: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SyncRespond(ctx, srv, s, nil, nil); relay.CodeOf(err) != wire.CodeEpoch {
+		t.Fatalf("sync with an empty 1.1 peer returned %v, want a %d close", err, wire.CodeEpoch)
+	}
+	for {
+		m, err := empty.Read(ctx)
+		if err != nil {
+			break
+		}
+		if m.T == "records" {
+			t.Fatal("the empty 1.1 peer was sent records")
+		}
+	}
 	joining := NewStore(nil, s.MeshID)
 	srv, cli = pipe()
-	go SyncRespond(ctx, srv, s, nil, nil)
+	heard := make(chan string, 1)
+	go SyncRespond(ctx, srv, s, nil, func(pen string) { heard <- pen })
 	if err := SyncInitiate(ctx, cli, joining, nil, nil); err != nil {
 		t.Fatalf("a joining node's first sync: %v", err)
+	}
+	if pen := <-heard; pen != VersionShared {
+		t.Fatalf("a joining node announced %q, want %q", pen, VersionShared)
 	}
 	if !joining.Shared() || joining.Len() != s.Len() {
 		t.Fatalf("the joining node holds %d of %d records, shared %v", joining.Len(), s.Len(), joining.Shared())
