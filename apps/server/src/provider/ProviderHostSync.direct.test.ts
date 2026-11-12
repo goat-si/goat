@@ -299,11 +299,20 @@ it.effect.each([
     host: { phase: "failed", message: UNCONFIRMED },
   },
   {
-    start: "is refused by the remote's tool",
+    // The wire does not say whether a structured error came before or after the sync started.
+    start: "gets a structured error from the remote's tool",
     error: new Dispatch.SshRemoteDispatchError({
       reason: "remote_refused",
-      message: "The remote goat_provider_sync refused: busy",
-      remoteCode: "unavailable",
+      message: "The remote goat_provider_sync refused: outcome unknown",
+      remoteCode: "orchestration_error",
+    }),
+    host: { phase: "failed", message: UNCONFIRMED },
+  },
+  {
+    start: "names a tool the remote does not have",
+    error: new Dispatch.SshRemoteDispatchError({
+      reason: "remote_outdated",
+      message: "GOAT on box does not have goat_provider_sync; update GOAT on box.",
     }),
     host: { phase: "cancelled" },
   },
@@ -381,4 +390,89 @@ it.effect(
         });
       }).pipe(Effect.provide(layer));
     }),
+);
+
+it.effect(
+  "regression S4-1: a cancel whose caller goes away while a host stops still finishes it",
+  () =>
+    Effect.gen(function* () {
+      const running = {
+        started: yield* Deferred.make<void>(),
+        killing: yield* Deferred.make<void>(),
+        killed: yield* Deferred.make<void>(),
+      };
+      const missing = { kind: "missing", provider: { ...pending, cli: "missing" } } as const;
+      const person = { kind: "client", sessionId: "person" as never } as const;
+      const { layer } = harness({
+        providers: [pending],
+        instances: [{ instanceId: opencode, driverKind: "opencode" }],
+        cliGate: yield* gate([missing], []),
+        running,
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", version: "1.2.3", login: false },
+          person,
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(running.started);
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, person)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(running.killing);
+        yield* Fiber.interrupt(stopping);
+        yield* Deferred.succeed(running.killed, undefined);
+        expect(yield* sync.awaitDone(started.sync.syncId)).toMatchObject({
+          done: true,
+          hosts: [{ host: null, phase: "cancelled" }],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("regression S4-2: two cancels of one sync share one remote cancel and one result", () =>
+  Effect.gen(function* () {
+    const accepted = yield* Deferred.make<void>();
+    const cancelling = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let cancels = 0;
+    const { state, layer } = harness({
+      answer: (call) =>
+        call.tool === "goat_provider_sync"
+          ? Deferred.succeed(accepted, undefined).pipe(
+              Effect.as({ kind: "started", sync: remoteSync(false, { phase: "installing" }) }),
+            )
+          : (cancels += 1) === 1
+            ? Deferred.succeed(cancelling, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(remoteSync(true, { phase: "cancelled" })),
+              )
+            : Effect.succeed(remoteSync(false, { phase: "installing" })),
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", hosts: ["box"], login: false },
+        direct(Effect.void),
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      yield* Deferred.await(accepted);
+      const cancel = sync.cancel(
+        { syncId: started.sync.syncId },
+        { kind: "mcp", scope: threadScope },
+      );
+      const first = yield* cancel.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(cancelling);
+      const second = yield* cancel.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+      const answers = [yield* Fiber.join(first), yield* Fiber.join(second)];
+      const settled = yield* sync.awaitDone(started.sync.syncId);
+      expect(
+        state.calls.filter(({ call }) => call.tool === "goat_provider_sync_cancel"),
+      ).toHaveLength(1);
+      for (const answer of [...answers, settled])
+        expect(answer.hosts).toEqual([{ host: "box", phase: "cancelled", version: null }]);
+    }).pipe(Effect.provide(layer));
+  }),
 );

@@ -110,6 +110,12 @@ export const harness = (options: {
   >;
   /** The provider CLI gate a local install asks; none unless given. */
   readonly cliGate?: Layer.Layer<ProviderCliGate.ProviderCliGate>;
+  /** An installer that runs until stopped, and whose stopping waits for killed. */
+  readonly running?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly killing: Deferred.Deferred<void>;
+    readonly killed: Deferred.Deferred<void>;
+  };
 }) => {
   const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
   const spawner = Layer.succeed(
@@ -118,12 +124,22 @@ export const harness = (options: {
       const child = command as unknown as { command: string; args: ReadonlyArray<string> };
       state.spawned.push({ command: child.command, args: child.args });
       const result = options.installer ?? { stdout: "", stderr: "", code: 0 };
-      return Effect.succeed(
+      const running = options.running;
+      return Effect.as(
+        running === undefined ? Effect.void : Deferred.succeed(running.started, undefined),
         ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+          exitCode:
+            running === undefined
+              ? Effect.succeed(ChildProcessSpawner.ExitCode(result.code))
+              : Effect.never,
           isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
+          kill: () =>
+            running === undefined
+              ? Effect.void
+              : Deferred.succeed(running.killing, undefined).pipe(
+                  Effect.andThen(Deferred.await(running.killed)),
+                ),
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
           stdout: Stream.make(encoder.encode(result.stdout)),

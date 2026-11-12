@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
@@ -48,14 +49,13 @@ export type RemoteFailure = {
 };
 export const classify = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
   const failure = describe(error);
-  // Only definite signals: refused here, a structured refusal by the remote tool, no such tool there,
-  // or a request that never left. A bare remote_refused can be a reply mangled after the send.
+  // Only definite signals: refused here, no such tool there, or a request that never left. Any
+  // remote_refused, structured or not, may come after the remote started the sync.
   const unsent =
     error._tag !== "SshRemoteDispatchError" ||
     error.reason === "remote_outdated" ||
     error.reason === "invalid_request" ||
-    error.reason === "host_unknown" ||
-    (error.reason === "remote_refused" && error.remoteCode !== undefined);
+    error.reason === "host_unknown";
   return unsent ? { ...failure, unsent: true } : failure;
 };
 const describe = (error: Dispatch.SshRemoteDispatchError | Failure): RemoteFailure => {
@@ -99,12 +99,16 @@ export interface SyncOperation {
   fibers: Array<Fiber.Fiber<unknown, unknown>>;
   /** Done once every host finished and the settlers ran, cancels included. */
   readonly allFinished: Deferred.Deferred<void>;
+  /** The one cancel that owns every host it claimed; a later cancel joins it. */
+  cancelling?: Fiber.Fiber<void>;
   /** Approvals that record this sync's result when its last host finishes. */
   readonly settlers: Array<(state: ProviderSyncState) => Effect.Effect<void>>;
 }
 
+/** A finished host's state is final: a late writer, such as a second cancel, changes nothing. */
 export const update = (task: HostTask, next: StatePatch, finished = false) =>
   Effect.suspend(() => {
+    if (task.finished) return Effect.void;
     const { login, message, ...rest } = next;
     const base = { ...task.state, ...rest };
     const withMessage =
@@ -144,37 +148,62 @@ const afterRemoteCancel = <E>(host: string, reply: Exit.Exit<ProviderSyncState, 
 };
 
 /**
- * Cancels one unfinished host. A remote one is cancelled there and reported as that host
+ * Cancels one claimed host. A remote one is cancelled there and reported as that host
  * confirms; a start whose fate is unknown is reported unconfirmed.
  */
-export const cancelTask = Effect.fn("ProviderHostSync.cancelTask")(
-  function* <E>(
-    task: HostTask,
-    cancelRemote: (host: string, syncId: string) => Effect.Effect<ProviderSyncState, E>,
-  ) {
-    if (task.finished) return;
-    const host = task.state.host;
-    const syncId =
-      task.remoteSyncId ??
-      (task.starting === undefined ? null : startOutcome(yield* Fiber.await(task.starting)));
-    if (host === null || syncId === null)
-      return yield* update(task, { phase: "cancelled", login: undefined }, true);
-    if (syncId === undefined) return yield* update(task, unconfirmed(host), true);
-    const reply = yield* Effect.exit(cancelRemote(host, syncId));
-    yield* update(task, afterRemoteCancel(host, reply), true);
-  },
-  // Whatever stops it, a cancelled host ends finished: cancelled here, unconfirmed elsewhere.
-  (effect, task) =>
-    Effect.ensuring(
-      effect,
-      Effect.suspend(() => {
-        if (task.finished) return Effect.void;
-        const host = task.state.host;
-        return update(
-          task,
-          host === null ? { phase: "cancelled", login: undefined } : unconfirmed(host),
-          true,
-        );
-      }),
-    ),
-);
+export const cancelTask = Effect.fn("ProviderHostSync.cancelTask")(function* <E>(
+  task: HostTask,
+  cancelRemote: (host: string, syncId: string) => Effect.Effect<ProviderSyncState, E>,
+) {
+  if (task.finished) return;
+  const host = task.state.host;
+  const syncId =
+    task.remoteSyncId ??
+    (task.starting === undefined ? null : startOutcome(yield* Fiber.await(task.starting)));
+  if (host === null || syncId === null)
+    return yield* update(task, { phase: "cancelled", login: undefined }, true);
+  if (syncId === undefined) return yield* update(task, unconfirmed(host), true);
+  const reply = yield* Effect.exit(cancelRemote(host, syncId));
+  yield* update(task, afterRemoteCancel(host, reply), true);
+});
+
+/** Whatever stopped a cancel, each host it claimed ends: cancelled here, unconfirmed elsewhere. */
+const finishClaimed = (tasks: ReadonlyArray<HostTask>) =>
+  Effect.forEach(
+    tasks,
+    (task) =>
+      update(
+        task,
+        task.state.host === null
+          ? { phase: "cancelled", login: undefined }
+          : unconfirmed(task.state.host),
+        true,
+      ),
+    { discard: true },
+  );
+
+/**
+ * The one cancel of a sync, owned by the service scope. Claiming the unfinished hosts and starting
+ * it is one step, so a caller that goes away cannot leave a claimed host without its cancel; a
+ * later cancel joins the first.
+ */
+export const claimCancel = (
+  operation: SyncOperation,
+  scope: Scope.Scope,
+  stop: (claimed: ReadonlyArray<HostTask>) => Effect.Effect<void>,
+) =>
+  Effect.uninterruptible(
+    Effect.suspend(() => {
+      if (operation.cancelling !== undefined) return Effect.succeed(operation.cancelling);
+      const claimed = operation.hosts.filter((task) => !task.finished);
+      for (const task of claimed) task.cancelling = true;
+      const run = stop(claimed).pipe(Effect.interruptible, Effect.ensuring(finishClaimed(claimed)));
+      return Effect.forkIn(run, scope).pipe(
+        Effect.tap((fiber) =>
+          Effect.sync(() => {
+            operation.cancelling = fiber;
+          }),
+        ),
+      );
+    }),
+  );

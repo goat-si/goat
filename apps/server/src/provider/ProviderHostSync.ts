@@ -93,6 +93,7 @@ import {
   askFailed,
   callerKey,
   cancelTask,
+  claimCancel,
   classify,
   type Failure,
   fail,
@@ -856,22 +857,25 @@ const make = Effect.gen(function* () {
         );
       }
     }).pipe(
+      // A claimed host is the cancel's to finish: it knows whether the start may have run.
       Effect.catch((failure: RemoteFailure) =>
-        update(
-          task,
-          {
-            phase: failure.status === "update_runtime" ? "update_runtime" : "failed",
-            message:
-              failure.status === "update_runtime"
-                ? `Update GOAT on ${host} to sync providers there. ${failure.message}`
-                : failure.message,
-          },
-          true,
-        ),
+        task.cancelling
+          ? Effect.void
+          : update(
+              task,
+              {
+                phase: failure.status === "update_runtime" ? "update_runtime" : "failed",
+                message:
+                  failure.status === "update_runtime"
+                    ? `Update GOAT on ${host} to sync providers there. ${failure.message}`
+                    : failure.message,
+              },
+              true,
+            ),
       ),
       // An interrupted start call means this process is stopping; the restart path records that.
       Effect.catchCause((cause) =>
-        task.finished || Cause.hasInterruptsOnly(cause)
+        task.finished || task.cancelling || Cause.hasInterruptsOnly(cause)
           ? Effect.void
           : update(task, { phase: "failed", message: `Lost track of ${host}.` }, true),
       ),
@@ -1042,26 +1046,28 @@ const make = Effect.gen(function* () {
       launcher.kind === "mcp" && launcher.directInstall && callerKey(launcher) === callerKey(caller)
         ? launcher
         : caller;
-    // Claim each unfinished host before interrupting, so only its cancel finishes and settles it.
-    const pending = operation.hosts.filter((task) => !task.finished);
-    for (const task of pending) task.cancelling = true;
-    yield* Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true });
-    // In the service scope, so a caller that goes away cannot leave a host unfinished.
-    const stopping = yield* Effect.forEach(pending, (task) =>
-      Effect.forkIn(
-        cancelTask(task, (host, syncId) =>
-          callRemote(remoteCaller, {
-            host,
-            tool: CANCEL_TOOL,
-            arguments: { syncId },
-            writes: true,
-            timeoutMs: MATRIX_DEADLINE_MS,
-          }).pipe(Effect.flatMap((raw) => decodeSyncState(raw))),
-        ).pipe(Effect.provideContext(context)),
-        scope,
+    const stopping = yield* claimCancel(operation, scope, (pending) =>
+      Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true }).pipe(
+        Effect.andThen(
+          Effect.forEach(
+            pending,
+            (task) =>
+              cancelTask(task, (host, syncId) =>
+                callRemote(remoteCaller, {
+                  host,
+                  tool: CANCEL_TOOL,
+                  arguments: { syncId },
+                  writes: true,
+                  timeoutMs: MATRIX_DEADLINE_MS,
+                }).pipe(Effect.flatMap((raw) => decodeSyncState(raw))),
+              ),
+            { concurrency: "unbounded", discard: true },
+          ),
+        ),
+        Effect.provideContext(context),
       ),
     );
-    yield* Fiber.awaitAll(stopping);
+    yield* Fiber.await(stopping);
     return view(operation);
   });
 
