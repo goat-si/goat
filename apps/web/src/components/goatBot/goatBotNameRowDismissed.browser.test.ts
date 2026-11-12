@@ -1,15 +1,24 @@
 import { EnvironmentId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
-import { webBotNameRowDismissals } from "./goatBotNameRowDismissed";
+import {
+  resetBotNameRowDismissalsForTests,
+  webBotNameRowDismissals,
+} from "./goatBotNameRowDismissed";
 
 // The stored format is shared with every tab and later versions of this browser's GOAT.
 const STORAGE_KEY = "goat:bot-name-row-dismissed:v1";
 const stored = (): ReadonlyArray<string> => JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
 const key = (environmentId: string, botId: string) => JSON.stringify([environmentId, botId]);
 
-it("two dismissals in one tick are both stored, and only the newest 200 are kept", () => {
+/** Every test starts with nothing stored and nothing kept in memory. */
+function setup() {
   localStorage.removeItem(STORAGE_KEY);
+  resetBotNameRowDismissalsForTests();
+}
+
+it("two dismissals in one tick are both stored, and only the newest 200 are kept", () => {
+  setup();
   const environmentId = EnvironmentId.make("env-cap");
   for (let index = 0; index < 199; index += 1)
     webBotNameRowDismissals.dismiss(environmentId, `old-${index}`);
@@ -24,7 +33,7 @@ it("two dismissals in one tick are both stored, and only the newest 200 are kept
 });
 
 it("a dismissal the browser refuses to store still hides the row for this session", () => {
-  localStorage.removeItem(STORAGE_KEY);
+  setup();
   const environmentId = EnvironmentId.make("env-refused");
   using _quota = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
     throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
@@ -38,4 +47,52 @@ it("a dismissal the browser refuses to store still hides the row for this sessio
   expect(stored()).toEqual([]);
   expect(webBotNameRowDismissals.dismissed(environmentId, "refused")).toBe(true);
   expect(webBotNameRowDismissals.dismissed(environmentId, "other")).toBe(false);
+});
+
+/** Storage refuses every write until disposed. */
+function refuseStorage(): Disposable {
+  const quota = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+  });
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  return {
+    [Symbol.dispose]: () => {
+      quota.mockRestore();
+      log.mockRestore();
+    },
+  };
+}
+
+it("memory keeps only the newest 200 dismissals storage refused", () => {
+  setup();
+  const environmentId = EnvironmentId.make("env-refused-cap");
+  using _refused = refuseStorage();
+  for (let index = 0; index <= 200; index += 1)
+    webBotNameRowDismissals.dismiss(environmentId, `refused-${index}`);
+  expect(webBotNameRowDismissals.dismissed(environmentId, "refused-0")).toBe(false);
+  expect(webBotNameRowDismissals.dismissed(environmentId, "refused-1")).toBe(true);
+  expect(webBotNameRowDismissals.dismissed(environmentId, "refused-200")).toBe(true);
+});
+
+it("a dismissal storage took leaves nothing in memory", () => {
+  setup();
+  const environmentId = EnvironmentId.make("env-stored");
+  webBotNameRowDismissals.dismiss(environmentId, "stored");
+  expect(stored()).toEqual([key("env-stored", "stored")]);
+  // Another tab clears the list: only storage was holding this dismissal.
+  localStorage.removeItem(STORAGE_KEY);
+  expect(webBotNameRowDismissals.dismissed(environmentId, "stored")).toBe(false);
+});
+
+it("a refused dismissal is stored by the next write that succeeds, and then leaves memory", () => {
+  setup();
+  const environmentId = EnvironmentId.make("env-late");
+  {
+    using _refused = refuseStorage();
+    webBotNameRowDismissals.dismiss(environmentId, "late");
+  }
+  webBotNameRowDismissals.dismiss(environmentId, "next");
+  expect(stored()).toEqual([key("env-late", "late"), key("env-late", "next")]);
+  localStorage.removeItem(STORAGE_KEY);
+  expect(webBotNameRowDismissals.dismissed(environmentId, "late")).toBe(false);
 });
