@@ -1,4 +1,4 @@
-import { BotProfile } from "@goat/contracts";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -21,7 +21,7 @@ vi.mock("~/state/use-atom-command", () => ({
     () =>
     async ({ input }: { input: Record<string, unknown> }) => {
       server.inputs.push(input);
-      return { _tag: "Success", value: { bot: null } };
+      return { _tag: "Success", value: { bot: { ...member, ...input } } };
     },
 }));
 vi.mock("./useGoatBotModel", () => ({
@@ -44,6 +44,7 @@ vi.mock("../chat/ProviderModelPicker", () => ({
 }));
 
 import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
+import { forgetRenamedBots } from "./goatBotRenamedBots";
 
 const member = Schema.decodeSync(BotProfile)({
   botId: "docs",
@@ -62,6 +63,7 @@ const member = Schema.decodeSync(BotProfile)({
 function setup(modelEdit: boolean) {
   server.inputs.length = 0;
   server.modelEdit = modelEdit;
+  forgetRenamedBots(EnvironmentId.make("env-1"));
 }
 
 it("sends a member's model only when the person changed it", async () => {

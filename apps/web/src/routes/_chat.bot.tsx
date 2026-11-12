@@ -27,6 +27,7 @@ import {
 } from "../components/goatBot/goatBotMemberContext";
 import { useBotRoster } from "../components/goatBot/useBotRoster";
 import { useBotManage } from "../components/goatBot/useBotManage";
+import { newerBotProfile, useRenamedBots } from "../components/goatBot/goatBotRenamedBots";
 import { useGoatBotHomeSettings } from "../components/goatBot/useGoatBotHome";
 import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
 import { useNewBotSlot } from "../components/goatBot/useNewBotSlot";
@@ -56,12 +57,18 @@ function GoatBotRouteSession() {
   // A bot this client just created opens from the create's answer, even when the list read after
   // it failed.
   const created = useNewBotSlot(roster.environmentId).created;
+  const renamed = useRenamedBots();
   const member =
     botId === undefined
       ? null
-      : (roster.bots?.find((bot) => bot.role === "member" && bot.botId === botId) ??
-        created.find((bot) => bot.botId === botId) ??
-        null);
+      : newerBotProfile(
+          roster.bots?.find((bot) => bot.role === "member" && bot.botId === botId) ??
+            created.find((bot) => bot.botId === botId) ??
+            null,
+          renamed.find(
+            (bot) => bot.environmentId === roster.environmentId && bot.botId === botId,
+          ) ?? null,
+        );
   const main = botRosterGroups(roster.bots ?? []).main;
   // A named bot this client does not know yet waits for the roster; it never opens main instead.
   const memberUnknown = botId !== undefined && member === null;

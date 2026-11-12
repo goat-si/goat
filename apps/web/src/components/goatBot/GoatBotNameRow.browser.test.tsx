@@ -57,10 +57,11 @@ import { openNewBotChat } from "./goatBotNewBotOpen";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
 let nextBot = 0;
+const made = new Map<string, BotProfile>();
 /** A fresh bot each time, so this browser's dismissals and focus marks never carry over. */
 function member(name: string, overrides: { readonly state?: "deleted" } = {}) {
   nextBot += 1;
-  return decodeProfile({
+  const bot = decodeProfile({
     botId: `bot-${nextBot}`,
     role: "member",
     name,
@@ -74,14 +75,18 @@ function member(name: string, overrides: { readonly state?: "deleted" } = {}) {
     updatedAt: "2026-11-07T00:00:00.000Z",
     ...overrides,
   });
+  made.set(bot.botId, bot);
+  return bot;
 }
 
 function setup() {
   permission.set(true);
-  const update = vi.fn(async (_input: unknown): Promise<unknown> => ({
-    _tag: "Success",
-    value: {},
-  }));
+  // The server answers with the bot as it now is.
+  const update = vi.fn(async (args: unknown): Promise<unknown> => {
+    const { input } = args as { readonly input: { readonly botId: string } };
+    const bot = made.get(input.botId);
+    return { _tag: "Success", value: { bot: { ...bot, ...input } } };
+  });
   state.update = update;
   return { update };
 }

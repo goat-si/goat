@@ -24,6 +24,7 @@ import { GoatBotEditBotDialog } from "./GoatBotEditBotDialog";
 import { useGoatBotMember } from "./goatBotMemberContext";
 import { webBotNameRowDismissals } from "./goatBotNameRowDismissed";
 import { takeNameRowFocus } from "./goatBotNewBotOpen";
+import { rememberRenamedBot } from "./goatBotRenamedBots";
 
 const NO_PERMISSION = Atom.make(false);
 const NAME_MAX = 64;
@@ -115,8 +116,12 @@ function NameForm({
       input: { botId: member.botId, name },
     });
     setSaving(false);
-    if (result._tag === "Failure") setError(botManageFailure(squashAtomCommandFailure(result)));
-    else if (!isGeneratedBotName(name)) onGone();
+    if (result._tag === "Failure") {
+      setError(botManageFailure(squashAtomCommandFailure(result)));
+      return;
+    }
+    rememberRenamedBot(result.value.bot);
+    if (!isGeneratedBotName(name)) onGone();
   }
   return (
     <form

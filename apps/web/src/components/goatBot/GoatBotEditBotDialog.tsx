@@ -10,6 +10,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { GoatBotModelField } from "./GoatBotModelField";
 import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { useGoatBotMainName } from "./goatBotMemberContext";
+import { rememberRenamedBot } from "./goatBotRenamedBots";
 
 /** Edits a bot's profile, and a member's model where its server takes one. */
 export function GoatBotEditBotDialog({
@@ -47,9 +48,9 @@ export function GoatBotEditBotDialog({
             ...(modelChanged ? { defaultModelSelection: model } : {}),
           },
         });
-        return result._tag === "Success"
-          ? null
-          : botManageFailure(squashAtomCommandFailure(result));
+        if (result._tag === "Failure") return botManageFailure(squashAtomCommandFailure(result));
+        rememberRenamedBot(result.value.bot);
+        return null;
       }}
     >
       {modelEditable ? (
