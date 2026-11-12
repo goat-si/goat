@@ -64,6 +64,13 @@ export class ProviderRegistry extends Context.Service<
       provider?: ProviderDriverKind,
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
+    /**
+     * Resolves once no untargeted refresh is in flight. `refresh()` joins a running pass, which
+     * may already have checked a provider; a refresh begun after this reads current state.
+     * Optional like the members above: a registry with no shared pass has nothing to wait for.
+     */
+    readonly awaitInFlightRefresh?: Effect.Effect<void>;
+
     /** Unknown instance ids return the cached list without error. */
     readonly refreshInstance: (
       instanceId: ProviderInstanceId,
@@ -652,6 +659,13 @@ export const layer = Layer.effect(
       return yield* Deferred.await(claimed.completion);
     });
 
+    const awaitInFlightRefresh = Ref.get(refreshAllInFlightRef).pipe(
+      Effect.flatMap((inFlight) =>
+        Option.isSome(inFlight) ? Effect.exit(Deferred.await(inFlight.value)) : Effect.void,
+      ),
+      Effect.asVoid,
+    );
+
     const refresh = Effect.fn("refresh")(function* (provider?: ProviderDriverKind) {
       if (provider === undefined) {
         return yield* refreshAll();
@@ -1055,6 +1069,7 @@ export const layer = Layer.effect(
       rescanGlobalSkills,
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
+      awaitInFlightRefresh,
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       reloadSecretsAndRefresh: (instanceId?: ProviderInstanceId) =>

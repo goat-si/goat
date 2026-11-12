@@ -1,4 +1,5 @@
 import { makeApplyDesktopShellEnvironmentSnapshot } from "./DesktopShellEnvironmentReceiver.ts";
+import { HostPathChanged } from "../provider/hostPathChanged.ts";
 import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -408,7 +409,12 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const config = yield* ServerConfig.ServerConfig;
   const environment = yield* HostProcess.Environment;
   const platform = yield* HostProcess.Platform;
-  const applyShellSnapshot = makeApplyDesktopShellEnvironmentSnapshot(environment, platform);
+  const pathChanged = Effect.asVoid((yield* HostPathChanged).open);
+  const applyShellSnapshot = makeApplyDesktopShellEnvironmentSnapshot(
+    environment,
+    platform,
+    pathChanged,
+  );
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const latest = yield* Ref.make(Option.none<DesktopHostTelemetrySnapshot>());
   const receiverStartedAt = yield* DateTime.now;

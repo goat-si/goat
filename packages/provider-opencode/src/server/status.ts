@@ -15,6 +15,8 @@ import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   buildServerProvider,
   classifySpawnFailure,
@@ -67,8 +69,11 @@ function normalizedErrorMessage(cause: unknown): string | undefined {
   return normalizeProbeMessage(cause.message);
 }
 
+const OPENCODE_MISSING = "OpenCode CLI (`opencode`) is not installed or not on PATH.";
+
 function formatOpenCodeProbeError(input: {
   readonly cause: unknown;
+  readonly host: Parameters<typeof withLoginShellPathNote>[1];
   readonly isExternalServer: boolean;
   readonly phase: "version" | "inventory";
   readonly serverUrl: string;
@@ -124,10 +129,7 @@ function formatOpenCodeProbeError(input: {
       env: { PATH: spawn.path },
     });
     if (failure === "missing")
-      return {
-        installed: false,
-        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-      };
+      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING, input.host) };
     const message = spawnFailureMessage(failure, spawn.cwd, input.binaryPath);
     if (message) return { installed: true, message };
   }
@@ -136,10 +138,7 @@ function formatOpenCodeProbeError(input: {
   while (cause && typeof cause === "object" && !seen.has(cause)) {
     seen.add(cause);
     if (isCommandMissingCause(cause)) {
-      return {
-        installed: false,
-        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-      };
+      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING, input.host) };
     }
     cause = "cause" in cause ? cause.cause : undefined;
   }
@@ -758,6 +757,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const customModels = openCodeSettings.customModels;
   const isExternalServer = openCodeSettings.serverUrl.trim().length > 0;
+  const host = { env: yield* HostProcess.Environment, platform: yield* HostProcess.Platform };
 
   const fallback = (
     cause: unknown,
@@ -766,6 +766,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   ) => {
     const failure = formatOpenCodeProbeError({
       cause,
+      host,
       isExternalServer,
       phase,
       serverUrl: openCodeSettings.serverUrl,

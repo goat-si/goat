@@ -88,6 +88,8 @@ const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisR
 export const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
+  /** What the fake installer leaves on disk before it exits. */
+  readonly onInstall?: Effect.Effect<void>;
   readonly providers?: ReadonlyArray<unknown>;
   readonly providersBroken?: boolean;
   /** Real handoffs for approval tests; the default records create and serves nothing else. */
@@ -113,20 +115,22 @@ export const harness = (options: {
       const child = command as unknown as { command: string; args: ReadonlyArray<string> };
       state.spawned.push({ command: child.command, args: child.args });
       const result = options.installer ?? { stdout: "", stderr: "", code: 0 };
-      return Effect.succeed(
-        ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          unref: Effect.succeed(Effect.void),
-          stdin: Sink.drain,
-          stdout: Stream.make(encoder.encode(result.stdout)),
-          stderr: Stream.make(encoder.encode(result.stderr)),
-          all: Stream.empty,
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-        }),
+      return (options.onInstall ?? Effect.void).pipe(
+        Effect.as(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.make(encoder.encode(result.stdout)),
+            stderr: Stream.make(encoder.encode(result.stderr)),
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
       );
     }),
   );

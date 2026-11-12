@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeTls from "node:tls";
 import type { DesktopShellEnvironmentSnapshot } from "@goat/contracts";
+import { loginShellPathUnread } from "@goat/shared/cliPath";
 import { applyShellEnvironment } from "@goat/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -20,6 +21,8 @@ class DesktopShellCertificatesUpdateFailed extends Schema.TaggedError<DesktopShe
 export function makeApplyDesktopShellEnvironmentSnapshot(
   environment: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
+  /** Runs when a snapshot changes PATH or ends login-shell discovery, not on every snapshot. */
+  onPathChanged: Effect.Effect<void> = Effect.void,
 ) {
   let baseCertificates: Array<string> | undefined;
   return Effect.fn("resourceTelemetry.desktopTelemetryReceiver.applyShellEnvironment")(function* (
@@ -37,6 +40,8 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
         return false;
       });
     }
+    const pathBefore = environment.PATH;
+    const unreadBefore = loginShellPathUnread(environment);
     applyShellEnvironment(environment, message.environment, platform);
     if (message.environment.NODE_EXTRA_CA_CERTS !== undefined) {
       yield* Effect.gen(function* () {
@@ -84,5 +89,11 @@ export function makeApplyDesktopShellEnvironmentSnapshot(
       );
     }
     if (message.discovered) delete environment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
+    // Windows keeps its existing behavior: statuses follow the periodic health check there.
+    if (
+      platform !== "win32" &&
+      (environment.PATH !== pathBefore || loginShellPathUnread(environment) !== unreadBefore)
+    )
+      yield* onPathChanged;
   });
 }

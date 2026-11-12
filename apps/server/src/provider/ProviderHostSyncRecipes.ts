@@ -3,6 +3,9 @@ import type {
   ProviderHostSyncDriver,
   ProviderSyncLogin,
 } from "@goat/contracts";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
+import { CommandResolutionCache } from "@goat/shared/shell";
+import * as Effect from "effect/Effect";
 
 /**
  * The official installer and sign-in for each CLI GOAT can sync. Commands are
@@ -111,6 +114,21 @@ export const PROVIDER_HOST_SYNC_DRIVERS = Object.keys(
 ) as ReadonlyArray<ProviderHostSyncDriver>;
 
 export const recipeFor = (driver: ProviderHostSyncDriver) => RECIPES[driver];
+
+/** A miss cached before an install would hide the new binary for 30 seconds. */
+export const forgetCommandMisses = Effect.gen(function* () {
+  (yield* CommandResolutionCache).clear();
+});
+
+/** The installer exited cleanly, yet the CLI is in none of the folders this server searches. */
+export const installedButNotFound = (
+  binary: string,
+  host: Parameters<typeof withLoginShellPathNote>[1],
+) =>
+  withLoginShellPathNote(
+    `The installer finished, but GOAT cannot find ${binary} on its PATH here. Add the install folder to PATH and restart GOAT.`,
+    host,
+  );
 
 /** Safe summary of a failed installer; the raw output never leaves this process. */
 export function describeInstallFailure(exitCode: number | null, output: string): string {

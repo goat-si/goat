@@ -40,6 +40,7 @@ import {
   formatCodexModelName,
 } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import {
   codexAppServerArgs,
   codexExecLaunchArgs,
@@ -865,10 +866,13 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
           : installed
             ? (spawnFailureMessage(failure, probeCwd, codexSettings.binaryPath) ??
               `Codex app-server provider probe failed: ${error.message}.`)
-            : `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
-              (codexSettings.binaryPath === "codex"
-                ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
-                : " Make sure the configured executable exists and can be run."),
+            : withLoginShellPathNote(
+                `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
+                  (codexSettings.binaryPath === "codex"
+                    ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
+                    : " Make sure the configured executable exists and can be run."),
+                { env: resolvedEnvironment, platform: yield* HostProcess.Platform },
+              ),
       },
     });
   }

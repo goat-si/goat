@@ -78,7 +78,11 @@ effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
     ),
     (probe) =>
       Effect.gen(function* () {
-        const env: NodeJS.ProcessEnv = { SHELL: "/bin/bash", PATH: "/usr/bin" };
+        const env: NodeJS.ProcessEnv = {
+          SHELL: "/bin/bash",
+          PATH: "/usr/bin",
+          HOME: "/home/tester",
+        };
 
         yield* fixPath().pipe(
           Effect.provideService(HostProcess.Platform, "linux"),
@@ -87,10 +91,51 @@ effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
         );
 
         assert.equal(probe.mock.calls.length, 1);
-        assert.equal(env.PATH, "/opt/tools/bin:/usr/bin");
+        assert.equal(
+          env.PATH,
+          "/opt/tools/bin:/usr/bin:/home/tester/.local/bin:/home/tester/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin",
+        );
       }),
     (probe) => Effect.sync(() => probe.mockRestore()),
   ),
+);
+
+effectIt.effect(
+  "still looks in the well-known CLI folders when the login shell does not answer",
+  () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+        const probe = vi.spyOn(NodeChildProcess, "execFileSync").mockImplementation(() => {
+          throw Object.assign(new Error("spawnSync /bin/zsh ETIMEDOUT"), { code: "ETIMEDOUT" });
+        });
+        return { stderr, probe };
+      }),
+      () =>
+        Effect.gen(function* () {
+          const env: NodeJS.ProcessEnv = {
+            SHELL: "/bin/zsh",
+            PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+            HOME: "/Users/tester",
+          };
+
+          yield* fixPath().pipe(
+            Effect.provideService(HostProcess.Platform, "darwin"),
+            Effect.provideService(HostProcess.Environment, env),
+            Effect.provide(NodeServices.layer),
+          );
+
+          assert.equal(
+            env.PATH,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/Users/tester/.local/bin:/Users/tester/.bun/bin:/opt/homebrew/bin:/usr/local/bin",
+          );
+        }),
+      ({ stderr, probe }) =>
+        Effect.sync(() => {
+          probe.mockRestore();
+          stderr.mockRestore();
+        }),
+    ),
 );
 
 effectIt.effect("keeps mise's PATH record with the login shell PATH", () =>
