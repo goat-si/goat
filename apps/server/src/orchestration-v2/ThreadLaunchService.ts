@@ -303,7 +303,8 @@ const make = Effect.gen(function* () {
   // Optional so harnesses that never launch into a real folder need not provide it.
   const workspacePaths = yield* Effect.serviceOption(WorkspacePaths.WorkspacePaths);
   const preparationScope = yield* Scope.make("sequential");
-  const { reservePreparation, releasePreparation, settleCliRaces } = yield* makeLaunchCommandSlots;
+  const { reservePreparation, releasePreparation, passCli, settleCliRaces } =
+    yield* makeLaunchCommandSlots;
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
 
   const mapError =
@@ -1154,7 +1155,8 @@ const make = Effect.gen(function* () {
           instanceId: input.modelSelection.instanceId,
         });
       const replay = Option.exists(launchReceipt, (prior) => prior.status === "accepted");
-      if (!linkOnly && !replay) yield* requireCli(input.modelSelection.instanceId);
+      if (!linkOnly && !replay)
+        yield* passCli(input.commandId, requireCli(input.modelSelection.instanceId));
       return yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
         const reusableLaunchReceipt =

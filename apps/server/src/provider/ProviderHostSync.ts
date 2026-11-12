@@ -102,6 +102,7 @@ import {
   lostTrack,
   ownerSession,
   type RemoteFailure,
+  remoteHostState,
   type SyncOperation,
   update,
 } from "./ProviderHostSyncTasks.ts";
@@ -423,8 +424,7 @@ const make = Effect.gen(function* () {
     const includeCloud = input.cloud === true;
     const local = yield* localRow(includeCloud);
     if (input.localOnly === true) return { rows: [local] };
-    // Connected hosts plus aliases the user wrote in ssh config; known_hosts
-    // entries are left out because they include every server ever reached.
+    // Connected hosts plus ssh-config aliases; known_hosts lists every server ever reached.
     const hosts = input.hosts ?? [
       ...(yield* dispatch.connectedHosts),
       ...(yield* dispatch.listHosts({ probe: false }).pipe(
@@ -691,7 +691,7 @@ const make = Effect.gen(function* () {
         before?.installed === true &&
         (operation.version === null || before.version === null
           ? operation.version === null
-          : before.version.includes(operation.version));
+          : versionCore(before.version) === operation.version);
       const command = sameVersion ? null : installCommand(driver, platform, operation.version);
       if (!sameVersion) {
         if (command === null)
@@ -847,7 +847,7 @@ const make = Effect.gen(function* () {
       const deadline = (yield* Clock.currentTimeMillis) + REMOTE_DEADLINE_MS;
       while (true) {
         const remote = current.hosts[0];
-        if (remote !== undefined) yield* update(task, { ...remote, host });
+        if (remote !== undefined) yield* update(task, remoteHostState(operation, remote, host));
         if (current.done) return yield* update(task, {}, true);
         if ((yield* Clock.currentTimeMillis) > deadline)
           return yield* lostTrack(task, `${host} did not finish within 30 minutes.`);

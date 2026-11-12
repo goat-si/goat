@@ -84,6 +84,6 @@ export const pinnedMismatch = (
   found === null ||
   command === null ||
   command.latestOnly ||
-  found.includes(requested)
+  versionCore(found) === requested
     ? undefined
     : `The installer finished, but ${name} is still ${versionCore(found) ?? found}, not ${requested}.`;

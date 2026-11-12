@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { describeInstall, installCommand } from "./ProviderHostSyncRecipes.ts";
 import type { SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
 
 export type Failure = ProviderHostSyncError | EnvironmentAuthorizationError;
@@ -267,3 +268,20 @@ export const cancelsSettled = (operation: SyncOperation): Effect.Effect<void> =>
       ? Effect.void
       : Fiber.await(operation.cancelling).pipe(Effect.andThen(cancelsSettled(operation))),
   );
+
+/**
+ * A remote host's sync state as this machine shows it. Its `ran` is text from another machine,
+ * so it is kept only when it is one of GOAT's own recipe lines for this request.
+ */
+export const remoteHostState = (
+  request: { readonly driver: ProviderHostSyncDriver; readonly version: string | null },
+  remote: ProviderSyncHostState,
+  host: string,
+) => {
+  const { ran, ...rest } = remote;
+  const recipe = (["darwin", "linux", "win32"] as const).some((platform) => {
+    const command = installCommand(request.driver, platform, request.version);
+    return command !== null && describeInstall(command) === ran;
+  });
+  return { ...rest, host, ...(ran !== undefined && recipe ? { ran } : {}) };
+};

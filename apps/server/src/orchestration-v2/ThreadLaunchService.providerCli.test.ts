@@ -4,9 +4,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as Gate from "../provider/ProviderCliGate.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import { makeHarness } from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput, modelSelection } from "./testkit/threadLaunchInput.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
@@ -106,33 +108,46 @@ it.effect(
     }),
 );
 
-it.effect(
-  "regression F2L-1: a launch racing its own retry never reports the created thread as missing",
-  () =>
+/** A gate that answers by call: present for the listed calls, missing for the rest. */
+const scripted = (present: ReadonlySet<number>, calls: Ref.Ref<number>) =>
+  Layer.succeed(
+    Gate.ProviderCliGate,
+    Gate.ProviderCliGate.of({
+      require: () =>
+        Ref.updateAndGet(calls, (count) => count + 1).pipe(
+          Effect.flatMap((count) => (present.has(count) ? Effect.void : Effect.fail(missing))),
+        ),
+      probe: () => Effect.die("launches only require"),
+      missing: () => Effect.die("launches only require"),
+    }),
+  );
+
+/** Holds the first launch after its CLI check passed, before it creates anything. */
+const heldAfterCheck = (passed: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
+  Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+    namedProjectsRoot: "/projects",
+    isScratchProject: () => Effect.succeed(false),
+    folderForThread: () =>
+      Deferred.succeed(passed, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.as(Option.none()),
+      ),
+  });
+
+it.effect.each([2, 3])(
+  "regression F2L-1/F3-6: %i attempts of one command, one past its CLI check, all return its thread",
+  (attempts) =>
     Effect.gen(function* () {
-      const checking = yield* Deferred.make<void>();
+      const passed = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const calls = yield* Ref.make(0);
-      const raced = Layer.succeed(
-        Gate.ProviderCliGate,
-        Gate.ProviderCliGate.of({
-          require: () =>
-            Ref.updateAndGet(calls, (count) => count + 1).pipe(
-              Effect.flatMap((count) =>
-                count === 1
-                  ? Deferred.succeed(checking, undefined).pipe(
-                      Effect.andThen(Deferred.await(release)),
-                    )
-                  : Effect.fail(missing),
-              ),
-            ),
-          probe: () => Effect.die("launches only require"),
-          missing: () => Effect.die("launches only require"),
-        }),
-      );
-      const harness = makeHarness({ providerCliGate: raced });
+      // The CLI vanished after the first check: every later check says missing.
+      const harness = makeHarness({
+        providerCliGate: scripted(new Set([1]), calls),
+        managedFolders: heldAfterCheck(passed, release),
+      });
       const { threadId: _serverAllocates, ...input } = launchInput({
-        command: "command:cli-race",
+        command: "command:cli-race-" + attempts,
         thread: "unused",
         message: "Only once",
       });
@@ -141,16 +156,17 @@ it.effect(
         const first = yield* launches
           .launch(input)
           .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* Deferred.await(checking);
-        // The same command again while the first still checks, as a proxy retry would send it.
-        const second = yield* launches
-          .launch(input)
-          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(passed);
+        const others = yield* Effect.forEach(Array.from({ length: attempts - 1 }), () =>
+          launches.launch(input).pipe(Effect.forkChild({ startImmediately: true })),
+        );
         yield* Deferred.succeed(release, undefined);
         const created = yield* Fiber.join(first);
-        const replayed = yield* Fiber.join(second);
-        assert.equal(replayed.threadId, created.threadId);
-        assert.isTrue(replayed.resumed);
+        for (const other of others) {
+          const replayed = yield* Fiber.join(other);
+          assert.equal(replayed.threadId, created.threadId);
+          assert.isTrue(replayed.resumed);
+        }
       }).pipe(Effect.provide(harness.layer));
     }),
 );

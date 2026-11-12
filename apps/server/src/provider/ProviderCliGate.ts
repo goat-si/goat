@@ -152,7 +152,10 @@ const make = Effect.gen(function* () {
           if (current.flights.get(instanceId)?.generation !== flight.generation) return current;
           const flights = new Map(current.flights);
           flights.delete(instanceId);
-          return { ...current, flights };
+          // No flight left to order against, so a removed instance leaves nothing behind.
+          const started = new Map(current.started);
+          started.delete(instanceId);
+          return { flights, started };
         }),
       ),
     );
@@ -164,23 +167,29 @@ const make = Effect.gen(function* () {
     const requestedAfter = (yield* Ref.get(state)).started.get(instanceId) ?? 0;
     while (true) {
       const answer = yield* Deferred.make<CliAnswer>();
-      const claim = yield* Ref.modify(state, (current): readonly [Claim, FlightState] => {
-        const flight = current.flights.get(instanceId);
-        if (flight !== undefined) return [{ join: flight }, current];
-        const start = { generation: (current.started.get(instanceId) ?? 0) + 1, answer };
-        return [
-          { start },
-          {
-            started: new Map(current.started).set(instanceId, start.generation),
-            flights: new Map(current.flights).set(instanceId, start),
-          },
-        ];
-      });
-      if ("start" in claim) {
-        // In the service scope, so a caller that goes away never strands the others.
-        yield* Effect.forkIn(settle(instanceId, claim.start), scope);
-        return yield* Deferred.await(claim.start.answer);
-      }
+      // Claiming a flight and forking its worker is one step, so no flight is left without one.
+      const claim = yield* Effect.uninterruptible(
+        Ref.modify(state, (current): readonly [Claim, FlightState] => {
+          const flight = current.flights.get(instanceId);
+          if (flight !== undefined) return [{ join: flight }, current];
+          const start = { generation: (current.started.get(instanceId) ?? 0) + 1, answer };
+          return [
+            { start },
+            {
+              started: new Map(current.started).set(instanceId, start.generation),
+              flights: new Map(current.flights).set(instanceId, start),
+            },
+          ];
+        }).pipe(
+          Effect.tap((claimed) =>
+            // In the service scope, so a caller that goes away never strands the others.
+            "start" in claimed
+              ? Effect.forkIn(Effect.interruptible(settle(instanceId, claimed.start)), scope)
+              : Effect.void,
+          ),
+        ),
+      );
+      if ("start" in claim) return yield* Deferred.await(claim.start.answer);
       const joined = yield* Deferred.await(claim.join.answer);
       if (options?.fresh !== true || claim.join.generation > requestedAfter) return joined;
     }

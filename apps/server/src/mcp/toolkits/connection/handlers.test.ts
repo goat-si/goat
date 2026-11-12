@@ -626,6 +626,11 @@ it.effect.each([
     providerClis: { complete: true, missing: [{ driver: "codex", displayName: "Codex" }] },
   },
   {
+    name: "a CLI driver that gave no answer as not yet known",
+    read: statusWith([enabled("codex"), enabled("claudeAgent", "present")]),
+    providerClis: { complete: false, missing: [] },
+  },
+  {
     name: "an unchecked CLI as not yet known",
     read: statusWith([enabled("codex", "unknown")]),
     providerClis: { complete: false, missing: [] },

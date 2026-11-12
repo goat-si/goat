@@ -473,11 +473,15 @@ export const fromFailure = (fields: Fields, context: CallContext): AgentSurfaceR
     tag ??
     "unknown";
   const remoteCode = stringOf(fields, "remoteCode");
+  // A classification the caller fixes, like a missing CLI, outranks a remote's legacy code.
+  const fixable = declared === undefined ? undefined : FAILURE_CLASSES[declared];
   const failure =
     fields.mayHaveStarted === true
       ? c("unknown_outcome")
-      : ((remoteCode === undefined ? undefined : FAILURE_CLASSES[remoteCode]) ??
-        classifyFailure(reason, tag));
+      : fixable?.releasesKey === true
+        ? fixable
+        : ((remoteCode === undefined ? undefined : FAILURE_CLASSES[remoteCode]) ??
+          classifyFailure(reason, tag));
   // Tagged errors often compute their message, so the encoded form may carry none.
   const message =
     stringOf(fields, "message") ?? stringOf(fields, "detail") ?? `The call failed: ${reason}.`;

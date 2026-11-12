@@ -6,6 +6,15 @@ import * as HostStatus from "../../HostStatusMcpService.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 
 const UNKNOWN = { complete: false, missing: [] } as const;
+/** Drivers whose probe runs their CLI; each answers present, missing, none or unknown. */
+const CLI_DRIVERS: ReadonlySet<string> = new Set([
+  "codex",
+  "claudeAgent",
+  "grok",
+  "opencode",
+  "omo",
+  "pi",
+]);
 
 /** Which provider CLIs a host reported missing, and whether it had checked every one. */
 const providerClisOf = (status: GoatHostStatusResult) => {
@@ -16,8 +25,15 @@ const providerClisOf = (status: GoatHostStatusResult) => {
   if (providers === undefined) return UNKNOWN;
   // Drivers that run no CLI report no cli; an older host reports none at all, so it cannot tell.
   const reported = providers.filter((provider) => provider.cli !== undefined);
+  // A driver GOAT checks by its CLI that gave no answer was not checked.
+  const unanswered = providers.some(
+    (provider) => provider.cli === undefined && CLI_DRIVERS.has(provider.driver),
+  );
   return {
-    complete: reported.length > 0 && reported.every((provider) => provider.cli !== "unknown"),
+    complete:
+      reported.length > 0 &&
+      !unanswered &&
+      reported.every((provider) => provider.cli !== "unknown"),
     missing: providers
       .filter((provider) => provider.cli === "missing")
       .map((provider) => ({
