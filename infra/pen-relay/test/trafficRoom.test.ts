@@ -12,6 +12,7 @@ import {
   readTotals,
   type Relay,
   startRelay,
+  type TotalsRow,
 } from "./harness.ts";
 
 async function readyNode(relay: Relay, seed: Uint8Array = randomSeed()): Promise<FakeNode> {
@@ -81,26 +82,28 @@ describe("Room traffic totals (written at every session end)", () => {
 
 describe("Room traffic totals across a restart", () => {
   const persist = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-relay-restart-"));
-  afterAll(() => {
-    NodeFS.rmSync(persist, { recursive: true, force: true });
-  });
-
-  it("keep what was written before the Room restarted and add to it", async () => {
-    const seed = randomSeed();
+  const seed = randomSeed();
+  let before: TotalsRow | undefined;
+  let second: Relay | undefined;
+  // Both wrangler starts run in hooks, which have the suite's hook timeout.
+  beforeAll(async () => {
     const first = await startRelay({ TOTALS_EVERY_MS: "0" }, { persist });
     try {
       await exchange(first, await readyNode(first, seed), 100, 200, 300);
     } finally {
       await first.stop();
     }
-    const [before] = readTotals(persist);
+    [before] = readTotals(persist);
+    second = await startRelay({ TOTALS_EVERY_MS: "0" }, { persist });
+  });
+  afterAll(async () => {
+    await second?.stop();
+    NodeFS.rmSync(persist, { recursive: true, force: true });
+  });
+
+  it("keep what was written before the Room restarted and add to it", async () => {
     expect(before).toMatchObject({ to_node: 400, from_node: 200, sessions: 1, unanswered: 1 });
-    const second = await startRelay({ TOTALS_EVERY_MS: "0" }, { persist });
-    try {
-      await exchange(second, await readyNode(second, seed), 10, 20, 0);
-    } finally {
-      await second.stop();
-    }
+    await exchange(second!, await readyNode(second!, seed), 10, 20, 0);
     expect(readTotals(persist)).toEqual([
       expect.objectContaining({
         to_node: 410,
