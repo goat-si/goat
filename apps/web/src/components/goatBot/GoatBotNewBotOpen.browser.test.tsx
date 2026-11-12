@@ -10,6 +10,7 @@ import { CommandPaletteDialogFrame } from "../CommandPaletteDialogFrame";
 import { CommandDialog } from "../ui/command";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Sidebar, SidebarProvider, useSidebar } from "../ui/sidebar";
+import { useState } from "react";
 import "~/index.css";
 
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -58,6 +59,7 @@ const channels = vi.hoisted(() => ({
   deleteBot: { permissionAtom: () => null },
   restoreBot: { permissionAtom: () => null },
   updateTaskView: { permissionAtom: () => null },
+  readBotArtifact: { permissionAtom: () => null },
 }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -128,11 +130,12 @@ vi.mock("./useBotRoster", async () => {
 });
 
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
+import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { resetNameRowFocusForTests } from "./goatBotNewBotOpen";
 import { useGoatBotPaletteNewBot } from "./goatBotPaletteNewBot";
 import { GoatBotSidebarTabs } from "./GoatBotSidebarTabs";
-import { resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
+import { newBotOpenBlocked, resetNewBotOpenHoldsForTests } from "./newBotOpenHolds";
 
 /** A create answer the test releases when it chooses. */
 function deferred<T>() {
@@ -174,6 +177,22 @@ function PaletteNewBot() {
   );
 }
 
+/** A Library or reply file the chat shows in place of the conversation, with no URL change. */
+function OpenFile() {
+  const [open, setOpen] = useState(false);
+  return open ? (
+    <GoatBotFileViewer
+      environmentId={EnvironmentId.make("env-1")}
+      file={{ relativePath: "notes.md", size: 12, modifiedAt: "2026-11-07T00:00:00.000Z" }}
+      onClose={() => setOpen(false)}
+    />
+  ) : (
+    <button type="button" onClick={() => setOpen(true)}>
+      Open notes.md
+    </button>
+  );
+}
+
 function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
   return (
     <SidebarProvider>
@@ -185,6 +204,7 @@ function Roster({ overlay = null }: { readonly overlay?: Overlay }) {
         {/* The open chat's own Edit bot, outside the roster. */}
         <GoatBotMemberContext value={ada}>
           <GoatBotEditBotButton />
+          <OpenFile />
         </GoatBotMemberContext>
       </div>
       <CommandDialog open={overlay === "palette"}>
@@ -318,6 +338,33 @@ it("a menu whose row went away while it was open does not block a later open", a
   answer();
   await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env-1/thread-made"));
 });
+
+it.each([
+  ["the roster", "New bot"],
+  ["the palette", "Palette New bot"],
+])(
+  "a file opened in the chat before a create from %s answers keeps the chat, and the created row stays",
+  async (_case, trigger) => {
+    const { answer } = setup();
+    await using screen = await render(<Roster />, { router: "/bot" });
+    await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
+    await userEvent.click(screen.getByRole("button", { name: trigger, exact: true }));
+    await expect.element(screen.getByRole("status").getByText("Creating…")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Open notes.md" }));
+    await expect.element(screen.getByRole("region", { name: "notes.md" })).toBeVisible();
+    const router = screen.router;
+    if (!router) throw new Error("the roster renders under a router");
+    using navigate = vi.spyOn(router, "navigate");
+    answer();
+    await createdInStore();
+    expect(navigate).not.toHaveBeenCalled();
+    await expect.element(screen.getByRole("region", { name: "notes.md" })).toBeVisible();
+    await expect.element(screen.getByRole("link", { name: "New bot", exact: true })).toBeVisible();
+    // Closing the file ends the hold: a later create opens its chat again.
+    await userEvent.click(screen.getByRole("button", { name: "Close notes.md" }));
+    expect(newBotOpenBlocked()).toBe(false);
+  },
+);
 
 it.each<[string, Exclude<Overlay, null>, string]>([
   ["the command palette", "palette", "Command palette"],

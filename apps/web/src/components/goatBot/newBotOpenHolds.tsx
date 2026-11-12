@@ -29,7 +29,7 @@ export function resetNewBotOpenHoldsForTests(): void {
   holds.clear();
 }
 
-/** Holds the open while mounted; render it inside a popup, which mounts only while open. */
+/** Holds the open while mounted; render it inside a surface that mounts only while shown. */
 export function HoldsNewBotOpen(): null {
   // oxlint-disable-next-line goat/react-effect-budget -- The hold must end with the popup, however it unmounts.
   useLayoutEffect(() => holdNewBotOpen(), []);
