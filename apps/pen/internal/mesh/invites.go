@@ -178,9 +178,11 @@ func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
 
 // Burn atomically uses an invite for the joiner whose card is cb; only one caller ever succeeds, and a bound
 // invite only for its subject. A bound invite becomes a burned entry carrying the offer nonce, in the same save.
-func (iv *Invites) Burn(id string, now time.Time, cb CardBody) error {
+// clock is read under the book's lock, so an invite that expired while the join waited for it is not burned.
+func (iv *Invites) Burn(id string, clock func() time.Time, cb CardBody) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	now := clock()
 	x, ok := iv.byID[id]
 	if !ok || x.State != "" {
 		return errors.New("invite already used or expired")

@@ -3,10 +3,14 @@ package mesh
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,7 +66,7 @@ func TestBoundInviteAdmitsOnlyItsSubject(t *testing.T) {
 	f, s, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	j := detID(3)
-	inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), now)
+	inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +108,7 @@ func TestBoundInviteKeepsItsSubjectOnDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	sub := subjectOf(detID(3), "j")
-	inv, err := iv.CreateBound(sub, "", now.Add(time.Minute), now)
+	inv, err := iv.CreateBound(sub, "", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +149,7 @@ func TestCancelRacingAJoinHasExactlyOneWinner(t *testing.T) {
 	}
 	t.Run("the cancel lands between the join's checks and its burn", func(t *testing.T) {
 		f, s, iv := joinFixture(t)
-		inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), now)
+		inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), at(now))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +175,7 @@ func TestCancelRacingAJoinHasExactlyOneWinner(t *testing.T) {
 	})
 	t.Run("the join burns first", func(t *testing.T) {
 		f, s, iv := joinFixture(t)
-		inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), now)
+		inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), at(now))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -185,7 +189,7 @@ func TestCancelRacingAJoinHasExactlyOneWinner(t *testing.T) {
 	t.Run("concurrently", func(t *testing.T) {
 		for range 16 {
 			f, s, iv := joinFixture(t)
-			inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), now)
+			inv, err := iv.CreateBound(subjectOf(j, "j"), "", now.Add(time.Minute), at(now))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -229,17 +233,17 @@ func TestCancelByMintIDBeforeTheCreateRefusesTheCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-1", now.Add(time.Minute), now); !errors.Is(err, ErrMintCancelled) {
+	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-1", now.Add(time.Minute), at(now)); !errors.Is(err, ErrMintCancelled) {
 		t.Fatalf("create after the cancel (book reloaded): %v; want ErrMintCancelled", err)
 	}
 	var onDisk []Invite
 	if _, err := st.ReadJSON("offers.json", &onDisk); err != nil || len(onDisk) != 1 || onDisk[0].ID != "" {
 		t.Fatalf("offers.json %+v (%v); want only the fence", onDisk, err)
 	}
-	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-2", now.Add(time.Minute), now); err != nil {
+	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-2", now.Add(time.Minute), at(now)); err != nil {
 		t.Fatalf("another mint: %v", err)
 	}
-	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-2", now.Add(time.Minute), now); !errors.Is(err, ErrMintUsed) {
+	if _, err := again.CreateBound(subjectOf(detID(3), "j"), "mint-2", now.Add(time.Minute), at(now)); !errors.Is(err, ErrMintUsed) {
 		t.Fatalf("the same mint twice: %v; want ErrMintUsed", err)
 	}
 }
@@ -257,7 +261,7 @@ func TestBoundInviteTerminalStatesSurviveARestart(t *testing.T) {
 	j := detID(3)
 	mint := func(m string) Invite {
 		t.Helper()
-		x, err := iv.CreateBound(subjectOf(j, "j"), m, now.Add(time.Minute), now)
+		x, err := iv.CreateBound(subjectOf(j, "j"), m, now.Add(time.Minute), at(now))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,7 +310,7 @@ func TestAReissuedMintIsFoundByItsOwnMintID(t *testing.T) {
 	_, s, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	sub := subjectOf(detID(3), "j")
-	first, err := iv.CreateBound(sub, "attach-1.1", now.Add(time.Minute), now)
+	first, err := iv.CreateBound(sub, "attach-1.1", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +320,7 @@ func TestAReissuedMintIsFoundByItsOwnMintID(t *testing.T) {
 	if got := StatusOf(s, iv, "", "attach-1.2", now); got.State != InviteAbsent {
 		t.Fatalf("the second mint before its create: %+v; want absent", got)
 	}
-	second, err := iv.CreateBound(sub, "attach-1.2", now.Add(time.Minute), now)
+	second, err := iv.CreateBound(sub, "attach-1.2", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +334,7 @@ func TestAReissuedMintIsFoundByItsOwnMintID(t *testing.T) {
 func TestAMintPastItsExpiresAtMakesNothing(t *testing.T) {
 	_, _, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
-	if _, err := iv.CreateBound(subjectOf(detID(3), "j"), "late", now, now); err == nil {
+	if _, err := iv.CreateBound(subjectOf(detID(3), "j"), "late", now, at(now)); err == nil {
 		t.Fatal("a mint at its expiresAt made an invite")
 	}
 	if x, ok := iv.findLocked("", "late"); ok {
@@ -348,7 +352,7 @@ func TestOnlyTheBoundInvitesNonceMatchesItsSubjectsAdmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), now)
+	bound, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +388,7 @@ func TestOnlyTheBoundInvitesNonceMatchesItsSubjectsAdmit(t *testing.T) {
 func TestAckForgetsSettledEntriesAndRefusesALiveOne(t *testing.T) {
 	_, s, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
-	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), now)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +417,7 @@ func TestABoundTransitionThatCannotBeSavedChangesNothing(t *testing.T) {
 	}
 	now := time.UnixMilli(1_800_000_000_000)
 	j := detID(3)
-	x, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), now)
+	x, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +432,7 @@ func TestABoundTransitionThatCannotBeSavedChangesNothing(t *testing.T) {
 		t.Fatal("a cancel that could not be saved succeeded")
 	}
 	card := CardBody{SignPub: x.Subject.SignPub, NoisePub: x.Subject.NoisePub, Name: "j", Nonce: "n"}
-	if err := iv.Burn(x.ID, now, card); err == nil {
+	if err := iv.Burn(x.ID, at(now), card); err == nil {
 		t.Fatal("a burn that could not be saved succeeded")
 	}
 	if _, ok := iv.Lookup(x.ID, now); !ok {
@@ -454,7 +458,7 @@ func TestABurnWhoseAdmitIsNotSavedReportsBurnedUnsaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.UnixMilli(1_800_000_000_000)
-	x, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), now)
+	x, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,5 +490,160 @@ func TestAnEmptyReferenceNamesNoInvite(t *testing.T) {
 	}
 	if _, ok := iv.Lookup(x.ID, now); !ok {
 		t.Fatal("the ordinary invite was cancelled by an empty reference")
+	}
+}
+
+func at(t time.Time) func() time.Time { return func() time.Time { return t } }
+
+// fakeClock is a clock a test moves while a join or a create waits.
+type fakeClock struct {
+	mu  sync.Mutex
+	cur time.Time
+}
+
+func (c *fakeClock) now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.cur }
+func (c *fakeClock) set(t time.Time) { c.mu.Lock(); c.cur = t; c.mu.Unlock() }
+
+// A bound invite that expires while its join waits before the burn is not burned: the burn reads the clock under
+// the book's lock, not when the join began.
+func TestABoundInviteThatExpiresBeforeItsBurnIsNotBurned(t *testing.T) {
+	f, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	j := detID(3)
+	inv, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := &fakeClock{cur: now}
+	s.burnGate = func() { clk.set(now.Add(2 * time.Minute)) }
+	srv, cli := pipe()
+	served := make(chan error, 1)
+	go func() {
+		_, err := ServeJoin(context.Background(), srv, j.NoisePub, Admission{ID: f, Store: s, Invites: iv, InviteID: inv.ID, Now: clk.now})
+		served <- err
+	}()
+	_, _, joinErr := Join(context.Background(), cli, j, "j")
+	if serveErr := <-served; serveErr == nil || joinErr == nil || s.Len() != 1 {
+		t.Fatalf("serve %v, join %v, records %d; want the expired invite refused and nothing signed", serveErr, joinErr, s.Len())
+	}
+	if got := StatusOf(s, iv, inv.ID, "", clk.now()); got.State != InviteExpired {
+		t.Fatalf("status %+v; want expired", got)
+	}
+}
+
+// A create decides on the clock it reads under the book's lock, so a mint that waited for the lock past its expiresAt
+// (or past the ack of its fence) makes nothing.
+func TestACreateReadsItsClockUnderTheBooksLock(t *testing.T) {
+	_, _, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	outside := false
+	clock := func() time.Time {
+		if iv.mu.TryLock() {
+			iv.mu.Unlock()
+			outside = true
+		}
+		return now
+	}
+	if _, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), clock); err != nil {
+		t.Fatal(err)
+	}
+	if outside {
+		t.Fatal("CreateBound read its clock without holding the book's lock")
+	}
+}
+
+// Fences count toward the cap of 512 kept entries, so creates cannot push the book past it.
+func TestFencesCountTowardTheCapOnCreates(t *testing.T) {
+	_, _, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	for i := range maxBoundAndFences {
+		if _, err := iv.Cancel("", fmt.Sprintf("f%d", i), now); err != nil {
+			t.Fatalf("fence %d: %v", i, err)
+		}
+	}
+	if _, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now)); err == nil {
+		t.Fatal("a create succeeded with 512 entries kept")
+	}
+}
+
+// joinWithCard answers the inviter's offer with a card j signs over the given key spellings and returns the joiner's
+// error and the inviter's.
+func joinWithCard(t *testing.T, f *ident.Identity, s *Store, iv *Invites, id string, now time.Time, j *ident.Identity, signPub, noisePub string) (joinErr, serveErr error) {
+	t.Helper()
+	srv, cliEnd := pipe()
+	served := make(chan error, 1)
+	go func() {
+		_, err := ServeJoin(context.Background(), srv, j.NoisePub, Admission{ID: f, Store: s, Invites: iv, InviteID: id, Now: at(now)})
+		served <- err
+	}()
+	c := &Lines{L: cliEnd}
+	offer, err := c.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := CardBody{V: 1, Mesh: offer.Mesh, Inviter: offer.Inviter, Nonce: offer.Nonce, NodeID: j.NodeID(), SignPub: signPub, NoisePub: noisePub, Name: "j"}
+	body, err := json.Marshal(cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := &Card{Body: body, Sig: ed25519.Sign(j.SignPriv, digest(cardPrefix, body))}
+	if err := card.Verify(); err != nil {
+		t.Fatalf("the test's card does not verify: %v", err)
+	}
+	if err := c.Write(Msg{T: "card", Card: card}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		m, err := c.Read(context.Background())
+		if err != nil {
+			return err, <-served
+		}
+		if m.T == "refused" {
+			return &RefusedError{Reason: m.Reason}, <-served
+		}
+		if m.T == "done" {
+			return nil, <-served
+		}
+	}
+}
+
+// otherSpelling encodes the same 32-byte key with nonzero trailing bits, which base64url decoding accepts.
+func otherSpelling(t *testing.T, k string) string {
+	t.Helper()
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	i := strings.IndexByte(alphabet, k[len(k)-1])
+	alt := k[:len(k)-1] + string(alphabet[i|1])
+	if alt == k {
+		alt = k[:len(k)-1] + string(alphabet[i|2])
+	}
+	if a, err := ident.DecodeKey(alt); err != nil || ident.B64.EncodeToString(a) != k {
+		t.Fatalf("%s is not another spelling of %s (%v)", alt, k, err)
+	}
+	return alt
+}
+
+// The subject's keys must be spelled as the subject's canonical ones: a card spelling either key another way is
+// refused before the burn (card keys key the member map, so it would be another member).
+func TestABoundInviteRefusesAnotherSpellingOfItsSubjectsKeys(t *testing.T) {
+	f, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	j := detID(3)
+	sub := subjectOf(j, "j")
+	inv, err := iv.CreateBound(sub, "", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keys := range [][2]string{{otherSpelling(t, sub.SignPub), sub.NoisePub}, {sub.SignPub, otherSpelling(t, sub.NoisePub)}} {
+		joinErr, serveErr := joinWithCard(t, f, s, iv, inv.ID, now, j, keys[0], keys[1])
+		var refused *RefusedError
+		if !errors.As(joinErr, &refused) || serveErr == nil {
+			t.Fatalf("keys %v: join %v, serve %v; want a refusal", keys, joinErr, serveErr)
+		}
+		if _, ok := iv.Lookup(inv.ID, now); !ok || s.Len() != 1 {
+			t.Fatalf("keys %v: invite usable %v, records %d; want it unburned and nothing signed", keys, ok, s.Len())
+		}
+	}
+	if joinErr, serveErr := joinWithCard(t, f, s, iv, inv.ID, now, j, sub.SignPub, sub.NoisePub); joinErr != nil || serveErr != nil {
+		t.Fatalf("canonical keys: join %v, serve %v", joinErr, serveErr)
 	}
 }

@@ -860,9 +860,11 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   32-byte keys and X a valid node name; the subject has exactly these three members and the line no unknown member.
   `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes when absent). The answer is the ordinary
   invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and makes nothing.
-- The invite's entry in `offers.json` keeps the subject. In "Join" step 3 the inviter refuses (`refused`, then 4401)
-  a card whose signPub, noisePub or name differs from the subject before it burns the invite, so a wrong machine
-  holding the token cannot use it up; the burn checks the subject again.
+- The invite's entry in `offers.json` keeps the subject. A joiner whose Noise key is not the subject's gets no psk for
+  it and closes 4401 at the handshake, so another machine holding the token cannot hold a join session open. In
+  "Join" step 3 the inviter refuses (`refused`, then 4401) a card whose signPub, noisePub or name differs from the
+  subject, keys compared exactly as the subject spells them (canonical base64url), before it burns the invite, so a
+  wrong machine cannot use it up; the burn checks the subject again.
 - `"mintId":M` names the request that makes a bound invite: 1 to 64 ASCII letters, digits, `-`, `_`, `.` or `:`, only
   with a subject and an `expiresAt`. The answer repeats it as `"mintId"`. Under the invite book's lock the create is refused, and makes
   nothing, when an entry or a fence already carries M, so one mint makes at most one invite.
@@ -891,8 +893,8 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   (with `expiresAt`), `cancelled`, `expired`, `burned`, `burned-unsaved` or `absent`. `burned` carries `nonce`;
   once the node's record set holds the admit whose card repeats that nonce and the subject's keys, it also carries
   `admit` (that record's hash) and `member` (whether the subject is a current member of the node's view).
-  `burned-unsaved` is the same while the node holds records it has not yet written to disk: the admit is in memory
-  only, and a restart before a later save loses it. `burned` without `admit`
+  `burned-unsaved` is the same while the node holds any records it has not yet written to disk, so the admit may be
+  in memory only and a restart before a later save may lose it; a caller asks again later. `burned` without `admit`
   means the burn was saved and no admit followed. An ordinary invite answers `live`, `expired` or `absent`. The
   read holds the store's lock and then the invite book's, the order of a burn, so it never sees a burn without the
   admit signed in the same step.
@@ -900,13 +902,17 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   entry or a fence and answers `{"t":"invite-ack","inviteId":I,"mintId":M,"state":"acked"}`, or `"absent"` when there
   is none. A live invite is refused. After an ack the node no longer knows the mintId, so a caller acknowledges a
   fence only once that mint's expiresAt has passed, when the expiry alone refuses a late create.
-- At most 256 bound entries are kept, and 512 with fences; past that a create or a fence is refused.
+- At most 256 bound entries are kept, and 512 counting fences; past either a create is refused, and past 512 a fence.
 - `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
   `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
-  `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to.
+  `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to. A
+  `pen leave` still deletes them, also one running at the same time; a later join then makes other keys, which the
+  bound invite refuses.
 - A node older than this decodes `subject` as the string of the `revoke` op, answers `{"error":"bad request"}` and
   makes nothing, so a caller never gets an unbound token in place of a bound one; it answers the other ops of this
-  section that it does not know the op. A caller always sends the subject: an older node ignores a `mintId` and an
+  section that it does not know the op. An older node takes a `null` or string `subject` as an ordinary invite, so a
+  caller sends the subject object and uses a token only from an answer that carries `id` and the `mintId` it sent.
+  A caller always sends the subject: an older node ignores a `mintId` and an
   `expiresAt` without one. After a downgrade an older node prunes terminal entries (they have no `expiresAt`) and treats live
   bound invites as ordinary ones.
 

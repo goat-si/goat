@@ -56,7 +56,7 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 			return nil, errNotAdmitted
 		}
 		inv, ok := d.inviteBook().Lookup(p.Invite, d.now())
-		if !ok {
+		if !ok || !inv.Subject.AdmitsNoise(remote) {
 			return nil, errNotAdmitted
 		}
 		return session.JoinPSK(inv.Secret, d.nodeID, d.id.NoisePub)

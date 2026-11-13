@@ -1,7 +1,6 @@
 package mesh
 
 import (
-	"bytes"
 	"errors"
 	"maps"
 	"time"
@@ -42,18 +41,20 @@ func (s Subject) Valid() error {
 	return nil
 }
 
-// admits reports whether a card carries the subject's keys and name; an invite without a subject admits any card.
+// admits reports whether a card carries the subject's keys, spelled exactly as the subject's canonical ones (card
+// keys key the member map, so another spelling of the same key is another member), and its name. An invite without a
+// subject admits any card.
 func (s *Subject) admits(cb CardBody) bool {
 	if s == nil {
 		return true
 	}
-	return sameKey(cb.SignPub, s.SignPub) && sameKey(cb.NoisePub, s.NoisePub) && cb.Name == s.Name
+	return cb.SignPub == s.SignPub && cb.NoisePub == s.NoisePub && cb.Name == s.Name
 }
 
-func sameKey(a, b string) bool {
-	x, err1 := ident.DecodeKey(a)
-	y, err2 := ident.DecodeKey(b)
-	return err1 == nil && err2 == nil && bytes.Equal(x, y)
+// AdmitsNoise reports whether a joiner holding the Noise key noise may complete a handshake for the invite, so a
+// machine other than the subject cannot hold a join session open with a bound invite's token.
+func (s *Subject) AdmitsNoise(noise []byte) bool {
+	return s == nil || s.NoisePub == ident.B64.EncodeToString(noise)
 }
 
 // ValidMintID reports whether m can name a mint: 1 to 64 ASCII letters, digits, '-', '_', '.' or ':'.
@@ -76,8 +77,9 @@ var (
 )
 
 // CreateBound makes an invite that admits only sub, valid until expiresAt. A non-empty mintID names the request
-// that makes it; under the book's lock it is refused when an entry or a fence already carries that mintID.
-func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt, now time.Time) (Invite, error) {
+// that makes it; under the book's lock, where clock is read, it is refused when an entry or a fence already carries
+// that mintID or expiresAt has passed.
+func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt time.Time, clock func() time.Time) (Invite, error) {
 	if err := sub.Valid(); err != nil {
 		return Invite{}, err
 	}
@@ -91,6 +93,7 @@ func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt, now time.T
 	x.Subject, x.MintID = &sub, mintID
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	now := clock()
 	if iv.retired {
 		return Invite{}, errInviteRetired
 	}
@@ -104,7 +107,7 @@ func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt, now time.T
 			return Invite{}, ErrMintUsed
 		}
 	}
-	if iv.boundLocked() >= maxBound {
+	if n := iv.boundLocked(); n >= maxBound || n+len(iv.fences) >= maxBoundAndFences {
 		return Invite{}, errors.New("too many bound invites kept; acknowledge settled ones first")
 	}
 	byID := maps.Clone(iv.byID)

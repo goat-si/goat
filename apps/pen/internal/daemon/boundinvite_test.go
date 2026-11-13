@@ -49,6 +49,12 @@ func TestBoundInviteOpAdmitsOnlyItsSubject(t *testing.T) {
 		t.Fatalf("answer %+v (%v); want a token and the invite id", r, err)
 	}
 	var refused *mesh.RefusedError
+	// Another machine holding the token is turned away at the handshake, before it can hold a join session open.
+	ost := shortDir(t)
+	other := identity(t, ost, rs.URL, "o")
+	if _, err := Join(ctx, ost, other, tok, "j"); err == nil || errors.As(err, &refused) {
+		t.Fatalf("join by another machine: %v; want it closed at the handshake, before any card", err)
+	}
 	if _, err := Join(ctx, jst, jid, tok, "k"); !errors.As(err, &refused) {
 		t.Fatalf("join under another name: %v; want a refusal", err)
 	}

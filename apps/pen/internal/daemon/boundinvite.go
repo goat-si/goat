@@ -74,7 +74,8 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			return
 		}
 		if head.Op == "invite.status" {
-			reply(mesh.StatusOf(d.mesh(), d.inviteBook(), ref.InviteID, ref.MintID, d.now()))
+			store, book := d.meshAndBook()
+			reply(mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now()))
 			return
 		}
 		do, t := d.inviteBook().Cancel, "invite-cancel"
@@ -100,7 +101,7 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		fail(err)
 		return
 	}
-	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, expiresAt, now)
+	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, expiresAt, d.now)
 	if err != nil {
 		fail(err)
 		return
