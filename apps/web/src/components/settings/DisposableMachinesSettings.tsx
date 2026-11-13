@@ -66,11 +66,15 @@ export function DisposableMachinesSettings({
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
+  const [keyCopiedFor, setKeyCopiedFor] = useState<string | null>(null);
+  const rowKey = useCopyToClipboard({
+    onError: () => setError("Could not copy. Select the machine key and copy it yourself."),
+  });
   const [thread, setThread] = useState("");
   const [cap, setCap] = useState(String(settings.cap));
   const [rule, setRule] = useState(settings.nameRule);
   const [dialog, setDialog] = useState<
-    { kind: "attach" } | { kind: "invite"; invite: NonNullable<HubMachineStatus["invite"]> } | null
+    { kind: "attach" } | { kind: "invite"; invite: Invite } | null
   >(null);
   const available = canSave && hub.enabled && !busy;
   async function update(patch: HubDisposableMachinesPatch) {
@@ -103,7 +107,8 @@ export function DisposableMachinesSettings({
       setError(failureText(failure, "Could not reissue the invite."));
     } else {
       list.refresh();
-      if (result.value.invite) setDialog({ kind: "invite", invite: result.value.invite });
+      const minted = inviteOf(result.value);
+      if (minted) setDialog({ kind: "invite", invite: minted });
       else setError(`No new invite was made: ${result.value.message}`);
     }
   }
@@ -317,6 +322,27 @@ export function DisposableMachinesSettings({
                     : `thread ${machine.provisioner.threadId}`}
                   {machine.penMember ? " · Still in Pen" : ""}
                 </span>
+                {waitsForKey(machine) && machine.machineKey && (
+                  <>
+                    <code className="max-w-48 truncate text-muted-foreground">
+                      {machine.machineKey}
+                    </code>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      aria-label={`Copy the machine key for ${machine.name}`}
+                      onClick={() => {
+                        setError(null);
+                        setKeyCopiedFor(machine.attachId);
+                        rowKey.copyToClipboard(machine.machineKey ?? "");
+                      }}
+                    >
+                      {rowKey.isCopied && keyCopiedFor === machine.attachId
+                        ? "Copied"
+                        : "Copy machine key"}
+                    </Button>
+                  </>
+                )}
                 {machine.state === "invited" && (
                   <Button
                     size="xs"
@@ -345,6 +371,20 @@ export function DisposableMachinesSettings({
   );
 }
 
+/** A machine GOAT cannot reach yet: the person still has to add the hub's key to it. */
+const waitsForKey = (machine: HubMachineStatus) =>
+  machine.state === "admitted" || (machine.state === "attaching" && machine.step === "reach");
+
+/** A token shown once, with the hub key the machine must trust. */
+type Invite = NonNullable<HubMachineStatus["invite"]> & { readonly machineKey?: string };
+const inviteOf = (status: HubMachineStatus): Invite | null =>
+  status.invite === undefined
+    ? null
+    : {
+        ...status.invite,
+        ...(status.machineKey === undefined ? {} : { machineKey: status.machineKey }),
+      };
+
 function AttachDialog({
   environmentId,
   initialInvite,
@@ -352,7 +392,7 @@ function AttachDialog({
   onAttached,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly initialInvite: NonNullable<HubMachineStatus["invite"]> | null;
+  readonly initialInvite: Invite | null;
   readonly onClose: () => void;
   readonly onAttached: () => void;
 }) {
@@ -361,6 +401,7 @@ function AttachDialog({
   const [invite, setInvite] = useState(initialInvite);
   const [copyError, setCopyError] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard({ onError: () => setCopyError(true) });
+  const copyKey = useCopyToClipboard({ onError: () => setCopyError(true) });
   const [name, setName] = useState("");
   const [signPub, setSignPub] = useState("");
   const [noisePub, setNoisePub] = useState("");
@@ -379,7 +420,8 @@ function AttachDialog({
       setError(failureText(failure, "Could not attach the machine."));
     } else {
       onAttached();
-      if (result.value.invite) setInvite(result.value.invite);
+      const minted = inviteOf(result.value);
+      if (minted) setInvite(minted);
       else
         setError(
           `No usable invite was returned: ${result.value.message} Create a new invite to try again.`,
@@ -415,9 +457,26 @@ function AttachDialog({
               <p className="text-muted-foreground text-xs">
                 Expires {new Date(invite.expiresAt).toLocaleString()}.
               </p>
+              {invite.machineKey && (
+                <div className="space-y-1">
+                  <Label htmlFor="disposable-machine-key">Machine key</Label>
+                  <Textarea
+                    id="disposable-machine-key"
+                    readOnly
+                    value={invite.machineKey}
+                    rows={2}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Add this line to authorized_keys of the machine's SSH user. After the machine
+                    joins Pen, this hub reaches it with this key alone, and links it to OpenCodex
+                    once this hub's OpenCodex can use the key.
+                  </p>
+                </div>
+              )}
               {copyError && (
                 <p role="alert" className="text-destructive text-xs">
-                  Could not copy. Select the token and copy it yourself.
+                  Could not copy. Select the text and copy it yourself.
                 </p>
               )}
             </div>
@@ -480,6 +539,17 @@ function AttachDialog({
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
+          {invite?.machineKey && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setCopyError(false);
+                if (invite.machineKey) copyKey.copyToClipboard(invite.machineKey);
+              }}
+            >
+              {copyKey.isCopied ? "Copied" : "Copy machine key"}
+            </Button>
+          )}
           {invite ? (
             <Button
               onClick={() => {

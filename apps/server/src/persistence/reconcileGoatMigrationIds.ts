@@ -74,6 +74,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ChannelBotTaskHistory",
   "DisposableMachines",
   "DisposableMachineRequests",
+  "DisposableMachineEnrollment",
 ]);
 
 type MigrationEntry<E> = readonly [

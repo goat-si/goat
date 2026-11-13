@@ -5,6 +5,8 @@ import * as HubOcx from "../HubOcx.ts";
 import * as DisposableAttach from "./DisposableAttach.ts";
 import * as DisposableMachineStore from "./DisposableMachineStore.ts";
 import * as DisposableProvisioners from "./DisposableProvisioners.ts";
+import * as EnrollHost from "./EnrollHost.ts";
+import * as MachineKey from "./machineKey.ts";
 import { homeContractsLayer } from "./features.ts";
 import * as PenInvitesSocket from "./PenInvitesSocket.ts";
 
@@ -17,4 +19,6 @@ export const layerDisposableAttach = DisposableAttach.layer.pipe(
   Layer.provide(PenInvitesSocket.layer),
   Layer.provide(homeContractsLayer.pipe(Layer.provide(HubOcx.layer))),
   Layer.provide(DisposableProvisioners.layer.pipe(Layer.provide(Profiles.layer))),
+  Layer.provide(EnrollHost.layer.pipe(Layer.provide(HubOcx.layer))),
+  Layer.provide(MachineKey.layer),
 );

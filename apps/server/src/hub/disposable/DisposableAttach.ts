@@ -10,7 +10,6 @@ import {
   type HubMachineStatus,
   isPenNodeName,
   matchesDisposableNameRule,
-  type ServerSettings,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -26,9 +25,6 @@ import * as Settings from "../../serverSettings.ts";
 import {
   type AttachEffect,
   ackable,
-  coversDelegation,
-  decodeDelegation,
-  type Delegation,
   encodeDelegation,
   encodeEffects,
   encodeProvisioner,
@@ -43,6 +39,9 @@ import { disposableSwitch } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
 import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvites.ts";
 import { makeSharedPasses } from "./sharedPasses.ts";
+import { makeAuthority, Provisioners } from "./attachAuthority.ts";
+import { makeEnroll } from "./DisposableEnroll.ts";
+import { MachineKey } from "./machineKey.ts";
 import {
   afterCancel,
   type Columns,
@@ -69,21 +68,11 @@ import {
 } from "./attachRow.ts";
 
 export type { StoredProvisioner };
+export { Provisioners };
 
 export interface AttachCaller {
   readonly provisioner: StoredProvisioner;
 }
-
-/** A provisioner's grant now (design section 4); undefined when it holds none for this node. */
-export class Provisioners extends Context.Service<
-  Provisioners,
-  {
-    readonly grantOf: (
-      provisioner: StoredProvisioner,
-      nodeId: string,
-    ) => Effect.Effect<Delegation | undefined>;
-  }
->()("goat/hub/disposable/DisposableAttach/Provisioners") {}
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 /** How long a list waits for Pen's answers before it reads what GOAT has stored. */
@@ -116,6 +105,11 @@ export class DisposableAttach extends Context.Service<
      * joined; its failures are logged, never returned.
      */
     readonly reconcile: Effect.Effect<void>;
+    /**
+     * One pass that moves admitted attaches on (route, reach, link); joined if running. Reconcile
+     * starts it without waiting, so a slow link never holds back invites and withdrawals.
+     */
+    readonly enroll: Effect.Effect<void>;
   }
 >()("goat/hub/disposable/DisposableAttach") {}
 
@@ -126,6 +120,7 @@ export const make = Effect.gen(function* () {
   const pen = yield* PenInvites;
   const home = yield* HomeContracts;
   const provisioners = yield* Provisioners;
+  const machineKey = yield* MachineKey;
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   // One attach mutation at a time, each rereading its record: mint, reissue, settlement and
   // withdrawal never interleave. Lock order: this, the settings write lock, the SQL transaction.
@@ -164,7 +159,9 @@ export const make = Effect.gen(function* () {
         ...extra,
         effects_json: encodeEffects(effects),
         state,
-        ...(state === row.state ? {} : { state_since: now }),
+        ...(state === row.state
+          ? {}
+          : { state_since: typeof extra.state_since === "string" ? extra.state_since : now }),
         ...(state === "failed" && row.final_at === null ? { final_at: now } : {}),
         updated_at: now,
       })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} RETURNING attach_id`;
@@ -190,72 +187,10 @@ export const make = Effect.gen(function* () {
       );
   });
 
-  /**
-   * Why this record's provisioner may no longer move it on (design section 4, Withdrawal), or
-   * undefined while it may: the switch is on, unexpired and still the record's grant, a thread is
-   * still named, and the provisioner still holds at least the grant recorded at attach start.
-   */
-  const unnamed = (row: Row, current: ServerSettings) => {
-    const provisioner = provisionerOf(row);
-    return (
-      provisioner === undefined ||
-      (provisioner.kind === "thread" &&
-        !current.hub.attachDisposableMachines.provisioners.some(
-          (id) => id === provisioner.threadId,
-        ))
-    );
-  };
-  // Reads goatclaw profiles through the settings service, so it never runs under the settings lock.
-  const provisionerEnded = Effect.fn("DisposableAttach.provisionerEnded")(function* (
-    row: Row,
-    current: ServerSettings,
-  ) {
-    const provisioner = provisionerOf(row);
-    if (provisioner === undefined || unnamed(row, current)) return "provisioner_refused" as const;
-    const now = yield* provisioners.grantOf(provisioner, row.node_id);
-    if (!coversDelegation(now, decodeDelegation(row.delegation_json)))
-      return "delegation_lost" as const;
-    return undefined;
-  });
-  const authorityEnded = Effect.fn("DisposableAttach.authorityEnded")(function* (
-    row: Row,
-    current: ServerSettings | undefined,
-  ) {
-    if (current === undefined) return "switch_off" as const;
-    const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-    if (!gate.open) return gate.reason;
-    if (gate.grant !== row.grant_id) return "switch_off" as const;
-    return yield* provisionerEnded(row, current);
-  });
-  const settingsNow = settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-  /**
-   * The provisioner's grant is read outside the settings lock; under it, the switch, its grant, the
-   * named thread and the goatclaw policy that grant was resolved from must be as they were.
-   */
-  const lockedEnded = (
-    row: Row,
-    before: ServerSettings,
-    current: ServerSettings,
-    nowMs: number,
-  ) => {
-    const gate = disposableSwitch(current.hub, nowMs);
-    if (!gate.open) return gate.reason;
-    if (gate.grant !== row.grant_id) return "switch_off" as const;
-    if (unnamed(row, current)) return "provisioner_refused" as const;
-    if (!samePolicy(current, before)) return "delegation_lost" as const;
-    return undefined;
-  };
-  /** The last check before a token leaves: the grant now, then the switch under the lock. */
-  const finalCheck = Effect.fn("DisposableAttach.finalCheck")(function* (row: Row) {
-    const before = yield* settingsNow;
-    const ended = yield* authorityEnded(row, before);
-    if (ended !== undefined || before === undefined) return ended ?? ("switch_off" as const);
-    return yield* settings
-      .withSettingsSnapshot((current) =>
-        Effect.map(Clock.currentTimeMillis, (nowMs) => lockedEnded(row, before, current, nowMs)),
-      )
-      .pipe(Effect.orElseSucceed(() => "switch_off" as const));
-  });
+  const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
+  const enrollment = yield* makeEnroll(exclusive);
+  /** The public line a machine must trust; attach makes the key, a read never does. */
+  const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
   /**
    * Admits the next mint (design section 2, Effect admission): the provisioner's grant is checked
@@ -392,7 +327,7 @@ export const make = Effect.gen(function* () {
     const lost = yield* finalCheck(fresh);
     if (lost !== undefined)
       return yield* withdrawMinted(fresh, { ...intent, state: "done" }, invite.inviteId, lost);
-    return status(fresh, { token: invite.token, expiresAt });
+    return status(fresh, { token: invite.token, expiresAt }, yield* knownKey);
   });
 
   const unrecorded = Effect.fn("DisposableAttach.unrecorded")(function* (inviteId: string) {
@@ -415,7 +350,7 @@ export const make = Effect.gen(function* () {
     earlier.expected_noise_pub !== input.noisePub ||
     earlier.name !== input.name
       ? fail("invalid_request", "This clientRequestId was used for another machine.")
-      : Effect.succeed(status(earlier));
+      : Effect.map(knownKey, (key) => status(earlier, undefined, key));
 
   const attach = Effect.fn("DisposableAttach.attach")(function* (
     caller: AttachCaller,
@@ -449,6 +384,9 @@ export const make = Effect.gen(function* () {
     )
       return yield* fail("provisioner_refused", refusalText.provisioner_refused);
     yield* requireFeatures;
+    // The machine trusts this key alone, so it exists before any invite does.
+    if ((yield* machineKey.identity.pipe(Effect.option))._tag === "None")
+      return yield* fail("storage_failed", "GOAT could not make this hub's machine key.");
     const members = yield* pen.members;
     if (members === undefined)
       return yield* fail("pen_unsupported", "This hub's Pen member list could not be read.");
@@ -571,9 +509,13 @@ export const make = Effect.gen(function* () {
       const missing = (view: ReadonlySet<string> | undefined) =>
         view !== undefined && !view.has(row.expected_sign_pub);
       if (missing(yield* members) && missing(yield* pen.members)) {
+        // The fence moves with the removal, so an enrollment step in flight commits nothing after it.
+        // A record that holds or started a link stays open until enrollment reads what it left.
+        const linking = row.link_id !== null || row.link_operation_id !== null;
         row = yield* save(row, effects, {
+          fence: row.fence + 1,
           pen_removed_at: yield* nowIso,
-          ...(row.final_at === null ? { state: "failed" } : {}),
+          ...(row.final_at === null ? { state: linking ? "left_pen" : "failed" } : {}),
         });
         yield* audit(row.attach_id, "hub.machine_left_pen", "removed");
       }
@@ -619,7 +561,9 @@ export const make = Effect.gen(function* () {
               step: "admitted",
               offer_nonce: admitted.nonce,
               admit_hash: admitted.admit ?? null,
+              // One time for both: the paused text compares them to tell which came first.
               pen_admitted_at: row.pen_admitted_at ?? now,
+              state_since: now,
               pen_removed_at: admitted.member === false ? now : null,
             },
       );
@@ -653,7 +597,12 @@ export const make = Effect.gen(function* () {
         row === undefined ? Effect.void : Effect.asVoid(settleRecord(row, members)),
       ),
     );
-  const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await);
+  const enrollPass = enrollment.pass.pipe(Effect.mapError(storageFailed));
+  const enroll = Effect.flatMap(shared("enroll", enrollPass), Deferred.await);
+  const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await).pipe(
+    Effect.andThen(shared("enroll", enrollPass)),
+    Effect.asVoid,
+  );
 
   const recordRequest = (requestKey: string, outcome: string, detail: string | null) =>
     Effect.flatMap(
@@ -684,7 +633,7 @@ export const make = Effect.gen(function* () {
     const effects = replace(effectsOf(row), afterCancel(open, cancelled));
     if (cancelled !== "cancelled") {
       const settled = yield* settleRecord(yield* save(row, effects));
-      return { outcome: "settled", status: status(settled) } as const;
+      return { outcome: "settled", status: status(settled, undefined, yield* knownKey) } as const;
     }
     const intent: AttachEffect = {
       id: row.attach_id + "." + (effects.length + 1),
@@ -732,7 +681,7 @@ export const make = Effect.gen(function* () {
       if (earlier.attach_id !== row.attach_id)
         return yield* fail("invalid_request", "This clientRequestId was used for another attach.");
       if (earlier.outcome === "ok" || earlier.outcome === "settled")
-        return { replay: status(row) } as const;
+        return { replay: status(row, undefined, yield* knownKey) } as const;
       if (earlier.outcome === "running")
         return yield* fail(
           "unknown_outcome",
@@ -808,12 +757,13 @@ export const make = Effect.gen(function* () {
             Effect.mapError(storageFailed),
           )
         : [yield* read(input.attachId)].filter((row) => row !== undefined);
-    return { machines: rows.map((row) => status(row)) };
+    const key = yield* knownKey;
+    return { machines: rows.map((row) => status(row, undefined, key)) };
   });
 
   const nodeOf = (attachId: string) => Effect.map(read(attachId), (row) => row?.node_id);
 
-  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile });
+  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile, enroll });
 });
 
 // Settles invites and withdraws ones whose authority ended, also when no client is reading.
