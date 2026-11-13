@@ -304,3 +304,17 @@ it.effect(
       }),
     ),
 );
+
+it.effect("an unreadable settings read pauses nothing and moves nothing on", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      home.settingsUnreadable = true;
+      yield* enroll;
+      home.settingsUnreadable = false;
+      expect(yield* listed(attachId)).toMatchObject({ state: "admitted" });
+      expect(host.control.knownHosts.size).toBe(0);
+    }),
+  ),
+);

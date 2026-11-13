@@ -367,16 +367,18 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
   const step = Effect.fn("DisposableEnroll.step")(function* (row: Row) {
     const enroll = decodeEnroll(row.enroll_json);
     if (enroll.stop !== undefined) return;
+    // Unreadable settings prove nothing ended, so they pause nothing; the next pass reads again.
     const before = yield* settingsNow;
+    if (before === undefined) return;
     const ended = yield* authorityEnded(row, before);
-    if (ended !== undefined || before === undefined) {
+    if (ended !== undefined) {
       yield* exclusive(
         Effect.gen(function* () {
           const paused = yield* sql`UPDATE disposable_machines SET state = 'paused',
               state_since = ${yield* nowIso} WHERE attach_id = ${row.attach_id}
               AND fence = ${row.fence} AND state != 'paused' RETURNING attach_id`;
           if (paused.length === 1)
-            yield* audit(row.attach_id, "hub.machine_enroll", "paused:" + (ended ?? "switch_off"));
+            yield* audit(row.attach_id, "hub.machine_enroll", "paused:" + ended);
         }),
       );
       return;
