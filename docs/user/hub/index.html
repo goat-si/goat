@@ -105,6 +105,26 @@ within 2 minutes, the change may still finish there, so open the routes again
 before you retry. Agents use <code>goat_hub_device_routes_update</code>, and a profile
 other than owner asks you first. Routes need an OpenCodex release with link
 routes on the hub; an older one says so.</p>
+<h2 id="disposable-machines">Disposable machines</h2>
+<p>A disposable machine is one you build for a short job, such as a cloud VM, and
+admit to your Pen mesh with a one-time invite. Turn on <strong>Attach disposable
+machines</strong> in <strong>Settings → Hub</strong> (the hub must be on), then name the threads that
+may attach machines by their thread ID (<strong>Copy → Thread ID</strong> in a thread’s menu).
+Only a person can change this consent, and it lasts 30 days: when it ends,
+<strong>Renew for 30 days</strong> opens it again. Changing the threads, the cap or the name
+rule cancels invites that were not used yet.</p>
+<p>To attach a machine yourself, choose <strong>Attach a machine</strong>, paste the line
+<code>pen identity --json</code> prints on that machine, and name it. GOAT shows the invite
+token once; run <code>pen join</code> with it on that machine within 10 minutes. While it
+waits, <strong>Reissue</strong> cancels that invite and makes a new one for the same keys;
+once it has expired, attach the machine again. A provisioner
+thread does the same with <code>goat_hub_machine_attach</code>; its invite token appears in
+that thread’s tool output and history, so treat the thread as holding a secret
+until the invite is used or expires.</p>
+<p>Each machine is a full Pen member and can reach services on your machines’
+loopback. GOAT does not link it as a Child yet, and it stays a Pen member until
+you remove it with <a href="/goat/docs/user/pen/#remove-a-machine"><code>pen revoke</code></a>. An older GOAT on the
+hub shows <strong>Update GOAT on this hub</strong> instead of these settings.</p>
 <h2 id="sync-opencodex-models">Sync OpenCodex models</h2>
 <p><strong>Sync OpenCodex</strong> loads OpenCodex’s current models into Codex, on the hub first
 and then on each linked Child. Find it in <strong>Settings → Hub → OpenCodex models</strong>,
@@ -187,4 +207,4 @@ in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
 turn a warning off, in <strong>Settings → Hub → Relay traffic warning</strong> on the web or
 desktop app, or ask an agent to change them. A warning never stops a turn or a
 link.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#turn-it-on">Turn it on</a></li><li><a href="#add-repair-or-remove-a-device">Add, repair, or remove a device</a></li><li><a href="#sync-opencodex-models">Sync OpenCodex models</a></li><li><a href="#permission-profiles">Permission profiles</a></li><li><a href="#read-a-device">Read a device</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#turn-it-on">Turn it on</a></li><li><a href="#add-repair-or-remove-a-device">Add, repair, or remove a device</a></li><li><a href="#disposable-machines">Disposable machines</a></li><li><a href="#sync-opencodex-models">Sync OpenCodex models</a></li><li><a href="#permission-profiles">Permission profiles</a></li><li><a href="#read-a-device">Read a device</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
