@@ -150,7 +150,7 @@ export function createChannelEnvironmentAtoms<R, E>(
         sourceEnvironmentId: environmentId,
         botId,
         eligible,
-        current: AsyncResult.isSuccess(result) && !result.waiting ? result.value : null,
+        current: AsyncResult.isSuccess(result) ? result.value : null,
         isOpenable: (destination) => {
           const state = Option.getOrNull(AsyncResult.value(get(connections(destination))));
           return (
