@@ -94,28 +94,29 @@ export function useBotWorkHistory(
           return answer.value;
         },
       });
-      if (currentKey.current !== request) return;
-      setStored({
-        key,
-        scope,
-        retained:
-          result.supported &&
-          (result.pages.at(-1)?.result.history?.nextCursor !== undefined ||
-            [...walk.pages, ...result.pages.map((page) => page.result)].some(
-              (page) => page.history?.partial || page.history?.endedEarly,
-            ))
-            ? walk.retained
+      if (currentKey.current === request)
+        setStored({
+          key,
+          scope,
+          retained:
+            result.supported &&
+            (result.pages.at(-1)?.result.history?.nextCursor !== undefined ||
+              [...walk.pages, ...result.pages.map((page) => page.result)].some(
+                (page) => page.history?.partial || page.history?.endedEarly,
+              ))
+              ? walk.retained
+              : [],
+          pages: result.supported
+            ? [...walk.pages, ...result.pages.map((page) => page.result)]
             : [],
-        pages: result.supported ? [...walk.pages, ...result.pages.map((page) => page.result)] : [],
-        unsupported: !result.supported,
-        loading: false,
-        failed: false,
-      });
+          unsupported: !result.supported,
+          loading: false,
+          failed: false,
+        });
     } catch {
       if (currentKey.current === request) setStored({ ...walk, loading: false, failed: true });
-    } finally {
-      if (active.current === request) active.current = null;
     }
+    if (active.current === request) active.current = null;
   }
   return {
     rows: merged.supported && historySupported ? merged.rows : current.rows,
