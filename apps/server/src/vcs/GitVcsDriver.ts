@@ -1149,7 +1149,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
-      const workspaceIgnored = (yield* filterIgnoredPaths(input.cwd, ["."])).length === 0;
+      const prefix = (yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: ["rev-parse", "--show-prefix"],
+      })).stdout.replace(/\n$/, "");
+      const workspaceIgnored =
+        prefix !== "" &&
+        (yield* filterIgnoredPaths(input.cwd, [`../${prefix.slice(0, -1).split("/").at(-1)}`]))
+          .length === 0;
       if (workspaceIgnored && !input.strict) {
         // HEAD omits staged-only paths. Seed just this workspace's additions, keeping
         // unrelated staged changes and the scratch index's sparse flags untouched.
