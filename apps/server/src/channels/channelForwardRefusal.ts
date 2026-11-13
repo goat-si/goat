@@ -11,8 +11,11 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
   owner: string,
   sequence: number,
   messageIds: ReadonlyArray<string>,
+  /** Refuses only while the task is still the one the caller judged; the commit compares this read. */
+  guard?: (latest: ChannelLedger.ChannelStoredTask) => boolean,
 ) {
   const latest = (yield* ledger.getTask(stored.task.taskId)) ?? stored;
+  if (guard !== undefined && !guard(latest)) return;
   const ownsFence =
     latest.pendingAnswerMessageId !== undefined &&
     messageIds.includes(latest.pendingAnswerMessageId);

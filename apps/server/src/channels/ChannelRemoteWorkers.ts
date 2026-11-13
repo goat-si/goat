@@ -55,6 +55,7 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -311,6 +312,8 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "ro
 
 /** The task changed hands or moved on while a remote call was pending; nothing was sent. */
 class Superseded extends Data.TaggedError("ChannelRemoteSuperseded")<{}> {}
+/** The requester may no longer direct this work: link gone, or scopes or ceiling below the task's. */
+class AuthorityLost extends Superseded {}
 /** The answer's sender may no longer direct this work; nothing is sent. */
 class SenderRefused extends Data.TaggedError("ChannelRemoteSenderRefused")<{
   readonly name: string;
@@ -417,6 +420,8 @@ export class ChannelRemoteWorkers extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    /** Waits for the forwards already running, as the runtime waits for its receptions. */
+    readonly awaitForwards: Effect.Effect<void>;
     /**
      * The machine an earlier attempt of this generation may already run on, when the task now
      * points elsewhere. Starting it anywhere else could run it twice.
@@ -732,12 +737,15 @@ const make = Effect.gen(function* () {
     const state = yield* readState(taskId).pipe(Effect.orElseSucceed(() => undefined));
     if (expected?.connection !== undefined && state?.connection === undefined)
       return yield* new Superseded();
-    const requester = yield* requesterForDispatch(stored.task).pipe(
+    const read = yield* requesterForDispatch(stored.task).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
       Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
-      Effect.orElseSucceed(() => undefined),
+      Effect.option,
     );
-    if (requester === undefined) return yield* new Superseded();
+    if (Option.isNone(read)) return yield* new Superseded();
+    // A requester who may no longer direct the work counts only once this attempt's state is
+    // still the task's; an attempt the task moved past stays Superseded.
+    const requester = read.value;
     const terminalEvidence = evidenceOnly && state !== undefined && awaitingEvidence(stored, state);
     if (!starting && state?.connection === undefined) {
       if (stored.task.target?.remote?.automatic !== undefined) return yield* new Superseded();
@@ -756,7 +764,7 @@ const make = Effect.gen(function* () {
             !terminalEvidence))
       )
         return yield* new Superseded();
-      return requester.runtimeModeCeiling;
+      return requester === undefined ? yield* new AuthorityLost() : requester.runtimeModeCeiling;
     }
     if (
       state?.connection !== undefined &&
@@ -785,7 +793,6 @@ const make = Effect.gen(function* () {
         state.correlationId !== remoteCorrelationFor(taskId, generation) ||
         ceiling === undefined ||
         ceiling !== remote.automatic.runtimeModeCeiling ||
-        lowerRuntimeMode(ceiling, requester.runtimeModeCeiling) !== ceiling ||
         state.connection.memoryGrantCeiling !== (target?.memoryGrantCeiling ?? "none") ||
         (state.remoteThreadId !== undefined &&
           (stored.task.worker?.threadId !== state.remoteThreadId ||
@@ -797,9 +804,14 @@ const make = Effect.gen(function* () {
       ) {
         return yield* new Superseded();
       }
+      if (
+        requester === undefined ||
+        lowerRuntimeMode(ceiling, requester.runtimeModeCeiling) !== ceiling
+      )
+        return yield* new AuthorityLost();
       return ceiling;
     }
-    return requester.runtimeModeCeiling;
+    return requester === undefined ? yield* new AuthorityLost() : requester.runtimeModeCeiling;
   });
 
   const callHost = <E extends Superseded | SenderRefused>(
@@ -1343,12 +1355,7 @@ const make = Effect.gen(function* () {
       { owner, narrate: true },
     ).pipe(Effect.asVoid);
 
-  const askAgain = (
-    owner: string,
-    stored: ChannelLedger.ChannelStoredTask,
-    text: string,
-    options: { readonly clearPendingAnswer?: boolean } = {},
-  ) =>
+  const askAgain = (owner: string, stored: ChannelLedger.ChannelStoredTask, text: string) =>
     Effect.gen(function* () {
       const askedAt = yield* nowIso;
       yield* commitTransition(
@@ -1367,11 +1374,7 @@ const make = Effect.gen(function* () {
             },
           },
         },
-        {
-          owner,
-          narrate: true,
-          ...(options.clearPendingAnswer ? { pendingAnswerMessageId: null } : {}),
-        },
+        { owner, narrate: true },
       );
     });
 
@@ -2519,8 +2522,8 @@ const make = Effect.gen(function* () {
       }
       const ids = answerForwardIdsFor(event.eventId);
       // Runs last in authorize, which the SSH layer repeats right before each request, so requester
-      // and sender are judged together at that point. A lost requester leaves the answer pending as
-      // authorityFor does; whether an earlier attempt reached the host stays unknown.
+      // and sender are judged together at that point. Whether an earlier attempt reached the host
+      // stays unknown either way.
       const senderGate = requesterForDelivery(stored.task, event.payload.sender).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
         Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
@@ -2530,23 +2533,43 @@ const make = Effect.gen(function* () {
             ? Effect.void
             : authority._tag === "sender_changed"
               ? Effect.fail(new SenderRefused({ name: authority.name }))
-              : Effect.fail(new Superseded()),
+              : Effect.fail(new AuthorityLost()),
         ),
       );
-      const refuseSender = (refused: SenderRefused) =>
+      // Each refusal holds only while the task still runs this attempt; a moved one is left to the
+      // next pass, which drops it. Whether an earlier try reached the host stays unknown.
+      const refuse = (text: string) =>
         refuseForward(
           ledger,
           stored,
-          REMOTE_COPY.senderChanged(refused.name, state.host),
+          text,
           owner,
           pending.sequence,
           [ids.messageId],
+          (latest) =>
+            latest.task.generation === stored.task.generation &&
+            latest.task.worker?.threadId === worker.threadId &&
+            latest.task.worker.host === worker.host,
         );
-      const before = yield* senderGate.pipe(Effect.result);
+      const refuseSender = (refused: SenderRefused) =>
+        refuse(REMOTE_COPY.senderChanged(refused.name, state.host));
+      const refuseLost = refuse(REMOTE_COPY.requesterChanged(state.host));
+      // The attempt's state is checked before anyone's authority, so a moved attempt never refuses.
+      const authorize = authorityFor(
+        stored.task.taskId,
+        stored.task.generation,
+        owner,
+        false,
+        false,
+        state,
+      ).pipe(Effect.tap(() => senderGate));
+      const before = yield* authorize.pipe(Effect.result);
       if (before._tag === "Failure")
         return before.failure instanceof SenderRefused
           ? yield* refuseSender(before.failure)
-          : undefined;
+          : before.failure instanceof AuthorityLost
+            ? yield* refuseLost
+            : undefined;
       const sent = yield* callHost(
         {
           host: state.host,
@@ -2562,25 +2585,18 @@ const make = Effect.gen(function* () {
           writes: true,
           timeoutMs: SEND_TIMEOUT_MS,
         },
-        authorityFor(stored.task.taskId, stored.task.generation, owner, false, false, state).pipe(
-          Effect.tap(() => senderGate),
-        ),
+        authorize,
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
         if (sent.failure instanceof SenderRefused) return yield* refuseSender(sent.failure);
+        if (sent.failure instanceof AuthorityLost) return yield* refuseLost;
         const code = remoteCode(sent.failure);
         if (
           code === "runtime_mode_escalation_denied" ||
           code === "interaction_mode_escalation_denied"
         ) {
           // The remote thread's modes went above the requester's ceiling: keep the answer's intent.
-          yield* askAgain(
-            owner,
-            stored,
-            REMOTE_COPY.answerRefused(state.host, event.payload.answer),
-            { clearPendingAnswer: true },
-          );
-          return yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          return yield* refuse(REMOTE_COPY.answerRefused(state.host, event.payload.answer));
         }
         // Left pending; the next pass sends it again with the same request id.
         yield* Effect.logWarning("channel remote answer not sent", {
@@ -2686,6 +2702,14 @@ const make = Effect.gen(function* () {
       "forward:" + pending.event.eventId,
       serialized(pending.event.taskId)(sendAnswer(pending, owner)),
     );
+
+  const awaitForwards = Effect.suspend(() =>
+    Effect.forEach(
+      [...fibers].flatMap(([key, fiber]) => (key.startsWith("forward:") ? [fiber] : [])),
+      (fiber) => Fiber.await(fiber),
+      { discard: true },
+    ),
+  );
 
   const ensure: ChannelRemoteWorkers["Service"]["ensure"] = (owner) =>
     Effect.gen(function* () {
@@ -3002,6 +3026,7 @@ const make = Effect.gen(function* () {
     launch,
     dispatch,
     forward,
+    awaitForwards,
     stop,
     ensure,
     attemptedElsewhere,
