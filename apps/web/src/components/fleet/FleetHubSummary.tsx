@@ -3,6 +3,7 @@ import {
   hubDeviceFacts,
   hubDeviceSeverity,
   type HubDevice,
+  type HubRelayWarningSource,
   type HubSnapshot,
 } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId } from "@goat/contracts";
@@ -153,7 +154,26 @@ export function FleetHubSummary({
           )}
         </span>
       </span>
-      <HubRelayWarning warning={hub.relayWarning} className="text-2xs text-warning-foreground" />
     </div>
+  );
+}
+
+/** Each machine whose Children passed its relay threshold in 24 hours, named, Home or not. */
+export function FleetRelayWarnings({
+  warnings,
+}: {
+  readonly warnings: ReadonlyArray<HubRelayWarningSource>;
+}) {
+  return warnings.length === 0 ? null : (
+    <ul
+      aria-label="Relay warnings"
+      className="flex flex-col gap-0.5 text-2xs text-warning-foreground"
+    >
+      {warnings.map(({ key, label, warning }) => (
+        <li key={key}>
+          <span className="font-medium">{label}</span> <HubRelayWarning warning={warning} />
+        </li>
+      ))}
+    </ul>
   );
 }

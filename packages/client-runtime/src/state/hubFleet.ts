@@ -45,8 +45,6 @@ export interface HubSnapshot {
   /** Key of the source that reported the Home, so callers can mark its row. */
   readonly homeKey: string;
   readonly devices: ReadonlyArray<HubDevice>;
-  /** Every Child together passed the Home's relay threshold for 24 hours; null below it or when unmeasured. */
-  readonly relayWarning: OpenCodexHubRelayWarning | null;
 }
 
 export interface HubSource {
@@ -67,10 +65,7 @@ const opencodexOf = (entry: HostStatusEntry | null | undefined) =>
 
 /** Null when no host this client reads is an OpenCodex Home. */
 export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | null {
-  // A Home whose last link went reads standalone but keeps its relay warning for a day.
-  const home =
-    sources.find((source) => opencodexOf(source.entry)?.link.role === "home") ??
-    sources.find((source) => opencodexOf(source.entry)?.link.relayWarning !== undefined);
+  const home = sources.find((source) => opencodexOf(source.entry)?.link.role === "home");
   const inventory = opencodexOf(home?.entry);
   if (home === undefined || inventory === undefined) return null;
   const byAlias = new Map<string, HubSource>();
@@ -128,8 +123,26 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
     homeHealthy: inventory.runtime.healthy,
     homeKey: home.key,
     devices: [...linked, ...others],
-    relayWarning: inventory.link.relayWarning ?? null,
   };
+}
+
+export interface HubRelayWarningSource {
+  readonly key: string;
+  readonly label: string;
+  readonly warning: OpenCodexHubRelayWarning;
+}
+
+/**
+ * Each machine's own relay warning: its Children together passed its threshold in 24 hours. A
+ * Home whose last link went reads standalone and keeps it for that day, whichever machine is Home.
+ */
+export function hubRelayWarnings(
+  sources: ReadonlyArray<HubSource>,
+): ReadonlyArray<HubRelayWarningSource> {
+  return sources.flatMap((source) => {
+    const warning = opencodexOf(source.entry)?.link.relayWarning;
+    return warning === undefined ? [] : [{ key: source.key, label: source.label, warning }];
+  });
 }
 
 /** "degraded (P5, P6)", "not verified", or "unproven". */

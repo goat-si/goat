@@ -44,8 +44,11 @@ function hubLinkTrafficFacts(
   route: OpenCodexLinkRoute | null,
 ): ReadonlyArray<string> {
   const { hour, day } = traffic;
-  const unconfirmedTo = day.toHomeBytes - day.relayToHomeBytes - day.directToHomeBytes;
-  const unconfirmedFrom = day.fromHomeBytes - day.relayFromHomeBytes - day.directFromHomeBytes;
+  const unconfirmed = (window: OpenCodexLinkTrafficWindow) => ({
+    to: window.toHomeBytes - window.relayToHomeBytes - window.directToHomeBytes,
+    from: window.fromHomeBytes - window.relayFromHomeBytes - window.directFromHomeBytes,
+  });
+  const [hourUnconfirmed, dayUnconfirmed] = [unconfirmed(hour), unconfirmed(day)];
   const relay = day.relayToHomeBytes + day.relayFromHomeBytes > 0 || route?.via === "relay";
   const direct = day.directToHomeBytes + day.directFromHomeBytes > 0 || route?.via === "direct";
   const measured = measuredFor(day, 24 * 3_600_000);
@@ -56,8 +59,8 @@ function hubLinkTrafficFacts(
     direct
       ? `direct ${eachWay(hour.directToHomeBytes, hour.directFromHomeBytes)} last hour · ${eachWay(day.directToHomeBytes, day.directFromHomeBytes)} in 24 h`
       : null,
-    unconfirmedTo + unconfirmedFrom > 0
-      ? `route not confirmed for ${eachWay(unconfirmedTo, unconfirmedFrom)} in 24 h`
+    dayUnconfirmed.to + dayUnconfirmed.from > 0
+      ? `route not confirmed ${eachWay(hourUnconfirmed.to, hourUnconfirmed.from)} last hour · ${eachWay(dayUnconfirmed.to, dayUnconfirmed.from)} in 24 h`
       : null,
   ].filter((part) => part !== null);
   return [

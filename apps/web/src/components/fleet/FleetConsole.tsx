@@ -10,7 +10,7 @@ import {
   presentHostStorage,
 } from "@goat/client-runtime/state/fleet-host-health";
 import { cpuPercent, memoryPercent } from "@goat/client-runtime/state/host-metrics";
-import { hubSnapshot } from "@goat/client-runtime/state/hub-fleet";
+import { hubRelayWarnings, hubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId, ServerEventLoopStall } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
@@ -37,7 +37,7 @@ import { FleetAlertAction } from "./FleetAlertAction";
 import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
 import { fleetConsoleBodyClassName, fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
-import { FleetHubSummary } from "./FleetHubSummary";
+import { FleetHubSummary, FleetRelayWarnings } from "./FleetHubSummary";
 import { FleetUncountedHosts } from "./FleetUncountedHosts";
 import { fleetQuota } from "./fleetQuota";
 import {
@@ -538,6 +538,7 @@ function FleetConsoleExpanded(props: {
   const hottest = hottestHost(rows, heat);
   const quota = fleetQuota(rows);
   const hub = hubSnapshot(rows);
+  const relayWarnings = hubRelayWarnings(rows);
   // A linked Child names its Home even when no pool reading routes its quota there.
   const viaHub = (row: FleetHostRow) => {
     const pooled = quota.viaHub.get(row.key);
@@ -660,6 +661,7 @@ function FleetConsoleExpanded(props: {
           {hub === null ? null : (
             <FleetHubSummary hub={hub} homeEnvironmentId={environmentOf.get(hub.homeKey) ?? null} />
           )}
+          <FleetRelayWarnings warnings={relayWarnings} />
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-baseline justify-between gap-2">

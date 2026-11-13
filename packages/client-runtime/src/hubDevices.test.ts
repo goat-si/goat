@@ -70,7 +70,6 @@ function snapshot(devices: ReadonlyArray<HubDevice>): HubSnapshot {
     homeHealthy: true,
     homeKey: "",
     devices,
-    relayWarning: null,
   };
 }
 

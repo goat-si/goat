@@ -1,7 +1,7 @@
 import type { HostStatusEntry, OpenCodexInventorySnapshot } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { hubDeviceFacts, hubDeviceSeverity, hubSnapshot } from "./hubFleet.ts";
+import { hubDeviceFacts, hubDeviceSeverity, hubRelayWarnings, hubSnapshot } from "./hubFleet.ts";
 import { hubLinkOfMachine, hubRelayWarningLabel } from "./hubLinkTraffic.ts";
 
 function inventory(
@@ -307,18 +307,12 @@ describe("link traffic", () => {
   });
 
   it("carries the hub-wide relay warning, and none below the threshold", () => {
-    const over = hubSnapshot([
-      {
-        key: "home",
-        label: "home",
-        entry: home([], { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 }),
-      },
-    ]);
-    expect(hubRelayWarningLabel(over!.relayWarning)).toBe(
+    const warning = { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 };
+    const [only] = hubRelayWarnings([{ key: "home", label: "home", entry: home([], warning) }]);
+    expect(hubRelayWarningLabel(only!.warning)).toBe(
       "Children sent 31 GB through the Pen relay in 24 h (warning at 30 GB). Nothing is stopped.",
     );
-    const under = hubSnapshot([{ key: "home", label: "home", entry: home([]) }]);
-    expect(under!.relayWarning).toBe(null);
+    expect(hubRelayWarnings([{ key: "home", label: "home", entry: home([]) }])).toEqual([]);
   });
 
   it("never calls bytes without a confirmed route direct, and says what the Home did not report", () => {
@@ -345,31 +339,24 @@ describe("link traffic", () => {
     expect(facts.slice(-3)).toEqual([
       "route pen-macmini",
       "transport not measured",
-      "route not confirmed for ↑10 GB ↓1 GB in 24 h",
+      "route not confirmed ↑1 GB ↓100 MB last hour · ↑10 GB ↓1 GB in 24 h",
     ]);
     expect(facts.join(" ")).not.toMatch(/none through a relay|not via relay|direct/u);
   });
 
-  it("keeps the hub-wide warning of a Home whose last link went and now reads standalone", () => {
+  it("lists each machine's own relay warning, also one whose last link went while another is the Home", () => {
     const base = inventory("none");
-    const hub = hubSnapshot([
+    const warning = { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 };
+    const sources = [
+      { key: "b", label: "studio", entry: entry(null, inventory("home")) },
       {
-        key: "home",
-        label: "home",
-        entry: entry(null, {
-          ...base,
-          link: {
-            ...base.link,
-            relayWarning: { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 },
-          },
-        }),
+        key: "a",
+        label: "mini",
+        entry: entry("mini", { ...base, link: { ...base.link, relayWarning: warning } }),
       },
-    ]);
-    expect(hub?.relayWarning).toEqual({
-      relayBytes: 31_000_000_000,
-      thresholdBytes: 30_000_000_000,
-    });
-    expect(hub?.devices).toEqual([]);
+    ];
+    expect(hubSnapshot(sources)?.homeKey).toBe("b");
+    expect(hubRelayWarnings(sources)).toEqual([{ key: "a", label: "mini", warning }]);
   });
 });
 

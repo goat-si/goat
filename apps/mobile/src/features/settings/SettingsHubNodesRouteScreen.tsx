@@ -148,7 +148,10 @@ function HubDevicesList({
   const snapshot = hubSnapshot(
     hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
   );
-  const relayWarning = hubRelayWarningLabel(snapshot?.relayWarning ?? null);
+  // This environment's own warning, whichever machine the snapshot names as Home.
+  const relayWarning = hubRelayWarningLabel(
+    hosts.find((entry) => entry.host === null)?.metrics?.opencodex?.link.relayWarning ?? null,
+  );
   const rows = hubDeviceList({
     nodes: listed.data?.nodes ?? null,
     snapshot,

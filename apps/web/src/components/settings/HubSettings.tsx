@@ -302,7 +302,7 @@ function HubControls({
         />
         <HubRelayWarningRow
           environmentId={environmentId}
-          warning={snapshot?.relayWarning ?? null}
+          warning={home?.link.relayWarning ?? null}
         />
         <SettingsRow
           {...searchableSetting("hub-permission-profiles")}
