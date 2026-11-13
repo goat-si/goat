@@ -89,6 +89,7 @@ vi.mock("~/state/entities", async (importOriginal) => ({
   useEnvironmentShellsBootstrapped: () => true,
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
+  useTimelineVisibleTurnItems: () => [],
   useThreadShell: () => null,
   useServerConfigs: () =>
     new Map([

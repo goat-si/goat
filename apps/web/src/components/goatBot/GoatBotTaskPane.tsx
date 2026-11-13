@@ -29,7 +29,7 @@ import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
-import { localSendRows, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -233,7 +233,7 @@ export function GoatBotTaskPane({
             baselineIds={session.source?.baselineIds}
             sourceIds={session.source?.sourceIds}
             submissions={local.taskId === taskId ? local.submissions : []}
-            committedSends={localSendRows(session.visibleTurnItems)}
+            committedSends={session.source?.committedSends}
             environmentId={environmentId}
             onRetry={session.onRetryInput}
             onDiscard={session.onDiscardInput}

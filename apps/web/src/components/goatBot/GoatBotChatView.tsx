@@ -49,7 +49,7 @@ import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
-import { localSendRows, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
@@ -145,7 +145,6 @@ function GoatBotChatViewWithSource(props: GoatBotChatViewProps) {
 function GoatBotChatViewContent({
   source,
   projectionRef,
-  visibleTurnItems = [],
   unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
@@ -468,7 +467,7 @@ function GoatBotChatViewContent({
                     rows={rows}
                     baselineIds={source.baselineIds}
                     sourceIds={source.sourceIds}
-                    committedSends={localSendRows(visibleTurnItems)}
+                    committedSends={source.committedSends}
                     submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}
                     onReply={

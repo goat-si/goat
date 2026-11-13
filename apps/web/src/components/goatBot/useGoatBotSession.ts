@@ -39,6 +39,7 @@ import {
   useEnvironmentShellsBootstrapped,
   useServerConfigs,
   useThreadShell,
+  useTimelineVisibleTurnItems,
 } from "~/state/entities";
 import { environmentThreadDetails } from "~/state/threads";
 import { channelEnvironment } from "~/state/channels";
@@ -372,7 +373,13 @@ export function useGoatBotSession(
         : botRef
           ? scopeThreadRef(botRef.environmentId, botRef.threadId)
           : null;
-  const source = useGoatBotSource(projectionRef, member?.botId ?? "main", visibleTurnItems);
+  const membership = useTimelineVisibleTurnItems(projectionRef);
+  const source = useGoatBotSource(
+    projectionRef,
+    member?.botId ?? "main",
+    visibleTurnItems,
+    membership,
+  );
   const legacyRef = useGlobalAgentStore((state) => state.ref);
   const legacyThreadRef =
     legacyRef === null ? null : scopeThreadRef(legacyRef.environmentId, legacyRef.threadId);

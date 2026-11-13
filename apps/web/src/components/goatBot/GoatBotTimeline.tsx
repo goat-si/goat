@@ -61,6 +61,7 @@ import { useGoatBotFollow, type GoatBotLocalSubmission } from "./useGoatBotFollo
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
+const NO_SUBMISSIONS: ReadonlyArray<GoatBotLocalSubmission> = Object.freeze([]);
 
 /** What the acknowledged work is doing, from the bot conversation's session; null elsewhere. */
 export const GoatBotActivityContext = createContext<GoatBotTimelineActivity | null>(null);
@@ -92,7 +93,7 @@ export function GoatBotTimeline({
   retryEnvironmentId = null,
   baselineIds,
   sourceIds,
-  submissions = [],
+  submissions = NO_SUBMISSIONS,
   committedSends,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
@@ -219,7 +220,8 @@ export function GoatBotTimeline({
     } else if (scroll !== null && follow.alignAnchor()) {
       // A folded answer stays beside its question while the transcript resizes.
     } else if (scroll !== null && followingRef.current) {
-      scroll.scrollTop = scroll.scrollHeight;
+      if (scroll.scrollTop < scroll.scrollHeight - scroll.clientHeight)
+        scroll.scrollTop = scroll.scrollHeight;
       lastScrollTopRef.current = scroll.scrollTop;
     }
     updateEdges();
@@ -231,16 +233,16 @@ export function GoatBotTimeline({
     if (!scroll || !list) return;
     return observeResize([scroll, list], followResize);
   }, [updateEdges, followResize]);
-  // New rows and the activity bubble keep the view pinned to the latest message unless the
-  // reader scrolled up.
+  // The activity bubble keeps the view pinned unless the reader scrolled up; new rows are pinned
+  // by useGoatBotFollow and streamed text by followResize.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (element !== null && (rows.length > 0 || activityText !== null) && followingRef.current) {
+    if (element !== null && activityText !== null && followingRef.current) {
       element.scrollTop = element.scrollHeight;
       lastScrollTopRef.current = element.scrollTop;
     }
     updateEdges();
-  }, [rows, activityText, updateEdges]);
+  }, [activityText, updateEdges]);
 
   // Which rows are new is decided once, from the first history and the visit before this open.
   // The divider sits above the first of them still shown, and the pill counts those shown.

@@ -37,9 +37,17 @@ export function useGoatBotFollow({
   readonly followingRef: RefObject<boolean>;
   readonly lastScrollTopRef: RefObject<number>;
 }) {
+  const [membership, setMembership] = useState({ rows, version: 0 });
+  if (
+    rows.length !== membership.rows.length ||
+    rows.some((row, i) => row.id !== membership.rows[i]?.id)
+  )
+    setMembership({ rows, version: membership.version + 1 });
+  // These sets live in this keyed timeline and hold its row IDs plus this sitting's sends.
   const initialized = useRef(baselineIds === undefined);
   const seen = useRef(new Set(baselineIds === undefined ? rows.map((row) => row.id) : []));
   const eligibleSources = useRef(new Set<string>());
+  // sentHere tracks displayed send motion; submitted also tracks folded sends without a user row.
   const submitted = useRef(new Set(submissions.map((send) => send.key)));
   const pending = useRef(new Map<string, GoatBotLocalSubmission>());
   const anchor = useRef<string | null>(null);
@@ -92,8 +100,18 @@ export function useGoatBotFollow({
     anchor.current = null;
     clearJumpPadding();
   };
+  const lastScan = useRef<ReadonlyArray<unknown> | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Reconcile projected arrivals and local sends with the transcript after layout.
   useLayoutEffect(() => {
+    // A streamed token changes text only; the scan runs when membership or the inputs change.
+    const inputs = [membership.version, submissions, baselineIds, sourceIds, committedSends];
+    if (lastScan.current?.every((value, index) => value === inputs[index])) return;
+    lastScan.current = inputs;
+    const scroll = scrollRef.current;
+    if (scroll !== null && followingRef.current) {
+      scroll.scrollTop = scroll.scrollHeight;
+      lastScrollTopRef.current = scroll.scrollTop;
+    }
     if (!initialized.current && baselineIds !== null && baselineIds !== undefined) {
       seen.current = new Set(baselineIds);
       initialized.current = true;
@@ -134,7 +152,6 @@ export function useGoatBotFollow({
         }
       }
     }
-    if (anchor.current !== null) alignAnchor();
     if (!initialized.current || baselineIds === null) return;
     if (baselineIds !== undefined && sourceIds !== undefined) {
       for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.current.add(id);
