@@ -37,8 +37,14 @@ import {
   isPlainRoute,
   penConfigHosts,
   penGlobalFiles,
+  penExactCommands,
+  penHostOption,
+  penRunCommand,
+  isRouteUser,
   penKnownHostsFile,
   penRevision,
+  type PenInstall,
+  type PenNode,
   sshSettings,
 } from "./penSshRoute.ts";
 
@@ -137,6 +143,28 @@ export type HubClientHandoff =
       readonly connect: OcxOutput;
     };
 
+/** A disposable machine's route as Pen defines it, or why Pen's files name none. */
+export type PenExactRoute =
+  | {
+      readonly kind: "route";
+      readonly alias: string;
+      readonly proxyCommand: string;
+      readonly user: string;
+      /** "ssh-ed25519 <base64>", as Pen's known_hosts holds it. */
+      readonly hostKey: string;
+      readonly fingerprint: string;
+    }
+  | {
+      readonly kind: "refused";
+      readonly reason:
+        | "no_exact_block"
+        | "other_pen"
+        | "unsafe_pen_path"
+        | "no_user"
+        | "no_key"
+        | "several_keys";
+    };
+
 /** The only seam to OpenCodex and SSH; tests replace it with a scripted runner. */
 export class HubOcx extends Context.Service<
   HubOcx,
@@ -213,6 +241,15 @@ export class HubOcx extends Context.Service<
      * person's consent to set it up as a Child; undefined for any other alias.
      */
     readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined, HubOcxError>;
+    /**
+     * Reads the route of a Pen member GOAT addresses by node id: Pen's exact pen-<nodeId> block for
+     * that node and Noise key run by the confirmed Pen, the User Pen wrote for it, and the one
+     * ed25519 host key Pen recorded.
+     */
+    readonly penExactRoute: (
+      node: PenNode,
+      pen: PenInstall,
+    ) => Effect.Effect<PenExactRoute, HubOcxError>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
@@ -601,7 +638,7 @@ const make = Effect.gen(function* () {
     Exit.isSuccess(exit) ? 0 : "10 seconds",
   );
 
-  const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
+  const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string, node?: PenNode) {
     if (!SAFE_ALIAS.test(alias)) return undefined;
     const directory = path.join(homeDirectory, ".ssh", "pen");
     const config = yield* penConfig;
@@ -619,7 +656,7 @@ const make = Effect.gen(function* () {
       settings.get("hostname") === alias &&
       settings.get("port") === "22" &&
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
-    if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
+    if (!keyedByAlias || penKnownHostsFile(settings, node) !== knownHosts) return undefined;
     // ssh also accepts a key its global known_hosts holds for the alias, so there must be none.
     const globals = penGlobalFiles(settings);
     if (globals === undefined) return undefined;
@@ -642,7 +679,7 @@ const make = Effect.gen(function* () {
     const lines = recorded.code === 0 ? recorded.stdout : "";
     // A @cert-authority or @revoked line changes what ssh accepts, and Pen never writes one.
     if (lines.split(/\r?\n/u).some((line) => line.trimStart().startsWith("@"))) return undefined;
-    return { settings, knownHosts, recorded: lines };
+    return { settings, knownHosts, recorded: lines, config };
   });
 
   return HubOcx.of({
@@ -745,6 +782,42 @@ const make = Effect.gen(function* () {
       const member = yield* penMember(alias);
       if (member === undefined) return undefined;
       return penRevision(member.settings, member.recorded);
+    }),
+    penExactRoute: Effect.fn("HubOcx.penExactRoute")(function* (node, pen) {
+      const alias = `pen-${node.nodeId}`;
+      const member = yield* penMember(alias, node);
+      const proxyCommand = member?.settings.get("proxycommand");
+      if (member === undefined || proxyCommand === undefined)
+        return { kind: "refused", reason: "no_exact_block" } as const;
+      // An ssh_config entry read before Pen's could name another pen or Pen home.
+      const trusted = penExactCommands(node, pen, path.join(homeDirectory, ".pen"));
+      if (
+        !trusted.includes(proxyCommand) ||
+        penHostOption(member.config, alias, "ProxyCommand") !== proxyCommand
+      )
+        return { kind: "refused", reason: "other_pen" } as const;
+      const run = penRunCommand(node, pen);
+      if (run === undefined) return { kind: "refused", reason: "unsafe_pen_path" } as const;
+      const user = penHostOption(member.config, alias, "User");
+      if (user === undefined || !isRouteUser(user) || member.settings.get("user") !== user)
+        return { kind: "refused", reason: "no_user" } as const;
+      const keys = member.recorded
+        .split(/\r?\n/u)
+        .map((line) => /^\S+ (ssh-ed25519 ([A-Za-z0-9+/]+={0,2}))$/u.exec(line.trim()))
+        .filter((match) => match !== null);
+      if (keys.length > 1) return { kind: "refused", reason: "several_keys" } as const;
+      const [, hostKey, blob] = keys[0] ?? [];
+      if (hostKey === undefined || blob === undefined)
+        return { kind: "refused", reason: "no_key" } as const;
+      const digest = NodeCrypto.createHash("sha256").update(Buffer.from(blob, "base64"));
+      return {
+        kind: "route",
+        alias,
+        proxyCommand: run,
+        user,
+        hostKey,
+        fingerprint: `SHA256:${digest.digest("base64").replace(/=+$/u, "")}`,
+      } as const;
     }),
     runningTurns: Effect.fn("HubOcx.runningTurns")(
       function* (alias, scope) {

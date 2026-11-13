@@ -33,6 +33,7 @@ import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
 import * as Context from "effect/Context";
@@ -94,6 +95,7 @@ export const make = Effect.gen(function* () {
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const http = yield* HttpClient.HttpClient;
+  const disposableMachines = yield* DisposableMachineStore.DisposableMachineStore;
   const signals = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   // Orders cloud alias invalidation against check results, so a check that finishes after a
@@ -121,12 +123,14 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    const disposable = yield* disposableMachines.recordsOrKept;
     return mergeHubNodes({
       hubEnvironmentId,
       registrations,
       linked: links,
       cloud: catalog,
       routeState,
+      disposable,
       notices:
         imported?.outcome === "skipped_locked" && imported.noticeDismissedAt === null
           ? [{ id: "desktop-import-locked", at: imported.at }]

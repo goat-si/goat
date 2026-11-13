@@ -141,6 +141,7 @@ export * from "./opencodexChildReady.ts";
 export * from "./hubParity.ts";
 export * from "./hubSettings.ts";
 export * from "./hubDeviceRoutes.ts";
+export * from "./disposableMachines.ts";
 export * from "./hubDevice.ts";
 export * from "./hostPressure.ts";
 export * from "./storageUsage.ts";

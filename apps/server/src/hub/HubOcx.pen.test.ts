@@ -664,3 +664,156 @@ it.effect("aliases read in turn share one deadline when Pen's config never answe
     expect(failures.map((failure) => failure._tag)).toEqual(Array(5).fill("HubOcxError"));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+const EXACT_NODE = "abcdefghijklmnopqrstuvwxyz";
+const EXACT_NOISE = "N".repeat(43);
+const EXACT_ALIAS = "pen-" + EXACT_NODE;
+const EXACT_PROXY =
+  "'/home/u/.local/bin/pen' pipe --node " + EXACT_NODE + " --noise " + EXACT_NOISE + " 22";
+const EXACT_BLOCK =
+  "Host " + EXACT_ALIAS + "\n    User runner\n    ProxyCommand " + EXACT_PROXY + "\n";
+const ED_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIFcDqbodCFNuBkK2emUwDpZghtdTw4e9ROT+jlVvIhId";
+const exactKeys = (...lines: ReadonlyArray<string>) =>
+  lines
+    .map(
+      (line, index) =>
+        "# Host " + EXACT_ALIAS + " found: line " + (index + 1) + " \n" + line + "\n",
+    )
+    .join("");
+const exactMachine = Effect.fn("HubOcxPenTest.exactMachine")(function* (
+  config: string,
+  proxy: string,
+) {
+  const machine = {
+    config,
+    sshG: (_: string) => "",
+    keys: exactKeys(
+      "pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY,
+      "pen-box," + EXACT_ALIAS + " ecdsa-sha2-nistp256 AAAAE2VjZHNh",
+    ),
+  };
+  const { ocx, home } = yield* penHome(machine);
+  machine.sshG = penSshG(home, { proxycommand: proxy, user: "runner" });
+  const pen = { executablePath: "/home/u/.local/bin/pen", stateDir: home + "/.pen" };
+  return { ocx, machine, home, pen, node: { nodeId: EXACT_NODE, noisePub: EXACT_NOISE } };
+});
+
+it.effect("Pen's exact block for a node is a route only with the Noise key GOAT recorded", () =>
+  Effect.gen(function* () {
+    const { ocx, pen, node } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    expect(yield* ocx.penExactRoute(node, pen)).toEqual({
+      kind: "route",
+      alias: EXACT_ALIAS,
+      // Whatever form Pen wrote, GOAT runs the confirmed pen with its home, unquoted.
+      proxyCommand:
+        "/home/u/.local/bin/pen pipe --node " +
+        EXACT_NODE +
+        " --noise " +
+        EXACT_NOISE +
+        " --home " +
+        pen.stateDir +
+        " 22",
+      user: "runner",
+      hostKey: "ssh-ed25519 " + ED_KEY,
+      fingerprint: "SHA256:nz9cVTpQx8PimslFh9CITEcWGb7QKBXpUlHyEaSApSw",
+    });
+    expect(yield* ocx.penExactRoute({ ...node, noisePub: "M".repeat(43) }, pen)).toEqual({
+      kind: "refused",
+      reason: "no_exact_block",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Pen gives an id another member uses as a name only that member's name block.
+it.effect("a node id another member uses as its name stays refused", () =>
+  Effect.gen(function* () {
+    const { ocx, pen, node } = yield* exactMachine(
+      PEN_BLOCK(EXACT_ALIAS),
+      "'/home/u/.local/bin/pen' pipe %n 22",
+    );
+    expect(yield* ocx.penExactRoute(node, pen)).toEqual({
+      kind: "refused",
+      reason: "no_exact_block",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("an exact block with two ed25519 keys, none, or no User of Pen's names no route", () =>
+  Effect.gen(function* () {
+    const { ocx, machine, pen, node } = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK,
+      EXACT_PROXY,
+    );
+    const read = ocx.penExactRoute(node, pen);
+    machine.keys = exactKeys(
+      "pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY,
+      EXACT_ALIAS + ",pen-other ssh-ed25519 " + ED_KEY.replace("IFc", "IGc"),
+    );
+    expect(yield* read).toEqual({ kind: "refused", reason: "several_keys" });
+    machine.keys = exactKeys("pen-box," + EXACT_ALIAS + " ecdsa-sha2-nistp256 AAAAE2VjZHNh");
+    expect(yield* read).toEqual({ kind: "refused", reason: "no_key" });
+    machine.keys = exactKeys("pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY);
+    machine.config = PEN_BLOCK("pen-box") + EXACT_BLOCK.replace("    User runner\n", "");
+    const withoutUser = yield* exactMachine(machine.config, EXACT_PROXY);
+    expect(yield* withoutUser.ocx.penExactRoute(node, withoutUser.pen)).toEqual({
+      kind: "refused",
+      reason: "no_user",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// ssh keeps the first value it reads, so an entry above Pen's Include wins over Pen's block.
+it.effect("an exact route run by any pen or Pen home but the confirmed one is refused", () =>
+  Effect.gen(function* () {
+    const other = EXACT_PROXY.replace("/home/u/.local/bin/pen", "/tmp/x/pen");
+    const overridden = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, other);
+    expect(yield* overridden.ocx.penExactRoute(overridden.node, overridden.pen)).toEqual({
+      kind: "refused",
+      reason: "other_pen",
+    });
+    const ownHome = "env PEN_HOME='/tmp/other' " + EXACT_PROXY;
+    const otherHome = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, ownHome),
+      ownHome,
+    );
+    expect(yield* otherHome.ocx.penExactRoute(otherHome.node, otherHome.pen)).toEqual({
+      kind: "refused",
+      reason: "other_pen",
+    });
+    // The same pen under the confirmed state folder, named explicitly, is that Pen.
+    const confirmed = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    const named = "env PEN_HOME='" + confirmed.pen.stateDir + "' " + EXACT_PROXY;
+    const explicit = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, named),
+      named,
+    );
+    const route = yield* explicit.ocx.penExactRoute(explicit.node, {
+      ...explicit.pen,
+      stateDir: confirmed.pen.stateDir,
+    });
+    expect(route).toMatchObject({ kind: "route" });
+    // A confirmed Pen home that needs quoting has no route OpenCodex could take.
+    const spaced = { ...explicit.pen, stateDir: confirmed.pen.stateDir + " x" };
+    const quoted = "env PEN_HOME='" + spaced.stateDir + "' " + EXACT_PROXY;
+    const unsafe = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, quoted),
+      quoted,
+    );
+    expect(yield* unsafe.ocx.penExactRoute(unsafe.node, spaced)).toEqual({
+      kind: "refused",
+      reason: "unsafe_pen_path",
+    });
+    // A confirmed Pen installed under another name is still that Pen.
+    const renamed = EXACT_PROXY.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
+    const renamedPen = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, renamed),
+      renamed,
+    );
+    expect(
+      yield* renamedPen.ocx.penExactRoute(renamedPen.node, {
+        ...renamedPen.pen,
+        executablePath: "/opt/bin/pen-v1",
+      }),
+    ).toMatchObject({ kind: "route" });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

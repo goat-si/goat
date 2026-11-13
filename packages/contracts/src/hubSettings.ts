@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HubDisposableMachinesPatch, HubDisposableMachinesSaved } from "./disposableMachines.ts";
 
 /**
  * "hub": cloud launches from any device go to the hub's sign-ins. "auto": the least loaded
@@ -36,6 +37,10 @@ export const HubSettings = Schema.Struct({
    */
   autoJoinCloudMachines: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   devices: HubDevices.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** "Attach disposable machines": off, with no provisioners, until a person turns it on. */
+  attachDisposableMachines: HubDisposableMachinesSaved.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type HubSettings = typeof HubSettings.Type;
 
@@ -46,6 +51,8 @@ export const HubSettingsPatch = Schema.Struct({
   autoJoinCloudMachines: Schema.optionalKey(Schema.Boolean),
   /** Replaces the whole map, as fleet.hosts does. */
   devices: Schema.optionalKey(HubDevices),
+  /** Merged field by field; a person's session is required to change it. */
+  attachDisposableMachines: Schema.optionalKey(HubDisposableMachinesPatch),
 });
 
 export const HUB_RELAY_WARNING_MAX_GB = 1_000_000;

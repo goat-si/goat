@@ -365,6 +365,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                     new HubOcxError({ reason: "unreachable", message: fixture.directFailure }),
                   ),
             penAliasRevision: () => Effect.succeed(undefined),
+            penExactRoute: () => Effect.die("unused"),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
             deviceHealth: (alias) =>
               Effect.sync(() => {
