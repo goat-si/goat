@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
 // rawCall sends one control line as written and decodes one answer.
@@ -356,5 +358,22 @@ func TestCancelEndsAWaitOnTheInvite(t *testing.T) {
 	var ev struct{ T string }
 	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
 		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// An ordinary invite's answer has exactly dev's members: bound invites add id and mintId only to their own answers.
+func TestAnOrdinaryInvitesAnswerIsUnchanged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	var raw json.RawMessage
+	if err := Call(a.st, Request{Op: "invite", TTLMs: 60000}, &raw); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := strictjson.Keys(raw)
+	if err != nil || strings.Join(keys, ",") != "token,relay,expiresAt,command,windowsCommand" {
+		t.Fatalf("answer members %v (%v); want token,relay,expiresAt,command,windowsCommand", keys, err)
 	}
 }

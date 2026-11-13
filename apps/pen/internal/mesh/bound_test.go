@@ -719,3 +719,32 @@ func TestStatusSettlesAnExpiredBoundInvite(t *testing.T) {
 		t.Fatal("the invite is usable again after the clock went back")
 	}
 }
+
+// devInvite is an offers.json entry exactly as dev wrote it before bound invites.
+type devInvite struct {
+	ID        string `json:"id"`
+	Secret    []byte `json:"secret"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+// An ordinary invite's entry in offers.json is byte for byte what dev wrote: bound invites change nothing for it.
+func TestAnOrdinaryInvitesEntryIsUnchanged(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.Create(time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteJSON("dev.json", []devInvite{{ID: x.ID, Secret: x.Secret, ExpiresAt: x.ExpiresAt}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err1 := os.ReadFile(st.Path("offers.json"))
+	want, err2 := os.ReadFile(st.Path("dev.json"))
+	if err1 != nil || err2 != nil || string(got) != string(want) {
+		t.Fatalf("offers.json\n%s\nwant\n%s (%v, %v)", got, want, err1, err2)
+	}
+}
