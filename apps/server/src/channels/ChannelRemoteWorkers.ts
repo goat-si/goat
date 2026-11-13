@@ -106,6 +106,7 @@ import {
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
+import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
 import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
@@ -1818,6 +1819,7 @@ const make = Effect.gen(function* () {
       },
     }));
     if (!channelWorkerObservationEquals(stored.task.observed, observed)) {
+      const eventId = yield* checkCorrectionEventId(ledger, stored.task, result);
       yield* commitTransition(
         ledger,
         stored,
@@ -1827,7 +1829,10 @@ const make = Effect.gen(function* () {
         },
         {
           owner,
-          narrate: result.observedCheck !== undefined && result.observedCheck.status !== "running",
+          narrate:
+            eventId !== undefined ||
+            (result.observedCheck !== undefined && result.observedCheck.status !== "running"),
+          ...(eventId === undefined ? {} : { eventId }),
           remoteWorker: update,
         },
       );

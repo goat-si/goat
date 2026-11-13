@@ -70,6 +70,7 @@ import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt
 import { makeSkillProposalOffers } from "./channelSkillProposals.ts";
 import { settleSupersededTurn } from "./channelSupersededTurns.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { checkCorrectionEventId } from "./channelCheckCorrection.ts";
 import { commitWorkerObserved, reconcileLateApprovals } from "./channelLateApprovals.ts";
 import {
   launchObservationNeeds,
@@ -759,6 +760,7 @@ const make = Effect.gen(function* () {
           result: result.value,
         });
         if (channelWorkerObservationEquals(stored.task.observed, observed)) continue;
+        const eventId = yield* checkCorrectionEventId(ledger, stored.task, observed.result);
         const wrote = yield* commitTransition(
           ledger,
           stored,
@@ -766,7 +768,7 @@ const make = Effect.gen(function* () {
             type: "task.worker.observed",
             payload: { generation: stored.task.generation, observed },
           },
-          { owner, narrate: true },
+          { owner, narrate: true, ...(eventId === undefined ? {} : { eventId }) },
         );
         if (wrote !== undefined) changed += 1;
       }
