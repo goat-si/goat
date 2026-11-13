@@ -57,11 +57,20 @@ function device(alias: string, transport: HubDevice["transport"] = "remote-link"
     versionVerdict: "compatible",
     fallback: "unknown",
     pressure: null,
+    traffic: null,
+    route: null,
+    linkTransport: null,
   };
 }
 
 function snapshot(devices: ReadonlyArray<HubDevice>): HubSnapshot {
-  return { homeName: "jun-mbp", homeVersion: "2.89.0", homeHealthy: true, homeKey: "", devices };
+  return {
+    homeName: "jun-mbp",
+    homeVersion: "2.89.0",
+    homeHealthy: true,
+    homeKey: "",
+    devices,
+  };
 }
 
 function host(

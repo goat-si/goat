@@ -173,7 +173,7 @@ it("folds every hub device into one Hub entry and names the Home on its Children
   await expect
     .element(
       childA.getByText(
-        "parity degraded (P6) · tunnel connected · OpenCodex 2.83.0, degraded · OpenCodex fallback unknown",
+        "parity degraded (P6) · tunnel connected · OpenCodex 2.83.0, degraded · OpenCodex fallback unknown · link traffic not measured",
       ),
     )
     .toBeVisible();

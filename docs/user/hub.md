@@ -179,3 +179,18 @@ does, or **unknown** when your OpenCodex does not report it yet.
 
 Fleet shows the same devices in its **Hub** entry. Select its count to see each
 one.
+
+A Remote Link Child's row also shows what its link to the hub carried: bytes
+to and from the hub in the last hour and the last 24 hours, the share that went
+through a Pen relay, the SSH alias the link uses (**via relay** for a Pen alias,
+**direct** otherwise), and whether it runs over HTTP or a WebSocket. Select the
+machine on the Fleet page to see the same line. GOAT counts from its own second
+reading of the hub's OpenCodex, so traffic before that does not show, and a short
+measurement says how long it covers. Bytes whose route GOAT could not confirm
+are shown apart from relay and direct ones. A row says **not measured** when the
+hub's OpenCodex does not report a number yet.
+
+GOAT warns in Hub and Fleet when one Child sends more than 5 GB through the relay
+in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
+turn a warning off, in **Settings → Hub → Relay traffic warning**. A warning
+never stops a turn or a link.

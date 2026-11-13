@@ -1,7 +1,8 @@
 import type { HostStatusEntry, OpenCodexInventorySnapshot } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { hubDeviceFacts, hubDeviceSeverity, hubSnapshot } from "./hubFleet.ts";
+import { hubDeviceFacts, hubDeviceSeverity, hubRelayWarnings, hubSnapshot } from "./hubFleet.ts";
+import { hubLinkOfMachine, hubRelayWarningLabel } from "./hubLinkTraffic.ts";
 
 function inventory(
   role: "home" | "child" | "none",
@@ -183,6 +184,7 @@ describe("hubSnapshot", () => {
       "OpenCodex 2.83.0, incompatible",
       "OpenCodex fallback off",
       "pressure elevated",
+      "link traffic not measured",
     ]);
   });
 });
@@ -217,5 +219,168 @@ describe("hubVersionLabel", () => {
       hubDeviceFacts(hub!.devices.find((device) => device.alias === alias)!);
     expect(facts("board")).toContain("OpenCodex 2.92.0");
     expect(facts("zero")).toContain("OpenCodex slow to answer");
+  });
+});
+
+describe("link traffic", () => {
+  const window = (total: number, relay: number, measuredMs: number, direct = total - relay) => ({
+    toHomeBytes: total,
+    fromHomeBytes: total / 10,
+    relayToHomeBytes: relay,
+    relayFromHomeBytes: relay / 10,
+    directToHomeBytes: direct,
+    directFromHomeBytes: direct / 10,
+    measuredMs,
+  });
+  const home = (
+    links: OpenCodexInventorySnapshot["link"]["links"],
+    relayWarning?: { relayBytes: number; thresholdBytes: number },
+  ) => {
+    const base = inventory("home");
+    return entry(null, {
+      ...base,
+      link: { ...base.link, links, ...(relayWarning ? { relayWarning } : {}) },
+    });
+  };
+
+  it("shows a connected Child's relay bytes each way, its route and its transport", () => {
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: home([
+          {
+            id: "lnk_a",
+            alias: "macmini-ts",
+            tunnelPort: 54958,
+            state: "connected",
+            route: { name: "pen-macmini", via: "relay" },
+            transport: "http",
+            traffic: {
+              hour: window(1_200_000_000, 1_200_000_000, 3_600_000),
+              day: window(16_000_000_000, 14_000_000_000, 86_400_000),
+              warning: { thresholdBytes: 5_000_000_000 },
+            },
+          },
+        ]),
+      },
+    ]);
+    const device = hub!.devices[0]!;
+    expect(hubDeviceSeverity(device)).toBe("warning");
+    expect(hubDeviceFacts(device).slice(-5)).toEqual([
+      "over 5 GB through the relay in 24 h",
+      "via relay pen-macmini",
+      "HTTP",
+      "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h",
+      "direct ↑0 B ↓0 B last hour · ↑2 GB ↓200 MB in 24 h",
+    ]);
+  });
+
+  it("reads what the Home does not report as not measured, and a short measurement as short", () => {
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: home([
+          { id: "lnk_a", alias: "old", tunnelPort: 54958, state: "connected" },
+          {
+            id: "lnk_b",
+            alias: "lan",
+            tunnelPort: 54959,
+            state: "connected",
+            route: { name: "lan" },
+            traffic: { hour: window(0, 0, 600_000), day: window(0, 0, 600_000) },
+          },
+          { id: "lnk_c", alias: "down", tunnelPort: 54960, state: "reconnecting" },
+        ]),
+      },
+    ]);
+    const facts = hub!.devices.map((device) => hubDeviceFacts(device).slice(-4));
+    expect(facts[0]).toContain("link traffic not measured");
+    expect(facts[1]).toEqual([
+      "route lan",
+      "transport not measured",
+      "nothing sent in 24 h",
+      "measured over 10 min",
+    ]);
+    expect(hubDeviceFacts(hub!.devices[2]!).join(" ")).not.toContain("measured");
+  });
+
+  it("carries the hub-wide relay warning, and none below the threshold", () => {
+    const warning = { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 };
+    const [only] = hubRelayWarnings([{ key: "home", label: "home", entry: home([], warning) }]);
+    expect(hubRelayWarningLabel(only!.warning)).toBe(
+      "Children sent 31 GB through the Pen relay in 24 h (warning at 30 GB). Nothing is stopped.",
+    );
+    expect(hubRelayWarnings([{ key: "home", label: "home", entry: home([]) }])).toEqual([]);
+  });
+
+  it("never calls bytes without a confirmed route direct, and says what the Home did not report", () => {
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: home([
+          {
+            id: "lnk_a",
+            alias: "macmini-ts",
+            tunnelPort: 54958,
+            state: "connected",
+            route: { name: "pen-macmini" },
+            traffic: {
+              hour: window(1_000_000_000, 0, 3_600_000, 0),
+              day: window(10_000_000_000, 0, 86_400_000, 0),
+            },
+          },
+        ]),
+      },
+    ]);
+    const facts = hubDeviceFacts(hub!.devices[0]!);
+    expect(facts.slice(-3)).toEqual([
+      "route pen-macmini",
+      "transport not measured",
+      "route not confirmed ↑1 GB ↓100 MB last hour · ↑10 GB ↓1 GB in 24 h",
+    ]);
+    expect(facts.join(" ")).not.toMatch(/none through a relay|not via relay|direct/u);
+  });
+
+  it("lists each machine's own relay warning, also one whose last link went while another is the Home", () => {
+    const base = inventory("none");
+    const warning = { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 };
+    const sources = [
+      { key: "b", label: "studio", entry: entry(null, inventory("home")) },
+      {
+        key: "a",
+        label: "mini",
+        entry: entry("mini", { ...base, link: { ...base.link, relayWarning: warning } }),
+      },
+    ];
+    expect(hubSnapshot(sources)?.homeKey).toBe("b");
+    expect(hubRelayWarnings(sources)).toEqual([{ key: "a", label: "mini", warning }]);
+  });
+});
+
+describe("hubLinkOfMachine", () => {
+  const devices = [
+    { alias: "macmini-ts", tunnel: "connected" as const },
+    { alias: "studio", tunnel: null },
+  ];
+  const machine = (label: string, sshAlias: string | null = null, reported: string[] = []) => ({
+    label,
+    sshHost: sshAlias === null ? null : { alias: sshAlias },
+    reportedAliases: reported.map((alias) => ({ alias })),
+  });
+
+  it("finds a Fleet machine's Remote Link Child by its dispatcher alias, a reported alias or its label", () => {
+    expect(hubLinkOfMachine(devices, machine("Mac mini", "macmini-ts"))?.alias).toBe("macmini-ts");
+    expect(hubLinkOfMachine(devices, machine("Mac mini", null, ["macmini-ts"]))?.alias).toBe(
+      "macmini-ts",
+    );
+    expect(hubLinkOfMachine(devices, machine("macmini-ts"))?.alias).toBe("macmini-ts");
+  });
+
+  it("never matches a machine that is not a linked Child", () => {
+    expect(hubLinkOfMachine(devices, machine("studio"))).toBe(null);
+    expect(hubLinkOfMachine(devices, machine("other", "other-ts"))).toBe(null);
   });
 });

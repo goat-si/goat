@@ -47,3 +47,31 @@ export const HubSettingsPatch = Schema.Struct({
   /** Replaces the whole map, as fleet.hosts does. */
   devices: Schema.optionalKey(HubDevices),
 });
+
+export const HUB_RELAY_WARNING_MAX_GB = 1_000_000;
+/** Decimal gigabytes a day; 0 never warns. */
+const RelayWarningGb = Schema.Number.check(
+  Schema.isBetween({ minimum: 0, maximum: HUB_RELAY_WARNING_MAX_GB }),
+);
+export const DEFAULT_HUB_RELAY_WARNING_DEVICE_GB_PER_DAY = 5;
+export const DEFAULT_HUB_RELAY_WARNING_HUB_GB_PER_DAY = 30;
+
+/**
+ * The server settings an environment reads when it is the hub. The relay thresholds only add a
+ * warning to Hub and Fleet when one Child, or all of them together, sent that much through a Pen
+ * relay in 24 hours; nothing ever stops a turn or a link because of them.
+ */
+export const HubServerSettingsFields = {
+  hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  hubRelayWarningDeviceGbPerDay: RelayWarningGb.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HUB_RELAY_WARNING_DEVICE_GB_PER_DAY)),
+  ),
+  hubRelayWarningHubGbPerDay: RelayWarningGb.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HUB_RELAY_WARNING_HUB_GB_PER_DAY)),
+  ),
+};
+export const HubServerSettingsPatchFields = {
+  hub: Schema.optionalKey(HubSettingsPatch),
+  hubRelayWarningDeviceGbPerDay: Schema.optionalKey(RelayWarningGb),
+  hubRelayWarningHubGbPerDay: Schema.optionalKey(RelayWarningGb),
+};

@@ -26,6 +26,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { HubChildSetup } from "./HubChildSetup";
+import { HubDeviceLinkLines } from "./HubLinkLines";
 import {
   AddHubDevice,
   HubActionResult,
@@ -260,6 +261,7 @@ function HubDeviceListRow({
             .join(" · ")}
         </p>
       )}
+      {device === null ? null : <HubDeviceLinkLines device={device} />}
       {row.missingClis === null ? null : (
         <p className="text-xs text-warning-foreground">
           {row.missingClis}. Install from Settings → Connections → Providers on your machines.

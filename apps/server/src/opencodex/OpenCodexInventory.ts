@@ -2,6 +2,7 @@ import {
   ForwardCompatibleOptional,
   OpenCodexDeviceFallback,
   OpenCodexInventorySnapshot,
+  OpenCodexLinkRowFields,
   OpenCodexProtocolEvidence,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -22,6 +23,8 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ProcessRunner from "../processRunner.ts";
+import * as HubLinkTraffic from "../hub/HubLinkTraffic.ts";
+import { LinkRowObservationFields } from "../hub/hubOcxJson.ts";
 import { openCodexCandidates } from "@goat/shared/opencodexRelease";
 import * as Installation from "./OpenCodexInstallation.ts";
 
@@ -115,7 +118,7 @@ const Status = Schema.Struct({
 });
 const Link = Schema.Struct({
   role: Schema.Literals(["home", "child", "standalone"]),
-  links: OpenCodexInventorySnapshot.fields.link.fields.links,
+  links: Schema.Array(Schema.Struct({ ...OpenCodexLinkRowFields, ...LinkRowObservationFields })),
 });
 const Models = Schema.Struct({
   data: Schema.Array(
@@ -174,6 +177,7 @@ const make = Effect.gen(function* () {
   const hostname = yield* HostProcess.Hostname;
   const installation = yield* Installation.OpenCodexInstallation;
   const runner = yield* ProcessRunner.ProcessRunner;
+  const linkTraffic = yield* HubLinkTraffic.HubLinkTraffic;
   const http = HttpClient.withScope(yield* HttpClient.HttpClient);
   const crypto = yield* Crypto.Crypto;
   const digest = (value: unknown) =>
@@ -380,6 +384,12 @@ const make = Effect.gen(function* () {
       .join("")
       .trim()
       .slice(0, 255);
+    const homeRows = linkRole === "home" ? (link?.links ?? []) : [];
+    // A Home whose last link went reports standalone; its relay bytes still count for a day.
+    const observed =
+      link !== undefined && link.role !== "child"
+        ? yield* linkTraffic.observe(homeRows)
+        : undefined;
     let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
     if (parity) {
       const observedAt = yield* Clock.currentTimeMillis;
@@ -485,7 +495,8 @@ const make = Effect.gen(function* () {
       link: {
         role: linkRole,
         available: link !== undefined,
-        links: linkRole === "home" ? (link?.links ?? []) : [],
+        links: observed?.links ?? homeRows.map(HubLinkTraffic.baseLinkRow),
+        ...(observed?.relayWarning ? { relayWarning: observed.relayWarning } : {}),
         childSettingsApplied,
         ...(homeName ? { homeName } : {}),
       },

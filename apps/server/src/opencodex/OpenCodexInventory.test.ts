@@ -19,6 +19,8 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
+import * as HubLinkTraffic from "../hub/HubLinkTraffic.ts";
+import * as Settings from "../serverSettings.ts";
 import * as Installation from "./OpenCodexInstallation.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
 import parityFixture from "../hub/fixtures/parity.json" with { type: "json" };
@@ -55,6 +57,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     managed?: boolean;
     hostname?: string;
     crypto?: Crypto.Crypto;
+    linkTraffic?: HubLinkTraffic.HubLinkTraffic["Service"];
   } = {},
 ) {
   const fixture = options.fixture;
@@ -151,6 +154,14 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
       ),
       Layer.provide(Layer.succeed(FileSystem.FileSystem, fs)),
       Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
+      Layer.provide(
+        options.linkTraffic
+          ? Layer.succeed(HubLinkTraffic.HubLinkTraffic, options.linkTraffic)
+          : Layer.effect(
+              HubLinkTraffic.HubLinkTraffic,
+              HubLinkTraffic.make(Effect.sync((): ReadonlySet<string> | undefined => undefined)),
+            ).pipe(Layer.provide(Settings.ServerSettingsService.layerTest())),
+      ),
       Layer.provide(
         FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetcher))),
       ),
@@ -824,4 +835,136 @@ it.effect("parity reads a settings record that carries OpenCodex's appliedAt", (
     expect(applied.parityEvidence?.settingsDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(applied.parityEvidence?.settingsDigest).toBe(plain.parityEvidence?.settingsDigest);
   }),
+);
+
+// The ?traffic=1, ?routes=1 and ?transport=1 row fields of OpenCodex src/link/status-projection.ts.
+const trafficRow = (toHomeBytes: number) => ({
+  id: "lnk_a",
+  alias: "mac-ts",
+  tunnelPort: 54001,
+  direction: "hub-initiated",
+  state: "connected",
+  routes: [
+    {
+      name: "mac-ts",
+      eligibleAt: "2026-11-13T00:05:00.000Z",
+      lastOutcome: { class: "transient", at: "2026-11-13T00:00:00.000Z" },
+    },
+    { name: "pen-mac", eligibleAt: null, lastOutcome: null },
+  ],
+  route: { name: "pen-mac", index: 1, since: "2026-11-13T00:00:00.000Z" },
+  routeBlocked: null,
+  ws: { open: 0, upgrades: 0, refused: {}, closes: {}, holds: 0 },
+  traffic: {
+    since: "2026-11-13T00:00:00.000Z",
+    epoch: "ab12cd34",
+    generation: 3,
+    requests: 9,
+    incomplete: 0,
+    toHomeBytes,
+    fromHomeBytes: toHomeBytes / 10,
+    toHomeSource: "content-length",
+    toHomeUncounted: 0,
+    untrackedRequests: 0,
+  },
+});
+
+it.effect(
+  "a Home's link traffic, route and WebSocket counters reach host status as relay bytes, a relay route and HTTP",
+  () =>
+    Effect.gen(function* () {
+      const linkTraffic = yield* HubLinkTraffic.make(
+        Effect.succeed(new Set(["pen-mac", "pen-old"])),
+      ).pipe(Effect.provide(Settings.ServerSettingsService.layerTest()));
+      const olderHomeRow = { id: "lnk_b", alias: "pen-old", tunnelPort: 54002, state: "connected" };
+      const link = { role: "home", links: [trafficRow(1_000_000), olderHomeRow] };
+      const { inventory } = yield* setup({ fixture: fleet.home, link, linkTraffic });
+      yield* inventory.read;
+      link.links[0] = trafficRow(6_001_000_000);
+      yield* TestClock.adjust("10 minutes");
+      const result = yield* inventory.read;
+      expect(result.link.links[0]).toEqual({
+        id: "lnk_a",
+        alias: "mac-ts",
+        tunnelPort: 54001,
+        state: "connected",
+        route: { name: "pen-mac", via: "relay", since: Date.parse("2026-11-13T00:00:00.000Z") },
+        transport: "http",
+        traffic: {
+          hour: {
+            toHomeBytes: 6_000_000_000,
+            fromHomeBytes: 600_000_000,
+            relayToHomeBytes: 6_000_000_000,
+            relayFromHomeBytes: 600_000_000,
+            directToHomeBytes: 0,
+            directFromHomeBytes: 0,
+            measuredMs: 600_000,
+          },
+          day: {
+            toHomeBytes: 6_000_000_000,
+            fromHomeBytes: 600_000_000,
+            relayToHomeBytes: 6_000_000_000,
+            relayFromHomeBytes: 600_000_000,
+            directToHomeBytes: 0,
+            directFromHomeBytes: 0,
+            measuredMs: 600_000,
+          },
+          warning: { thresholdBytes: 5_000_000_000 },
+        },
+      });
+      // An older Home reports no counters: its one-route link uses its alias, and nothing is measured.
+      expect(result.link.links[1]).toEqual({
+        ...olderHomeRow,
+        route: { name: "pen-old", via: "relay" },
+      });
+      expect(result.link.relayWarning).toBeUndefined();
+      expect(yield* decodeSnapshot(result)).toEqual(result);
+    }),
+);
+
+it.effect(
+  "a relay warning outlives the Home's last link, which OpenCodex then reports as standalone",
+  () =>
+    Effect.gen(function* () {
+      const linkTraffic = yield* HubLinkTraffic.make(Effect.succeed(new Set(["pen-mac"]))).pipe(
+        Effect.provide(Settings.ServerSettingsService.layerTest()),
+      );
+      const link: { role: string; links: Array<unknown> } = {
+        role: "home",
+        links: [trafficRow(0)],
+      };
+      const { inventory } = yield* setup({ fixture: fleet.home, link, linkTraffic });
+      yield* inventory.read;
+      link.links[0] = trafficRow(30_000_000_000);
+      yield* TestClock.adjust("10 minutes");
+      expect((yield* inventory.read).link.relayWarning).toEqual({
+        relayBytes: 33_000_000_000,
+        thresholdBytes: 30_000_000_000,
+      });
+      link.role = "standalone";
+      link.links = [];
+      yield* TestClock.adjust("10 minutes");
+      expect((yield* inventory.read).link.relayWarning).toEqual({
+        relayBytes: 33_000_000_000,
+        thresholdBytes: 30_000_000_000,
+      });
+    }),
+);
+
+it.effect(
+  "a multi-route row whose route blocks do not decode reads as route not measured, never as its alias",
+  () =>
+    Effect.gen(function* () {
+      const linkTraffic = yield* HubLinkTraffic.make(Effect.succeed(new Set(["mac-ts"]))).pipe(
+        Effect.provide(Settings.ServerSettingsService.layerTest()),
+      );
+      const row = { ...trafficRow(0), routes: [{ label: "future shape" }], route: { label: "x" } };
+      const { inventory } = yield* setup({
+        fixture: fleet.home,
+        link: { role: "home", links: [row] },
+        linkTraffic,
+      });
+      const result = yield* inventory.read;
+      expect(result.link.links[0]?.route).toBeUndefined();
+    }),
 );

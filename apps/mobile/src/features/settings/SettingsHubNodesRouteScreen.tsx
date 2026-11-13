@@ -19,6 +19,7 @@ import {
   hubDeviceFacts,
   hubSnapshot,
 } from "@goat/client-runtime/state/hub-fleet";
+import { hubRelayWarningLabel } from "@goat/client-runtime/state/hub-link-traffic";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -144,11 +145,16 @@ function HubDevicesList({
       .hub ?? null;
   const hosts = status.data?.hosts ?? [];
   const unsupported = isHubNodesUnsupportedError(listed.cause);
+  const snapshot = hubSnapshot(
+    hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
+  );
+  // This environment's own warning, whichever machine the snapshot names as Home.
+  const relayWarning = hubRelayWarningLabel(
+    hosts.find((entry) => entry.host === null)?.metrics?.opencodex?.link.relayWarning ?? null,
+  );
   const rows = hubDeviceList({
     nodes: listed.data?.nodes ?? null,
-    snapshot: hubSnapshot(
-      hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
-    ),
+    snapshot,
     hosts,
     statusCurrent: status.isSuccess,
   });
@@ -288,6 +294,11 @@ function HubDevicesList({
           {error ?? listed.error}
         </Text>
       ) : null}
+      {relayWarning === null ? null : (
+        <Text accessibilityRole="alert" className="text-sm text-warning-foreground">
+          {relayWarning}
+        </Text>
+      )}
       {status.error ? (
         <View className="gap-2">
           <Text className="text-sm text-foreground-muted">

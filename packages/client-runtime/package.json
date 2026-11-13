@@ -491,6 +491,10 @@
       "types": "./src/state/hubFleet.ts",
       "default": "./src/state/hubFleet.ts"
     },
+    "./state/hub-link-traffic": {
+      "types": "./src/state/hubLinkTraffic.ts",
+      "default": "./src/state/hubLinkTraffic.ts"
+    },
     "./state/host-metrics": {
       "types": "./src/state/host-metrics.ts",
       "default": "./src/state/host-metrics.ts"
