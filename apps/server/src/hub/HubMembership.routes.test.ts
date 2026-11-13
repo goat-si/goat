@@ -401,3 +401,24 @@ it.effect(
       expect(yield* hub.consumed).toEqual([]);
     }),
 );
+it.effect(
+  "every failure before ocx starts answers with a code, so a waiting change stays continuable, and keeps the approval",
+  () =>
+    Effect.gen(function* () {
+      const cases = [
+        { kind: "unstartable" as const, code: "ocx_unstartable" },
+        { kind: "missing" as const, code: "ocx_missing" },
+        { kind: "failed" as const, code: "link_status_unreadable" },
+        { kind: "unlinked" as const, code: "link_not_found" },
+      ];
+      for (const { kind, code } of cases) {
+        const { hub, decisionId } = yield* approvedChange(routesHome());
+        if (kind === "unlinked") hub.unlink("mini");
+        else hub.breakLinkStatus(kind);
+        const failed = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+        expect(failed, kind).toMatchObject({ state: "failed", code });
+        expect(yield* hub.consumed, kind).toEqual([]);
+        expect(routesCalls(hub.calls), kind).toEqual([]);
+      }
+    }),
+);

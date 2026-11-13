@@ -39,8 +39,9 @@ export type HubDeviceRoutesUpdateInput = typeof HubDeviceRoutesUpdateInput.Type;
 
 /**
  * unsupported: the Home's OpenCodex has no `ocx link routes`. code and cause are OpenCodex's
- * fixed refusal words, such as route_unproven and transient, never its free text, or GOAT's
- * ocx_unstartable. A failed answer with a code changed nothing and leaves an approval unspent.
+ * fixed refusal words, such as route_unproven and transient, never its free text, or GOAT's own
+ * for a failure before ocx starts: ocx_missing, ocx_unstartable, link_status_unreadable, not_home,
+ * link_not_found. A failed answer with a code changed nothing and leaves an approval unspent.
  */
 export const HubDeviceRoutesResult = Schema.Struct({
   deviceAlias: Schema.String,

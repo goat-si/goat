@@ -217,19 +217,28 @@ const routesAnswer = (
 export const makeRoutes = (deps: RoutesDeps) => {
   const linkOf = Effect.fn("HubMembership.routesLink")(function* (alias: string) {
     const { status, forbidden } = yield* deps.readHomeLinks();
-    if (status === undefined) return { failed: linkStatusUnreadable(forbidden) } as const;
+    if (status === undefined)
+      return { failed: linkStatusUnreadable(forbidden), code: "link_status_unreadable" } as const;
     if (status.role === "child")
-      return { failed: "This machine is a Child and has no Home links." } as const;
+      return {
+        failed: "This machine is a Child and has no Home links.",
+        code: "not_home",
+      } as const;
     const record = status.links.find((entry) => entry.alias === alias);
     return record === undefined
-      ? ({ failed: `${alias} has no Remote Link on this Home.` } as const)
+      ? ({ failed: `${alias} has no Remote Link on this Home.`, code: "link_not_found" } as const)
       : ({ linkId: record.id } as const);
   });
+  // Every failure before ocx starts changed nothing; its code says so, and keeps an approval usable.
   const unreachable = (alias: string) => (error: HubOcxError) =>
     Effect.succeed<HubDeviceRoutesResult>({
       deviceAlias: alias,
       state: "failed",
-      message: error.message,
+      code: error.reason === "unreachable" ? "link_status_unreadable" : error.reason,
+      message:
+        error.reason === "ocx_unstartable"
+          ? "ocx could not be started on this hub, so nothing changed."
+          : error.message,
     });
 
   const list = Effect.fn("HubMembership.routes")(function* (
@@ -245,6 +254,7 @@ export const makeRoutes = (deps: RoutesDeps) => {
         return {
           deviceAlias: alias,
           state: "failed",
+          code: link.code,
           message: link.failed,
         } satisfies HubDeviceRoutesResult;
       return routesAnswer(
@@ -273,6 +283,7 @@ export const makeRoutes = (deps: RoutesDeps) => {
         return {
           deviceAlias: alias,
           state: "failed",
+          code: link.code,
           message: link.failed,
         } satisfies HubDeviceRoutesUpdateResult;
       const binding = `goat-hub-binding: routes ${alias} ${link.linkId} ${describe(change)}`;
