@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   updateTaskView: vi.fn(),
   turnsWaiting: [] as string[],
 }));
-vi.mock("~/state/environments", () => ({
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => ({
     connection: { phase: "disconnected" },
     serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
@@ -46,7 +47,8 @@ vi.mock("./useBotRoster", () => ({
     refresh: mocks.refreshThreads,
   }),
 }));
-vi.mock("~/state/entities", () => ({
+vi.mock("~/state/entities", async (original) => ({
+  ...(await original<typeof import("~/state/entities")>()),
   useThreadShell: () => null,
   useServerConfigs: () => new Map(),
 }));
@@ -76,12 +78,15 @@ vi.mock("./GoatBotTimeline", async () => ({
   GoatBotActivityContext: (await import("react")).createContext(null),
   GoatBotTimeline: () => <p>Task conversation</p>,
 }));
-vi.mock("./GoatBotAvatar", () => ({
-  GoatBotAvatar: () => null,
+// A member's hero is the real avatar, so its picture is what a person sees.
+vi.mock("./GoatBotAvatar", async (original) => ({
+  ...(await original<typeof import("./GoatBotAvatar")>()),
   GoatBotMainAvatar: () => <span data-goat-main-avatar />,
-  GoatBotSessionAvatar: () => <span data-goat-session-avatar />,
 }));
-vi.mock("./useGoatBotMemberStatus", () => ({ useGoatBotMemberWaitingCount: () => 0 }));
+vi.mock("./useGoatBotMemberStatus", () => ({
+  useGoatBotMemberWaitingCount: () => 0,
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+}));
 vi.mock("./GoatBotSuggested", () => ({ GoatBotSuggested: () => null }));
 vi.mock("./GoatBotComputer", () => ({ GoatBotComputer: () => <p>Machine list</p> }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -258,6 +263,30 @@ it.each(["main", "member"] as const)(
     await expect.element(screen.getByRole("dialog", { name: "" })).toBeVisible();
   },
 );
+
+it("shows a member's own initial on its colour in the Home hero, not the main bot's face", async () => {
+  setup([]);
+  const bot = {
+    botId: "rose",
+    role: "member",
+    name: "New bot 2",
+    avatar: null,
+    color: "#BE185D",
+    environmentId: EnvironmentId.make("env"),
+    sessionThreadId: ThreadId.make("member-thread"),
+  } as unknown as BotProfile;
+  await using screen = await render(
+    <GoatBotMemberContext value={bot}>
+      <GoatBotWorkPanel
+        environmentId={bot.environmentId}
+        threadId={ThreadId.make("member-thread")}
+        onOpenFile={() => {}}
+      />
+    </GoatBotMemberContext>,
+  );
+  await expect.element(screen.getByRole("heading", { name: "New bot 2" })).toBeVisible();
+  await expect.element(screen.getByText("N", { exact: true })).toBeVisible();
+});
 
 it("does not offer profile editing without permission", async () => {
   setup([]);

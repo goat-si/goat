@@ -34,7 +34,7 @@ import { GoatBotWorkPeek } from "./GoatBotWorkPeek";
 import {
   goatBotSearch,
   memberThreadsKey,
-  useGoatBotAvatar,
+  useGoatBotPicture,
   useGoatBotMember,
   useGoatBotName,
 } from "./goatBotMemberContext";
@@ -129,7 +129,7 @@ export function GoatBotWorkPanel({
   };
   const member = useGoatBotMember();
   const botName = useGoatBotName();
-  const avatar = useGoatBotAvatar();
+  const picture = useGoatBotPicture();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const { rows, remoteWork, supported, loaded, failed, failure, turnsWaiting, refresh } =
     useBotThreads(environmentId, memberThreadsKey(member));
@@ -245,7 +245,7 @@ export function GoatBotWorkPanel({
             <GoatBotMainAvatar
               size="xl"
               chatOpen={false}
-              emoji={avatar}
+              emoji={picture.emoji}
               surface={onShowChat ? "popover" : "screen"}
             />
           ) : (
@@ -253,7 +253,8 @@ export function GoatBotWorkPanel({
               size="xl"
               surface={onShowChat ? "popover" : "screen"}
               place="list"
-              emoji={avatar}
+              emoji={picture.emoji}
+              accent={picture.accent}
               waitingCount={memberWaiting}
               threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
             />

@@ -31,7 +31,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar, GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
 import {
   useGoatBotAccentStyle,
-  useGoatBotAvatar,
+  useGoatBotPicture,
   useGoatBotMainName,
   useGoatBotMember,
   useGoatBotName,
@@ -145,7 +145,7 @@ export function GoatBotChatView({
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
   const mainName = useGoatBotMainName();
-  const avatar = useGoatBotAvatar();
+  const picture = useGoatBotPicture();
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const bot = availability.kind === "ready" ? availability.bot : null;
   const routineLanding = useGoatBotRoutineLanding(bot, panelOpen, () => setPanelOpen(true));
@@ -281,7 +281,8 @@ export function GoatBotChatView({
                       size="sm"
                       surface="chip"
                       chatOpen
-                      emoji={avatar}
+                      emoji={picture.emoji}
+                      accent={picture.accent}
                       waitingCount={memberWaiting}
                       threadRef={scopeThreadRef(member.environmentId, member.sessionThreadId)}
                       activity={reading ? { state: "reading" } : removed ? null : working}
@@ -291,7 +292,7 @@ export function GoatBotChatView({
                       size="sm"
                       surface="chip"
                       chatOpen
-                      emoji={avatar}
+                      emoji={picture.emoji}
                       activity={reading ? { state: "reading" } : removed ? null : working}
                     />
                   )}
@@ -538,13 +539,18 @@ function GoatBotRemovedNotice({
   readonly memberName: string | null;
   readonly onCheckAgain: (() => void) | undefined;
 }) {
-  const avatar = useGoatBotAvatar();
+  const picture = useGoatBotPicture();
   const botName = useGoatBotName();
   if (memberName !== null) {
     return (
       <Empty className="min-h-0 flex-1">
         <EmptyHeader className="max-w-md">
-          <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
+          <GoatBotAvatar
+            size="lg"
+            emoji={picture.emoji}
+            accent={picture.accent}
+            className="mx-auto mb-4"
+          />
           <EmptyTitle>{memberName} was deleted</EmptyTitle>
           <EmptyDescription>
             Its conversation is archived. Restore it to keep chatting here.
@@ -566,7 +572,12 @@ function GoatBotRemovedNotice({
     return (
       <Empty className="min-h-0 flex-1">
         <EmptyHeader className="max-w-md">
-          <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
+          <GoatBotAvatar
+            size="lg"
+            emoji={picture.emoji}
+            accent={picture.accent}
+            className="mx-auto mb-4"
+          />
           <EmptyTitle>Couldn't check this chat</EmptyTitle>
           <EmptyDescription>
             It may have been archived or deleted. Check again to find out.
@@ -602,7 +613,12 @@ function GoatBotRemovedNotice({
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
-        <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
+        <GoatBotAvatar
+          size="lg"
+          emoji={picture.emoji}
+          accent={picture.accent}
+          className="mx-auto mb-4"
+        />
         <EmptyTitle>
           {removal === "archived" ? "This chat is archived" : "This chat was deleted"}
         </EmptyTitle>
@@ -665,7 +681,7 @@ function GoatBotNotice({
   readonly onSelectExample?: ((text: string) => void) | undefined;
 }) {
   const member = useGoatBotMember();
-  const avatar = useGoatBotAvatar();
+  const picture = useGoatBotPicture();
   const openName = useGoatBotName();
   const mainName = useGoatBotMainName();
   const copy = noticeCopy(availability, mainName, openName);
@@ -725,7 +741,12 @@ function GoatBotNotice({
   return (
     <Empty size="compact" className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
-        <GoatBotAvatar size="lg" emoji={avatar} className="mx-auto mb-4" />
+        <GoatBotAvatar
+          size="lg"
+          emoji={picture.emoji}
+          accent={picture.accent}
+          className="mx-auto mb-4"
+        />
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
