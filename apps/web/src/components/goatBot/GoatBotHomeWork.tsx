@@ -17,7 +17,7 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { holdNavigation } from "~/lib/navigationHolds";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -33,6 +33,7 @@ import {
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
+import { rememberHomeOrigin } from "./goatBotHomeRequest";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -77,6 +78,7 @@ export function GoatBotHomeWork({
   onShowAllChange,
   focusTaskId = null,
   focusRef,
+  returnTaskId = null,
   notice = null,
   history,
 }: {
@@ -104,6 +106,7 @@ export function GoatBotHomeWork({
   /** The row Back returns to; it takes focus when it shows again. */
   readonly focusTaskId?: ChannelTaskId | null | undefined;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
+  readonly returnTaskId?: ChannelTaskId | null | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
   /** The bot's older work; rows missing from currentTaskIds came from this walk. */
@@ -130,6 +133,16 @@ export function GoatBotHomeWork({
   const showMore = historyAvailable || hidden > 0;
   // oxlint-disable-next-line goat/react-effect-budget -- Preserve focus when history removes its continuation button.
   useLayoutEffect(() => {
+    if (
+      returnTaskId !== null &&
+      focusTaskId === returnTaskId &&
+      loaded &&
+      !failed &&
+      !rows.some((row) => row.kind === "task" && row.task.taskId === returnTaskId)
+    ) {
+      const heading = containerRef.current?.closest("section")?.querySelector<HTMLElement>("h3");
+      if (heading) focusRef?.(heading);
+    }
     if (showMore || pendingFocus.current === null) return;
     if (document.activeElement === document.body) {
       const added = [...work.running, ...work.waiting, ...finished].find(
@@ -145,6 +158,7 @@ export function GoatBotHomeWork({
       key={task.row.task.taskId}
       task={task}
       mark={mark}
+      returned={task.row.task.taskId === returnTaskId}
       rows={rows}
       remoteWork={remoteWork}
       environmentId={environmentId}
@@ -267,6 +281,7 @@ function MarkIcon({ mark }: { readonly mark: Mark }) {
 function WorkRow({
   task,
   mark,
+  returned,
   rows,
   remoteWork,
   environmentId,
@@ -281,6 +296,7 @@ function WorkRow({
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
+  readonly returned: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly remoteWork: ReadonlyArray<BotRemoteWork>;
   readonly environmentId: EnvironmentId;
@@ -297,6 +313,18 @@ function WorkRow({
   const title = row.task.title;
   const member = useGoatBotMember();
   const navigate = useNavigate();
+  const router = useRouter();
+  const remember = (event: React.MouseEvent) => {
+    if (
+      !event.defaultPrevented &&
+      event.button === 0 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey
+    )
+      rememberHomeOrigin(router, environmentId, member?.botId ?? null, row.task.taskId);
+  };
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const [expanded, setExpanded] = useState(false);
@@ -356,7 +384,10 @@ function WorkRow({
     if (result._tag === "Success") onRefresh();
   }
   return (
-    <div className="border-t border-border/50 first:border-t-0">
+    <div
+      data-home-return={returned || undefined}
+      className={cn("border-t border-border/50 first:border-t-0", returned && "bg-accent/40")}
+    >
       <div className="flex min-h-11 items-center gap-2 px-3">
         <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
           <MarkIcon mark={mark} />
@@ -373,6 +404,7 @@ function WorkRow({
         ) : (
           <Link
             to="/bot"
+            onClick={remember}
             ref={focusRef}
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -410,6 +442,7 @@ function WorkRow({
             remoteWork={remoteWork}
             currentLinks={currentLinks?.filter((link) => link.taskId === row.task.taskId) ?? null}
             currentRemoteIds={older ? null : currentRemoteIds}
+            onHomeNavigate={remember}
           />
         </div>
       )}

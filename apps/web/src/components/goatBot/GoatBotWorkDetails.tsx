@@ -24,9 +24,11 @@ const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:
 function GoatBotRemoteWork({
   item,
   openable,
+  onHomeNavigate,
 }: {
   item: BotRemoteWork;
   openable?: boolean | undefined;
+  onHomeNavigate?: ((event: React.MouseEvent) => void) | undefined;
 }) {
   const connected = useAtomValue(
     openable !== undefined || item.environmentId === undefined
@@ -44,7 +46,12 @@ function GoatBotRemoteWork({
       </span>
     );
   return (
-    <Link to="/$environmentId/$threadId" params={target.ref} className="underline">
+    <Link
+      to="/$environmentId/$threadId"
+      params={target.ref}
+      onClick={onHomeNavigate}
+      className="underline"
+    >
       Open work thread on {target.host}
     </Link>
   );
@@ -57,6 +64,7 @@ export function GoatBotWorkDetails({
   remoteWork,
   currentLinks = null,
   currentRemoteIds = null,
+  onHomeNavigate,
 }: {
   environmentId: EnvironmentId;
   taskId: ChannelTaskId;
@@ -64,6 +72,7 @@ export function GoatBotWorkDetails({
   remoteWork: readonly BotRemoteWork[];
   currentLinks?: ReadonlyArray<HomeCurrentOpenableLink> | null;
   currentRemoteIds?: ReadonlyArray<string> | null;
+  onHomeNavigate?: ((event: React.MouseEvent) => void) | undefined;
 }) {
   const environment = useEnvironment(environmentId);
   const supported =
@@ -116,6 +125,7 @@ export function GoatBotWorkDetails({
           key={`${thread.environmentId}:${thread.threadId}`}
           to="/$environmentId/$threadId"
           params={thread}
+          onClick={onHomeNavigate}
           className="underline"
         >
           Open work thread
@@ -125,6 +135,7 @@ export function GoatBotWorkDetails({
         <GoatBotRemoteWork
           key={item.childWorkId}
           item={item}
+          onHomeNavigate={onHomeNavigate}
           openable={
             currentLinks !== null && currentRemoteIds?.includes(item.childWorkId)
               ? currentLinks.some(

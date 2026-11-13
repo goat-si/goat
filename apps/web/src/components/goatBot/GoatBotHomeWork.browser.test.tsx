@@ -50,6 +50,7 @@ vi.mock("~/state/query", () => ({
 }));
 
 import { GoatBotHomeWork, type HomeHistory } from "./GoatBotHomeWork";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -558,4 +559,32 @@ it("uses current atom links, preserves child-only and history links, and falls b
   actions.current = { eligible: true, list: "failed", links: [] };
   await screen.rerender(view([current, older], options));
   expect(hrefs()).toContain("/remote/dropped");
+});
+
+it("records the member Home when opening a worker link from its row", async () => {
+  const row = {
+    ...taskRow("task-a", "Member task", "running", "2026-11-09T01:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("worker") },
+  };
+  setup();
+  const member = {
+    botId: "member",
+    environmentId,
+    sessionThreadId: "member-thread",
+  } as unknown as import("@goat/contracts").BotProfile;
+  await using screen = await render(
+    <GoatBotMemberContext value={member}>{view([row])}</GoatBotMemberContext>,
+  );
+  const router = screen.router;
+  if (!router) throw new Error("missing router");
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Member task" }));
+  await userEvent.click(screen.getByRole("link", { name: "Open work thread" }));
+  router.history.back();
+  await vi.waitFor(() =>
+    expect(router.state.location.state.goatBotOpenHome).toEqual({
+      key: JSON.stringify(["env", "member"]),
+      taskId: "task-a",
+    }),
+  );
 });

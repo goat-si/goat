@@ -1,5 +1,6 @@
 import type { GoatBotRow, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import {
+  ChannelTaskId,
   EnvironmentId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
@@ -131,7 +132,7 @@ function setup(narrow = false) {
   const view = (
     rows: GoatBotRow[] = [],
     peek = false,
-    openHome: { key: string; entry: string } | null = null,
+    openHome: { key: string; entry: string; taskId?: ChannelTaskId } | null = null,
   ) => (
     <GoatBotChatView
       openHome={openHome}
@@ -453,4 +454,48 @@ it("the memory in Library reads the notes again after the answer and after the t
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 4);
+});
+
+it("a task-origin request opens Home with its row marked once", async () => {
+  const { view } = setup();
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: { taskId: "task-a", title: "Returned task", status: "running", updatedAt: at },
+      view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    },
+  ];
+  const request = {
+    key: goatBotHomeKey(environmentId, null),
+    entry: "return-entry",
+    taskId: ChannelTaskId.make("task-a"),
+  };
+  await using screen = await render(view([], false, request));
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await expect.element(chip).toHaveAttribute("aria-expanded", "true");
+  const row = screen.getByRole("link", { name: /^Returned task/ });
+  await expect.element(row).toBeVisible();
+  expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
+    "true",
+  );
+  await userEvent.click(chip);
+  await screen.rerender(view([], false, request));
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(chip);
+  await expect.element(screen.getByRole("link", { name: /^Returned task/ })).toBeVisible();
+  expect(
+    screen
+      .getByRole("link", { name: /^Returned task/ })
+      .element()
+      .closest("[data-home-return]"),
+  ).toBeNull();
+  await screen.rerender(<div />);
+  await screen.rerender(view([], false, null));
+  await expect
+    .element(screen.getByRole("button", { name: "GOAT Bot home" }))
+    .toHaveAttribute("aria-expanded", "false");
 });
