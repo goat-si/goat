@@ -212,6 +212,29 @@ function Expandable({ rows }: { readonly rows: readonly Row[] }) {
   return view(rows, { showAll, onShowAllChange: setShowAll });
 }
 
+it("reveals current finished work before requesting older history", async () => {
+  const rows = setup(
+    Array.from({ length: 7 }, (_, index) =>
+      taskRow(`task-${index}`, `Finished ${index + 1}`, "completed", "2026-11-04T01:00:00.000Z"),
+    ),
+  );
+  const loadMore = vi.fn();
+  function Work() {
+    const [showAll, setShowAll] = useState(false);
+    return view(rows, {
+      showAll,
+      onShowAllChange: setShowAll,
+      history: history({ supported: true, hasMore: true, loadMore }),
+    });
+  }
+  await using screen = await render(<Work />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  expect(loadMore).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
 it("says it is loading while the first read runs, not an empty claim", async () => {
   const rows = setup([]);
   await using screen = await render(view(rows, { loaded: false }));

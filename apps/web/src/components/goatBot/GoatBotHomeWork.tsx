@@ -208,6 +208,10 @@ export function GoatBotHomeWork({
           expanded={showAll}
           label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
+            if (hidden > 0 && !showAll) {
+              onShowAllChange(true);
+              return;
+            }
             if (history?.loading) return;
             if (historyAvailable) {
               if (document.activeElement === showMoreRef.current)
