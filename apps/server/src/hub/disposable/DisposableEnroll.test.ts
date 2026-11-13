@@ -711,3 +711,24 @@ it.effect("a pass that finds a contract missing does not reset the sends of the 
     }),
   ),
 );
+
+it.effect(
+  "a machine removed from Pen after a link attempt that left nothing is not said to hold an operation",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push({ failedClean: "full_install_present" });
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "paused" });
+        pen.members.delete(key(1));
+        yield* listed(attachId);
+        yield* enroll;
+        const machine = yield* listed(attachId);
+        expect(machine).toMatchObject({ state: "failed", penMember: false });
+        expect(machine?.message).not.toContain("link operation");
+        expect(machine?.message).toContain("removed from Pen");
+      }),
+    ),
+);

@@ -296,11 +296,10 @@ export const leftPenMessage = (
       name +
       " was removed from Pen during link operation " +
       operationId +
-      ", which OpenCodex had not finished.",
-    nextAction:
-      "Check it on the hub with ocx link operations --operation-id " +
+      ", which OpenCodex had not settled. Check it on the hub with ocx link operations --operation-id " +
       operationId +
-      "; if it made a link, remove it with ocx link revoke.",
+      ": OpenCodex settles an open operation when it is repeated with that id, and a link it made is removed with ocx link revoke.",
+    nextAction: null,
   };
 };
 

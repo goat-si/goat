@@ -518,18 +518,24 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const outcome =
       row.link_id === null && operationId !== null ? yield* readBack(row, operationId) : undefined;
     const linkId = outcome?.kind === "committed" ? outcome.linkId : row.link_id;
+    // An operation that left nothing (failed_clean, or never journalled) is not named afterwards.
+    const leftNothing =
+      linkId === null && (outcome?.kind === "failed_clean" || outcome?.kind === "not_found");
     const now = yield* nowIso;
     const settled = yield* exclusive(
       sql`UPDATE disposable_machines SET state = 'failed', final_at = ${now}, state_since = ${now},
-        link_id = ${linkId}, updated_at = ${now}
+        link_id = ${linkId}, link_operation_id = ${leftNothing ? null : operationId},
+        updated_at = ${now}
         WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} AND state = 'left_pen'
         RETURNING attach_id`,
     );
     if (settled.length === 1) yield* audit(row.attach_id, "hub.machine_left_pen", "link_named");
   });
 
-  /** One step for one record, if it is due; its failures are the caller's pass to log. */
-  /** `contracts` is the pass's own read of the Home's contracts, shared by its records. */
+  /**
+   * One step for one record, if it is due; its failures are the caller's pass to log. `contracts`
+   * is the pass's own read of the Home's contracts, shared by its records.
+   */
   const advance = Effect.fn("DisposableEnroll.advance")(function* (
     attachId: string,
     contracts?: Contracts,
