@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
   executeEnvironmentHttpRequest,
+  layerRemoteHttpClient,
   RemoteEnvironmentAuthTimeoutError,
   RemoteEnvironmentAuthUndeclaredStatusError,
 } from "./http.ts";
@@ -32,11 +33,9 @@ import * as Logger from "effect/Logger";
 import * as Layer from "effect/Layer";
 import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as HttpObservability from "@goat/shared/httpObservability";
 
 it.effect(
-  "keeps a capability out of spans, error messages and log annotations for successful and failing requests",
+  "the remote client opens no span for a Pen route URL, whatever tracing the caller enabled, and keeps the capability out of errors and logs",
   () => {
     const capability = "b".repeat(43);
     const url = `http://127.0.0.1/pen-route/${capability}/api`;
@@ -49,16 +48,12 @@ it.effect(
         return span;
       },
     });
-    const client = HttpClient.make((request) =>
-      Effect.succeed(
-        HttpClientResponse.fromWeb(
-          request,
-          new Response("failed", { status: request.url.endsWith("/failure") ? 500 : 200 }),
-        ),
-      ),
-    ).pipe(HttpClient.filterStatusOk);
+    const fetchFn: typeof globalThis.fetch = async (input) =>
+      new Response("failed", { status: String(input).endsWith("/failure") ? 500 : 200 });
     return Effect.gen(function* () {
+      const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
       yield* client.get(url);
+      yield* client.get("https://example.com/traced");
       const failureUrl = `${url}/failure`;
       const error = yield* executeEnvironmentHttpRequest(
         failureUrl,
@@ -69,11 +64,13 @@ it.effect(
       yield* Effect.logWarning("request failed", { error });
       expect(JSON.stringify(logs)).not.toContain(capability);
       expect(JSON.stringify(spans.map((span) => [...span.attributes]))).not.toContain(capability);
-      expect(spans.filter((span) => span.kind === "client")).toHaveLength(0);
+      expect(spans.filter((span) => span.kind === "client")).toHaveLength(1);
     }).pipe(
+      // Listed after the client on purpose: a caller's predicate must not re-enable the span.
+      Effect.provideService(HttpClient.TracerDisabledWhen, () => false),
       Effect.provide(
         Layer.merge(
-          HttpObservability.layer,
+          layerRemoteHttpClient(fetchFn),
           Logger.layer(
             [
               Logger.make((entry) => {

@@ -1,68 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Exercises a local listener and fake Pen subprocess.
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
-import * as NodeEvents from "node:events";
 import * as NodeStream from "node:stream";
-import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it } from "vite-plus/test";
 import { HUB_PROXY_NODE_SCOPE_CEILING } from "@goat/contracts";
 import { websocketAccept } from "@goat/pen-protocol/client/http1";
 import { makePenGateway } from "./PenGateway.ts";
-
-const pin = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "a".repeat(43) };
-function fetchUrl(url: string, headers: Record<string, string> = {}, method = "GET") {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const req = NodeHttp.request(url, { headers, method }, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("end", () =>
-        resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }),
-      );
-    });
-    req.on("error", reject);
-    req.end();
-  });
-}
-function fakeChild(
-  script?: (request: string, stdout: NodeStream.PassThrough) => void,
-  ready = true,
-  memberPin = pin,
-) {
-  const child = new NodeEvents.EventEmitter() as NodeChildProcess.ChildProcess;
-  const stdin = new NodeStream.PassThrough();
-  const stdout = new NodeStream.PassThrough();
-  const stderr = new NodeStream.PassThrough();
-  Object.assign(child, {
-    stdin,
-    stdout,
-    stderr,
-    stdio: [stdin, stdout, stderr],
-    pid: 123,
-    exitCode: null,
-    signalCode: null,
-  });
-  child.kill = () => {
-    if (child.signalCode === null) {
-      Object.assign(child, { signalCode: "SIGKILL" });
-      child.emit("exit", null, "SIGKILL");
-      stdout.destroy();
-    }
-    return true;
-  };
-  if (ready)
-    queueMicrotask(() => stderr.write(`pen-ready v1 ${memberPin.nodeId} ${memberPin.noisePub}\n`));
-  let request = "";
-  stdin.on("data", (bytes: Buffer) => {
-    request += bytes.toString();
-    const split = request.indexOf("\r\n\r\n");
-    if (split < 0) return;
-    const length = Number(/\r\nContent-Length: (\d+)/i.exec(request)?.[1] ?? 0);
-    if (Buffer.byteLength(request.slice(split + 4)) < length) return;
-    stdin.removeAllListeners("data");
-    script?.(request, stdout);
-  });
-  return child;
-}
+import { fakeChild, fetchUrl, pin } from "./penGateway.testkit.ts";
 
 describe("Pen gateway", () => {
   it("fetches public descriptors without minting or sending a bearer", async () => {
@@ -602,10 +546,10 @@ describe("Pen gateway", () => {
       finish("/pen");
       const route = await opening;
       await closing;
-      if (route.kind === "open")
-        expect(
-          (await fetchUrl(`${route.httpBaseUrl}/api/projects`, { origin: "goat://app" })).status,
-        ).toBe(404);
+      if (route.kind !== "open") throw new Error("the open in flight was refused");
+      expect(
+        (await fetchUrl(`${route.httpBaseUrl}/api/projects`, { origin: "goat://app" })).status,
+      ).toBe(404);
     } finally {
       await gateway.dispose();
     }
@@ -619,7 +563,8 @@ describe("Pen gateway", () => {
       requestSeen = resolve;
     });
     let frameSeen = (_value: string) => {};
-    let receivedFrame = false;
+    let headWritten = false;
+    let frameBeforeHead = false;
     const frameReady = new Promise<string>((resolve) => {
       frameSeen = resolve;
     });
@@ -644,7 +589,7 @@ describe("Pen gateway", () => {
             if (!(stdin instanceof NodeStream.PassThrough)) throw new Error("missing fake stdin");
             targetStdin = stdin;
             stdin.on("data", (bytes: Buffer) => {
-              receivedFrame = true;
+              if (!headWritten) frameBeforeHead = true;
               frameSeen(bytes.toString());
             });
             requestSeen();
@@ -668,11 +613,12 @@ describe("Pen gateway", () => {
       socket.on("error", () => {});
       await requestReady;
       expect(targetStdin).toBeDefined();
-      expect(receivedFrame).toBe(false);
+      headWritten = true;
       upstream!.write(
         `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${websocketAccept(wsKey)}\r\n\r\n`,
       );
       expect(await frameReady).toBe("client-frame");
+      expect(frameBeforeHead).toBe(false);
     } finally {
       socket?.destroy();
       await gateway.dispose();
@@ -732,7 +678,8 @@ describe("Pen gateway", () => {
       200,
       "ok",
     ],
-    ["close delimited", "GET", "HTTP/1.1 200 OK\r\n\r\nok", 200, "ok"],
+    // Without a length the end of the pipe is the only end, and a cut body would look complete.
+    ["close delimited", "GET", "HTTP/1.1 200 OK\r\n\r\nok", 502, ""],
     ["redirect", "GET", "HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n", 502, ""],
     ["informational", "GET", "HTTP/1.1 103 Early Hints\r\n\r\n", 502, ""],
   ])("reframes %s responses", async (_name, method, upstream, status, expected) => {

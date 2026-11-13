@@ -175,7 +175,8 @@ it.effect(
     Effect.gen(function* () {
       const { port, seen } = yield* harness();
       for (const raw of [
-        get("/api/auth/session"),
+        get("/api/auth/websocket-ticket"),
+        get("/api/auth/session?x=1"),
         get("/api/auth/session", "Connection: Upgrade\r\nUpgrade: websocket\r\n"),
         "OPTIONS /api/projects HTTP/1.1\r\nHost: pen\r\nAuthorization: Bearer x\r\n\r\n",
         get("http://pen/api/projects"),

@@ -48,6 +48,10 @@ describe("Pen gateway request policy", () => {
   it("rejects credentials, session minting and path traversal", () => {
     for (const url of [
       `/pen-route/${capability}/api/pen/session`,
+      `/pen-route/${capability}/api/pen/session;x`,
+      `/pen-route/${capability}//api/pen/session`,
+      `/pen-route/${capability}/API/pen/session`,
+      `/pen-route/${capability}/api/pen/%73ession?x=1`,
       `/pen-route/${capability}/api/../ws`,
       `/pen-route/${capability}/api/%2e%2e/ws`,
     ]) {

@@ -121,7 +121,8 @@ export function decidePenGatewayRequest<T extends GatewayRoute>(
     decoded.includes("\0")
   )
     return refuse(400, cors);
-  if (decoded === "/api/pen/session" || decoded.startsWith("/api/pen/session/"))
+  // The target admits only the exact path; this side refuses every spelling that could become it.
+  if (/^\/api\/pen\/session(?:[/;]|$)/.test(decoded.replace(/\/+/g, "/").toLowerCase()))
     return refuse(403, cors);
   const validOrigin = origin !== undefined && input.appOrigins.includes(origin);
   const originlessAsset =

@@ -30,6 +30,8 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
   const policy = yield* PenViewerPolicy;
   const gateway = yield* PenRouteGateway;
   const openedPins = new Map<string, DesktopPenPin>();
+  // A stored route is read once per run: the member's GOAT may have a new environment id since.
+  const verified = new Set<string>();
   const pass = Effect.fn("PenNativeDiscovery.pass")(function* (state: PenMembersInput) {
     if (state.kind === "unavailable" && policy.enabled && Option.isSome(gateway)) return;
     const entries = yield* SubscriptionRef.get(registry.entries);
@@ -43,22 +45,23 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
       const { meshId, nodeId, noisePub } = route.profile;
       const pin: DesktopPenPin = { meshId, nodeId, noisePub };
       if (policy.enabled && Option.isSome(gateway) && penPinIsCurrent(state, pin)) continue;
-      yield* registry
-        .removeRoute(route.target.environmentId, route.target.connectionId)
-        .pipe(
+      yield* registry.removeRoute(route.target.environmentId, route.target.connectionId).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Could not remove Pen native route", {
+            error: redactPenRouteUrl(String(error)),
+          }),
+        ),
+      );
+      if (Option.isSome(gateway))
+        yield* gateway.value.close(pin).pipe(
           Effect.catch((error) =>
-            Effect.logWarning("Could not remove Pen native route", { error }),
+            Effect.logWarning("Could not close Pen native route", {
+              error: redactPenRouteUrl(String(error)),
+            }),
           ),
         );
-      if (Option.isSome(gateway))
-        yield* gateway.value
-          .close(pin)
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Could not close Pen native route", { error }),
-            ),
-          );
       openedPins.delete(pinKey(pin));
+      verified.delete(pinKey(pin));
     }
     for (const [key, pin] of openedPins) {
       if (policy.enabled && Option.isSome(gateway) && penPinIsCurrent(state, pin)) continue;
@@ -80,14 +83,12 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
         Effect.gen(function* () {
           const pin = { meshId: state.meshId, nodeId: member.nodeId, noisePub: member.noisePub };
           const connectionId = penConnectionId(pin.meshId, pin.nodeId);
-          if (
-            existing.some(
-              (route) =>
-                route.profile.connectionId === connectionId &&
-                route.profile.noisePub === pin.noisePub,
-            )
-          )
-            return;
+          const known = existing.find(
+            (route) =>
+              route.profile.connectionId === connectionId &&
+              route.profile.noisePub === pin.noisePub,
+          );
+          if (known !== undefined && verified.has(pinKey(pin))) return;
           const latestBeforeOpen = yield* SubscriptionRef.get(membership.latest);
           if (Option.isNone(latestBeforeOpen) || !penPinIsCurrent(latestBeforeOpen.value, pin))
             return;
@@ -104,6 +105,11 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           );
           const latest = yield* SubscriptionRef.get(membership.latest);
           if (Option.isNone(latest) || !penPinIsCurrent(latest.value, pin)) return;
+          verified.add(pinKey(pin));
+          if (known !== undefined) {
+            if (known.target.environmentId === descriptor.environmentId) return;
+            yield* registry.removeRoute(known.target.environmentId, connectionId);
+          }
           const target = new PenConnectionTarget({
             connectionId,
             environmentId: descriptor.environmentId,
