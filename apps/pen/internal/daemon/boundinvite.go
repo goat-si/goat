@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -15,7 +16,7 @@ import (
 // boundInviteRequest is an invite op that names its subject (contract "Bound invites").
 type boundInviteRequest struct {
 	Op      string        `json:"op"`
-	TTLMs   *int64        `json:"ttlMs,omitempty"`
+	TTLMs   int64         `json:"ttlMs,omitempty"`
 	Wait    bool          `json:"wait,omitempty"`
 	Subject *mesh.Subject `json:"subject"`
 	MintID  string        `json:"mintId,omitempty"`
@@ -96,7 +97,8 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		return
 	}
 	now := d.now()
-	expiresAt, err := boundExpiry(req, now)
+	keys, _ := strictjson.Keys(line)
+	expiresAt, err := boundExpiry(req, slices.Contains(keys, "ttlMs"), now)
 	if err != nil {
 		fail(err)
 		return
@@ -121,12 +123,13 @@ const maxBoundExpiry = 24 * time.Hour
 // boundExpiry is the invite's expiry: the caller's absolute expiresAt, which comes with a mintId and without ttlMs
 // and is at most maxBoundExpiry ahead, or ttlMs (10 minutes when absent). A passed expiresAt is refused under the
 // invite book's lock (CreateBound).
-func boundExpiry(req boundInviteRequest, now time.Time) (time.Time, error) {
+// hasTTL says the line carries a ttlMs member at all, so 0 or null is refused beside expiresAt as well.
+func boundExpiry(req boundInviteRequest, hasTTL bool, now time.Time) (time.Time, error) {
 	if (req.MintID == "") != (req.ExpiresAt == 0) {
 		return time.Time{}, errors.New("mintId and expiresAt go together")
 	}
 	if req.ExpiresAt != 0 {
-		if req.TTLMs != nil {
+		if hasTTL {
 			return time.Time{}, errors.New("expiresAt replaces ttlMs; send one of them")
 		}
 		t := time.UnixMilli(req.ExpiresAt)
@@ -135,10 +138,7 @@ func boundExpiry(req boundInviteRequest, now time.Time) (time.Time, error) {
 		}
 		return t, nil
 	}
-	var ttl time.Duration
-	if req.TTLMs != nil {
-		ttl = time.Duration(*req.TTLMs) * time.Millisecond
-	}
+	ttl := time.Duration(req.TTLMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
