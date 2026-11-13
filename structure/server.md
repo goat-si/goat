@@ -159,6 +159,16 @@ Leave and re-link clean up the device before the Home (disconnect, restart, stan
 `/healthz`), then force-revoke: the Home's own revoke runs a remote disconnect whose failure
 restarts the tunnel. A device that cannot be cleaned up keeps its link until a person decides.
 
+`apps/server/src/hub/disposable` attaches disposable machines. A person's switch in Settings → Hub
+(`hub.attachDisposableMachines`, writable only on the person path, stamped with a grant id and at most
+30 days of consent) names the provisioner threads, a cap and a name rule. `DisposableAttach` reserves a
+`disposable_machines` record under the settings write lock, mints a Pen bound invite over Pen's control
+socket once Pen's `invite.*` features and OpenCodex's `link.*` contracts are declared, and returns the
+token once. A reconcile pass, shared by list calls and a 30 s loop, settles each mint from Pen's
+`invite.status`, withdraws invites whose consent or grant ended, and acknowledges terminal entries. The
+attach ends at Pen admission. Records project onto hub nodes as the machine's class, and an unreadable
+table reads as kept. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are thin transports over it.
+
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
 machine; the Child's own GOAT (`OpenCodexChildReady.ts`, behind `goat_hub_child_prepare`) installs
