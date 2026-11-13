@@ -91,7 +91,7 @@ export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
 const MAX_INVITES_PER_ATTACH = 32;
 const INVITES_USED =
-  "This attach has used all its invites. Its last invite holds these keys until it expires (at most 10 minutes); then attach the machine again with a new request.";
+  "This attach has used all its invites. Its last invite holds these keys until GOAT records its expiry, on the next 30-second pass or the next list, later if Pen cannot be reached; then attach the machine again with a new request.";
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,

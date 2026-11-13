@@ -381,7 +381,9 @@ function AttachDialog({
       onAttached();
       if (result.value.invite) setInvite(result.value.invite);
       else
-        setError(`No invite was made: ${result.value.message} Create a new invite to try again.`);
+        setError(
+          `No usable invite was returned: ${result.value.message} Create a new invite to try again.`,
+        );
     }
   }
   return (
