@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId, type OrchestrationV2ServerCommand, ThreadId } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import { warnLaunchWakeKeyCrossing } from "./launchWakeKeyWarning.ts";
@@ -50,5 +52,27 @@ it.effect(
         const exit = yield* Effect.exit(warnLaunchWakeKeyCrossing(store(read), command));
         assert.isTrue(Exit.isSuccess(exit));
       }
+    }),
+);
+it.effect(
+  "invariant: an outside interruption waits for the warning's read, so the helper adds no interruption point after the commit",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let readDone = false;
+      const held = Effect.gen(function* () {
+        yield* Deferred.succeed(started, undefined);
+        yield* Deferred.await(release);
+        readDone = true;
+        return { runs: [], messages: [] };
+      });
+      const fiber = yield* Effect.forkChild(warnLaunchWakeKeyCrossing(store(held), command));
+      yield* Deferred.await(started);
+      // Delivered at once while the read is parked on its gate.
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.await(fiber);
+      assert.isTrue(readDone);
     }),
 );

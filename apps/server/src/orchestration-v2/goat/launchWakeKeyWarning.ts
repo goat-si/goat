@@ -21,7 +21,8 @@ const crossing = Effect.fn("launchWakeKeyWarning.warn")(function* (
 
 /**
  * Logs once when a committed launch wake queued the thread's ninth distinct launching run. It runs
- * under the thread's lock right after the commit; any failure in it is swallowed with a debug log.
+ * under the thread's lock right after the commit: any failure in it is swallowed with a debug log,
+ * and it is uninterruptible, so an outside interruption takes effect only after its one read.
  */
 export const warnLaunchWakeKeyCrossing = (
   projectionStore: Pick<ProjectionStoreV2Shape, "getThreadRecords">,
@@ -33,4 +34,5 @@ export const warnLaunchWakeKeyCrossing = (
         ? Effect.void
         : Effect.logDebug("launch wake key warning skipped", { cause: exit.cause }),
     ),
+    Effect.uninterruptible,
   );
