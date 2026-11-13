@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { groupBotWork, resolveRemoteBotWork } from "@goat/client-runtime/goatBot";
+import {
+  groupBotWork,
+  resolveRemoteBotWork,
+  type HomeCurrentOpenableLink,
+} from "@goat/client-runtime/goatBot";
 import type {
   BotRemoteWork,
   BotThreadRow,
@@ -45,11 +49,13 @@ export function GoatBotWorkDetails({
   taskId,
   rows,
   remoteWork,
+  currentLinks = null,
 }: {
   environmentId: EnvironmentId;
   taskId: ChannelTaskId;
   rows: readonly BotThreadRow[];
   remoteWork: readonly BotRemoteWork[];
+  currentLinks?: ReadonlyArray<HomeCurrentOpenableLink> | null;
 }) {
   const environment = useEnvironment(environmentId);
   const supported =
@@ -63,6 +69,33 @@ export function GoatBotWorkDetails({
   const work = groupBotWork(rows, query.data?.groups ?? [], environmentId, remoteWork);
   const task = [...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === taskId);
   if (!task) return null;
+  const childThreads = (query.data?.groups ?? [])
+    .filter((group) => group.taskId === taskId)
+    .flatMap((group) => group.children)
+    .flatMap((child) =>
+      child.surface === "thread_launch" && child.destination?.threadId !== undefined
+        ? [{ environmentId, threadId: child.destination.threadId }]
+        : [],
+    );
+  const rowWork = groupBotWork(rows, [], environmentId, remoteWork);
+  const rowThreads =
+    [...rowWork.inProgress, ...rowWork.done].find((entry) => entry.row.task.taskId === taskId)
+      ?.threads ?? [];
+  const seen = new Set(
+    [...(currentLinks ?? []), ...rowThreads].map((link) =>
+      JSON.stringify([link.environmentId, link.threadId]),
+    ),
+  );
+  const extraChildren = childThreads.filter((thread) => {
+    const key = JSON.stringify([thread.environmentId, thread.threadId]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const threads =
+    currentLinks === null
+      ? task.threads
+      : [...currentLinks.filter((link) => link.kind !== "remote"), ...extraChildren];
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       {task.subagents.map((agent) => (
@@ -70,7 +103,7 @@ export function GoatBotWorkDetails({
           {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
         </span>
       ))}
-      {task.threads.map((thread) => (
+      {threads.map((thread) => (
         <Link
           key={`${thread.environmentId}:${thread.threadId}`}
           to="/$environmentId/$threadId"
@@ -80,9 +113,47 @@ export function GoatBotWorkDetails({
           Open work thread
         </Link>
       ))}
-      {task.remote.map((item) => (
-        <GoatBotRemoteWork key={item.childWorkId} item={item} />
-      ))}
+      {currentLinks === null ? (
+        task.remote.map((item) => <GoatBotRemoteWork key={item.childWorkId} item={item} />)
+      ) : (
+        <>
+          {currentLinks
+            .filter((link) => link.kind === "remote")
+            .map((link) => {
+              const item = task.remote.find(
+                (remote) => remote.childWorkId === link.remoteChildWorkId,
+              );
+              return (
+                <Link
+                  key={link.remoteChildWorkId}
+                  to="/$environmentId/$threadId"
+                  params={link}
+                  className="underline"
+                >
+                  Open work thread on {item?.host ?? "remote"}
+                </Link>
+              );
+            })}
+          {task.remote
+            .filter(
+              (item) =>
+                !currentLinks.some(
+                  (link) => link.kind === "remote" && link.remoteChildWorkId === item.childWorkId,
+                ),
+            )
+            .map((item) => {
+              const target = resolveRemoteBotWork(item, () => false);
+              return target.kind === "unavailable" ? (
+                <span
+                  key={item.childWorkId}
+                  className="rounded-full border border-border px-2 py-1"
+                >
+                  {target.host} · {target.label}
+                </span>
+              ) : null;
+            })}
+        </>
+      )}
       {task.truncated && <span>More work is available.</span>}
       {query.error && (
         <>

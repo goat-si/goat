@@ -114,6 +114,7 @@ vi.mock("~/state/channels", () => ({
     },
     listChildWork: () => null,
     remoteWorkOpenable: () => Atom.make(false),
+    homeCurrentOpenableWorkAtom: () => Atom.make({ eligible: false, list: "pending", links: [] }),
     slackSettings: () => null,
   },
 }));
