@@ -71,6 +71,10 @@ export class RemoteMachine {
   projectPolicyKnown = true;
   onProjectList: Effect.Effect<void> = Effect.void;
   beforeHostCall: ((call: SshRemoteDispatch.SshHostToolCall) => Effect.Effect<void>) | undefined;
+  /** Runs when a call's authorization is refused, before the call fails; nothing was sent. */
+  onAuthorizationDenied:
+    | ((call: SshRemoteDispatch.SshHostToolCall) => Effect.Effect<void>)
+    | undefined;
   readonly authorizationDenied = Deferred.makeUnsafe<void>();
   readonly scripts: Array<{
     readonly host: string;
@@ -425,13 +429,15 @@ export class RemoteMachine {
         ) =>
           Effect.gen(function* () {
             const machine = machineFor(call.host);
-            const ceiling = yield* authorize.pipe(
-              Effect.tapError(() => Deferred.succeed(machine.authorizationDenied, undefined)),
+            const denied = Effect.suspend(() =>
+              Effect.andThen(
+                Deferred.succeed(machine.authorizationDenied, undefined),
+                machine.onAuthorizationDenied?.(call) ?? Effect.void,
+              ),
             );
+            const ceiling = yield* authorize.pipe(Effect.tapError(() => denied));
             if (machine.beforeHostCall !== undefined) yield* machine.beforeHostCall(call);
-            const current = yield* authorize.pipe(
-              Effect.tapError(() => Deferred.succeed(machine.authorizationDenied, undefined)),
-            );
+            const current = yield* authorize.pipe(Effect.tapError(() => denied));
             if (current !== ceiling) return yield* machine.refused("caller_changed");
             const checkedAt = DateTime.formatIso(yield* DateTime.now);
             machine.calls.push({
