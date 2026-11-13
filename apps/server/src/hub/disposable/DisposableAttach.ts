@@ -525,6 +525,18 @@ export const make = Effect.gen(function* () {
     const requestKey = digest(principal + "\n" + input.clientRequestId);
     const earlier = yield* byRequest(requestKey);
     if (earlier !== undefined) return yield* replayAttach(earlier, input);
+    // Cheap refusals first: a closed switch or an unnamed thread asks neither Pen nor OpenCodex.
+    // The settings lock checks both again before anything is reserved.
+    const before = yield* settingsNow;
+    if (before === undefined) return yield* storageFailed();
+    const gate = disposableSwitch(before.hub, yield* Clock.currentTimeMillis);
+    if (!gate.open) return yield* fail(gate.reason, refusalText[gate.reason]);
+    const thread = caller.provisioner.kind === "thread" ? caller.provisioner.threadId : undefined;
+    if (
+      thread !== undefined &&
+      !before.hub.attachDisposableMachines.provisioners.some((id) => id === thread)
+    )
+      return yield* fail("provisioner_refused", refusalText.provisioner_refused);
     yield* requireFeatures;
     const member = yield* pen.isMember(input.signPub);
     if (member === undefined)

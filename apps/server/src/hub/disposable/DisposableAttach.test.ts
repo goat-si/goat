@@ -88,6 +88,18 @@ it.effect(
     ),
 );
 
+it.effect("with the switch off or the thread unnamed, attach asks neither Pen nor OpenCodex", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      yield* switchTo({ provisioners: [] });
+      expect(yield* reason(attach(1))).toBe("provisioner_refused");
+      yield* switchTo({ enabled: false });
+      expect(yield* reason(attach(2))).toBe("switch_off");
+      expect(pen.control.featuresAsked).toBe(0);
+    }),
+  ),
+);
+
 it.effect("a name Pen would refuse is refused before anything is reserved or minted", () =>
   world((pen) =>
     Effect.gen(function* () {
