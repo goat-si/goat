@@ -372,8 +372,8 @@ type Status struct {
 	MeshID      string       `json:"meshId"`
 	Members     int          `json:"members"`
 	PID         int          `json:"pid"`
-	// Features lists what this node supports beyond its version's base (contract "Bound invites"); only the status op
-	// carries it, so the relays and login-bind answers keep their shape.
+	// Features lists what this node supports beyond its version's base (contract "Bound invites"). Only the status op
+	// carries it: name, reconnect, relays, login-bind and account-unbind answer with the same struct and keep their shape.
 	Features []string `json:"features,omitempty"`
 }
 
