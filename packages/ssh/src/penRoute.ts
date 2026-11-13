@@ -26,9 +26,10 @@ export const penGlobalFiles = (
   if (input?.platform === "win32") {
     const root = input.programData;
     if (!root || /\s/u.test(root) || !windowsAbsolute(root)) return undefined;
-    const files = windowsGlobalFiles(root);
-    const placeholder = windowsGlobalFiles("__PROGRAMDATA__");
-    return value === files.join(" ") || value === placeholder.join(" ") ? files : undefined;
+    // Win32-OpenSSH prints its default with this placeholder and resolves it when it opens a file.
+    return value === windowsGlobalFiles("__PROGRAMDATA__").join(" ")
+      ? windowsGlobalFiles(root)
+      : undefined;
   }
   return value === DEFAULT_GLOBAL_KNOWN_HOSTS.join(" ") ? DEFAULT_GLOBAL_KNOWN_HOSTS : undefined;
 };
