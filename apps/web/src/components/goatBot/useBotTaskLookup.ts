@@ -9,8 +9,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { botTaskLookupDecision } from "./botTaskLookupDecision";
 
 type LookupError = "missing" | "failed" | "denied";
-type Answer = { key: string; value?: BotWorkResult; error?: LookupError };
-type Read = { key: string; generation: number };
+type Answer = { period: number; value?: BotWorkResult; error?: LookupError };
 
 function failureKind(error: unknown): LookupError {
   if (!error || typeof error !== "object") return "failed";
@@ -40,50 +39,65 @@ export function useBotTaskLookup(
   const command = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
   const readable = supported && permitted && available;
   const key = JSON.stringify([environmentId, botId, taskId]);
-  const generation = useRef(0);
-  const runningRef = useRef<Read | null>(null);
-  const [running, setRunning] = useState<Read | null>(null);
+  // A read, its answer and an action's invalidation belong to one period in which this task is the
+  // pane's and eligible. A new period begins when either changes; this is lifecycle, not a decision.
+  const periodKey = readable && list.established && !list.holdsTask ? key : null;
+  const [period, setPeriod] = useState({ key: periodKey, id: 0 });
+  if (period.key !== periodKey) setPeriod({ key: periodKey, id: period.id + 1 });
+  /** The mounted period; a read whose period is no longer live sets nothing. */
+  const live = useRef<number | null>(null);
+  /** The running read's period, for two presses that arrive before React renders again. */
+  const runningRef = useRef<number | null>(null);
+  const [running, setRunning] = useState<number | null>(null);
   const [answer, setAnswer] = useState<Answer | null>(null);
-  const [staleKey, setStaleKey] = useState<string | null>(null);
-  if (staleKey !== null && staleKey !== key) setStaleKey(null);
-  const listed = list.established && list.holdsTask;
-  if (answer !== null && (answer.key !== key || !readable || listed)) setAnswer(null);
-  const held = answer?.key === key;
-  const inFlight = running?.key === key;
+  const [stale, setStale] = useState<number | null>(null);
+  const held = answer?.period === period.id;
+  const inFlight = running === period.id;
   const decision = botTaskLookupDecision({
     readable,
     ...list,
     held,
-    stale: staleKey === key,
+    stale: stale === period.id,
     inFlight,
   });
-  const settle = useStableCallback((read: Read, next: Answer) => {
-    if (runningRef.current === read) {
+  const start = useStableCallback((id: number) => {
+    if (live.current !== id || runningRef.current === id) return;
+    runningRef.current = id;
+    setRunning(id);
+    setStale(null);
+    void command({ environmentId, input: { taskId, botId } }).then((result) => {
+      if (live.current !== id) return;
       runningRef.current = null;
       setRunning(null);
-    }
-    if (read.generation === generation.current && read.key === key) setAnswer(next);
-  });
-  const start = useStableCallback(() => {
-    if (runningRef.current?.key === key) return;
-    const read = { key, generation: ++generation.current };
-    runningRef.current = read;
-    setRunning(read);
-    setStaleKey(null);
-    void command({ environmentId, input: { taskId, botId } }).then((result) =>
-      settle(
-        read,
+      setAnswer(
         result._tag === "Success"
-          ? { key: read.key, value: result.value }
-          : { key: read.key, error: failureKind(squashAtomCommandFailure(result)) },
-      ),
-    );
+          ? { period: id, value: result.value }
+          : { period: id, error: failureKind(squashAtomCommandFailure(result)) },
+      );
+    });
   });
+  // oxlint-disable-next-line goat/react-effect-budget -- Marks the period live while it is mounted.
+  useEffect(() => {
+    live.current = period.id;
+    return () => {
+      live.current = null;
+    };
+  }, [period.id]);
   // oxlint-disable-next-line goat/react-effect-budget -- Starts the read botTaskLookupDecision asks for.
   useEffect(() => {
-    if (decision.startRead) start();
-  }, [decision.startRead, start]);
+    if (decision.startRead) start(period.id);
+  }, [decision.startRead, period.id, start]);
+  /**
+   * An action or acknowledgement sent for `sent` (this hook's key then) completed. It marks the
+   * view to reread only while that is still the pane's task; false means drop the completion.
+   */
+  const complete = useStableCallback((sent: string) => {
+    if (sent !== key) return false;
+    setStale(period.id);
+    return true;
+  });
   return {
+    key,
     supported,
     permitted,
     view: decision.view,
@@ -92,10 +106,8 @@ export function useBotTaskLookup(
     loading: inFlight || (decision.view === "waiting" && readable),
     /** The person's Try again; the only read that ignores a held answer. */
     retry: () => {
-      if (decision.canRetry) start();
+      if (decision.canRetry) start(period.id);
     },
-    /** An action on the task completed, so its view is reread once the list settles. */
-    invalidate: (task: ChannelTaskId = taskId) =>
-      setStaleKey(JSON.stringify([environmentId, botId, task])),
+    complete,
   };
 }

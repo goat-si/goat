@@ -78,9 +78,10 @@ export function GoatBotTaskPane({
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
   const taskSummary =
     task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
-  const refreshTask = (task: ChannelTaskId = taskId) => {
-    refresh();
-    lookup.invalidate(task);
+  const sentFor = lookup.key;
+  /** A completion counts only for the task it was sent for; another task's is dropped. */
+  const finish = (sent: string) => {
+    if (lookup.complete(sent)) refresh();
   };
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
@@ -89,7 +90,10 @@ export function GoatBotTaskPane({
     environmentId,
     taskId,
     readThrough,
-    onAcknowledged: (task) => refreshTask(task),
+    identity: sentFor,
+    onAcknowledged: (_task, _through, sent) => {
+      if (sent !== undefined) finish(sent);
+    },
   });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
@@ -194,7 +198,7 @@ export function GoatBotTaskPane({
               <GoatBotTaskRetry
                 environmentId={environmentId}
                 taskId={taskId}
-                onStarted={refreshTask}
+                onStarted={() => finish(sentFor)}
               />
             ) : null}
             <Button
@@ -206,7 +210,7 @@ export function GoatBotTaskPane({
                   environmentId,
                   input: { taskId, pinned: task.view.pinnedAt === null },
                 }).then((result) => {
-                  if (result._tag === "Success") refreshTask();
+                  if (result._tag === "Success") finish(sentFor);
                 })
               }
             >
@@ -221,7 +225,7 @@ export function GoatBotTaskPane({
                   environmentId,
                   input: { taskId, done: task.view.doneAt === null },
                 }).then((result) => {
-                  if (result._tag === "Success") refreshTask();
+                  if (result._tag === "Success") finish(sentFor);
                 })
               }
             >
@@ -239,7 +243,7 @@ export function GoatBotTaskPane({
                     readThrough: task.lastActivityAt,
                     update,
                   }).then((outcome) => {
-                    if (outcome === "accepted") refreshTask();
+                    if (outcome === "accepted") finish(sentFor);
                   });
                 }}
               >
