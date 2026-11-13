@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import {
   applyHistoryPress,
+  botThreadKey,
   botThreadsHistoryInput,
-  botWorkHistoryReported,
   botWorkHistoryView,
   EMPTY_WALK,
   markWalkRead,
@@ -34,14 +34,15 @@ export function useBotWorkHistory(
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
-  const reported = botWorkHistoryReported(walk, current);
+  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded });
   const [written, setWritten] = useState("[[],[],[]]");
-  if (reported !== written) {
-    setWritten(reported);
+  if (view.reported !== written) {
+    setWritten(view.reported);
     setWalk((state) => writeThrough(state, current));
   }
-  const view = botWorkHistoryView({ walk, current, capabilities, botId, loaded });
+  // Opening an older row's peek acknowledges it; its read-through only moves forward.
   function markRead(taskId: ChannelTaskId, through: string) {
+    if (!Number.isFinite(Date.parse(through))) return;
     setWalk((state) => markWalkRead(state, taskId, through));
   }
   async function loadMore() {
@@ -51,7 +52,7 @@ export function useBotWorkHistory(
     try {
       const result = await readBotThreadHistory({
         from: walk.cursor,
-        listed: view.listed,
+        listed: new Set(view.pressRows.map(botThreadKey)),
         wanted: 5,
         read: async (cursor) => {
           const input = botThreadsHistoryInput(capabilities, botId, cursor);

@@ -40,21 +40,6 @@ const union = <T>(mine: readonly T[], theirs: readonly T[], key: (item: T) => st
   return [...theirs, ...mine.filter((item) => !keys.has(key(item)))];
 };
 
-/** What the current list says about tasks the walk holds; a change is written through once. */
-export function botWorkHistoryReported(
-  walk: BotWorkHistoryWalk,
-  current: ChannelListBotThreadsResult,
-): string {
-  const listed = taskRows(current.rows);
-  const held = walk.entries.flatMap((entry) => listed.get(entry.task.task.taskId) ?? []);
-  const heldIds = new Set(held.map((row) => row.task.taskId));
-  return JSON.stringify([
-    held.map((row) => [row.task, row.view, row.unread]),
-    current.rows.filter((row) => row.kind === "coding" && heldIds.has(row.taskId)),
-    (current.remoteWork ?? []).filter((item) => heldIds.has(item.taskId)),
-  ]);
-}
-
 // The server's current list is the authority for any task it holds: its task row replaces the
 // entry's, so the entry keeps the last reported state after the task leaves that list. The pin is
 // not carried: the server lists every pinned task, so one that left the list was unpinned, apart
@@ -155,6 +140,14 @@ export function botWorkHistoryView(input: {
 }) {
   const { walk, current } = input;
   const listed = taskRows(current.rows);
+  // What the current list says about tasks the walk holds; a change is written through once.
+  const held = walk.entries.flatMap((entry) => listed.get(entry.task.task.taskId) ?? []);
+  const heldIds = new Set(held.map((row) => row.task.taskId));
+  const reported = JSON.stringify([
+    held.map((row) => [row.task, row.view, row.unread]),
+    current.rows.filter((row) => row.kind === "coding" && heldIds.has(row.taskId)),
+    (current.remoteWork ?? []).filter((item) => heldIds.has(item.taskId)),
+  ]);
   const supported =
     botThreadsHistoryInput(input.capabilities, input.botId) !== null && !walk.unsupported;
   const history: ChannelListBotThreadsResult = {
@@ -175,8 +168,9 @@ export function botWorkHistoryView(input: {
   const useMerged = merged.supported && supported;
   return {
     supported,
+    reported,
     /** The rows a press already holds, so its pages count only new tasks. */
-    listed: new Set((merged.supported ? merged.rows : current.rows).map(botThreadKey)),
+    pressRows: merged.supported ? merged.rows : current.rows,
     currentTaskIds: new Set(listed.keys()),
     rows: useMerged ? merged.rows : current.rows,
     remoteWork: useMerged ? merged.remoteWork : (current.remoteWork ?? []),
