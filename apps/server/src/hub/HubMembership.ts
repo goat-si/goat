@@ -405,6 +405,7 @@ const make = Effect.gen(function* () {
   const routes = makeRoutes({
     ocx,
     authorize,
+    permitHost: (scope, host) => profiles.require(scope, "hub.manage", { host }),
     readHomeLinks,
     request: (caller, input) => consent.request(caller, "routes", input),
     approved: (caller, decisionId, binding) =>

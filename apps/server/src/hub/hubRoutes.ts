@@ -92,6 +92,11 @@ export interface RoutesDeps {
     alias: string,
     person: HubPerson | undefined,
   ) => Effect.Effect<Caller, OrchestratorMcpFailure>;
+  /** An agent's profile must allow hub.manage on each machine a route names. */
+  readonly permitHost: (
+    scope: McpInvocationScope,
+    host: string,
+  ) => Effect.Effect<unknown, OrchestratorMcpFailure>;
   readonly readHomeLinks: () => Effect.Effect<
     { readonly status: typeof LinkStatus.Type | undefined; readonly forbidden: boolean },
     HubOcxError
@@ -253,6 +258,9 @@ export const makeRoutes = (deps: RoutesDeps) => {
     if (!changeAliases(change).every((route) => SAFE_ALIAS.test(route)))
       return yield* invalid("Each route must be a plain SSH alias.");
     const caller = yield* deps.authorize(scope, alias, person);
+    // Tool access reads only top-level arguments; the routes sit inside change.
+    if (person === undefined)
+      for (const route of changeAliases(change)) yield* deps.permitHost(scope, route);
     return yield* Effect.gen(function* () {
       const link = yield* linkOf(alias);
       if ("failed" in link)

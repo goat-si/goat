@@ -194,3 +194,23 @@ it.effect(
       ]);
     }),
 );
+it.effect(
+  "an agent whose host list names the device but not the new route is refused before ocx link routes runs",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ profile: "hub-mini", linked: ["mini"], routes: routesHome() });
+      expect((yield* hub.membership.routes(scope, { deviceAlias: "mini" })).state).toBe("ok");
+      for (const change of [
+        { op: "add" as const, route: "pen-mini" },
+        { op: "remove" as const, route: "pen-mini" },
+        { op: "order" as const, routes: ["pen-mini", "mini"] },
+      ]) {
+        const refused = yield* Effect.flip(
+          hub.membership.updateRoutes(scope, { deviceAlias: "mini", change }),
+        );
+        expect(refused.code).toBeDefined();
+      }
+      expect(routesCalls(hub.calls)).toEqual([`home link routes --link-id ${LINK} --json`]);
+      expect((yield* hub.inboxItems).items).toEqual([]);
+    }),
+);

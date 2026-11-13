@@ -220,6 +220,14 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
         capabilities: ["hub.manage" as const, "threads.launch" as const],
         maxLanes: 1,
       },
+      // An agent profile allowed to manage only the machine "mini".
+      "hub-mini": {
+        id: "hub-mini",
+        runtimeModeCeiling: "full-access" as const,
+        capabilities: ["hub.manage" as const, "threads.launch" as const],
+        maxLanes: 1,
+        hosts: ["mini"],
+      },
     },
   };
   // Handoffs as the person's client sees them: created by the agent, answered in a GOAT app.
