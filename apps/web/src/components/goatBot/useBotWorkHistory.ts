@@ -83,12 +83,15 @@ export function useBotWorkHistory(
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
-  const [seenRows, setSeenRows] = useState(current.rows);
-  if (seenRows !== current.rows) {
-    setSeenRows(current.rows);
+  const listed = taskRows(current.rows);
+  // What the current list says about tasks the walk holds; a change writes it through once.
+  const held = walk.entries.flatMap((entry) => listed.get(entry.task.task.taskId) ?? []);
+  const reported = JSON.stringify(held.map((row) => [row.task, row.view, row.unread]));
+  const [written, setWritten] = useState("[]");
+  if (reported !== written) {
+    setWritten(reported);
     setWalk((state) => writeThrough(state, current));
   }
-  const listed = taskRows(current.rows);
   const supported = botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
   const history: ChannelListBotThreadsResult = {
     rows: walk.entries.flatMap((entry) => entry.rows),
