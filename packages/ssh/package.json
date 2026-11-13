@@ -47,6 +47,10 @@
       "types": "./src/penAlias.ts",
       "import": "./src/penAlias.ts"
     },
+    "./penMembershipWatch": {
+      "types": "./src/penMembershipWatch.ts",
+      "import": "./src/penMembershipWatch.ts"
+    },
     "./preflight": {
       "types": "./src/preflight.ts",
       "import": "./src/preflight.ts"
@@ -58,6 +62,7 @@
   },
   "dependencies": {
     "@goat/contracts": "workspace:*",
+    "@goat/pen-protocol": "workspace:*",
     "@goat/shared": "workspace:*",
     "effect": "catalog:"
   },

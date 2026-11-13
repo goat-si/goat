@@ -56,6 +56,7 @@ export const AuthSessionRecord = Schema.Struct({
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   principalKind: SessionPrincipalKind,
   penBinding: Schema.NullOr(AuthSessionPenBinding),
+  penMemberNode: Schema.NullOr(Schema.String),
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 
@@ -70,6 +71,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   principalKind: SessionPrincipalKind,
   penBinding: Schema.optionalKey(Schema.NullOr(AuthSessionPenBinding)),
+  penMemberNode: Schema.optionalKey(Schema.String),
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
 
@@ -201,6 +203,7 @@ const AuthSessionDbRow = Schema.Struct({
   penNodeId: Schema.NullOr(Schema.String),
   penSignPub: Schema.NullOr(Schema.String),
   penNoisePub: Schema.NullOr(Schema.String),
+  penMemberNode: Schema.NullOr(Schema.String),
 });
 
 const AuthSessionRawDbRow = Schema.Struct({
@@ -224,6 +227,7 @@ const AuthSessionRawDbRow = Schema.Struct({
   penNodeId: Schema.Unknown,
   penSignPub: Schema.Unknown,
   penNoisePub: Schema.Unknown,
+  penMemberNode: Schema.Unknown,
 });
 
 const decodeAuthSessionDbRow = Schema.decodeUnknownEffect(AuthSessionDbRow);
@@ -248,6 +252,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     lastConnectedAt: row.lastConnectedAt,
     revokedAt: row.revokedAt,
     principalKind: row.principalKind,
+    penMemberNode: row.penMemberNode,
     penBinding:
       row.penMeshId !== null &&
       row.penNodeId !== null &&
@@ -281,6 +286,7 @@ function toPersistenceSqlOrDecodeError(
 /** @public */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const effectiveRevocation = sql`CASE WHEN pen_member_node IS NOT NULL THEN pen_member_revoked_at ELSE revoked_at END`;
 
   const insertSessionRow = (ignoreExisting: boolean) =>
     SqlSchema.void({
@@ -306,7 +312,8 @@ export const make = Effect.gen(function* () {
           pen_mesh_id,
           pen_node_id,
           pen_sign_pub,
-          pen_noise_pub
+          pen_noise_pub,
+          pen_member_node
         )
         VALUES (
           ${input.sessionId},
@@ -322,12 +329,13 @@ export const make = Effect.gen(function* () {
           ${input.client.browser},
           ${input.issuedAt},
           ${input.expiresAt},
-          NULL,
+          ${input.penMemberNode === undefined ? null : input.issuedAt},
           ${input.principalKind},
           ${input.penBinding?.meshId ?? null},
           ${input.penBinding?.nodeId ?? null},
           ${input.penBinding?.signPub ?? null},
-          ${input.penBinding?.noisePub ?? null}
+          ${input.penBinding?.noisePub ?? null},
+          ${input.penMemberNode ?? null}
         )
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,
@@ -355,12 +363,13 @@ export const make = Effect.gen(function* () {
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt",
+          ${effectiveRevocation} AS "revokedAt",
           principal_kind AS "principalKind",
           pen_mesh_id AS "penMeshId",
           pen_node_id AS "penNodeId",
           pen_sign_pub AS "penSignPub",
-          pen_noise_pub AS "penNoisePub"
+          pen_noise_pub AS "penNoisePub",
+          pen_member_node AS "penMemberNode"
         FROM auth_sessions
         WHERE session_id = ${sessionId}
       `,
@@ -372,14 +381,15 @@ export const make = Effect.gen(function* () {
     execute: ({ session, revokedAt, replaceSessionId }) =>
       sql`
         UPDATE auth_sessions
-        SET revoked_at = ${revokedAt}
+        SET revoked_at = CASE WHEN pen_member_node IS NULL THEN ${revokedAt} ELSE revoked_at END,
+            pen_member_revoked_at = CASE WHEN pen_member_node IS NOT NULL THEN ${revokedAt} ELSE pen_member_revoked_at END
         WHERE ${
           replaceSessionId === undefined
             ? sql`subject = ${session.subject}`
             : sql`session_id = ${replaceSessionId}`
         }
           AND method = ${session.method}
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
           AND expires_at > ${revokedAt}
         RETURNING session_id AS "sessionId"
       `,
@@ -405,14 +415,15 @@ export const make = Effect.gen(function* () {
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt",
+          ${effectiveRevocation} AS "revokedAt",
           principal_kind AS "principalKind",
           pen_mesh_id AS "penMeshId",
           pen_node_id AS "penNodeId",
           pen_sign_pub AS "penSignPub",
-          pen_noise_pub AS "penNoisePub"
+          pen_noise_pub AS "penNoisePub",
+          pen_member_node AS "penMemberNode"
         FROM auth_sessions
-        WHERE revoked_at IS NULL
+        WHERE ${effectiveRevocation} IS NULL
           AND (expires_at > ${now} OR ${sql.in("session_id", connectedSessionIds)})
         ORDER BY issued_at DESC, session_id DESC
       `,
@@ -425,7 +436,7 @@ export const make = Effect.gen(function* () {
         UPDATE auth_sessions
         SET last_connected_at = ${lastConnectedAt}
         WHERE session_id = ${sessionId}
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
       `,
   });
 
@@ -437,7 +448,7 @@ export const make = Effect.gen(function* () {
         SET client_surface = COALESCE(${surface}, client_surface),
             client_app_version = COALESCE(${appVersion}, client_app_version)
         WHERE session_id = ${sessionId}
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
       `,
   });
 
@@ -447,9 +458,10 @@ export const make = Effect.gen(function* () {
     execute: ({ sessionId, revokedAt }) =>
       sql`
         UPDATE auth_sessions
-        SET revoked_at = ${revokedAt}
+        SET revoked_at = CASE WHEN pen_member_node IS NULL THEN ${revokedAt} ELSE revoked_at END,
+            pen_member_revoked_at = CASE WHEN pen_member_node IS NOT NULL THEN ${revokedAt} ELSE pen_member_revoked_at END
         WHERE session_id = ${sessionId}
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -460,9 +472,10 @@ export const make = Effect.gen(function* () {
     execute: ({ currentSessionId, revokedAt }) =>
       sql`
         UPDATE auth_sessions
-        SET revoked_at = ${revokedAt}
+        SET revoked_at = CASE WHEN pen_member_node IS NULL THEN ${revokedAt} ELSE revoked_at END,
+            pen_member_revoked_at = CASE WHEN pen_member_node IS NOT NULL THEN ${revokedAt} ELSE pen_member_revoked_at END
         WHERE session_id <> ${currentSessionId}
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
         RETURNING session_id AS "sessionId"
       `,
   });
@@ -479,7 +492,7 @@ export const make = Effect.gen(function* () {
           pen_noise_pub AS "noisePub"
         FROM auth_sessions
         WHERE pen_node_id IS NOT NULL
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
           ${nodeId === undefined ? sql`` : sql`AND pen_node_id = ${nodeId}`}
       `,
   });
@@ -494,7 +507,7 @@ export const make = Effect.gen(function* () {
           COUNT(*) AS "total"
         FROM auth_sessions
         WHERE pen_node_id IS NOT NULL
-          AND revoked_at IS NULL
+          AND ${effectiveRevocation} IS NULL
           AND expires_at > ${now}
       `,
   });
@@ -506,7 +519,7 @@ export const make = Effect.gen(function* () {
       sql`
         DELETE FROM auth_sessions
         WHERE pen_node_id IS NOT NULL
-          AND (revoked_at IS NOT NULL OR expires_at <= ${now})
+          AND (${effectiveRevocation} IS NOT NULL OR expires_at <= ${now})
         RETURNING session_id AS "sessionId"
       `,
   });
