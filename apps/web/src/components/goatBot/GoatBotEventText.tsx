@@ -31,7 +31,11 @@ export function GoatBotEventText({
     subject.kind === "task" ? (
       <Link
         to="/bot"
-        search={{ task: ChannelTaskId.make(subject.id), ...goatBotSearch(member) }}
+        search={{
+          task: ChannelTaskId.make(subject.id),
+          taskTitle: subject.name,
+          ...goatBotSearch(member),
+        }}
         aria-label={label}
         className={CHIP}
       >

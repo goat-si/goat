@@ -33,6 +33,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   readonly directory: string;
   readonly serverPassword?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntime.OpenCodeRuntimeError>;
 }) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
@@ -110,6 +111,9 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const environment = input.currentEnvironment
+            ? yield* input.currentEnvironment
+            : input.environment;
           const serverScope = yield* Scope.make();
           const started = yield* Effect.exit(
             restore(
@@ -120,7 +124,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
                   ...(input.serverPassword !== undefined
                     ? { serverPassword: input.serverPassword }
                     : {}),
-                  ...(input.environment ? { environment: input.environment } : {}),
+                  ...(environment ? { environment } : {}),
                   ...(input.verify ? { verify: input.verify } : {}),
                 })
                 .pipe(Effect.provideService(Scope.Scope, serverScope)),

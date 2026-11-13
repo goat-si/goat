@@ -310,7 +310,9 @@ const make = Effect.gen(function* () {
     const cutoffIso = DateTime.formatIso(DateTime.makeUnsafe(cutoff));
     const source = yield* sql<{
       readonly task_json: string;
-    }>`SELECT t.task_json FROM channel_tasks t
+      readonly updated_at: string;
+      readonly task_id: string;
+    }>`SELECT t.task_json, t.updated_at, t.task_id FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.owner_id = ${owner.ownerId} AND t.bot_id = ${botId} AND c.owner_id = ${owner.ownerId}
         AND c.kind = 'goat'
@@ -324,8 +326,14 @@ const make = Effect.gen(function* () {
             WHERE s.key >= ('child-work:' || t.task_id || ':') AND s.key < ('child-work:' || t.task_id || ';')
               AND json_extract(s.value_json, '$.generation') = t.generation
               AND json_extract(s.value_json, '$.state') IN ('launched', 'bound', 'unknown'))))
-      ORDER BY t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
-    const tasks = yield* Effect.try(() => source.map((item) => decodeTask(item.task_json))).pipe(
+      ORDER BY (t.task_id IN (SELECT value FROM json_each(${pinned}))) DESC,
+        t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
+    const ordered = [...source].sort(
+      (a, b) =>
+        Buffer.compare(Buffer.from(b.updated_at), Buffer.from(a.updated_at)) ||
+        Buffer.compare(Buffer.from(b.task_id), Buffer.from(a.task_id)),
+    );
+    const tasks = yield* Effect.try(() => ordered.map((item) => decodeTask(item.task_json))).pipe(
       Effect.mapError(failed),
     );
     const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});

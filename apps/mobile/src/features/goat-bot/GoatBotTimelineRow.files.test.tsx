@@ -1,5 +1,6 @@
 import { act, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 import {
   createNativeMemoryHarness,
   renderNative,

@@ -1,9 +1,9 @@
-import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
+import { ChannelTaskId, EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const actions = vi.hoisted(() => ({
   show: vi.fn(),
@@ -41,7 +41,7 @@ vi.mock("~/state/query", () => ({
   }),
 }));
 
-import { GoatBotHomeWork } from "./GoatBotHomeWork";
+import { GoatBotHomeWork, type HomeHistory } from "./GoatBotHomeWork";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -72,6 +72,20 @@ function setup(rows: Row[] = []) {
   actions.update.mockResolvedValue({ _tag: "Success" });
   actions.refresh.mockReset();
   return rows;
+}
+
+function history(overrides: Partial<HomeHistory> = {}): HomeHistory {
+  return {
+    supported: false,
+    hasMore: false,
+    loading: false,
+    failed: false,
+    incomplete: false,
+    launchesTruncated: new Set(),
+    currentTaskIds: new Set(),
+    loadMore: () => {},
+    ...overrides,
+  };
 }
 
 function view(rows: readonly Row[], overrides: Record<string, unknown> = {}) {
@@ -225,15 +239,19 @@ it("an access-denied read explains itself and offers no retry that can never suc
   expect(screen.container.textContent).not.toContain("Try again");
 });
 
-it("an empty list claims only recent work and offers the one next action", async () => {
+it("an empty list offers the next action without claiming history is unavailable", async () => {
   const rows = setup([]);
-  await using screen = await render(view(rows));
+  await using screen = await render(view(rows, { history: history({ supported: true }) }));
   await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText(/Ask GOAT Bot in chat to start work/)).toBeVisible();
+  expect(screen.container.textContent).not.toContain("aren't listed here");
+});
+
+it("explains the three-day cutoff when history is unsupported", async () => {
+  const rows = setup([]);
+  await using screen = await render(view(rows, { history: history() }));
   await expect
-    .element(
-      screen.getByText(/Unpinned tasks that finished more than three days ago aren't listed here/),
-    )
+    .element(screen.getByText(/Unpinned tasks that finished more than three days/))
     .toBeVisible();
 });
 
@@ -253,9 +271,7 @@ it("the row's chevron opens the task, and Show work and Hide work live in its me
   const rows = setup([taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z")]);
   const onOpenTask = vi.fn();
   await using screen = await render(view(rows, { onOpenTask }));
-  const chevron = screen.container.querySelector("[data-work-chevron]");
-  expect(chevron).not.toBeNull();
-  await userEvent.click(chevron as Element);
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
   expect(onOpenTask).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Show work" }).query()).toBeNull();
   const actionsButton = screen.getByRole("button", { name: "Actions for Stop the port" });
@@ -271,4 +287,127 @@ it("the row's chevron opens the task, and Show work and Hide work live in its me
   expect(actions.show.mock.calls[1]?.[0]?.[0]).toEqual({ id: "work", label: "Hide work" });
   expect(onOpenTask).toHaveBeenCalledOnce();
   expect(actions.update).not.toHaveBeenCalled();
+});
+
+it("offers history continuation and explains incomplete older work and truncated launches", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const loadMore = vi.fn();
+  await using screen = await render(
+    view(rows, {
+      history: history({
+        hasMore: true,
+        incomplete: true,
+        launchesTruncated: new Set([ChannelTaskId.make("task-a")]),
+        loadMore,
+      }),
+    }),
+  );
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "Older work may be missing" }))
+    .toBeVisible();
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a failed older-work read is announced in the status region", async () => {
+  const rows = setup([]);
+  await using screen = await render(
+    view(rows, { history: history({ supported: true, hasMore: true }) }),
+  );
+  expect(screen.getByRole("status").all()).toHaveLength(2);
+  await screen.rerender(
+    view(rows, { history: history({ supported: true, hasMore: true, failed: true }) }),
+  );
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "Couldn't load older work." }))
+    .toBeInTheDocument();
+});
+
+it("an older row's menu offers Show work, Open and Pin, and Pin only refreshes the list", async () => {
+  const [row] = setup([
+    taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z", { unread: true }),
+  ]);
+  if (!row) throw new Error("missing fixture");
+  const onOpenTask = vi.fn();
+  await using screen = await render(
+    view([row], { history: history({ supported: true }), onOpenTask }),
+  );
+  const trigger = screen.getByRole("button", { name: "Actions for Older task" });
+  actions.show.mockResolvedValueOnce("pin");
+  await userEvent.click(trigger);
+  expect(actions.show.mock.calls[0]?.[0]).toEqual([
+    { id: "work", label: "Show work" },
+    { id: "open", label: "Open" },
+    { id: "pin", label: "Pin", disabled: false },
+  ]);
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  expect(actions.update.mock.calls[0]?.[0]).toEqual({
+    environmentId,
+    input: { taskId: "old", pinned: true },
+  });
+  actions.show.mockResolvedValueOnce("open");
+  await userEvent.click(trigger);
+  expect(onOpenTask).toHaveBeenCalledWith(row);
+});
+
+it("Pin on an older row that is already pinned still pins it", async () => {
+  const [row] = setup([taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z")]);
+  if (!row) throw new Error("missing fixture");
+  const pinned = { ...row, view: { ...row.view, pinnedAt: "2026-11-01T00:00:00.000Z" } };
+  await using screen = await render(view([pinned], { history: history({ supported: true }) }));
+  actions.show.mockResolvedValueOnce("pin");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await vi.waitFor(() => expect(actions.update).toHaveBeenCalledOnce());
+  expect(actions.update.mock.calls[0]?.[0].input).toEqual({ taskId: "old", pinned: true });
+});
+
+it("an older row's Pin is unavailable without permission to change task views", async () => {
+  const [row] = setup([taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z")]);
+  if (!row) throw new Error("missing fixture");
+  actions.permit = false;
+  await using screen = await render(view([row], { history: history({ supported: true }) }));
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  expect(actions.show.mock.calls[0]?.[0]).toContainEqual({
+    id: "pin",
+    label: "Pin",
+    disabled: true,
+  });
+});
+
+it("does not steal focus after a person leaves Show more while history is pending", async () => {
+  setup();
+  let finish: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  function Home() {
+    const [loaded, setLoaded] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const rows = loaded
+      ? [taskRow("older", "Older task", "running", "2026-11-09T01:00:00.000Z")]
+      : [];
+    return (
+      <>
+        <p>Outside text</p>
+        {view(rows, {
+          history: history({
+            hasMore: !loaded,
+            loadMore: () => {
+              void waiting.then(() => setLoaded(true));
+            },
+          }),
+          showAll: expanded,
+          onShowAllChange: setExpanded,
+        })}
+      </>
+    );
+  }
+  await using screen = await render(<Home />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await userEvent.click(screen.getByText("Outside text"));
+  expect(document.activeElement).toBe(document.body);
+  await act(() => finish());
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  expect(document.activeElement).toBe(document.body);
 });

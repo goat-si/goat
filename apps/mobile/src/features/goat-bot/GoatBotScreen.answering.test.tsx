@@ -1,7 +1,7 @@
 import "./goatBotScreenTestHarness";
 import { act } from "react";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { bot, picker, render, screenSession, typeInto } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
@@ -215,3 +215,5 @@ it("holds an answer while files are in the box, and says so, since an answer can
     screenSession.rows = [];
   }
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

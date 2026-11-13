@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { act, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 // A member's chat opened through its route and read, then its roster row: the route, the real
 // GoatBotScreen, the visit snapshot, the preview and the app state run as the app runs them. Only

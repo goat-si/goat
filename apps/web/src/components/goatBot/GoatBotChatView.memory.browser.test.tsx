@@ -116,6 +116,7 @@ vi.mock("~/state/query", async (original) => ({
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 const note = { index: 0, date: "2026-11-07", text: 'Reply in "Korean"' };
 const environmentId = EnvironmentId.make("local");
@@ -127,8 +128,13 @@ function setup(narrow = false) {
   state.notes = [note];
   state.refresh.mockReset();
   const onSend = vi.fn<(text: string) => void>();
-  const view = (rows: GoatBotRow[] = [], peek = false) => (
+  const view = (
+    rows: GoatBotRow[] = [],
+    peek = false,
+    openHome: { key: string; entry: string } | null = null,
+  ) => (
     <GoatBotChatView
+      openHome={openHome}
       availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
       canOperate
       rows={rows}
@@ -158,6 +164,25 @@ async function windowSize(width: number, height: number) {
 }
 
 const homeSheet = () => page.getByRole("dialog", { name: "GOAT Bot work" });
+
+it("an Open Home request for this bot opens Home once per history entry", async () => {
+  const { view } = setup();
+  const request = (key: string, entry: string) => ({ key, entry });
+  const mine = goatBotHomeKey(environmentId, null);
+  await using screen = await render(
+    view([], false, request(goatBotHomeKey(EnvironmentId.make("other"), null), "a")),
+  );
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await screen.rerender(view([], false, request(mine, "b")));
+  await expect.element(chip).toHaveAttribute("aria-expanded", "true");
+  await userEvent.click(chip);
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await screen.rerender(view([], false, request(mine, "b")));
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await screen.rerender(view([], false, null));
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+});
 
 it("the home chip toggles by click and keyboard without losing the draft", async () => {
   const { view } = setup();

@@ -5,6 +5,8 @@ import { BotThreadRow } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],
   canSend: true,
@@ -37,6 +39,7 @@ vi.mock("./MobileNewBotNameRow", () => ({
   useMobileBotEditing: () => ({ nameRow: null, editSheet: null, openEdit: undefined }),
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { hairlineWidth: 1 },
   // Views report where they sit, as native layout does once they mount.
   View: function View({
     children,
@@ -146,6 +149,15 @@ vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
+// The row menu is native; these tests do not open it.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: { label: string; row?: ReactNode }) => (
+    <>
+      {props.row}
+      <button aria-label={props.label} />
+    </>
+  ),
+}));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: "light",
@@ -250,7 +262,7 @@ vi.mock("../../state/channels", () => ({
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",
-    updateTaskView: {},
+    updateTaskView: { permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/server", () => ({
@@ -267,7 +279,14 @@ vi.mock("../../state/environments", () => ({
         "env",
         {
           serverConfig: {
-            environment: { capabilities: { goatBotTaskThreads: true, goatBotNotes: true } },
+            environment: {
+              capabilities: {
+                goatBotTaskThreads: true,
+                goatBotNotes: true,
+                goatBotChildWork: true,
+                goatBotMembers: true,
+              },
+            },
           },
         },
       ],
@@ -403,6 +422,22 @@ it("a routine's event line opens Home with that routine scrolled into view, even
   const [scroll] = session.scrollToIndex.mock.calls[0] ?? [];
   expect(session.homeKeys[scroll?.index ?? -1]).toBe("routines");
   expect(scroll).toMatchObject({ viewPosition: 0, viewOffset: 56 - 240 });
+  await view.unmount();
+});
+
+it("reveals and lands on a sixth routine opened from its event", async () => {
+  session.routines = Array.from({ length: 6 }, (_, i) => routine(`r-${i}`, `Routine ${i}`));
+  session.tasks = [];
+  const view = await render([event({ kind: "routine", id: "r-5", name: "Routine 5" })]);
+  await press(view.button("Open GOAT Bot home"));
+  expect(view.sheet()?.textContent).not.toContain("Routine 5");
+  await press(view.button("Close"));
+  session.scrollToIndex.mockClear();
+  await press(view.button("Routine Routine 5 ran. Open routine Routine 5"));
+  expect(view.sheet()?.textContent).toContain("Routine 5");
+  expect(view.button("Show less")).toBeDefined();
+  const [scroll] = session.scrollToIndex.mock.calls.at(-1) ?? [];
+  expect(session.homeKeys[scroll?.index ?? -1]).toBe("routines");
   await view.unmount();
 });
 

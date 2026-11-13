@@ -1,5 +1,6 @@
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import {
   createNativeMemoryHarness,

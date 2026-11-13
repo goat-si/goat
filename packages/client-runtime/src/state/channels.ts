@@ -101,11 +101,13 @@ export function createChannelEnvironmentAtoms<R, E>(
   });
   const childWorkFamily = Atom.family((key: string) => {
     const target = JSON.parse(key) as Parameters<typeof childWorkQuery>[0];
-    return Atom.make((get) =>
-      get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
-        .goatBotChildWork === true
-        ? get(childWorkQuery(target))
-        : AsyncResult.success({ groups: [] }),
+    return Atom.readable(
+      (get) =>
+        get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
+          .goatBotChildWork === true
+          ? get(childWorkQuery(target))
+          : AsyncResult.success({ groups: [] }),
+      (refresh) => refresh(childWorkQuery(target)),
     );
   });
   /**
@@ -264,6 +266,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    /** One page of a bot's task history, read on request rather than kept live. */
+    listBotThreadsPage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:list-bot-threads-page",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+    }),
     listOpenAsks: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-open-asks",
       tag: CHANNEL_GATEWAY_WS_METHODS.listOpenAsks,

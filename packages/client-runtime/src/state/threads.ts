@@ -14,7 +14,6 @@ import {
 } from "@goat/contracts";
 import { boundedSnapshotProjection } from "@goat/shared/orchestrationV2BoundedSnapshot";
 import { pendingBackgroundTurnItems } from "@goat/shared/orchestrationV2PendingBackgroundWork";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
@@ -59,15 +58,9 @@ import {
   snapshotToPersist,
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
+import { threadStreamFailureMessage } from "./threadTextAppends.ts";
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
-
-function formatThreadError(cause: Cause.Cause<unknown>): string {
-  const error = Cause.squash(cause);
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "Could not synchronize the thread.";
-}
 
 function formatHistoryError(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -322,14 +315,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
     }));
   });
-  const setStreamError = (message: string) =>
+  // Null is a text resync: it shows as synchronizing, never as an error.
+  const setStreamError = (message: string | null) =>
     Ref.set(awaitingCompletion, false).pipe(
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
           status:
-            current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
-          error: Option.some(message),
+            current.status === "deleted"
+              ? current.status
+              : message === null
+                ? "synchronizing"
+                : statusWithoutLiveData(current.data),
+          error: Option.fromNullishOr(message),
         })),
       ),
       Effect.andThen(noteStatus),
@@ -1018,7 +1016,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }),
       {
         onDefect: () => setStreamError("Could not synchronize the thread."),
-        onExpectedFailure: (cause) => setStreamError(formatThreadError(cause)),
+        onExpectedFailure: (cause) => setStreamError(threadStreamFailureMessage(cause)),
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },

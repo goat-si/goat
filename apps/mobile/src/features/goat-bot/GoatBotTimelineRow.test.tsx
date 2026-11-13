@@ -841,3 +841,5 @@ describe("event lines", () => {
     expect(view.container.textContent).toContain("Routine Daily check ran");
   });
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

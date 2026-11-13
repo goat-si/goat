@@ -1,7 +1,7 @@
 import "./goatBotScreenTestHarness";
 import { act } from "react";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { a11y, bot, list, render, screenSession, typeInto } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
@@ -149,3 +149,5 @@ it("marks what a member bot said since the person last read its chat", async () 
     screenSession.rows = [];
   }
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

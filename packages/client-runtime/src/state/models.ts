@@ -245,7 +245,14 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
-  if (thread.latestRunId === null && thread.activeProviderThreadId === null && !parkAtIdle) {
+  // Without a GOAT run, an idle provider reference only means the session can resume (an import).
+  const idleWithoutRun =
+    thread.status === "idle" && thread.activeRunId === null && thread.activityRunStatus == null;
+  if (
+    thread.latestRunId === null &&
+    !parkAtIdle &&
+    (thread.activeProviderThreadId === null || idleWithoutRun)
+  ) {
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);

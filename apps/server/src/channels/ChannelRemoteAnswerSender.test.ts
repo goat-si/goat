@@ -6,6 +6,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import {
   RemoteMachine,
   correlationOf,
@@ -15,11 +17,14 @@ import {
 } from "./testing/RemoteMachine.ts";
 import {
   makeHarness,
+  onlyTask,
   owner,
   setupBot,
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
+import { trackForwards } from "./testkit/remoteForwardFibers.ts";
 
 /** Answers to work on another machine from someone other than the requester, checked at delivery. */
 
@@ -97,12 +102,14 @@ const askedOnMachine = (machine: RemoteMachine, colleagueName = "Colleague") =>
     yield* setupBot;
     yield* link("U2", "Teammate");
     yield* link("U1", colleagueName);
+    const writes = yield* taskWriteMilestones();
     yield* say("U2", "do@mac-studio: pick a branch", "start");
-    yield* until("running", (task) => task.status === "running");
+    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    yield* writes.waitFor((task) => task.status === "running");
     const correlationId = correlationOf(machine);
     machine.report(correlationId, "needs_input", "Which branch?");
     machine.finishRun(correlationId, "completed", "Waiting for an answer.");
-    return yield* until("question", (task) => task.status === "waiting_input");
+    return yield* writes.waitFor((task) => task.status === "waiting_input");
   });
 
 const pendingForwards = Effect.flatMap(ChannelLedger.ChannelLedger, (ledger) =>
@@ -111,6 +118,13 @@ const pendingForwards = Effect.flatMap(ChannelLedger.ChannelLedger, (ledger) =>
 
 const sent = (machine: RemoteMachine, text: string) =>
   machine.sends.some((send) => (send.message as string).includes(text));
+
+/** The open questions that tell someone their answer may not have reached the other machine. */
+const toldMayNotHavePassedOn = Effect.map(onlyTask, (task) =>
+  task.openQuestions
+    .map((question) => question.text)
+    .filter((text) => text.includes("may not have passed on")),
+);
 
 const reasked = (text: string) =>
   until("asked again", (task) =>
@@ -257,27 +271,42 @@ describe("an answer to work on another machine", () => {
     },
   );
 
-  it.effect("waits, unsent, while the requester themself may no longer direct the work", () => {
-    const { machine, harness } = remoteHarness();
-    return Effect.gen(function* () {
-      yield* askedOnMachine(machine);
-      machine.down = true;
-      yield* say("U1", "answer: use main", "answer");
-      yield* settle();
-      yield* change("U2", "unlinked");
-      machine.down = false;
-      yield* settle();
-      assert.lengthOf(machine.sends, 0);
-      assert.lengthOf(yield* pendingForwards, 1);
-    }).pipe(Effect.provide(harness.layer));
-  });
-
   it.effect(
-    "waits, unsent, when the requester is unlinked between the two checks before the request",
+    "regression: an answer whose requester is unlinked is dropped unsent, and the requester told",
     () => {
       const { machine, harness } = remoteHarness();
+      const forwards = trackForwards();
       return Effect.gen(function* () {
-        yield* askedOnMachine(machine);
+        const asked = yield* askedOnMachine(machine);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        machine.down = true;
+        yield* say("U1", "answer: use main", "answer");
+        yield* runtime.drain;
+        yield* forwards.settled;
+        // While the machine is unreachable the answer waits, unsent.
+        assert.lengthOf(yield* pendingForwards, 1);
+        yield* change("U2", "unlinked");
+        machine.down = false;
+        yield* runtime.drain;
+        yield* forwards.settled;
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(yield* pendingForwards, 0);
+        assert.deepStrictEqual(yield* toldMayNotHavePassedOn, [
+          REMOTE_COPY.requesterChanged(machine.host),
+        ]);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.isUndefined((yield* ledger.getTask(asked.taskId))?.pendingAnswerMessageId);
+      }).pipe(forwards.observe, Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "regression: an answer whose requester is unlinked inside the final check before the request is dropped unsent, and the requester told",
+    () => {
+      const { machine, harness } = remoteHarness();
+      const forwards = trackForwards();
+      return Effect.gen(function* () {
+        const asked = yield* askedOnMachine(machine);
         const ledger = yield* ChannelLedger.ChannelLedger;
         const sql = yield* SqlClient.SqlClient;
         const findIdentity = ledger.findIdentity;
@@ -307,11 +336,19 @@ describe("an answer to work on another machine", () => {
             if (call.tool === "goat_thread_send") armed = true;
           });
         yield* say("U1", "answer: use main", "answer");
-        yield* settle();
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        yield* forwards.settled;
+        // The final authorization before the request read U2 linked in authorityFor and unlinked in
+        // senderGate, so it refused. An unlink after that check and before the send itself is the
+        // transport's check-then-send window, which this test does not cover.
         assert.isTrue(unlinked);
         assert.isFalse(sent(machine, "use main"));
-        assert.lengthOf(yield* pendingForwards, 1);
-      }).pipe(Effect.provide(harness.layer));
+        assert.lengthOf(yield* pendingForwards, 0);
+        assert.deepStrictEqual(yield* toldMayNotHavePassedOn, [
+          REMOTE_COPY.requesterChanged(machine.host),
+        ]);
+        assert.isUndefined((yield* ledger.getTask(asked.taskId))?.pendingAnswerMessageId);
+      }).pipe(forwards.observe, Effect.provide(harness.layer));
     },
   );
 

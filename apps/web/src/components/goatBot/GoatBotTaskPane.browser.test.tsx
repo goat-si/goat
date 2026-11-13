@@ -6,13 +6,15 @@ import {
   EnvironmentId,
 } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
+  noRows: false,
+  showMenu: vi.fn(),
   send: vi.fn(() => true),
   // One command function serves both commands; a retry is told apart by its clientRequestId.
   update: vi.fn(async (call?: { readonly input?: { readonly clientRequestId?: string } }) =>
@@ -36,6 +38,10 @@ const state = vi.hoisted(() => ({
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: () => true,
+}));
+vi.mock("~/localApi", async (original) => ({
+  ...(await original<typeof import("~/localApi")>()),
+  readLocalApi: () => ({ contextMenu: { show: state.showMenu } }),
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
@@ -83,22 +89,25 @@ vi.mock("./useBotRoster", () => ({
   useBotThreads: (_environmentId: string, bot: { botId: string } | null) => {
     state.lists.push(bot?.botId ?? null);
     return {
-      rows: [
-        decodeBotThreadRow({
-          kind: "task",
-          task: {
-            taskId: "task-1",
-            title: bot === null ? "Review work" : "Find sources",
-            status: state.row.status,
-            updatedAt: "2026-11-04T10:00:00.000Z",
-            ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
-          },
-          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
-          lastActivityAt: "2026-11-04T10:00:00.000Z",
-          unread: state.row.unread,
-          mainMessagesSinceQuiet: 0,
-        }),
-      ],
+      rows: state.noRows
+        ? []
+        : [
+            decodeBotThreadRow({
+              kind: "task",
+              task: {
+                taskId: "task-1",
+                title: bot === null ? "Review work" : "Find sources",
+                status: state.row.status,
+                updatedAt: "2026-11-04T10:00:00.000Z",
+                ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
+              },
+              view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+              lastActivityAt: "2026-11-04T10:00:00.000Z",
+              unread: state.row.unread,
+              mainMessagesSinceQuiet: 0,
+            }),
+          ],
+      remoteWork: [],
       refresh: state.refresh,
     };
   },
@@ -107,7 +116,7 @@ vi.mock("./useGoatBotSession", () => ({
   useGoatBotSession: (_items: unknown, taskId: string) => {
     state.session(taskId);
     return {
-      availability: { kind: "ready" },
+      availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
@@ -124,6 +133,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -142,6 +152,9 @@ function Pane({ onClose }: { onClose: () => void }) {
 
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
+  state.noRows = false;
+  state.showMenu.mockReset();
+  state.showMenu.mockResolvedValue(null);
   resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
@@ -313,4 +326,72 @@ it("offers no retry for work still going or on a server without it", async () =>
   await screen.rerender(<Pane onClose={() => {}} />);
   await expect.element(screen.getByText("Failed")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+});
+
+it("uses the title carried from a history row when the current list no longer contains it", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      narrow
+      onClose={() => {}}
+      taskTitle="Older task"
+    />,
+  );
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect.element(screen.getByText("Task thread")).not.toBeInTheDocument();
+});
+
+it("explains where to find actions for older work absent from the current list", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const close = vi.fn();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      taskTitle="Older task"
+      narrow
+      onClose={close}
+    />,
+  );
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect
+    .element(screen.getByText("Status and actions for older work are in GOAT Bot's Home."))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Pin", exact: true }))
+    .not.toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it("Open Home from an older task goes to the bot's chat with its Home named in history state", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const close = vi.fn();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      taskTitle="Older task"
+      narrow
+      onClose={close}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open Home" }));
+  expect(close).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env/bot-thread"));
+  expect(screen.router?.state.location.state.goatBotOpenHome).toBe(
+    goatBotHomeKey(EnvironmentId.make("env"), null),
+  );
 });

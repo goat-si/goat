@@ -1,4 +1,5 @@
 import {
+  accessDenied,
   BOT_RUNNING_TASK_STATUSES,
   botComputers,
   presentTaskStatus,
@@ -46,6 +47,10 @@ export function MobileBotComputer(props: {
       <Text className="text-foreground-muted">
         Machines are unavailable while {botName} is offline.
       </Text>
+    );
+  if (accessDenied(tasks.cause))
+    return (
+      <Text className="text-foreground-muted">This device can't read {botName}'s machines.</Text>
     );
   if (tasks.cause !== null)
     return (

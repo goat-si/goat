@@ -77,6 +77,10 @@ export const channelTaskIdFromAgent = (taskId: ChannelTaskId): ChannelTaskId =>
 export const taskEventIdFor = (taskId: ChannelTaskId, version: number) =>
   stableId("channel-task-event", [taskId, String(version)]) as ChannelTaskEventId;
 
+/** The one event that corrects a run's pending check to "did not run". */
+export const checkNotRunEventIdFor = (taskId: ChannelTaskId, runId: string) =>
+  stableId("channel-task-event", [taskId, runId, "check-not-run"]) as ChannelTaskEventId;
+
 /** The one skill proposal a task generation's completion may start. */
 export const skillProposalTaskIdFor = (sourceTaskId: ChannelTaskId, generation: number) =>
   stableId("channel-task", [sourceTaskId, String(generation), "skill-proposal"]) as ChannelTaskId;

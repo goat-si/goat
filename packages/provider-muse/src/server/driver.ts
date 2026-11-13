@@ -84,9 +84,8 @@ export const MuseDriver: ProviderDriver<
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const hostEnvironment = yield* HostProcess.Environment;
     // Drop an inherited META_API_KEY so Muse uses its login; an instance value still wins.
-    const processEnvironment = yield* mergeProviderInstanceEnvironment(
-      environment,
-      makeMuseEnvironment(hostEnvironment),
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, makeMuseEnvironment(hostEnvironment)),
     );
     const effectiveConfig = {
       ...config,
@@ -106,10 +105,13 @@ export const MuseDriver: ProviderDriver<
     });
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
-      resolveProviderMaintenanceCapabilitiesEffect(museMaintenance, {
-        binaryPath: effectiveConfig.binaryPath,
-        env: processEnvironment,
-      }).pipe(
+      currentEnvironment.pipe(
+        Effect.flatMap((env) =>
+          resolveProviderMaintenanceCapabilitiesEffect(museMaintenance, {
+            binaryPath: effectiveConfig.binaryPath,
+            env,
+          }),
+        ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -122,7 +124,7 @@ export const MuseDriver: ProviderDriver<
       // The maintenance runner requests fresh capabilities around an explicit update
       // and needs the native target version to verify that the command actually upgraded.
       const latestVersion = options?.fresh
-        ? yield* latestMuseVersion(processEnvironment, { fresh: true }).pipe(
+        ? yield* latestMuseVersion(yield* currentEnvironment, { fresh: true }).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
           )
@@ -145,7 +147,8 @@ export const MuseDriver: ProviderDriver<
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         makePendingMuseProvider(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkMuseProviderStatus(effectiveConfig, processEnvironment, cwd).pipe(
+      checkProvider: currentEnvironment.pipe(
+        Effect.flatMap((env) => checkMuseProviderStatus(effectiveConfig, env, cwd)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -154,12 +157,16 @@ export const MuseDriver: ProviderDriver<
       enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>
-            enrichMuseSnapshot({
-              snapshot: currentSnapshot,
-              maintenanceCapabilities,
-              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-              environment: processEnvironment,
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                enrichMuseSnapshot({
+                  snapshot: currentSnapshot,
+                  maintenanceCapabilities,
+                  enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+                  environment,
+                }),
+              ),
+            ),
           ),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
@@ -180,13 +187,13 @@ export const MuseDriver: ProviderDriver<
     const orchestrationAdapter = yield* makeMuseAdapterV2({
       instanceId,
       settings: effectiveConfig,
-      environment: processEnvironment,
+      environment: currentEnvironment,
       modelCatalog,
       ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       continuationRequests,
     });
     const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {
-      environment: processEnvironment,
+      environment: currentEnvironment,
       modelCatalog,
     });
     return {

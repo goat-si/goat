@@ -41,6 +41,7 @@ const state = vi.hoisted(() => ({
   openChat: vi.fn(),
   presentations: new Map<string, unknown>(),
   slackQuery: { data: null as unknown, error: null as string | null, refresh: () => {} },
+  homeError: null as string | null,
 }));
 
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
@@ -60,7 +61,7 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
     moveTarget: state.moveTarget,
     changeHome: state.changeHome,
     busy: false,
-    error: null,
+    error: state.homeError,
   }),
 }));
 vi.mock("../../state/entities", () => ({
@@ -233,6 +234,26 @@ it("says Ready for a healthy main bot once its work has loaded", async () => {
   await render({ rows: [] });
   expect(container.textContent).toContain("Ready");
   expect(container.textContent).toContain("GPT-5.4 on Codex");
+});
+
+it("on Home, says nothing for a ready bot and still shows a bot that needs attention", async () => {
+  state.homeConnected = true;
+  await render({ rows: [], quietWhenReady: true });
+  expect(container.textContent).toBe("");
+  await render({ rows: [], turnsWaiting: ["turn-1"], quietWhenReady: true });
+  expect(container.textContent).toContain("Needs attention");
+  expect(container.textContent).toContain("1 waiting for your answer");
+});
+
+it("on Home, keeps a failed home change in view even when the new home is ready", async () => {
+  state.homeConnected = true;
+  state.homeError = "Moved, but MacBook could not be told.";
+  try {
+    await render({ rows: [], quietWhenReady: true });
+    expect(container.textContent).toContain("Moved, but MacBook could not be told.");
+  } finally {
+    state.homeError = null;
+  }
 });
 
 it("says the bot waits for an answer in the chat when its own turn asked a question", async () => {

@@ -146,17 +146,20 @@ export function GoatBotFace(props: {
  * The waiting dot keeps clear of the head's ear in a small circle: web's share of the circle, 6 to
  * 10 px, and a pixel out on the corner below 32 px, where the ear nearly reaches the edge. Its ring,
  * in the colour behind the avatar, is drawn outside that fill so it parts the dot from any accent.
+ * Above 40 px the box corner is far off the circle, so the dot sits on the edge at 45 degrees.
  */
 function waitingDotStyle(circle: number) {
   const size = Math.min(10, Math.max(6, Math.round(circle * 0.28)));
-  const out = circle < 32 ? -1 : 0;
   const ring = circle < 32 ? 1 : 1.5;
+  const outer = size + ring * 2;
+  const edge = circle > 40 ? (circle / 2) * (1 - Math.SQRT1_2) - outer / 2 : null;
+  const out = circle < 32 ? -1 : 0;
   return {
-    width: size + ring * 2,
-    height: size + ring * 2,
+    width: outer,
+    height: outer,
     borderWidth: ring,
-    top: out - ring,
-    right: out - ring,
+    top: edge ?? out - ring,
+    right: edge ?? out - ring,
   };
 }
 

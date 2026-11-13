@@ -375,3 +375,5 @@ it("draws the tables of a reply with link references in their own cards, every r
   );
   expect(resolvedLinks(text)).not.toContain("unresolved");
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

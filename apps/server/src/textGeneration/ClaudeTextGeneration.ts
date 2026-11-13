@@ -163,7 +163,8 @@ function claudeErrorResult(stdout: string): string | undefined {
 
 export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(function* (
   claudeSettings: ClaudeSettings,
-  environment?: NodeJS.ProcessEnv,
+  /** An Effect is read at each generation, so a later host PATH reaches it. */
+  environment?: NodeJS.ProcessEnv | Effect.Effect<NodeJS.ProcessEnv>,
   modelCatalog: Effect.Effect<ClaudeModelCatalog> = Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG),
   memoryRunnerContext?: MemoryGenerationRunnerContext,
 ) {
@@ -172,7 +173,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const home = yield* HostProcess.HomeDirectory;
-  const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
+  const resolveClaudeEnvironment = (
+    Effect.isEffect(environment) ? environment : Effect.succeed(environment)
+  ).pipe(
+    Effect.flatMap((base) => makeClaudeEnvironment(claudeSettings, base)),
+    Effect.provideService(Path.Path, path),
+  );
   const scopedModelCatalog = modelCatalog.pipe(
     Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)),
   );
@@ -219,6 +225,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         operation,
         detail: "Claude is disabled in GOAT settings.",
       });
+    const claudeEnvironment = yield* resolveClaudeEnvironment;
     const catalog = yield* scopedModelCatalog;
     const resolvedModelSelection = {
       ...modelSelection,

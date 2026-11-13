@@ -197,7 +197,7 @@ async function generateMuseText(
 export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(function* (
   settings: MuseSettings,
   options: {
-    readonly environment?: NodeJS.ProcessEnv;
+    readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
     readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
     readonly createHost?: typeof createMuseSdkHost;
   } = {},
@@ -237,12 +237,13 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     const response = yield* Effect.gen(function* () {
       // Metadata requests already include their context and do not need checkout configuration.
       const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-muse-text-" });
+      const currentEnvironment = environment ? yield* environment : undefined;
       const host = yield* Effect.acquireRelease(
         createMuseSdkHostEffect(
           {
             binaryPath: settings.binaryPath,
             cwd,
-            ...(environment ? { environment } : {}),
+            ...(currentEnvironment ? { environment: currentEnvironment } : {}),
             readOnly: true,
             // Muse derives SDK turn events from its session log, including completion.
             sessionLogging: true,

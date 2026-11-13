@@ -106,6 +106,7 @@ export function GoatBotRouteScreen({
     <GoatBotScreen
       visible={focused}
       foreground={foreground}
+      seen={seen}
       member={member}
       main={main}
       onRestoreMember={

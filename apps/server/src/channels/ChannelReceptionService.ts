@@ -35,6 +35,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import {
+  channelEvidenceCorrection,
   channelEvidenceLabels,
   channelEvidenceSentence,
   splitChannelResultText,
@@ -111,6 +112,7 @@ import {
 } from "./channelApprovalCards.ts";
 import { askForApprovalCode, pendingApprovals } from "./channelApprovalReplies.ts";
 import { replyDelivery, turnAnswerReplyTo } from "./channelReplyDelivery.ts";
+import { correctionTellsEvidence, isCheckCorrection } from "./channelCheckCorrection.ts";
 import { makeInboundChoices } from "./channelInboundChoice.ts";
 import {
   answerNativeQuestion,
@@ -1570,9 +1572,11 @@ const make = Effect.gen(function* () {
         );
         const result = pending.event.payload.observed.result;
         const evidence =
-          result?.observedCheck !== undefined && result.observedCheck.status !== "running"
-            ? channelEvidenceSentence(result, stored.task.title)
-            : null;
+          result !== undefined && isCheckCorrection(stored.task, pending.event.eventId, result)
+            ? channelEvidenceCorrection(result, stored.task.title)
+            : result?.observedCheck !== undefined && result.observedCheck.status !== "running"
+              ? channelEvidenceSentence(result, stored.task.title)
+              : null;
         // A check that lands after the result is one more sentence; GOAT Bot's chat, which shows
         // no task card, reads it as part of the result.
         if (evidence !== null) {
@@ -1645,7 +1649,8 @@ const make = Effect.gen(function* () {
       // A message has no card around it, so meaningful verification rides along as one sentence.
       const evidence =
         (origin.kind !== "goat" || goatOutcome) &&
-        (base.kind === "result" || base.kind === "failure")
+        (base.kind === "result" || base.kind === "failure") &&
+        !(yield* correctionTellsEvidence(ledger, task))
           ? channelEvidenceSentence(task.observed?.result)
           : null;
       const replyTo = turnAnswerReplyTo(task, base.kind);

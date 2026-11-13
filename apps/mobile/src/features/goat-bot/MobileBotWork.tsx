@@ -1,22 +1,19 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  accessDenied,
+  botHomeWork,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
-  isRetryableTaskStatus,
   presentTaskStatus,
-  retryRefusalText,
   taskAttemptLabel,
+  workRowCollapsed,
   type GoatBotAccent,
   type GoatBotTaskCard,
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
-import {
-  isAtomCommandInterrupted,
-  runAtomCommand,
-  squashAtomCommandFailure,
-} from "@goat/client-runtime/state/runtime";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
   BotId,
   BotProfile,
@@ -24,12 +21,21 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { ChannelTaskId } from "@goat/contracts";
+import { CHANNEL_LIST_CHILD_WORK_MAX_TASKS, ChannelTaskId } from "@goat/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Alert,
+  FlatList,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
-import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
@@ -43,10 +49,13 @@ import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import type { MobileNoteWording, MobileNoteWordings } from "./mobileNoteWordings";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskList";
+import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
-import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
+import { MobileTaskActions } from "./MobileTaskActions";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
@@ -56,7 +65,7 @@ const STICKY_TABS_CLEARANCE = 56;
 const SCROLL_RETRIES = 3;
 const NO_WORDINGS: MobileNoteWordings = new Map();
 type HomeScroll = {
-  readonly index: number;
+  readonly key: string;
   readonly viewPosition: number;
   readonly viewOffset: number;
 };
@@ -74,10 +83,13 @@ export function MobileBotWork(props: {
   readonly taskCard?: ReactNode;
   /** The bot's face for the header chip Android draws above the chat. */
   readonly chipFace?: ReactNode;
+  readonly heroFace?: ReactNode;
   /** The home sheet's open state when the chat's header chip controls it. */
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
   readonly visible: boolean;
+  /** The screen is focused and the app active, so what it shows has been seen. */
+  readonly seen?: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
   /** Opens a coding thread the task started. */
   readonly onOpenThread: (thread: {
@@ -129,8 +141,11 @@ export function MobileBotWork(props: {
   const capabilities = environmentId
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
-  const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
   const member = props.member ?? null;
+  const enabled =
+    selected?.connected === true &&
+    capabilities?.goatBotTaskThreads === true &&
+    (member === null || capabilities?.goatBotMembers === true);
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
@@ -141,12 +156,15 @@ export function MobileBotWork(props: {
         })
       : null,
   );
-  const rows = threads.data?.rows ?? [];
+  const workScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
+  const offline = selected?.connected !== true;
+  const listData = useKeptWhileOffline(threads.data, workScope, offline);
+  const rows = listData?.rows ?? [];
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
   const childTaskId = props.taskId ?? peekTaskId;
   const children = useEnvironmentQuery(
-    environmentId && enabled && childTaskId
+    environmentId && enabled && capabilities?.goatBotChildWork === true && childTaskId
       ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [childTaskId] } })
       : null,
   );
@@ -155,8 +173,9 @@ export function MobileBotWork(props: {
       ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
       : null,
   );
+  const childData = useKeptWhileOffline(children.data, workScope, offline);
   const work = environmentId
-    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, threads.data?.remoteWork)
+    ? groupBotWork(rows, childData?.groups ?? [], environmentId, listData?.remoteWork)
     : { inProgress: [], done: [] };
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
@@ -176,6 +195,7 @@ export function MobileBotWork(props: {
   // An event line opens the home on Home with its task peeked or its routine scrolled to.
   const [focusSeq, setFocusSeq] = useState(0);
   const [routineFocus, setRoutineFocus] = useState<{ id: string; seq: number } | null>(null);
+  const [showAllRoutines, setShowAllRoutines] = useState(false);
   // A task the list had not loaded yet when the home opened on it, and one it turned out to lack.
   const [taskFocus, setTaskFocus] = useState<ChannelTaskId | null>(null);
   const [leaveFor, setLeaveFor] = useState<{ id: ChannelTaskId; seq: number } | null>(null);
@@ -188,11 +208,26 @@ export function MobileBotWork(props: {
   const lastScroll = useRef<HomeScroll | null>(null);
   const scrollRetry = useRef<HomeScroll | null>(null);
   const scrollAttempts = useRef(0);
+  const [returnKey, setReturnKey] = useState<string | null>(null);
+  if (!open && returnKey !== null) setReturnKey(null);
+  const attemptScroll = (scroll: HomeScroll) => {
+    const index = homeItems.findIndex((item) => item.key === scroll.key);
+    if (index < 0) {
+      lastScroll.current = null;
+      scrollRetry.current = null;
+      return;
+    }
+    listRef.current?.scrollToIndex({
+      index,
+      viewPosition: scroll.viewPosition,
+      viewOffset: scroll.viewOffset,
+    });
+  };
   const scrollHome = (scroll: HomeScroll) => {
     lastScroll.current = scroll;
     scrollRetry.current = null;
     scrollAttempts.current = 0;
-    listRef.current?.scrollToIndex(scroll);
+    attemptScroll(scroll);
   };
   if (open && props.focus && props.focus.seq !== focusSeq) {
     setFocusSeq(props.focus.seq);
@@ -200,6 +235,7 @@ export function MobileBotWork(props: {
     const focusedTask = props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null;
     setPeekTaskId(focusedTask);
     setTaskFocus(focusedTask);
+    setReturnKey(null);
     setLeaveFor(null);
     setRoutineFocus(
       props.focus.kind === "routine" ? { id: props.focus.id, seq: props.focus.seq } : null,
@@ -244,6 +280,36 @@ export function MobileBotWork(props: {
   // A save that finishes after the sheet moved to another bot settles that bot's draft only.
   const checkInScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
   const [checkIns, setCheckIns] = useState<Readonly<Record<string, MobileCheckInDraft>>>({});
+  const [expandedByScope, setExpandedByScope] = useState<
+    Readonly<Record<string, ReadonlyArray<ChannelTaskId>>>
+  >({});
+  const expanded = expandedByScope[checkInScope] ?? [];
+  const expandedChildren = useEnvironmentQuery(
+    environmentId &&
+      open &&
+      enabled &&
+      capabilities?.goatBotChildWork === true &&
+      expanded.length > 0
+      ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [...expanded] } })
+      : null,
+  );
+  const expandedData = useKeptWhileOffline(expandedChildren.data, workScope, offline);
+  const detailWork =
+    environmentId && expanded.length > 0
+      ? groupBotWork(rows, expandedData?.groups ?? [], environmentId, listData?.remoteWork)
+      : null;
+  const toggleExpanded = (id: ChannelTaskId) =>
+    setExpandedByScope((current) => {
+      const ids = current[checkInScope] ?? [];
+      return {
+        ...current,
+        [checkInScope]: ids.includes(id)
+          ? ids.filter((item) => item !== id)
+          : [...ids, id].slice(-CHANNEL_LIST_CHILD_WORK_MAX_TASKS),
+      };
+    });
+  const [showAllFinished, setShowAllFinished] = useState(false);
+  const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const checkInDraft = checkIns[checkInScope] ?? MOBILE_CHECK_IN_DRAFT;
   const updateCheckIn: MobileCheckInDraftUpdate = (update) =>
     setCheckIns((current) => ({
@@ -251,13 +317,15 @@ export function MobileBotWork(props: {
       [checkInScope]: update(current[checkInScope] ?? MOBILE_CHECK_IN_DRAFT),
     }));
   const peekEntry =
-    peekTaskId === null
+    peekTaskId === null || !enabled
       ? null
       : ([...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === peekTaskId) ??
         null);
   // A peeked task that left the list is forgotten, so it does not reopen when it returns.
-  if (peekTaskId !== null && peekEntry === null && listedTasks !== null) setPeekTaskId(null);
+  if (peekTaskId !== null && peekEntry === null && (listedTasks !== null || !enabled))
+    setPeekTaskId(null);
   const closeSheet = () => {
+    setReturnKey(null);
     setPeekTaskId(null);
     setTaskFocus(null);
     setOpen(false);
@@ -271,11 +339,22 @@ export function MobileBotWork(props: {
     openTask(leaveFor.id);
   }, [leaveFor, openTask, setOpen]);
   // The system back (Android's button or gesture) leaves a peek before it leaves the sheet.
+  const leavePeek = () => {
+    if (
+      peekTaskId !== null &&
+      !showAllFinished &&
+      environmentId &&
+      workRowCollapsed(rows, environmentId, listData?.remoteWork ?? [], peekTaskId)
+    ) {
+      setShowAllFinished(true);
+      setReturnKey(JSON.stringify(["task", peekTaskId]));
+    }
+    setPeekTaskId(null);
+    setTaskFocus(null);
+  };
   const goBack = () => {
-    if (peekTaskId !== null) {
-      setPeekTaskId(null);
-      setTaskFocus(null);
-    } else closeSheet();
+    if (peekTaskId !== null) leavePeek();
+    else closeSheet();
   };
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (!environmentId || !enabled) return;
@@ -293,32 +372,38 @@ export function MobileBotWork(props: {
     }
     threads.refresh();
   };
-  const unreadAt = task?.row.unread ? task.row.lastActivityAt : null;
-  const refreshThreads = threads.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Mark the visible task read through its latest activity.
-  useEffect(() => {
-    if (props.visible && props.taskId && unreadAt && environmentId && enabled) {
-      void runAtomCommand(appAtomRegistry, channelEnvironment.updateTaskView, {
-        environmentId,
-        input: { taskId: props.taskId, readThrough: unreadAt },
-      }).then((result) => {
-        if (result._tag === "Success") refreshThreads();
-        else Alert.alert("Could not mark task read", "Please try again.");
-      });
-    }
-  }, [props.visible, props.taskId, unreadAt, environmentId, enabled, refreshThreads]);
+  useMobileHomeTaskReads({
+    environmentId,
+    seen: (props.seen ?? props.visible) && enabled && canUpdate,
+    task: task?.row ?? null,
+    peek: open ? (peekEntry?.row ?? null) : null,
+    onAcknowledged: threads.refresh,
+  });
   const now = useNowMinuteMs();
   const routineThreadId = member?.threadId ?? home.botRef?.threadId ?? null;
   const boundRoutines =
     routineThreadId === null
       ? []
       : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, now);
-  const sectionLabel = (key: string, text: string, first = false): MobileBotHomeItem => ({
+  if (
+    routineFocus &&
+    !showAllRoutines &&
+    boundRoutines.findIndex((row) => row.id === routineFocus.id) >= 5
+  ) {
+    setShowAllRoutines(true);
+  }
+  const sectionLabel = (
+    key: string,
+    text: string,
+    first = false,
+    action?: ReactNode,
+  ): MobileBotHomeItem => ({
     key,
     render: () => (
-      <Text className={`${first ? "mt-2" : "mt-4"} text-xs font-medium text-foreground-muted`}>
-        {text}
-      </Text>
+      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
+        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
+        {action}
+      </View>
     ),
   });
   const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
@@ -332,41 +417,18 @@ export function MobileBotWork(props: {
       render: () => (
         <View>
           <View className="items-center gap-2 pt-2 pb-4">
-            <GoatBotFaceAvatar
-              state="idle"
-              size={56}
-              emoji={props.botAvatar}
-              accent={props.botAccent}
-            />
-            <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
+            {props.heroFace ?? (
+              <GoatBotFaceAvatar
+                state="idle"
+                size={96}
+                emoji={props.botAvatar}
+                accent={props.botAccent}
+              />
+            )}
+            <Text accessibilityRole="header" className="text-xl font-semibold text-foreground">
               {botName}
             </Text>
-            {props.onEditBot ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={props.onEditBot}
-                className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
-              >
-                <Text className="font-goat-medium text-primary-text">Edit bot</Text>
-              </Pressable>
-            ) : null}
           </View>
-          <MobileBotStatusCard
-            environmentId={environmentId}
-            member={member}
-            botName={botName}
-            main={props.main ?? null}
-            rows={
-              !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
-            }
-            refreshRows={threads.refresh}
-            turnsWaiting={props.turnsWaiting ?? []}
-            onOpenChat={() => setOpen(false)}
-            onOpenTask={(id) => {
-              setOpen(false);
-              props.onOpenTask(id);
-            }}
-          />
         </View>
       ),
     },
@@ -403,19 +465,30 @@ export function MobileBotWork(props: {
     },
   ];
   if (tab === "Home") {
-    homeItems.push(sectionLabel("machines-label", "Machines", true), {
-      key: "machines",
+    homeItems.push({
+      key: "status",
       render: () => (
-        <MobileBotComputer
+        <MobileBotStatusCard
           environmentId={environmentId}
-          connected={selected?.connected === true}
-          botId={member?.botId ?? null}
+          member={member}
           botName={botName}
-          workKey={`${workKey}#${props.workRevision ?? ""}`}
+          main={props.main ?? null}
+          rows={
+            !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
+          }
+          refreshRows={threads.refresh}
+          turnsWaiting={props.turnsWaiting ?? []}
+          onOpenChat={() => setOpen(false)}
+          onOpenTask={(id) => {
+            setOpen(false);
+            props.onOpenTask(id);
+          }}
+          quietWhenReady
         />
       ),
     });
-    homeItems.push(sectionLabel("work-label", "Work"));
+    homeItems.push(sectionLabel("work-label", "Work", true));
+    const workStart = homeItems.length;
     if (goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0) {
       homeItems.push(
         message(
@@ -423,7 +496,7 @@ export function MobileBotWork(props: {
           <Pressable
             accessibilityRole="button"
             onPress={closeSheet}
-            className="min-h-[44px] justify-center"
+            className="min-h-[44px] justify-center py-2"
           >
             <Text className="text-foreground">
               {goatBotWaitingInChatText(botName)}. Open the chat
@@ -436,13 +509,20 @@ export function MobileBotWork(props: {
       homeItems.push(
         message(
           "tasks-error",
-          <Pressable
-            accessibilityRole="button"
-            onPress={threads.refresh}
-            className="min-h-[44px] justify-center"
-          >
-            <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
-          </Pressable>,
+          accessDenied(threads.cause) ? (
+            <Text className="text-foreground-muted">This device can't read {botName}'s work.</Text>
+          ) : (
+            <View>
+              <Text className="text-danger-foreground">Couldn't load {botName}'s tasks.</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={threads.refresh}
+                className="min-h-[44px] justify-center"
+              >
+                <Text className="text-foreground">Try again</Text>
+              </Pressable>
+            </View>
+          ),
         ),
       );
     }
@@ -454,24 +534,69 @@ export function MobileBotWork(props: {
         message(
           "tasks-unavailable",
           <Text className="text-foreground-muted">
-            Tasks are unavailable while {botName} is offline or unsupported.
+            {selected?.connected !== true
+              ? `${botName}'s tasks are unavailable while the computer is offline.`
+              : "Tasks can't be listed from this server right now."}
           </Text>,
         ),
       );
-    } else {
-      const loading = threads.data === null && !threads.error;
+    }
+    if (enabled || (selected?.connected !== true && listData !== null)) {
+      const loading = enabled && threads.data === null && !threads.error;
       if (loading)
         homeItems.push(
-          message("tasks-loading", <Text className="text-foreground-muted">Loading tasks…</Text>),
+          message(
+            "tasks-loading",
+            <View accessible accessibilityLabel="Loading tasks…" className="gap-3 py-3">
+              {[0, 1, 2].map((index) => (
+                <View key={index} className="h-8 rounded bg-subtle-strong" />
+              ))}
+            </View>,
+          ),
         );
-      if (threads.data !== null || (props.chatTasks ?? []).length > 0) {
+      if (listData !== null || (props.chatTasks ?? []).length > 0) {
         homeItems.push(
           ...mobileBotTaskListItems({
             botName,
-            work,
+            work: environmentId
+              ? botHomeWork(rows, children.data?.groups ?? [], environmentId, listData?.remoteWork)
+              : { running: [], waiting: [], finished: [] },
+            showAllFinished,
+            onToggleFinished: () => setShowAllFinished((value) => !value),
+            expanded: new Set(expanded),
+            onToggleExpanded: toggleExpanded,
+            details: (id) => {
+              if (!detailWork) return [];
+              const entry = [...detailWork.inProgress, ...detailWork.done].find(
+                (item) => item.row.task.taskId === id,
+              );
+              return entry
+                ? mobileBotWorkDetails({
+                    entry,
+                    rows,
+                    openable: enabled,
+                    supported: enabled && capabilities?.goatBotChildWork === true,
+                    error: expandedChildren.error,
+                    pending: expandedChildren.isPending,
+                    groupChildren:
+                      expandedData?.groups.find((group) => group.taskId === id)?.children.length ??
+                      null,
+                    openThread: (thread) => {
+                      closeSheet();
+                      props.onOpenThread(thread);
+                    },
+                  })
+                : [];
+            },
+            // Offline rows stay listed, but nothing can be opened or changed until it reconnects.
+            canUpdate: canUpdate && enabled,
+            openable: enabled,
             rows,
             chatTasks: props.chatTasks ?? [],
-            onPeekTask: setPeekTaskId,
+            onPeekTask: (id) => {
+              setReturnKey(null);
+              setPeekTaskId(id);
+            },
             onOpenTask: (id) => {
               closeSheet();
               props.onOpenTask(id);
@@ -486,8 +611,12 @@ export function MobileBotWork(props: {
         );
       }
     }
+    homeItems.splice(
+      workStart,
+      homeItems.length - workStart,
+      ...carded(homeItems.slice(workStart)),
+    );
     // The routines entry follows its section label, at the next two places in the list.
-    const index = homeItems.length + 1;
     const routinesItem: MobileBotHomeItem = {
       key: "routines",
       render: () => (
@@ -501,12 +630,14 @@ export function MobileBotWork(props: {
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
           rows={boundRoutines}
+          showAll={showAllRoutines}
+          onShowAllChange={setShowAllRoutines}
           focusRoutineId={routineFocus?.id ?? null}
           onFocusedRowLayout={(y) => {
             if (routineFocus !== null) routineLanded.current = routineFocus.seq;
             setRoutineFocus(null);
             scrollHome({
-              index,
+              key: "routines",
               viewPosition: 0,
               viewOffset: STICKY_TABS_CLEARANCE - y,
             });
@@ -523,11 +654,47 @@ export function MobileBotWork(props: {
         />
       ),
     };
-    homeItems.push(sectionLabel("routines-label", "Routines"), routinesItem);
+    homeItems.push(
+      sectionLabel(
+        "routines-label",
+        "Routines",
+        false,
+        props.onDraft ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              if (props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT)) closeSheet();
+            }}
+            className="min-h-[44px] justify-center"
+          >
+            <Text className="text-foreground underline">New routine</Text>
+          </Pressable>
+        ) : null,
+      ),
+      ...carded([routinesItem]),
+    );
+    homeItems.push(
+      sectionLabel("machines-label", "Machines"),
+      ...carded([
+        {
+          key: "machines",
+          render: () => (
+            <MobileBotComputer
+              environmentId={environmentId}
+              connected={selected?.connected === true}
+              botId={member?.botId ?? null}
+              botName={botName}
+              workKey={`${workKey}#${props.workRevision ?? ""}`}
+            />
+          ),
+        },
+      ]),
+    );
   } else {
     homeItems.push(
       {
         key: "library",
+        card: "only",
         render: () => (
           <MobileBotLibrary
             environmentId={environmentId}
@@ -537,9 +704,10 @@ export function MobileBotWork(props: {
           />
         ),
       },
-      sectionLabel("notes-label", "Notes"),
+      sectionLabel("notes-label", "Memory"),
       {
         key: "notes",
+        card: "only",
         render: () => (
           <MobileBotMemory
             environmentId={environmentId}
@@ -565,15 +733,26 @@ export function MobileBotWork(props: {
     );
   }
   const routinesIndex = homeItems.findIndex((item) => item.key === "routines");
+  // oxlint-disable-next-line goat/react-effect-budget -- Discard retries when a parent closes the sheet.
+  useEffect(() => {
+    if (open) return;
+    lastScroll.current = null;
+    scrollRetry.current = null;
+  }, [open, lastScroll, scrollRetry]);
+  // oxlint-disable-next-line goat/react-effect-budget -- Return to a newly revealed task after the list has mounted it.
+  useEffect(() => {
+    if (returnKey === null || !open) return;
+    scrollHome({ key: returnKey, viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE });
+    // oxlint-disable-next-line react/set-state-in-effect -- Consume this one-shot scroll after the list has mounted the revealed row.
+    setReturnKey(null);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The request, not list rebuilds, initiates this scroll.
+  }, [returnKey, open]);
   // oxlint-disable-next-line goat/react-effect-budget -- Bring the routines entry into the virtualized list so a focused routine's row mounts and can refine the scroll.
   useEffect(() => {
     if (routineFocus === null || routinesIndex < 0) return;
     if (routineLanded.current === routineFocus.seq) return;
-    const scroll = { index: routinesIndex, viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE };
-    lastScroll.current = scroll;
-    scrollRetry.current = null;
-    scrollAttempts.current = 0;
-    listRef.current?.scrollToIndex(scroll);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The focus and target index drive the landing, not list rebuilds.
+    scrollHome({ key: "routines", viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE });
   }, [
     routineFocus,
     routinesIndex,
@@ -616,64 +795,16 @@ export function MobileBotWork(props: {
             <Text className="text-foreground-muted">Task not found.</Text>
           ) : null}
           {task ? (
-            <View className="flex-row flex-wrap gap-3">
-              {environmentId &&
-              capabilities?.goatBotTaskRetry === true &&
-              isRetryableTaskStatus(task.row.task.status) ? (
-                <MobileTaskRetry
-                  environmentId={environmentId}
-                  taskId={task.row.task.taskId}
-                  onStarted={threads.refresh}
-                />
-              ) : null}
-              <Pressable
-                accessibilityRole="button"
-                className="min-h-[44px] justify-center"
-                onPress={() =>
-                  void update({ taskId: task.row.task.taskId, pinned: !task.row.view.pinnedAt })
-                }
-              >
-                <Text className="text-foreground">{task.row.view.pinnedAt ? "Unpin" : "Pin"}</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                className="min-h-[44px] justify-center"
-                onPress={() =>
-                  void update({ taskId: task.row.task.taskId, done: !task.row.view.doneAt })
-                }
-              >
-                <Text className="text-foreground">
-                  {task.row.view.doneAt ? "Reopen" : "Mark done"}
-                </Text>
-              </Pressable>
-              {task.threads.map((thread) => (
-                <Pressable
-                  key={`${thread.environmentId}:${thread.threadId}`}
-                  accessibilityRole="button"
-                  className="min-h-[44px] justify-center"
-                  onPress={() =>
-                    props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
-                  }
-                >
-                  <Text className="text-foreground underline">Open work thread</Text>
-                </Pressable>
-              ))}
-              {task.remote.map((item) => (
-                <MobileBotRemoteWork
-                  key={item.childWorkId}
-                  item={item}
-                  onOpenThread={props.onOpenThread}
-                />
-              ))}
-              {task.subagents.map((agent) => (
-                <Text key={agent.childWorkId} className="text-foreground-muted">
-                  {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-                </Text>
-              ))}
-              {children.error ? (
-                <Text className="text-danger-foreground">Couldn't load subagents.</Text>
-              ) : null}
-            </View>
+            <MobileTaskActions
+              task={task}
+              environmentId={environmentId ?? null}
+              enabled={enabled}
+              canRetry={capabilities?.goatBotTaskRetry === true}
+              childError={children.error !== null}
+              onUpdate={(input) => void update(input)}
+              onRetried={threads.refresh}
+              onOpenThread={props.onOpenThread}
+            />
           ) : null}
           {props.taskCard}
         </View>
@@ -707,13 +838,25 @@ export function MobileBotWork(props: {
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
         <View className="flex-1 bg-screen px-4 pt-4">
-          <Pressable
-            accessibilityRole="button"
-            onPress={closeSheet}
-            className="min-h-[44px] self-start justify-center px-2"
-          >
-            <Text className="text-foreground">Close</Text>
-          </Pressable>
+          <View className="flex-row items-center justify-between">
+            <Pressable
+              accessibilityRole="button"
+              onPress={closeSheet}
+              className="min-h-[44px] self-start justify-center px-2"
+            >
+              <Text className="text-foreground">Close</Text>
+            </Pressable>
+            {props.onEditBot ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit bot"
+                onPress={props.onEditBot}
+                className="min-h-[44px] min-w-[44px] items-center justify-center"
+              >
+                <SymbolView name="pencil" size={18} tintColorClassName="accent-icon-muted" />
+              </Pressable>
+            ) : null}
+          </View>
           {/* The status card scrolls away and the tab row sticks, so large text still leaves
               room for the list. */}
           {/* The keyboard insets the list, so a note's wording field and its buttons can scroll
@@ -724,26 +867,43 @@ export function MobileBotWork(props: {
             testID="goat-bot-home-scroll"
             data={homeItems}
             keyExtractor={(item) => item.key}
-            renderItem={({ item }) => <>{item.render()}</>}
+            renderItem={({ item }) =>
+              item.card ? (
+                <View
+                  className={`min-h-[44px] justify-center border-border bg-grouped-card px-3 ${item.card === "first" || item.card === "only" ? "rounded-t-2xl" : ""} ${item.card === "last" || item.card === "only" ? "rounded-b-2xl" : ""}`}
+                  style={{
+                    borderLeftWidth: StyleSheet.hairlineWidth,
+                    borderRightWidth: StyleSheet.hairlineWidth,
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderBottomWidth:
+                      item.card === "last" || item.card === "only" ? StyleSheet.hairlineWidth : 0,
+                  }}
+                >
+                  {item.render()}
+                </View>
+              ) : (
+                <>{item.render()}</>
+              )
+            }
             // A routine row far down Home may not be measured yet: land near it, then try again.
             onScrollToIndexFailed={(info) => {
               const scroll = lastScroll.current;
-              const retry =
+              const current =
                 scroll !== null &&
-                scroll.index === info.index &&
-                scrollAttempts.current < SCROLL_RETRIES;
+                homeItems.findIndex((item) => item.key === scroll.key) === info.index;
+              const retry = current && scrollAttempts.current < SCROLL_RETRIES;
               if (retry) scrollAttempts.current += 1;
               scrollRetry.current = retry ? scroll : null;
-              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
+              if (current)
+                listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
             }}
             onContentSizeChange={() => {
               const retry = scrollRetry.current;
               if (retry === null) return;
               scrollRetry.current = null;
-              listRef.current?.scrollToIndex(retry);
+              attemptScroll(retry);
             }}
             stickyHeaderIndices={[1]}
-            contentContainerClassName="gap-2"
             contentContainerStyle={{ paddingBottom: bottomInset }}
             initialNumToRender={12}
             windowSize={7}
@@ -761,7 +921,7 @@ export function MobileBotWork(props: {
                 rows={rows}
                 connected={selected?.connected === true}
                 machineLabel={selected?.label ?? botName}
-                onBack={() => setPeekTaskId(null)}
+                onBack={leavePeek}
                 onOpenThread={(thread) => {
                   closeSheet();
                   props.onOpenThread(thread);
@@ -776,57 +936,5 @@ export function MobileBotWork(props: {
         </View>
       </Modal>
     </>
-  );
-}
-
-function MobileTaskRetry(props: {
-  readonly environmentId: EnvironmentId;
-  readonly taskId: ChannelTaskId;
-  readonly onStarted: () => void;
-}) {
-  const canRetry = useAtomValue(channelEnvironment.retryTask.permissionAtom(props.environmentId));
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  if (!canRetry) return null;
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setProblem(null);
-    const result = await runAtomCommand(
-      appAtomRegistry,
-      channelEnvironment.retryTask,
-      {
-        environmentId: props.environmentId,
-        input: { taskId: props.taskId, clientRequestId: uuidv4() },
-      },
-      { label: "GOAT Bot task retry", reportFailure: false },
-    );
-    setBusy(false);
-    if (result._tag === "Success") {
-      if (result.value.status === "refused") setProblem(retryRefusalText(result.value.reason));
-      else props.onStarted();
-      return;
-    }
-    if (isAtomCommandInterrupted(result)) return;
-    const failure = squashAtomCommandFailure(result);
-    setProblem(`Couldn't retry: ${failure instanceof Error ? failure.message : String(failure)}`);
-  };
-  return (
-    <View className="gap-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: busy }}
-        disabled={busy}
-        onPress={() => void run()}
-        className="min-h-[44px] justify-center"
-      >
-        <Text className="text-foreground">Retry</Text>
-      </Pressable>
-      {problem !== null ? (
-        <Text accessibilityRole="alert" className="text-danger-foreground">
-          {problem}
-        </Text>
-      ) : null}
-    </View>
   );
 }
