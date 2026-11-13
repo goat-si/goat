@@ -175,9 +175,10 @@ const question: Extract<GoatBotRow, { kind: "bot" }> = {
   answerQuestionId: "q1",
 };
 
-function ChatFixture({ folded = false }: { folded?: boolean }) {
+function ChatFixture({ folded = false, sibling = false }: { folded?: boolean; sibling?: boolean }) {
   const [sent, setSent] = useState(false);
   const [extra, setExtra] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
   const initial = folded ? [...rows.slice(0, 10), question, ...rows.slice(10)] : rows;
   const sentRow: GoatBotRow = {
     ...(rows[0] as Extract<GoatBotRow, { kind: "user" }>),
@@ -191,13 +192,19 @@ function ChatFixture({ folded = false }: { folded?: boolean }) {
     : folded
       ? [
           ...rows.slice(0, 10),
-          { ...question, options: [], answer: "Keep", answerIndex: 0, answerSending: true },
+          { ...question, options: [], answer: "Keep", answerIndex: 0, answerSending: !confirmed },
           ...rows.slice(10),
         ]
       : [...rows, sentRow];
   return (
     <div style={{ display: "flex", height: 400, width: 360 }}>
       <button onClick={() => setExtra(true)}>Deliver remote reply</button>
+      <button onClick={() => setConfirmed(true)}>Confirm answer</button>
+      {sibling ? (
+        <div style={{ display: "flex", width: 360, height: 400 }}>
+          <GoatBotTimeline rows={display} onRetry={() => {}} />
+        </div>
+      ) : null}
       <GoatBotChatView
         availability={{
           kind: "ready",
@@ -208,6 +215,10 @@ function ChatFixture({ folded = false }: { folded?: boolean }) {
         legacyAgentRoute={null}
         onRetryInput={() => {}}
         onSend={() => {
+          setSent(true);
+          return "local-1" as unknown as boolean;
+        }}
+        onSendToTask={() => {
           setSent(true);
           return "local-1" as unknown as boolean;
         }}
@@ -229,6 +240,31 @@ it("failing-first: the person's composer send follows its pending row without mo
   expect(document.activeElement).toBe(screen.container.querySelector("textarea"));
 });
 
+it("failing-first: a main-chat task choice follows only the initiating timeline", async () => {
+  await using screen = await render(<ChatFixture folded sibling />);
+  const elements = [
+    ...screen.container.querySelectorAll<HTMLElement>(".goat-timeline > div:first-child"),
+  ];
+  expect(elements).toHaveLength(2);
+  const [other, main] = elements as [HTMLElement, HTMLElement];
+  await act(() => {
+    other.scrollTop = 0;
+    other.dispatchEvent(new Event("scroll"));
+    main.scrollTop = 0;
+    main.dispatchEvent(new Event("scroll"));
+  });
+  const cards = [...screen.container.querySelectorAll<HTMLElement>('[data-bot-row="question"]')];
+  const pick = [...cards[1]!.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Keep"),
+  );
+  expect(pick).toBeDefined();
+  await act(() => pick!.click());
+  expect(cards[1]!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    main.getBoundingClientRect().bottom + 1,
+  );
+  expect(other.scrollTop).toBe(0);
+});
+
 it("failing-first: a reply below a folded-answer anchor still raises the cue", async () => {
   await using screen = await render(<ChatFixture folded />);
   const element = scroller(screen.container);
@@ -240,12 +276,61 @@ it("failing-first: a reply below a folded-answer anchor still raises the cue", a
     screen.getByRole("textbox", { name: /Message GOAT Bot|Which option/ }),
     "Keep{Enter}",
   );
+  const anchor = screen.container.querySelector<HTMLElement>('[data-bot-row="question"]')!;
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  expect(distanceFromBottom(element)).toBeGreaterThan(48);
   await userEvent.click(screen.getByRole("button", { name: "Deliver remote reply" }));
   expect(
     [...screen.container.querySelectorAll("button")].some((button) =>
       button.textContent?.includes("Jump to latest"),
     ),
   ).toBe(true);
+});
+
+it("failing-first: a folded answer stays anchored across confirmation and resize until manual scroll", async () => {
+  await using screen = await render(<ChatFixture folded />);
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await userEvent.type(
+    screen.getByRole("textbox", { name: /Message GOAT Bot|Which option/ }),
+    "Keep{Enter}",
+  );
+  const anchor = screen.container.querySelector<HTMLElement>('[data-bot-row="question"]')!;
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  const confirm = [...screen.container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Confirm answer",
+  )!;
+  await act(() => confirm.click());
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  const list = element.querySelector("ol")!;
+  await afterResize(list, () =>
+    act(() => {
+      list.style.paddingTop = "100px";
+    }),
+  );
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  expect(document.activeElement).toBe(screen.container.querySelector("textarea"));
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await afterResize(list, () =>
+    act(() => {
+      list.style.paddingTop = "200px";
+    }),
+  );
+  expect(element.scrollTop).toBe(0);
 });
 
 it("failing-first: jump focuses the first new reply and bottom scrolling clears the cue", async () => {
@@ -445,6 +530,29 @@ it("guard: retrying an existing send or receiving another device's send does not
     />,
   );
   expect(element.scrollTop).toBe(0);
+});
+
+it("failing-first: an empty loaded baseline treats the first later reply as new", async () => {
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  const baselineIds = new Set<string>();
+  const view = (shown: ReadonlyArray<GoatBotRow>, sourceIds: ReadonlySet<string>) => (
+    <GoatBotTimeline rows={shown} onRetry={() => {}} {...{ baselineIds, sourceIds }} />
+  );
+  await using screen = await render(view([], new Set()), { container: host, router: false }); // No links in these rows.
+  await screen.rerender(view(rows, new Set(rows.map((row) => row.id))));
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const next = [...rows, reply("first-reply")];
+  await screen.rerender(view(next, new Set(next.map((row) => row.id))));
+  expect(
+    [...screen.container.querySelectorAll("button")].some((button) =>
+      button.textContent?.includes("Jump to latest"),
+    ),
+  ).toBe(true);
 });
 
 it("failing-first: manually returning to bottom clears a cue permanently", async () => {
