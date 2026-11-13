@@ -301,3 +301,5 @@ describe("a task question's answer is what the server recorded", () => {
     expect(choices).toEqual(["A. Keep", "B. Clear", "Something else"]);
   });
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

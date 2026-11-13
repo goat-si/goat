@@ -428,15 +428,6 @@ vi.mock("@legendapp/list/react-native", async () => {
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
 }));
-vi.mock("../../lib/appState", () => ({
-  useAppActive: () => device.appState === "active",
-  useReduceMotionEnabled: () => false,
-}));
-vi.mock("../../state/entities", () => ({ useThreadShell: () => screenSession.faceShell }));
-vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () => [] }));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: null }),
-}));
 vi.mock("@react-navigation/native", () => ({
   useIsFocused: () => device.focused,
   useNavigation: () => ({ dispatch: () => {} }),

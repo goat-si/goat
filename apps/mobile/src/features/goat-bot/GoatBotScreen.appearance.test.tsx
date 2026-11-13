@@ -23,6 +23,15 @@ import {
 } from "./goatBotScreenTestHarness";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
+vi.mock("../../lib/appState", () => ({
+  useAppActive: () => true,
+  useReduceMotionEnabled: () => false,
+}));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => screenSession.faceShell }));
+vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () => [] }));
+vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ botRef: null }),
+}));
 
 it("shows the bot's waiting state in the Home hero", async () => {
   screenSession.activity = {
