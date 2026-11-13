@@ -541,10 +541,10 @@ export const make = Effect.gen(function* () {
     )
       return yield* fail("provisioner_refused", refusalText.provisioner_refused);
     yield* requireFeatures;
-    const member = yield* pen.isMember(input.signPub);
-    if (member === undefined)
+    const members = yield* pen.members;
+    if (members === undefined)
       return yield* fail("pen_unsupported", "This hub's Pen member list could not be read.");
-    if (member)
+    if (members.has(input.signPub))
       return yield* fail(
         "key_in_use",
         "That key is already a Pen member; remove it from Pen first.",
@@ -649,11 +649,15 @@ export const make = Effect.gen(function* () {
    * stored before any cancel is sent, a terminal state before Pen is told to forget it, and an
    * admitted key is released only when Pen's view no longer has it.
    */
-  const settleRecord = Effect.fn("DisposableAttach.settleRecord")(function* (start: Row) {
+  const settleRecord = Effect.fn("DisposableAttach.settleRecord")(function* (
+    start: Row,
+    members: Effect.Effect<ReadonlySet<string> | undefined> = pen.members,
+  ) {
     let row = start;
     let effects = effectsOf(row);
     if (row.pen_admitted_at !== null && row.pen_removed_at === null) {
-      if ((yield* pen.isMember(row.expected_sign_pub)) === false) {
+      const view = yield* members;
+      if (view !== undefined && !view.has(row.expected_sign_pub)) {
         row = yield* save(row, effects, {
           pen_removed_at: yield* nowIso,
           ...(row.final_at === null ? { state: "failed" } : {}),
@@ -726,12 +730,14 @@ export const make = Effect.gen(function* () {
     const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
       WHERE (${sql.unsafe(OPEN)}) OR (${sql.unsafe(IN_PEN)}) OR ${sql.unsafe(OWES_ACK)}
       ORDER BY created_at LIMIT 1000`.pipe(Effect.mapError(storageFailed));
-    for (const { attach_id } of due) yield* settleOne(attach_id);
+    // One read of Pen's member list serves every admitted record in the pass.
+    const members = yield* Effect.cached(pen.members);
+    for (const { attach_id } of due) yield* settleOne(attach_id, members);
   }).pipe(Effect.withSpan("DisposableAttach.reconcile"));
-  const settleOne = (attachId: string) =>
+  const settleOne = (attachId: string, members?: Effect.Effect<ReadonlySet<string> | undefined>) =>
     exclusive(
       Effect.flatMap(read(attachId), (row) =>
-        row === undefined ? Effect.void : Effect.asVoid(settleRecord(row)),
+        row === undefined ? Effect.void : Effect.asVoid(settleRecord(row, members)),
       ),
     );
   const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await);

@@ -154,16 +154,15 @@ const make = Effect.gen(function* () {
       Effect.map((features) => (features === undefined ? new Set<string>() : new Set(features))),
       Effect.orElseSucceed(() => undefined),
     ),
-    isMember: Effect.fn("PenInvites.isMember")(function* (signPub) {
-      return yield* ask({ op: "ls" }).pipe(
-        Effect.map((line) =>
-          Option.getOrUndefined(
-            Option.map(decodeLs(line), (ls) => ls.members.some((m) => m.signPub === signPub)),
-          ),
+    members: ask({ op: "ls" }).pipe(
+      Effect.map((line) =>
+        Option.getOrUndefined(
+          Option.map(decodeLs(line), (ls) => new Set(ls.members.map((m) => m.signPub))),
         ),
-        Effect.orElseSucceed(() => undefined),
-      );
-    }),
+      ),
+      Effect.orElseSucceed(() => undefined),
+      Effect.withSpan("PenInvites.members"),
+    ),
     mint: Effect.fn("PenInvites.mint")(function* ({ subject, mintId, expiresAtMs }) {
       return yield* ask({ op: "invite", subject, mintId, expiresAt: expiresAtMs }).pipe(
         Effect.flatMap((line) => answer(decodeMinted(line), "invite")),

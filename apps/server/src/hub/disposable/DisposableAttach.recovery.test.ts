@@ -360,3 +360,18 @@ it.effect("a goatclaw policy change while the grant resolves refuses the first m
     }),
   ),
 );
+
+it.effect("one pass reads Pen's member list once, however many machines it admitted", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      const second = yield* attach(2);
+      pen.control.join(first.attachId + ".1", true);
+      pen.control.join(second.attachId + ".1", true);
+      yield* reconcile;
+      pen.control.membersAsked = 0;
+      yield* reconcile;
+      expect(pen.control.membersAsked).toBe(1);
+    }),
+  ),
+);

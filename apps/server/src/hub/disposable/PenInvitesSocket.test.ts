@@ -98,8 +98,9 @@ it.live("speaks Pen's bound-invite ops on its control socket and reads only what
       });
       const invites = yield* PenInvites;
       expect(yield* invites.features).toEqual(new Set(["invite.subject/1", "invite.status/1"]));
-      expect(yield* invites.isMember(SIGN)).toBe(true);
-      expect(yield* invites.isMember(Buffer.alloc(32, 2).toString("base64url"))).toBe(false);
+      const members = yield* invites.members;
+      expect(members?.has(SIGN)).toBe(true);
+      expect(members?.has(Buffer.alloc(32, 2).toString("base64url"))).toBe(false);
       const subject = { signPub: SIGN, noisePub: SIGN, name: "cc-1" };
       expect(yield* invites.mint({ subject, mintId: "m-1", expiresAtMs: 5 })).toEqual({
         inviteId: "inv-1",

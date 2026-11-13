@@ -64,8 +64,8 @@ export class PenInvites extends Context.Service<
   {
     /** Pen's features; undefined when Pen cannot be asked. */
     readonly features: Effect.Effect<ReadonlySet<string> | undefined>;
-    /** Whether a signing key is a member of the hub's Pen view; undefined when unreadable. */
-    readonly isMember: (signPub: string) => Effect.Effect<boolean | undefined>;
+    /** The signing keys of the hub's Pen view; undefined when unreadable. */
+    readonly members: Effect.Effect<ReadonlySet<string> | undefined>;
     readonly mint: (input: {
       readonly subject: PenSubject;
       readonly mintId: string;

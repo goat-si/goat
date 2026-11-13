@@ -66,6 +66,8 @@ export const fakePen = () => {
     features: new Set<string>(PEN_ATTACH_FEATURES),
     /** How many times GOAT asked Pen for its features. */
     featuresAsked: 0,
+    /** How many times GOAT read Pen's member list. */
+    membersAsked: 0,
     /** Awaited before the mint touches the book, so a test can hold or interrupt it. */
     mintGate: undefined as Deferred.Deferred<void> | undefined,
     mintStarted: undefined as Deferred.Deferred<void> | undefined,
@@ -108,7 +110,10 @@ export const fakePen = () => {
       control.featuresAsked += 1;
       return control.features;
     }),
-    isMember: (signPub) => Effect.sync(() => members.has(signPub)),
+    members: Effect.sync(() => {
+      control.membersAsked += 1;
+      return new Set(members);
+    }),
     mint: ({ subject, mintId, expiresAtMs }) =>
       Effect.gen(function* () {
         if (control.mintStarted) yield* Deferred.succeed(control.mintStarted, undefined);
