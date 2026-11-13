@@ -13,9 +13,18 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
-import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "../ui/dialog";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function DisposableMachinesSettings({
@@ -74,11 +83,15 @@ export function DisposableMachinesSettings({
       else setError("The invite was not returned. Reissue it again if needed.");
     }
   }
+  const expires =
+    settings.enabled && settings.expiresAt !== null
+      ? ` Consent ends ${new Date(settings.expiresAt).toLocaleString()}.`
+      : "";
   return (
-    <SettingsSection title="Attach disposable machines">
+    <SettingsSection title="Disposable machines">
       <SettingsRow
         title="Attach disposable machines"
-        description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.`}
+        description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${expires}`}
         control={
           <Switch
             aria-label="Attach disposable machines"
@@ -88,17 +101,47 @@ export function DisposableMachinesSettings({
           />
         }
       />
-      <div className="space-y-3 p-4">
-        <p>Consent expires: {settings.expiresAt ?? "Not set"}</p>
-        <div>
-          <strong>Provisioner thread IDs</strong>
-          <ul>
+      <SettingsRow
+        title="Provisioner threads"
+        description="Threads that may attach machines, by thread id."
+        control={
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Thread ID"
+              size="sm"
+              className="w-56"
+              value={thread}
+              onChange={(event) => setThread(event.target.value)}
+            />
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={
+                !available ||
+                !thread.trim() ||
+                settings.provisioners.some((id) => id === thread.trim()) ||
+                settings.provisioners.length >= 32
+              }
+              onClick={() => {
+                const id = ThreadId.make(thread.trim());
+                void update({ provisioners: [...settings.provisioners, id] });
+                setThread("");
+              }}
+            >
+              Add thread
+            </Button>
+          </div>
+        }
+      >
+        {settings.provisioners.length > 0 && (
+          <ul className="space-y-1 pb-2 text-muted-foreground text-xs">
             {settings.provisioners.map((id) => (
-              <li key={id}>
-                {id}{" "}
+              <li key={id} className="flex items-center gap-2">
+                <span className="font-mono">{id}</span>
                 <Button
                   size="xs"
-                  variant="outline"
+                  variant="ghost"
+                  aria-label={`Remove ${id}`}
                   disabled={!available}
                   onClick={() =>
                     void update({
@@ -106,103 +149,119 @@ export function DisposableMachinesSettings({
                     })
                   }
                 >
-                  Remove {id}
+                  Remove
                 </Button>
               </li>
             ))}
           </ul>
-        </div>
-        <div className="flex gap-2">
-          <Input
-            aria-label="Thread ID"
-            value={thread}
-            onChange={(event) => setThread(event.target.value)}
-          />
-          <Button
-            size="xs"
-            disabled={
-              !available ||
-              !thread.trim() ||
-              settings.provisioners.some((id) => id === thread.trim()) ||
-              settings.provisioners.length >= 32
-            }
-            onClick={() => {
-              const id = ThreadId.make(thread.trim());
-              void update({ provisioners: [...settings.provisioners, id] });
-              setThread("");
-            }}
-          >
-            Add thread
-          </Button>
-        </div>
-        <div className="flex gap-2">
-          <label>
-            Machine cap{" "}
+        )}
+      </SettingsRow>
+      <SettingsRow
+        title="Machine cap"
+        description="How many disposable machines may hold a place in Pen at once."
+        control={
+          <div className="flex items-center gap-2">
             <Input
               aria-label="Machine cap"
+              size="sm"
+              className="w-20"
               type="number"
               min={1}
               max={100}
               value={cap}
               onChange={(event) => setCap(event.target.value)}
             />
-          </label>
-          <Button
-            size="xs"
-            disabled={
-              !available || !Number.isInteger(Number(cap)) || Number(cap) < 1 || Number(cap) > 100
-            }
-            onClick={() => void update({ cap: Number(cap) })}
-          >
-            Save cap
-          </Button>
-        </div>
-        <div className="flex gap-2">
-          <label>
-            Name rule{" "}
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={
+                !available ||
+                !Number.isInteger(Number(cap)) ||
+                Number(cap) < 1 ||
+                Number(cap) > 100 ||
+                Number(cap) === settings.cap
+              }
+              onClick={() => void update({ cap: Number(cap) })}
+            >
+              Save cap
+            </Button>
+          </div>
+        }
+      />
+      <SettingsRow
+        title="Name rule"
+        description="Names machines may take: letters, digits, - _ ., classes such as [a-z0-9-] and counts such as {0,30}."
+        control={
+          <div className="flex items-center gap-2">
             <Input
               aria-label="Name rule"
+              size="sm"
+              className="w-56"
               value={rule}
               onChange={(event) => setRule(event.target.value)}
             />
-          </label>
-          <Button size="xs" disabled={!available} onClick={() => void update({ nameRule: rule })}>
-            Save rule
-          </Button>
-        </div>
-        {error && <p role="alert">{error}</p>}
-        {list.error && <p role="alert">{list.error}</p>}
-        <Button size="xs" variant="outline" onClick={list.refresh}>
-          Refresh machines
-        </Button>
-        <ul aria-label="Disposable machines">
-          {list.data?.machines.map((machine) => (
-            <li key={machine.attachId}>
-              <strong>{machine.name}</strong> · {machine.state} · {machine.message} ·{" "}
-              {machine.provisioner.kind === "person"
-                ? "Person"
-                : `Thread ${machine.provisioner.threadId}`}
-              {machine.penMember ? " · Still in Pen" : ""}
-              {machine.state === "invited" && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={!canReissue || busy || !hub.enabled}
-                  onClick={() => void reissueInvite(machine.attachId)}
-                >
-                  Reissue {machine.name}
-                </Button>
-              )}
-            </li>
-          ))}
-        </ul>
-        <Button
-          disabled={!canAttach || busy || !hub.enabled || !settings.enabled}
-          onClick={() => setDialog({ kind: "attach" })}
-        >
-          Attach a machine
-        </Button>
-      </div>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!available || rule === settings.nameRule}
+              onClick={() => void update({ nameRule: rule })}
+            >
+              Save rule
+            </Button>
+          </div>
+        }
+      />
+      <SettingsRow
+        title="Machines"
+        description="Every machine attached this way, with who vouched for it and whether its key is still in Pen."
+        control={
+          <div className="flex items-center gap-2">
+            <Button size="xs" variant="outline" onClick={list.refresh}>
+              Refresh machines
+            </Button>
+            <Button
+              size="xs"
+              disabled={!canAttach || busy || !hub.enabled || !settings.enabled}
+              onClick={() => setDialog({ kind: "attach" })}
+            >
+              Attach a machine
+            </Button>
+          </div>
+        }
+      >
+        {(error || list.error) && (
+          <p role="alert" className="pb-2 text-destructive text-xs">
+            {error ?? list.error}
+          </p>
+        )}
+        {(list.data?.machines.length ?? 0) > 0 && (
+          <ul aria-label="Disposable machines" className="space-y-1 pb-2 text-xs">
+            {list.data?.machines.map((machine) => (
+              <li key={machine.attachId} className="flex items-center gap-2">
+                <span className="font-medium">{machine.name}</span>
+                <span className="text-muted-foreground">
+                  {machine.message} ·{" "}
+                  {machine.provisioner.kind === "person"
+                    ? "a person"
+                    : `thread ${machine.provisioner.threadId}`}
+                  {machine.penMember ? " · Still in Pen" : ""}
+                </span>
+                {machine.state === "invited" && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    aria-label={`Reissue ${machine.name}`}
+                    disabled={!canReissue || busy || !hub.enabled}
+                    onClick={() => void reissueInvite(machine.attachId)}
+                  >
+                    Reissue
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsRow>
       {dialog && (
         <AttachDialog
           environmentId={environmentId}
@@ -258,47 +317,74 @@ function AttachDialog({
         if (!open) onClose();
       }}
     >
-      <DialogPopup>
-        <DialogTitle>Attach a machine</DialogTitle>
-        <DialogDescription>Use the keys from pen identity --json on the machine.</DialogDescription>
-        {invite ? (
-          <div>
-            <p>This invite token is a secret. Copy it now; it is shown only once.</p>
-            <p>Expires: {invite.expiresAt}</p>
-            <code>{invite.token}</code>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Attach a machine</DialogTitle>
+          <DialogDescription>
+            {invite
+              ? "This invite token is a secret. Copy it now; GOAT shows it only once."
+              : "Use the keys pen identity --json prints on the machine."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          {invite ? (
+            <div className="space-y-2">
+              <Textarea
+                readOnly
+                aria-label="Invite token"
+                value={invite.token}
+                rows={3}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <p className="text-muted-foreground text-xs">
+                Expires {new Date(invite.expiresAt).toLocaleString()}.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Input
+                aria-label="Machine name"
+                placeholder="Machine name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+              <Input
+                aria-label="Signing public key"
+                placeholder="signPub"
+                value={signPub}
+                onChange={(event) => setSignPub(event.target.value)}
+              />
+              <Input
+                aria-label="Noise public key"
+                placeholder="noisePub"
+                value={noisePub}
+                onChange={(event) => setNoisePub(event.target.value)}
+              />
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="text-destructive text-xs">
+              {error}
+            </p>
+          )}
+        </DialogPanel>
+        <DialogFooter variant="bare">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          {invite ? (
             <Button onClick={() => void navigator.clipboard.writeText(invite.token)}>
               Copy token
             </Button>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <Input
-              aria-label="Machine name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <Input
-              aria-label="Signing public key"
-              value={signPub}
-              onChange={(event) => setSignPub(event.target.value)}
-            />
-            <Input
-              aria-label="Noise public key"
-              value={noisePub}
-              onChange={(event) => setNoisePub(event.target.value)}
-            />
+          ) : (
             <Button
               disabled={!canAttach || busy || !name || !signPub || !noisePub}
               onClick={() => void submit()}
             >
               Create invite
             </Button>
-          </div>
-        )}
-        {error && <p role="alert">{error}</p>}
-        <Button variant="outline" onClick={onClose}>
-          Close
-        </Button>
+          )}
+        </DialogFooter>
       </DialogPopup>
     </Dialog>
   );
