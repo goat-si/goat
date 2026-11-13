@@ -287,12 +287,20 @@ these may look like success to a local program.
   - A command that has to wait for the turn says so at once, naming the holder from `start.holder`.
   - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
     `pen up` can find nothing to stop while the start completes; run `pen down` again.
+- **A pending AF_UNIX read can miss the other side's close.** A blocked read of the control socket may never return
+  after the peer half-closes or closes, so no read of a registration waits without a bound: both sides give way to a
+  fresh read every 30 s, and `pen service register` stops waiting for the node's close 30 s after its own half-close,
+  by a deadline that needs no close notice. Whether a fresh read sees a close the pending one missed is not
+  established, so the node's end of a registration whose holder is gone may still wait for a failed write, a newer
+  registration or the daemon's stop. GOAT stops its child without a half-close, so only the node ends GOAT's.
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
   while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
   that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's
   `cmd/internal/robustio`; past that the save fails and the file keeps its old content whole. A stale writer cannot
   win meanwhile: every write of those files reads the current file under the state lock (`LockFileEx`, which a
   second handle in the same process also waits for) and decides from it.
+  Readers such as `pen pipe` and `pen forward` take no lock, so parallel ProxyCommands never queue; an open that
+  lands during a replace can fail the same way, and `ReadJSON` retries it by the same rule (a missing file at once).
 - **Win32-OpenSSH starts ProxyCommand without a shell.** The command is quoted for CreateProcess, the state
   directory travels as `pen pipe --home`, and the config has no ControlMaster, which that ssh lacks.
 - **An sshd session's job ends its processes.** A `--no-service` daemon started over SSH tries to leave the job

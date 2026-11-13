@@ -4,6 +4,8 @@ import type {
   GoatHubOpenCodexSyncInput,
   HubDeviceMoveInput,
   HubDeviceOperationInput,
+  HubDeviceRoutesInput,
+  HubDeviceRoutesUpdateInput,
   HubMachineAttachInput,
   HubMachineListInput,
   HubMachineReissueInput,
@@ -109,6 +111,18 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
     ),
   ),
   goat_hub_opencodex_sync: openCodexSync,
+  goat_hub_device_routes: McpToolAccess.reads((input: HubDeviceRoutesInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* HubMembership.HubMembership).routes(scope, input);
+    }),
+  ),
+  goat_hub_device_routes_update: McpToolAccess.writes((input: HubDeviceRoutesUpdateInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* HubMembership.HubMembership).updateRoutes(scope, input);
+    }),
+  ),
   // The switch, the named thread and the grant are the service's checks; goatclaw narrows agents.
   goat_hub_machine_attach: McpToolAccess.writesAsCaller((input: HubMachineAttachInput) =>
     Effect.gen(function* () {

@@ -5,7 +5,6 @@ import {
   type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -16,7 +15,11 @@ import type * as Schema from "effect/Schema";
 
 import * as Settings from "../serverSettings.ts";
 import { decodeLinkRowRoute, type LinkRowObservationFields } from "./hubOcxJson.ts";
-import { makeLinkTrafficBook, type LinkTrafficView } from "./linkTrafficBook.ts";
+import {
+  makeLinkTrafficBook,
+  type LinkTrafficView,
+  type LinkTrafficWindow,
+} from "./linkTrafficBook.ts";
 import { readPenConfig } from "./penConfigFile.ts";
 import { penConfigHosts } from "./penSshRoute.ts";
 
@@ -49,6 +52,8 @@ export const baseLinkRow = ({
  * its alias, and does once its tunnel is connected.
  */
 function routeOf(row: LinkStatusRow, penAliases: ReadonlySet<string> | undefined) {
+  // A client-initiated link's SSH starts on the Child; its alias is only the Child's label here.
+  if (row.direction !== "hub-initiated") return undefined;
   const multi = row.routes !== undefined || row.route !== undefined;
   const named = multi ? Option.getOrNull(decodeLinkRowRoute(row.route)) : null;
   const proven =
@@ -67,6 +72,9 @@ function routeOf(row: LinkStatusRow, penAliases: ReadonlySet<string> | undefined
   };
 }
 
+/** A window as the contract carries it; webSocketMs only decides httpBodiesOnly. */
+const windowOf = ({ webSocketMs: _webSocketMs, ...window }: LinkTrafficWindow) => window;
+
 const relayBytes = (view: LinkTrafficView) =>
   view.day.relayToHomeBytes + view.day.relayFromHomeBytes;
 
@@ -81,7 +89,9 @@ export function deriveLinkRows(
   const routed = rows.map((row) => ({ row, route: routeOf(row, penAliases) }));
   book.observe(
     routed.flatMap(({ row, route }) =>
-      row.traffic === undefined ? [] : [{ linkId: row.id, traffic: row.traffic, route }],
+      row.traffic === undefined
+        ? []
+        : [{ linkId: row.id, traffic: row.traffic, route, webSocket: (row.ws?.open ?? 0) > 0 }],
     ),
     at,
   );
@@ -97,7 +107,13 @@ export function deriveLinkRows(
         ? {}
         : {
             traffic: {
-              ...view,
+              hour: windowOf(view.hour),
+              day: windowOf(view.day),
+              // OpenCodex's Home book counts relayed HTTP bodies, never link WebSocket payloads:
+              // say so while a WebSocket is open or its time is still inside the day.
+              ...((row.ws?.open ?? 0) > 0 || view.day.webSocketMs > 0
+                ? { httpBodiesOnly: true as const }
+                : {}),
               ...(warned ? { warning: { thresholdBytes: thresholds.deviceBytes } } : {}),
             },
           }),
@@ -123,6 +139,8 @@ export class HubLinkTraffic extends Context.Service<
   {
     readonly observe: (
       rows: ReadonlyArray<LinkStatusRow>,
+      /** When the ocx read started: an overlapping read that answers later is then the older one. */
+      at: number,
     ) => Effect.Effect<ReturnType<typeof deriveLinkRows>>;
   }
 >()("goat/hub/HubLinkTraffic") {}
@@ -134,8 +152,8 @@ export const make = Effect.fn("HubLinkTraffic.make")(function* (
   const book = makeLinkTrafficBook();
   const observe = Effect.fn("HubLinkTraffic.observe")(function* (
     rows: ReadonlyArray<LinkStatusRow>,
+    at: number,
   ) {
-    const at = yield* Clock.currentTimeMillis;
     const aliases = rows.length === 0 ? undefined : yield* penAliases;
     // A settings read that fails warns at the defaults rather than not at all.
     const configured = yield* settings.getSettings.pipe(

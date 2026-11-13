@@ -80,6 +80,9 @@ type serviceReg struct {
 	port   int
 	key    []byte
 	holder net.Conn
+	// liveMu guards draining: once the holder's drain starts it owns the connection's read deadline (rearm).
+	liveMu   sync.Mutex
+	draining bool
 	// wmu orders the holder's registered answer and a replaced notice.
 	wmu sync.Mutex
 	// ended and conns are guarded by serviceBook.mu: conns are the deliveries committed to it; once it ended,
@@ -468,7 +471,11 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	idb := make([]byte, 16)
 	rand.Read(idb)
 	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
-		out: newHolderQueue(c, func(c net.Conn) { d.spawn(func() { discardAndClose(ctx, c) }) }), endDone: make(chan struct{})}
+		endDone: make(chan struct{})}
+	reg.out = newHolderQueue(c, func(c net.Conn) {
+		reg.drainStarts()
+		d.spawn(func() { discardAndClose(ctx, c) })
+	})
 	reg.out.whileWriting = d.opt.HolderWriting
 	reg.out.whileFilling = d.opt.HolderFilling
 	reg.wmu.Lock()

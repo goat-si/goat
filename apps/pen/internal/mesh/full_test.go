@@ -14,7 +14,8 @@ import (
 )
 
 // N3: a member at its cap for ordinary records refuses the next one; the sync fails 4508 so the
-// sender sees it was not taken, instead of a done that claims it was.
+// sender sees it was not taken, instead of a done that claims it was. The refusal can reach the sender
+// before or after it wrote its done; it reads 4508 either way.
 func TestASyncIntoAFullMeshFailsForTheSender(t *testing.T) {
 	f := detID(1)
 	b, found := newMesh(t, f)
@@ -34,17 +35,40 @@ func TestASyncIntoAFullMeshFailsForTheSender(t *testing.T) {
 	if _, err := sender.Merge(append(recs, extra)); err != nil {
 		t.Fatal(err)
 	}
-	srv, cli := pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	go SyncRespond(ctx, srv, full, nil, nil)
-	err := SyncInitiate(ctx, cli, sender, nil, nil)
-	if relay.CodeOf(err) != wire.CodeMeshFull {
-		t.Fatalf("a push into a full mesh returned %v, want a 4508 failure", err)
+	for i := range 21 {
+		srv, cli := pipe()
+		var l Link = cli
+		held := i > 0
+		if held {
+			l = holdDone{cli, ctx}
+		}
+		go SyncRespond(ctx, srv, full, nil, nil)
+		if err := SyncInitiate(ctx, l, sender, nil, nil); relay.CodeOf(err) != wire.CodeMeshFull {
+			t.Fatalf("a push into a full mesh (done written after the refusal: %v) returned %v, want a 4508 failure", held, err)
+		}
 	}
 	if full.Has(extra.Hash) {
 		t.Fatal("setup: the full member stored the extra record")
 	}
+}
+
+// holdDone writes the sender's done line only once the session has closed, so the receiver's refusal
+// lands between the record and the done.
+type holdDone struct {
+	*pipeEnd
+	ctx context.Context
+}
+
+func (h holdDone) Send(b []byte) error {
+	if bytes.Contains(b, []byte(`"t":"done"`)) {
+		select {
+		case <-h.done:
+		case <-h.ctx.Done():
+		}
+	}
+	return h.pipeEnd.Send(b)
 }
 
 // syncTo runs one mesh session from a fresh pipe, first responding and second dialing.

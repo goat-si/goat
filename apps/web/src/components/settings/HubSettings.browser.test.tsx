@@ -59,6 +59,12 @@ vi.mock("../../state/server", () => ({
       run: state.completeChild,
       permissionAtom: state.permission,
     },
+    listHubDeviceRoutes: { label: "hub:routes", run: vi.fn(), permissionAtom: state.permission },
+    updateHubDeviceRoutes: {
+      label: "hub:routes-update",
+      run: vi.fn(),
+      permissionAtom: state.permission,
+    },
     hubNodesLive: ({ environmentId }: { environmentId: string }) => state.nodes.get(environmentId),
     checkHubNodes: {
       label: "nodes:check",

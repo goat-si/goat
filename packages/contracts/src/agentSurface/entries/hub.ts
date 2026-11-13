@@ -231,6 +231,44 @@ export const hubEntries = {
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
 
+  "hub.device_routes": entry({
+    resource: "hub",
+    verb: "device_routes",
+    name: "goat_hub_device_routes",
+    toolkit: "hostStatus",
+    summary: "List a Remote Link Child's SSH routes on this OpenCodex Home.",
+    description:
+      "List the SSH routes this machine's OpenCodex Home tries for a Remote Link Child, in order, and which one is the link's pinned alias. goat_host_status shows the route in use and whether it goes through a Pen relay.",
+    guide:
+      "Runs ocx link routes --link-id <id> --json on this Home for the link whose alias is deviceAlias. A Home whose OpenCodex has no ocx link routes answers state unsupported; update OpenCodex there. Needs hub.manage for deviceAlias.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
+  "hub.device_routes_update": entry({
+    resource: "hub",
+    verb: "device_routes_update",
+    name: "goat_hub_device_routes_update",
+    toolkit: "hostStatus",
+    operation: "handoff",
+    summary: "Add, remove or reorder a Remote Link Child's SSH routes on this OpenCodex Home.",
+    description:
+      "Change the SSH routes this machine's OpenCodex Home tries for a Remote Link Child: add one (optionally at a position), remove one, or set their order. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_routes to check the result.",
+    guide:
+      "Runs ocx link routes add|remove|order on this Home for the link whose alias is deviceAlias. A route is an ssh_config alias or user@host. OpenCodex stores an added route only after it proved the link's pinned host key over that route, and refuses removing the pinned alias; such refusals come back as state failed with OpenCodex's fixed code (route_unproven with its cause, route_exists, route_limit, route_is_pin, route_order_mismatch, route_not_found, link_not_found, invalid_link_id, link_changed, pin_changed, pin_mismatch, trust_file_unexpected, link_operation_in_progress, link_exclusive, link_not_home_initiated, invalid_body, routes_stored_reload_failed). link_exclusive means the link's one route was fixed at enrollment and cannot be edited; link_not_home_initiated means the Child opened the link itself, so the Home has no routes for it; invalid_body includes a position past the end of the list. ocx_unstartable means ocx could not be started on this hub, so nothing changed. routes_stored_reload_failed means the change was stored and applies after an OpenCodex restart. When ocx does not answer within 2 minutes the Home may still finish the change: read goat_hub_device_routes before retrying. A Home whose OpenCodex has no ocx link routes answers state unsupported. Needs hub.manage for deviceAlias and for every route the change names. An owner-profile caller changes routes directly; any other profile needs a person's approval bound to the link and this exact change. An outcome before ocx starts (ocx missing or not startable, no link, an unreadable link status, an interruption before the start) and a fixed refusal leave that approval unspent; any other outcome after ocx starts spends it. In a thread, approvals carry a handoff whose ID equals decisionId; otherwise they use the decision inbox.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: ["approval"],
+    idempotency: "key",
+    reconcile: "hub.device_routes",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
   "hub.opencodex_sync": entry({
     resource: "hub",
     verb: "opencodex_sync",

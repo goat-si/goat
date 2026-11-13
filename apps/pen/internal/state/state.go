@@ -94,9 +94,10 @@ func (s *Store) WriteJSON(name string, v any, perm os.FileMode) error {
 	return s.WriteAtomic(name, append(b, '\n'), perm)
 }
 
-// ReadJSON reads name into v; it reports false when the file does not exist.
+// ReadJSON reads name into v; it reports false when the file does not exist. It takes no lock, so a
+// reader never waits on another; on Windows it retries the moment a concurrent replace refuses the open.
 func (s *Store) ReadJSON(name string, v any) (bool, error) {
-	b, err := os.ReadFile(s.Path(name))
+	b, err := readFile(s.Path(name))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}

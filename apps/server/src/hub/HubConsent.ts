@@ -1,7 +1,8 @@
 /**
  * Who approves a hub membership change: a thread through a handoff whose id is its decisionId,
- * others through the decision inbox. Either is bound to the action, alias and key, and covers
- * that change until it succeeds once or expires; a failed attempt does not spend it.
+ * others through the decision inbox, bound to the action, alias and key until used or expired.
+ * Join, leave and move spend it on success; a route change on any outcome after ocx starts except
+ * a fixed refusal, since the Home may have the edit.
  */
 import {
   HUB_DEVICE_HANDOFF_PATHS,
@@ -132,7 +133,8 @@ export const makeHubConsent = Effect.gen(function* () {
 
   /**
    * Verifies the approval for this change without spending it; call it right before the change
-   * starts, under the membership permit, and call `used` once the change has happened.
+   * starts, under the membership permit, and call `used` once the change has happened (for a
+   * route change, once it may have).
    */
   const approved = Effect.fn("HubConsent.approved")(function* (
     caller: ConsentCaller,

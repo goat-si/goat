@@ -42,6 +42,8 @@ export const OpenCodexLinkRowFields = {
   state: Schema.Literals(["connecting", "connected", "reconnecting", "failed", "idle", "unknown"]),
   lastApplyAt: ForwardCompatibleOptional(Schema.Number),
   apiKeyId: Schema.optional(Schema.String),
+  /** Who opens the link's SSH: only a hub-initiated link has routes the Home can change. */
+  direction: ForwardCompatibleOptional(Schema.Literals(["hub-initiated", "client-initiated"])),
 };
 
 export const OpenCodexInventorySnapshot = Schema.Struct({

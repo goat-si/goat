@@ -7,6 +7,11 @@ import {
   HubDeviceOperationInput,
   HubDeviceOperationResult,
 } from "./hubDevice.ts";
+import {
+  HubDeviceRoutesInput,
+  HubDeviceRoutesResult,
+  HubDeviceRoutesUpdateInput,
+} from "./hubDeviceRoutes.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import { ChildReadyResult, HubDeviceSetupInput } from "./opencodexChildReady.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
@@ -19,6 +24,8 @@ export const HUB_DEVICE_WS_METHODS = {
   hubDeviceRepair: "hub.deviceRepair",
   hubDeviceChildOptIn: "hub.deviceChildOptIn",
   hubDeviceSetup: "hub.device_setup",
+  hubDeviceRoutes: "hub.deviceRoutes",
+  hubDeviceRoutesUpdate: "hub.deviceRoutesUpdate",
 } as const;
 
 const HubDeviceRpcError = Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]);
@@ -55,5 +62,17 @@ export const WsHubDeviceChildOptInRpc = Rpc.make(HUB_DEVICE_WS_METHODS.hubDevice
 export const WsHubDeviceSetupRpc = Rpc.make(HUB_DEVICE_WS_METHODS.hubDeviceSetup, {
   payload: HubDeviceSetupInput,
   success: ChildReadyResult,
+  error: HubDeviceRpcError,
+});
+/** A Remote Link Child's routes on the Home, the same as goat_hub_device_routes. */
+export const WsHubDeviceRoutesRpc = Rpc.make(HUB_DEVICE_WS_METHODS.hubDeviceRoutes, {
+  payload: HubDeviceRoutesInput,
+  success: HubDeviceRoutesResult,
+  error: HubDeviceRpcError,
+});
+/** A person adds, removes or reorders a Child's routes; their action is the approval. */
+export const WsHubDeviceRoutesUpdateRpc = Rpc.make(HUB_DEVICE_WS_METHODS.hubDeviceRoutesUpdate, {
+  payload: HubDeviceRoutesUpdateInput,
+  success: HubDeviceRoutesResult,
   error: HubDeviceRpcError,
 });

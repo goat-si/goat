@@ -122,6 +122,8 @@ type liveNode struct {
 	opened chan uint32
 	// frames receives each DATA and CLOSE frame as it arrives (dropped when full).
 	frames chan wire.Frame
+	// pongs receives each pong the relay sends the node (dropped when full).
+	pongs chan struct{}
 }
 
 func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
@@ -139,7 +141,7 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 		answer = relay.AnswerChallenge(id, lv.origin, ch)
 	}
 	ws.Write(ctx, websocket.MessageBinary, answer)
-	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024)}
+	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024), pongs: make(chan struct{}, 8)}
 	go func() {
 		total, last := uint64(len(ch)), uint64(0)
 		for {
@@ -148,6 +150,12 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 				return
 			}
 			if typ != websocket.MessageBinary {
+				if string(p) == "pong" {
+					select {
+					case n.pongs <- struct{}{}:
+					default:
+					}
+				}
 				continue
 			}
 			if total += uint64(len(p)); total-last >= wire.AckEvery {
