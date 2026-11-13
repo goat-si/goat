@@ -35,6 +35,8 @@ export function HubDeviceRoutes({
     exclusive: boolean;
   } | null>(null);
   const [answer, setAnswer] = useState<HubDeviceRoutesResult | null>(null);
+  // A read-back after a change fails on its own, beside the change's answer.
+  const [readError, setReadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
   const editable = canChange && routes?.exclusive !== true;
@@ -43,6 +45,10 @@ export function HubDeviceRoutes({
   const settle = (result: Awaited<ReturnType<typeof list>>, keepAnswer = false) => {
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
+      if (keepAnswer) {
+        setReadError(failure instanceof Error ? failure.message : String(failure));
+        return;
+      }
       setAnswer({
         deviceAlias: alias,
         state: "failed",
@@ -65,6 +71,7 @@ export function HubDeviceRoutes({
   };
   const change = async (next: HubDeviceRoutesChange) => {
     setBusy(true);
+    setReadError(null);
     const result = await update({ environmentId, input: { deviceAlias: alias, change: next } });
     settle(result);
     // A stored change that the Home could not apply yet still lists, so read it back.
@@ -183,6 +190,11 @@ export function HubDeviceRoutes({
           {busy ? "Working…" : "Add route"}
         </Button>
       </form>
+      {readError === null ? null : (
+        <p role="alert" className="text-destructive">
+          Could not read the routes again: {readError}
+        </p>
+      )}
       {answer === null || (answer.state === "ok" && answer.code === undefined) ? null : (
         <p
           role={answer.state === "failed" ? "alert" : "status"}

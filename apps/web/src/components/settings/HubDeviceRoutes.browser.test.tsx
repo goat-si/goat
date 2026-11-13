@@ -1,5 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { EnvironmentId, type HubDeviceRoutesResult } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import { AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -37,35 +38,64 @@ const listed = (routes: ReadonlyArray<string>) => ({
   } satisfies HubDeviceRoutesResult,
 });
 
-it("a change the Home stored but could not apply keeps saying so after the list is read back", async () => {
+const stored = {
+  _tag: "Success" as const,
+  value: {
+    deviceAlias: "mini",
+    state: "ok",
+    code: "routes_stored_reload_failed",
+    message:
+      "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
+    linkId: "lnk_0123456789abcdef",
+  } satisfies HubDeviceRoutesResult,
+};
+
+/** Opens the routes, adds mini-lan, and lets the read-back after the stored change answer `readBack`. */
+async function addStored(readBack: unknown) {
   state.list.mockReset().mockResolvedValueOnce(listed(["mini", "pen-mini"]));
-  state.update.mockReset().mockResolvedValueOnce({
-    _tag: "Success",
-    value: {
-      deviceAlias: "mini",
-      state: "ok",
-      code: "routes_stored_reload_failed",
-      message:
-        "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
-      linkId: "lnk_0123456789abcdef",
-    } satisfies HubDeviceRoutesResult,
-  });
+  state.update.mockReset().mockResolvedValueOnce(stored);
+  await using stack = new AsyncDisposableStack();
   const registry = AtomRegistry.make();
-  await using screen = await render(
-    <RegistryContext value={registry}>
-      <HubDeviceRoutes environmentId={EnvironmentId.make("hub")} alias="mini" />
-    </RegistryContext>,
+  stack.defer(() => registry.dispose());
+  const screen = stack.use(
+    await render(
+      <RegistryContext value={registry}>
+        <HubDeviceRoutes environmentId={EnvironmentId.make("hub")} alias="mini" />
+      </RegistryContext>,
+    ),
   );
   await userEvent.click(screen.getByRole("button", { name: "Routes" }));
   await expect.element(screen.getByText("pen-mini")).toBeVisible();
-  state.list.mockResolvedValueOnce(listed(["mini-lan", "mini", "pen-mini"]));
+  state.list.mockResolvedValueOnce(readBack);
   await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
   await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  const opened = stack.move();
+  return { screen, [Symbol.asyncDispose]: () => opened.disposeAsync() };
+}
+
+it("a change the Home stored but could not apply keeps saying so after the list is read back", async () => {
+  await using opened = await addStored(listed(["mini-lan", "mini", "pen-mini"]));
+  const { screen } = opened;
   await expect.element(screen.getByText("mini-lan")).toBeVisible();
   await expect
     .element(screen.getByRole("status"))
     .toHaveTextContent(
       "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
     );
-  registry.dispose();
+});
+
+it("a read-back that fails after a stored change shows its error beside the stored notice", async () => {
+  await using opened = await addStored({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("connection lost")),
+  });
+  const { screen } = opened;
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Could not read the routes again: connection lost");
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent(
+      "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
+    );
 });
