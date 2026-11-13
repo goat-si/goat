@@ -3,8 +3,10 @@ package state
 import (
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -59,9 +61,31 @@ func TestReadJSONReportsAMissingFileOnWindowsAtOnce(t *testing.T) {
 	}
 }
 
-// A real handle opened with no sharing makes os.ReadFile fail with ERROR_SHARING_VIOLATION, as a
-// reader does when it meets a replace; once that handle closes, ReadJSON reads the file.
-func TestReadJSONReadsAFileOnceAnExclusiveHandleCloses(t *testing.T) {
+// Real handles on the hosted Windows runner (measured with a probe): a handle with write access and no sharing makes
+// Go's open fail with ERROR_SHARING_VIOLATION, and a target that a replace marked for deletion makes it fail with
+// ERROR_ACCESS_DENIED. A handle with read access only and no sharing does not refuse Go's open there, so these tests
+// hold the file the two ways that do.
+
+// holdFile opens path with access and share and returns the handle and its close, which runs once.
+func holdFile(t *testing.T, path string, access, share uint32) (windows.Handle, func()) {
+	t.Helper()
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, access, share, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { windows.CloseHandle(h) }) }
+	t.Cleanup(release)
+	return h, release
+}
+
+// A writer that holds the file with no sharing refuses the read with a sharing violation; once it closes,
+// ReadJSON reads the file.
+func TestReadJSONReadsAFileOnceAWriterHoldingItWithoutSharingCloses(t *testing.T) {
 	st, err := OpenDir(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -69,35 +93,57 @@ func TestReadJSONReadsAFileOnceAnExclusiveHandleCloses(t *testing.T) {
 	if err := st.WriteAtomic("config.json", []byte(`{"name":"n"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := windows.UTF16PtrFromString(st.Path("config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := false
-	t.Cleanup(func() {
-		if !closed {
-			windows.CloseHandle(h)
-		}
-	})
+	_, release := holdFile(t, st.Path("config.json"), windows.GENERIC_READ|windows.GENERIC_WRITE, 0)
 	var refused error
 	waits, _ := stubWindowsRead(t, func(name string) ([]byte, error) {
 		b, err := os.ReadFile(name)
 		if err != nil && refused == nil {
 			refused = err
-			closed = true
-			windows.CloseHandle(h)
+			release()
 		}
 		return b, err
 	})
 	var c Config
 	if ok, err := st.ReadJSON("config.json", &c); err != nil || !ok || c.Name != "n" {
-		t.Fatalf("ReadJSON = %v, %v, %+v; want the file read once the handle closed", ok, err, c)
+		t.Fatalf("ReadJSON = %v, %v, %+v; want the file read once the writer closed", ok, err, c)
 	}
 	if !errors.Is(refused, windows.ERROR_SHARING_VIOLATION) || len(*waits) == 0 {
 		t.Fatalf("the first read returned %v after %d waits; want a sharing violation and a retry", refused, len(*waits))
+	}
+}
+
+// A replace holds its target open for deletion until the new file takes its name; a read meanwhile is denied. Once the
+// old file is gone and the new one is in place, ReadJSON reads the new one.
+func TestReadJSONReadsTheNewFileOnceAReplacedTargetIsGone(t *testing.T) {
+	st, err := OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteAtomic("config.json", []byte(`{"name":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, release := holdFile(t, st.Path("config.json"), windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
+	del := byte(1)
+	if err := windows.SetFileInformationByHandle(h, windows.FileDispositionInfo, &del, uint32(unsafe.Sizeof(del))); err != nil {
+		t.Fatal(err)
+	}
+	var refused error
+	waits, _ := stubWindowsRead(t, func(name string) ([]byte, error) {
+		b, err := os.ReadFile(name)
+		if err != nil && refused == nil {
+			refused = err
+			release() // the old file goes with its last handle
+			if werr := os.WriteFile(name, []byte(`{"name":"new"}`), 0o600); werr != nil {
+				t.Errorf("writing the new file: %v", werr)
+			}
+		}
+		return b, err
+	})
+	var c Config
+	if ok, err := st.ReadJSON("config.json", &c); err != nil || !ok || c.Name != "new" {
+		t.Fatalf("ReadJSON = %v, %v, %+v; want the new file read once the old one was gone", ok, err, c)
+	}
+	if !errors.Is(refused, windows.ERROR_ACCESS_DENIED) || len(*waits) == 0 {
+		t.Fatalf("the first read returned %v after %d waits; want access denied and a retry", refused, len(*waits))
 	}
 }
