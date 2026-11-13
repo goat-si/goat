@@ -37,7 +37,7 @@ vi.mock("node:child_process", { spy: true });
  * pin moves to a version not in `verified`.
  */
 const PINNED_DRIVER_TOOLS = {
-  verified: ["0.40.1-goat.1"],
+  verified: ["0.47.24-goat.1"],
   tools: [
     // `cua-driver list-tools` of the macOS binary.
     "bring_to_front",
