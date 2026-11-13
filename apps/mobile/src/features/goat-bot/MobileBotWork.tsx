@@ -351,22 +351,6 @@ export function MobileBotWork(props: {
               </Pressable>
             ) : null}
           </View>
-          <MobileBotStatusCard
-            environmentId={environmentId}
-            member={member}
-            botName={botName}
-            main={props.main ?? null}
-            rows={
-              !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
-            }
-            refreshRows={threads.refresh}
-            turnsWaiting={props.turnsWaiting ?? []}
-            onOpenChat={() => setOpen(false)}
-            onOpenTask={(id) => {
-              setOpen(false);
-              props.onOpenTask(id);
-            }}
-          />
         </View>
       ),
     },
@@ -403,19 +387,29 @@ export function MobileBotWork(props: {
     },
   ];
   if (tab === "Home") {
-    homeItems.push(sectionLabel("machines-label", "Machines", true), {
-      key: "machines",
+    homeItems.push({
+      key: "status",
       render: () => (
-        <MobileBotComputer
+        <MobileBotStatusCard
           environmentId={environmentId}
-          connected={selected?.connected === true}
-          botId={member?.botId ?? null}
+          member={member}
           botName={botName}
-          workKey={`${workKey}#${props.workRevision ?? ""}`}
+          main={props.main ?? null}
+          rows={
+            !enabled ? "unavailable" : threads.error ? "failed" : threads.isSuccess ? rows : null
+          }
+          refreshRows={threads.refresh}
+          turnsWaiting={props.turnsWaiting ?? []}
+          onOpenChat={() => setOpen(false)}
+          onOpenTask={(id) => {
+            setOpen(false);
+            props.onOpenTask(id);
+          }}
+          quietWhenReady
         />
       ),
     });
-    homeItems.push(sectionLabel("work-label", "Work"));
+    homeItems.push(sectionLabel("work-label", "Work", true));
     if (goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0) {
       homeItems.push(
         message(
@@ -524,6 +518,18 @@ export function MobileBotWork(props: {
       ),
     };
     homeItems.push(sectionLabel("routines-label", "Routines"), routinesItem);
+    homeItems.push(sectionLabel("machines-label", "Machines"), {
+      key: "machines",
+      render: () => (
+        <MobileBotComputer
+          environmentId={environmentId}
+          connected={selected?.connected === true}
+          botId={member?.botId ?? null}
+          botName={botName}
+          workKey={`${workKey}#${props.workRevision ?? ""}`}
+        />
+      ),
+    });
   } else {
     homeItems.push(
       {
@@ -537,7 +543,7 @@ export function MobileBotWork(props: {
           />
         ),
       },
-      sectionLabel("notes-label", "Notes"),
+      sectionLabel("notes-label", "Memory"),
       {
         key: "notes",
         render: () => (

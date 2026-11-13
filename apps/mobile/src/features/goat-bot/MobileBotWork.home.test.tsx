@@ -319,7 +319,7 @@ async function press(label: string) {
 }
 const home = () => container.querySelector('[data-testid="goat-bot-home-scroll"]');
 
-it("shows the bot's machines, work and routines on Home, and files and notes in Library", async () => {
+it("shows Work, Routines, then Machines on Home, and files then Memory in Library", async () => {
   state.rows = [task("t1", "Check the disks")];
   await open();
   for (const text of [
@@ -331,9 +331,12 @@ it("shows the bot's machines, work and routines on Home, and files and notes in 
     "Check in on me",
   ])
     expect(container.textContent).toContain(text);
+  const content = home()?.textContent ?? "";
+  expect(content.indexOf("Work")).toBeLessThan(content.indexOf("Routines"));
+  expect(content.indexOf("Routines")).toBeLessThan(content.indexOf("Machines"));
   await press("Library");
   expect(container.textContent).toContain("bot files");
-  expect(container.textContent).toContain("Notes");
+  expect(container.textContent).toContain("Memory");
   await press("Draft a note");
   expect(state.draft).toHaveBeenCalledWith("Remember this");
   expect(button("Library")).toBeUndefined();
