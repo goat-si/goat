@@ -107,6 +107,15 @@ once, for both aliases, the machine, the old link and the new host key, and GOAT
 leaves the old alias and links the new one. If the new link fails, the same
 approval finishes the move later. Aliases that name different machines are refused.
 
+**Routes** on a Remote Link Child's row lists the SSH aliases the hub tries for
+its link, in order, and marks the pinned one. Add another alias of the same
+machine, such as a LAN or Tailscale alias ahead of its `pen-<name>` alias, to
+keep its traffic off the Pen relay: the hub stores a new route only after it
+proves that machine's pinned host key over it. Move a route up or down, or
+remove one; the pinned alias stays. Agents use `goat_hub_device_routes_update`,
+and a profile other than owner asks you first. Routes need an OpenCodex release
+with link routes on the hub; an older one says so.
+
 ## Sync OpenCodex models
 
 **Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first
