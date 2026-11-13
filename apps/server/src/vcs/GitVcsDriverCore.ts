@@ -99,6 +99,7 @@ import {
 import { filterBranchesForListQuery, paginateBranches } from "./gitBranchListQuery.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
+import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
@@ -5165,17 +5166,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ).pipe(Effect.map((result) => result.exitCode === 0))
           : false;
 
-      const checkoutArgs = localInputExists
-        ? ["checkout", input.refName]
-        : remoteExists && !localTrackingBranch && localTrackedBranchTargetExists
-          ? ["checkout", input.refName]
-          : remoteExists && !localTrackingBranch
-            ? ["checkout", "--track", input.refName]
-            : remoteExists && localTrackingBranch
-              ? ["checkout", localTrackingBranch]
-              : ["checkout", input.refName];
+      const { branch: newTrackingBranch, args: checkoutArgs } = trackingCheckoutTarget({
+        refName: input.refName,
+        localInputExists,
+        remoteExists,
+        localTrackingBranch,
+        localTrackedBranchTargetExists,
+        localTrackedBranchCandidate,
+      });
 
       yield* refuseOptionLikeRefName("GitVcsDriver.switchRef", input.cwd, checkoutArgs.at(-1));
+      yield* createTrackingBranch(input.cwd, newTrackingBranch, input.refName, executeGit);
 
       // A stale ref must not turn into a path checkout that discards local edits.
       yield* executeGitWithStableDiagnostics(
@@ -5183,9 +5184,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         [...checkoutArgs, "--"],
         {
-          timeoutMs: 10_000,
+          timeoutMs: null,
           fallbackErrorDetail: "git checkout failed",
-          writesSharedConfig: !localInputExists,
+          writesSharedConfig: checkoutArgs[1] === "--track" || (!localInputExists && !remoteExists),
         },
       );
 
