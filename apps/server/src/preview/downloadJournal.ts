@@ -1,5 +1,4 @@
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
-import { withoutDataPayload } from "./ServerBrowserPage.ts";
 
 /** A file the tab saved, as status lists it. */
 export interface SavedDownload {
@@ -141,32 +140,18 @@ export const downloadsOf = (tab: DownloadsTab, observing = false) => {
 };
 export type DownloadWait = ReturnType<typeof downloadsOf>;
 
-const attributed = new WeakSet<SavedDownload>();
-
 /**
- * Journals one download around the tab's own save, which stays as upstream wrote it: the entry
- * settles with the record that save added to the tab, matched by the URL it records, or fails
- * when it added none (a failed, cancelled or oversized download, or a closing tab).
+ * Journals one download around the tab's own save: the entry settles with the record that save
+ * returns, or fails when it saved none (a failed, cancelled or oversized download, or a closing tab).
  */
-export const journalDownload = async <T extends DownloadsTab, D extends { url(): string }>(
+export const journalDownload = async <T extends object, D>(
   tab: T,
   download: D,
-  save: (tab: T, download: D) => Promise<void>,
+  save: (tab: T, download: D) => Promise<SavedDownload | undefined>,
 ) => {
   const entry = downloadJournal(tab).started();
-  const before = new Set(tab.downloads);
-  try {
-    await save(tab, download);
-  } finally {
-    const url = withoutDataPayload(download.url()).slice(0, 2048);
-    const saved = tab.downloads.find(
-      (each) => !before.has(each) && !attributed.has(each) && each.url === url,
-    );
-    if (saved === undefined)
-      entry.failed("it failed, was cancelled, was too large or its tab closed");
-    else {
-      attributed.add(saved);
-      entry.saved(saved);
-    }
-  }
+  const saved = await save(tab, download).catch(() => undefined);
+  if (saved === undefined)
+    entry.failed("it failed, was cancelled, was too large or its tab closed");
+  else entry.saved(saved);
 };

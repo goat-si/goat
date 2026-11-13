@@ -35,13 +35,16 @@ const READ_BACK_MS = 1_000;
  * Clicks only when the control is not already in the wanted state, then reads it back, as
  * Playwright's check() does. A click that opened a dialog or left the page cannot be read back.
  */
-export const clickToState = async <R extends { readonly evidence: ReadonlyArray<string> }>(
+export const clickToState = async <
+  R extends { readonly evidence: ReadonlyArray<string>; readonly pressesCompleted?: number },
+>(
   locator: Locator | null,
   wanted: boolean,
   gate: ReadinessGate,
   timeout: number,
   press: () => Promise<R>,
 ): Promise<
+  | R
   | (R & { readonly pressed: true; readonly checked?: boolean })
   | { readonly pressed: false; readonly checked: boolean }
 > => {
@@ -53,6 +56,8 @@ export const clickToState = async <R extends { readonly evidence: ReadonlyArray<
   if ((await readChecked(locator, gate, timeout)) === wanted)
     return { pressed: false, checked: wanted };
   const result = await press();
+  // A dialog a held key opened stopped the click itself: the keys went out, the click did not.
+  if (result.pressesCompleted === 0) return result;
   if (result.evidence.includes("dialog") || result.evidence.includes("navigation"))
     return { ...result, pressed: true };
   const after = await readChecked(locator, gate, READ_BACK_MS).catch(() => undefined);

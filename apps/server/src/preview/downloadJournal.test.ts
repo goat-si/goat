@@ -83,28 +83,24 @@ it("a running download dropped past the journal's bound fails its wait instead o
   await expect(waiting).rejects.toThrow("more than 40 downloads started before a wait took it");
 });
 
-it("overlapping saves each settle with the record their own save added, matched by URL", async () => {
+it("overlapping downloads of one URL each settle with what their own save returned", async () => {
   const tab = { downloads: [] as SavedDownload[] };
-  const download = (name: string) => ({ url: () => `https://files.test/${name}` });
-  const second = Promise.withResolvers<void>();
-  const first = journalDownload(tab, download("a.csv"), async () => {
-    // The second save lands its record while the first is still running.
-    await second.promise;
-    tab.downloads.push(file("a.csv"));
+  const download = { url: () => "https://files.test/report.csv" };
+  const record = file("report.csv");
+  const firstFails = Promise.withResolvers<undefined>();
+  const secondReturns = Promise.withResolvers<void>();
+  const first = journalDownload(tab, download, () => firstFails.promise);
+  const second = journalDownload(tab, download, async () => {
+    // The second save lists its record, then is still finishing when the first one fails.
+    tab.downloads.push(record);
+    await secondReturns.promise;
+    return record;
   });
-  const failing = journalDownload(tab, download("broken.csv"), async () => {
-    await second.promise;
-  });
-  await journalDownload(tab, download("b.csv"), async () => {
-    tab.downloads.push(file("b.csv"));
-  });
-  second.resolve();
-  await Promise.all([first, failing]);
-  // Entries keep the order the downloads started in: a.csv, broken.csv, b.csv.
+  firstFails.resolve(undefined);
+  await first;
+  secondReturns.resolve();
+  await second;
   const journal = downloadJournal(tab);
-  const a = await journal.wait(0, live(), always);
-  expect(a.file.fileName).toBe("a.csv");
-  a.claim();
   await expect(journal.wait(0, live(), always)).rejects.toThrow("The download did not save");
-  expect((await journal.wait(0, live(), always)).file.fileName).toBe("b.csv");
+  expect((await journal.wait(0, live(), always)).file).toBe(record);
 });

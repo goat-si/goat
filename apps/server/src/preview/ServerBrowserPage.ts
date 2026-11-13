@@ -651,6 +651,7 @@ const clickTarget = async (
   // Listening first: a dialog that opens while the watch installs still ends the wait.
   let dialogBeforePress = false;
   let dialogShown = false;
+  let clicked = false;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => {
       dialogBeforePress = !sent;
@@ -688,6 +689,7 @@ const clickTarget = async (
     if (count === 1) await keys.press();
     // A dialog a key-down opened holds the page; once it is answered, the click stays unsent.
     if (dialogShown) return undefined;
+    clicked = true;
     if (count === 1)
       return locator === null
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
@@ -724,8 +726,8 @@ const clickTarget = async (
   }
   if (!sent) watch.cancel();
   const outcome = await watch.settle(dialog).finally(() => releaseAim(aim, gate));
-  // A dialog that stopped a multi-press click leaves it short of what was asked.
-  const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
+  // A dialog that stopped a multi-press click, or a held key's dialog before any press, leaves it short.
+  const short = (input.clickCount ?? 1) > presses && ((input.clickCount ?? 1) > 1 || !clicked);
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
 export const click = async (
@@ -1092,17 +1094,18 @@ export const waitFor = async (
   });
   const wait = async () => {
     for (;;) {
-      remaining();
+      // One budget per pass: a deadline passing while the list is built would leave a started wait unobserved.
+      const left = remaining();
       await Promise.all([
-        locator?.waitFor({ state, timeout: remaining() }),
+        locator?.waitFor({ state, timeout: left }),
         ...(input.text === undefined && input.urlIncludes === undefined
           ? []
           : [
               page
-                .waitForFunction(documentCondition, undefined, { timeout: remaining() })
+                .waitForFunction(documentCondition, undefined, { timeout: left })
                 .then((handle) => handle.dispose()),
             ]),
-        ...extras.pending(remaining()),
+        ...extras.pending(left),
       ]);
       remaining();
       const version = documentVersion;

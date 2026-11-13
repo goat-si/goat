@@ -99,11 +99,42 @@ it("a dialog a held key opened leaves the click unsent and the key released once
         linger: (work: Promise<unknown>) => void lingering.push(work.catch(() => undefined)),
       });
       const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
-      await ServerBrowserPage.click(page, { locator: "#b", modifiers: ["Shift"] }, undefined, gate);
+      const result = await ServerBrowserPage.click(
+        page,
+        { locator: "#b", modifiers: ["Shift"] },
+        undefined,
+        gate,
+      );
+      // The keys went out and the click did not: no press of it completed.
+      expect(result).toMatchObject({ pressesCompleted: 0 });
       await (await dialog).dismiss();
       await Promise.all(lingering);
       await ServerBrowserPage.click(page, { locator: "#b" });
       expect(await page.evaluate("shifts")).toEqual([false]);
+    },
+  ));
+
+it("a checked click whose held key opened a dialog does not report the box as pressed", () =>
+  fixture(
+    `<script>addEventListener("keydown", (event) => event.key === "Shift" && alert("held"), { once: true });</script>
+    <input type="checkbox" id="box">`,
+    async (page) => {
+      const lingering: Array<Promise<unknown>> = [];
+      const gate = Object.assign(() => {}, {
+        linger: (work: Promise<unknown>) => void lingering.push(work.catch(() => undefined)),
+      });
+      const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
+      const result = await ServerBrowserPage.click(
+        page,
+        { locator: "#box", checked: true, modifiers: ["Shift"] },
+        undefined,
+        gate,
+      );
+      expect(result).toMatchObject({ pressesCompleted: 0 });
+      expect(result).not.toHaveProperty("pressed");
+      await (await dialog).dismiss();
+      await Promise.all(lingering);
+      expect(await page.isChecked("#box")).toBe(false);
     },
   ));
 

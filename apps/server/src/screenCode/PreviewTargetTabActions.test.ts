@@ -122,3 +122,26 @@ it.live(
     );
   },
 );
+
+it.live(
+  "a tab click a held key's dialog stopped before it was sent reads unverifiable, not confirmed",
+  () => {
+    const { broker } = tabBroker(() => ({
+      effect: "confirmed",
+      evidence: ["dialog"],
+      pressesCompleted: 0,
+    }));
+    return runCells(broker, [
+      `const tab = await screen.tab({tabId: 'form'});
+    await tab.claim();
+    return await tab.click('#terms', { checked: true, modifiers: ['shift'] });`,
+    ]).pipe(
+      Effect.map(([result]) => {
+        expect(result).toMatchObject({
+          _tag: "Success",
+          success: { status: "completed", value: { ok: true, verdict: "unverifiable" } },
+        });
+      }),
+    );
+  },
+);

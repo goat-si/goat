@@ -940,7 +940,7 @@ const make = Effect.gen(function* () {
       offered = { id, fileName: saved.fileName };
       const shownInTab =
         navigation === tab.navigationGeneration && tab.page.url() === "about:blank";
-      if (shownInTab) return;
+      if (shownInTab) return saved;
       const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
       controller?.push({
         _tag: "download",
@@ -948,6 +948,7 @@ const make = Effect.gen(function* () {
         fileName: saved.fileName,
         sizeBytes: saved.sizeBytes,
       });
+      return saved;
     } catch (cause) {
       if (path !== undefined) await NodeFSP.rm(path, { force: true }).catch(constVoid);
       runFork(Effect.logWarning("server preview download failed", { cause }));

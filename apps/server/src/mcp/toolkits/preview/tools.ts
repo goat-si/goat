@@ -107,6 +107,8 @@ const PreviewClickResult = Schema.Struct({
   /** What the server browser saw change right after the click; absent from other hosts. */
   effect: Schema.optional(Schema.Literals(["confirmed", "suspected_noop"])),
   evidence: Schema.optional(Schema.Array(Schema.String)),
+  /** Presses sent before a dialog stopped the click; 0 when a held key's dialog came first. */
+  pressesCompleted: Schema.optional(Schema.Int),
   /** With checked: whether a click was needed and sent, and the state read back after it. */
   pressed: Schema.optional(Schema.Boolean),
   checked: Schema.optional(Schema.Boolean),
