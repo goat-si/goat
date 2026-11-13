@@ -57,6 +57,7 @@ import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotChipFace, GoatBotHeaderFace } from "./GoatBotFace";
+import { GoatBotHeroFace } from "./GoatBotHeroFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
@@ -317,6 +318,8 @@ export function GoatBotScreen(props: {
   readonly visible: boolean;
   /** False while the app is in the background, where GOAT Bot's steps are not read. */
   readonly foreground?: boolean;
+  /** Focused and the app active: what the screen shows has been seen. */
+  readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
@@ -331,6 +334,9 @@ export function GoatBotScreen(props: {
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
   const member = props.member ?? null;
+  const conversation = member
+    ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
+    : undefined;
   const mainName = goatBotName(props.main ?? null);
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
@@ -664,14 +670,7 @@ export function GoatBotScreen(props: {
             emoji={botEmoji}
             accent={accent}
             onPress={taskId ? undefined : openHome}
-            {...(member
-              ? {
-                  conversation: {
-                    environmentId: member.environmentId,
-                    threadId: member.sessionThreadId,
-                  },
-                }
-              : {})}
+            conversation={conversation}
           />
         ) : null}
         <View style={{ paddingTop: topInset }}>
@@ -682,24 +681,26 @@ export function GoatBotScreen(props: {
             focus={homeFocus}
             // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
             onDismissed={sheetGone}
+            heroFace={
+              <GoatBotHeroFace
+                activity={session.activity ?? null}
+                emoji={botEmoji}
+                accent={accent}
+                conversation={conversation}
+              />
+            }
             chipFace={
               Platform.OS === "android" ? (
                 <GoatBotChipFace
                   activity={session.activity ?? null}
                   emoji={botEmoji}
                   accent={accent}
-                  {...(member
-                    ? {
-                        conversation: {
-                          environmentId: member.environmentId,
-                          threadId: member.sessionThreadId,
-                        },
-                      }
-                    : {})}
+                  conversation={conversation}
                 />
               ) : null
             }
             visible={props.visible}
+            seen={props.seen ?? props.visible}
             onOpenTask={onSelectTask}
             onOpenThread={onSelectThread}
             member={

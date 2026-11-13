@@ -2,7 +2,7 @@ import "./goatBotScreenTestHarness";
 import { act } from "react";
 import type { BotProfile } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { bot, botEditing, render, screenSession } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
@@ -162,3 +162,5 @@ it("shows the name row and the answering chip together, the name row first", asy
   ).toBeTruthy();
   await row.view.unmount();
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

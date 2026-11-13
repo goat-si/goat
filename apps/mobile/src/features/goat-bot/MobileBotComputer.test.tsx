@@ -104,6 +104,13 @@ it("a failure can be tried again", async () => {
   expect(state.refresh).toHaveBeenCalledTimes(1);
 });
 
+it("shows a denied read without offering a retry", async () => {
+  setup(null, { _tag: "EnvironmentAuthorizationError" });
+  await render();
+  expect(container.textContent).toContain("This device can't read GOAT Bot's machines.");
+  expect(container.textContent).not.toContain("Try again");
+});
+
 it("a member's tab lists only that bot's work", async () => {
   setup({ tasks: [] });
   await render({ botId: BotId.make("research") });

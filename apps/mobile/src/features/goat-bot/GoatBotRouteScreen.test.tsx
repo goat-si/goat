@@ -17,6 +17,7 @@ const route = vi.hoisted(() => ({
   memberPreview: null as null | { unread: boolean; at: string },
   previewRefs: [] as unknown[],
   screenForeground: undefined as boolean | undefined,
+  screenSeen: undefined as boolean | undefined,
   screenTask: undefined as string | undefined,
   screenMember: undefined as string | null | undefined,
 }));
@@ -61,11 +62,13 @@ vi.mock("./GoatBotScreen", () => ({
   GoatBotScreen: (props: {
     readSnapshot?: GoatBotVisitSnapshot | null;
     foreground?: boolean;
+    seen?: boolean;
     taskId?: string;
     member?: { botId: string } | null;
   }) => {
     route.snapshot = props.readSnapshot;
     route.screenForeground = props.foreground;
+    route.screenSeen = props.seen;
     route.screenTask = props.taskId;
     route.screenMember = props.member === undefined ? undefined : (props.member?.botId ?? null);
     return null;
@@ -236,4 +239,26 @@ it("opens the task an ask names in its own bot's chat, whether or not the work l
   expect(route.screenMember).toBe("scout");
   await act(async () => root.unmount());
   route.member = null;
+});
+
+it("tells the chat what it shows is seen only while focused and the app is active", async () => {
+  Object.assign(route, { focused: true, foreground: true, active: true, threadId: "seen-thread" });
+  const view = await mount();
+  expect(route.screenSeen).toBe(true);
+  // Control Center: still in the foreground, but inactive, so a task is not marked read.
+  route.active = false;
+  await view.show();
+  expect(route.screenSeen).toBe(false);
+  route.active = true;
+  await view.show();
+  expect(route.screenSeen).toBe(true);
+  route.foreground = false;
+  await view.show();
+  expect(route.screenSeen).toBe(false);
+  route.foreground = true;
+  route.focused = false;
+  await view.show();
+  expect(route.screenSeen).toBe(false);
+  route.focused = true;
+  await view.unmount();
 });

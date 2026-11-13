@@ -32,6 +32,8 @@ export function GoatBotTaskRow(props: {
   readonly card: GoatBotTaskCard;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onOpenTask?: (() => void) | undefined;
+  /** Listed but closed, as when the bot's computer is offline. */
+  readonly disabled?: boolean;
 }) {
   const { card } = props;
   const titleText = useScaledTextRole("body");
@@ -60,11 +62,13 @@ export function GoatBotTaskRow(props: {
     .filter(Boolean)
     .join(" · ");
   const detailed = !props.onOpenTask;
+  const closed = props.disabled === true || (!props.onOpenTask && !opensThread);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${card.title}. ${status}.${detailed && card.continuationLabel ? ` ${card.continuationLabel}.` : ""}${detailed ? ` ${(card.evidenceLabels ?? []).join(". ")}` : ""} ${action}`}
-      disabled={!props.onOpenTask && !opensThread}
+      accessibilityState={{ disabled: closed }}
+      disabled={closed}
       onPress={() => {
         if (props.onOpenTask) return props.onOpenTask();
         if (target.kind === "thread" && unreachableHost === null)
@@ -111,12 +115,10 @@ export function GoatBotTaskRow(props: {
           ))
         : null}
       <Text
-        className={
-          props.onOpenTask || opensThread ? "font-medium text-foreground" : "text-foreground-muted"
-        }
+        className={closed ? "text-foreground-muted" : "font-medium text-foreground"}
         style={metaText}
       >
-        {props.onOpenTask || opensThread ? `${action} ›` : action}
+        {closed ? action : `${action} ›`}
       </Text>
     </Pressable>
   );

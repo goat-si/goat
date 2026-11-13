@@ -57,6 +57,8 @@ export function MobileBotStatusCard(props: {
   readonly botName?: string;
   /** The main bot, whose model a member uses until it has one of its own. */
   readonly main?: Pick<BotProfile, "name"> | null;
+  /** Home shows the card only while something is not ready, as web's Home does. */
+  readonly quietWhenReady?: boolean;
 }) {
   const { member } = props;
   const home = useMobileGoatBotHomeSettings();
@@ -124,10 +126,16 @@ export function MobileBotStatusCard(props: {
     canConfigureSlack: false,
     now,
   });
+  if (props.quietWhenReady && !home.error && diagnostics.lines.every((line) => line.tone === "ok"))
+    return null;
   return (
     <View
       accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
-      className="gap-2 border-b border-border pb-3"
+      className={
+        props.quietWhenReady
+          ? "mt-2 mb-3 gap-2 rounded-2xl border border-border bg-grouped-card px-3 py-3"
+          : "gap-2 border-b border-border pb-3"
+      }
     >
       <Text className="font-semibold text-foreground">{diagnostics.title}</Text>
       {diagnostics.lines.map((line) => (
