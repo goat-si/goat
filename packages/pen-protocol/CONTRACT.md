@@ -878,16 +878,17 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   invite` prints an admission for the first, and for `burned` exits 1 naming the event (one before that exit printed
   an admission). A wait is never answered `expired` once a join has used the invite, also when the expiry passes
   while that join runs: it answers `expired` only when the node's clock has reached the expiry (a timer that fires
-  early, after the clock was set back, waits again) and after the expiry is written (an ordinary invite is removed),
-  so no join can use the invite after that answer. When that write fails the wait answers `{"error":"..."}` and ends
-  instead. For a bound invite, `invite.status` reports whether the invite was used (from `offers.json`), and its
-  admit and whether the joiner is a member (from the node's record set and view in memory): `burned`, or
-  `burned-unsaved` while that admit is not yet on disk, with `admit` and `member` true, or `burned` with `member`
-  false or without an admit when nobody was admitted; it does not record whether the joiner received the set, so only
-  the wait tells a finished join from one that did not finish. A caller that settles admissions from status learns
-  that the joiner is a member in both cases, which is what it acts on, so no feature name marks the change. The
-  answer is the ordinary invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and
-  makes nothing.
+  early, after the clock was set back, waits again), or, for an ordinary invite that a failed burn already removed
+  from memory, when its timer fires, and in both cases only after the expiry is written (an ordinary invite is
+  removed), so no join can use the invite after that answer. When that write fails the wait answers `{"error":"..."}`
+  and ends instead. For a bound invite, `invite.status` reports whether the invite was used (from `offers.json`), and
+  its admit and whether the joiner is a member (from the node's record set and view in memory): `burned`, or
+  `burned-unsaved` while the record set holds unsaved records (the admit may not be on disk), with `admit` and
+  `member` true, or `burned` with `member` false or without an admit when nobody was admitted; it does not record
+  whether the joiner received the set, so only the wait tells a finished join from one that did not finish. A caller
+  that settles admissions from status learns that the joiner is a member in both cases, which is what it acts on, so
+  no feature name marks the change. The answer is the ordinary invite answer plus `"id"`, the invite id ("Sessions").
+  A refusal is `{"error":"..."}` and makes nothing.
 - The invite's entry in `offers.json` keeps the subject, and keeps its secret and expiry under `boundSecret` and
   `boundExpiresAt` instead of `secret` and `expiresAt`; an ordinary invite's entry is exactly as before. A joiner whose Noise key is not the subject's gets no psk for
   it and closes 4401 at the handshake, so another machine holding the token cannot hold a join session open. In
