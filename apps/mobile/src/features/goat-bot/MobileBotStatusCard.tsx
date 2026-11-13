@@ -131,7 +131,11 @@ export function MobileBotStatusCard(props: {
   return (
     <View
       accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
-      className="gap-2 border-b border-border pb-3"
+      className={
+        props.quietWhenReady
+          ? "mt-2 gap-2 rounded-2xl border border-border bg-grouped-card px-3 py-3"
+          : "gap-2 border-b border-border pb-3"
+      }
     >
       <Text className="font-semibold text-foreground">{diagnostics.title}</Text>
       {diagnostics.lines.map((line) => (
