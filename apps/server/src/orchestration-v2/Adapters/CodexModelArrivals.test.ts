@@ -342,3 +342,66 @@ it.effect(
       assert.strictEqual(yield* modelStatus(added), "outdated");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "a catalog rewritten while GOAT reads it never becomes what the process started with",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+      let rewrites = 0;
+      // The sync replaces the file after GOAT's stat and before its read.
+      const racingFs: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (path, encoding) =>
+          (rewrites++ === 0
+            ? writeCatalog(filename, { [known]: 1_048_576 }, 3_000)
+            : Effect.void
+          ).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+      };
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known)]),
+        listServed: Effect.succeed([known]),
+        startedAtMs: 2_000,
+        catalog: {
+          cwd: "/",
+          home: undefined,
+          fileSystem: racingFs,
+          readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+        },
+      });
+      yield* modelStatus(known);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a process that could not say where its catalog is is asked again a minute later", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    const answers = [false, true];
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: fs,
+        readConfig: Effect.suspend(() =>
+          answers.shift() === true
+            ? Effect.succeed({ config: { model_catalog_json: filename } })
+            : Effect.fail("busy"),
+        ),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    yield* TestClock.adjust("1 minute");
+    assert.strictEqual(yield* modelStatus(known), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
