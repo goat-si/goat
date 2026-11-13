@@ -471,3 +471,48 @@ describe("child thread requests", () => {
     registry.dispose();
   });
 });
+
+it("switches each environment between Home links and legacy listed work", () => {
+  const harness = makeHarness([environmentId, remoteEnvironmentId]);
+  const main = ThreadId.make("current");
+  const legacy = ThreadId.make("legacy");
+  const current = Atom.make({
+    byBot: [{ botId: "main" as never, eligible: true, list: "ready" as const }],
+    links: [{ taskId: "task" as never, environmentId, threadId: main, kind: "coding" as const }],
+  });
+  const old = Atom.make({
+    byBot: [{ botId: "main" as never, eligible: false, list: "ready" as const }],
+    links: [],
+  });
+  harness.registry.set(harness.snapshotAtom(environmentId), {
+    ...v2ShellSnapshot,
+    threads: [{ ...v2ThreadShell, id: main }],
+  });
+  harness.registry.set(harness.snapshotAtom(remoteEnvironmentId), {
+    ...v2ShellSnapshot,
+    threads: [{ ...v2ThreadShell, id: legacy }],
+  });
+  const shells = createEnvironmentThreadShellAtoms({
+    catalogValueAtom: harness.catalogValueAtom,
+    snapshotAtom: harness.snapshotAtom,
+    goatBotHomeWork: (id) => (id === environmentId ? current : old),
+    goatBotListedWork: ({ environmentIdsAtom }) =>
+      Atom.make((get) =>
+        get(environmentIdsAtom).map((id) => ({
+          environmentId: id,
+          threadId: id === environmentId ? main : legacy,
+        })),
+      ),
+  });
+  harness.registry.mount(shells.goatBotObservationThreadKeysAtom);
+  const hidden = () => harness.registry.get(shells.goatBotObservationThreadKeysAtom);
+  expect(hidden().has(`${environmentId}:${main}`)).toBe(true);
+  expect(hidden().has(`${remoteEnvironmentId}:${legacy}`)).toBe(true);
+  harness.registry.set(current, {
+    byBot: [{ botId: "main" as never, eligible: true, list: "ready" }],
+    links: [],
+  });
+  expect(hidden().has(`${environmentId}:${main}`)).toBe(false);
+  expect(hidden().has(`${remoteEnvironmentId}:${legacy}`)).toBe(true);
+  harness.registry.dispose();
+});

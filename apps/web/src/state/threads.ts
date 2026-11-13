@@ -41,6 +41,7 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   goatBotListedWork: channelEnvironment.listedBotWork,
+  goatBotHomeWork: channelEnvironment.homeCurrentOpenableWorkByEnvironment,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
