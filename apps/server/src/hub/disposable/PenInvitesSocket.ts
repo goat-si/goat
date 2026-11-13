@@ -111,6 +111,8 @@ const make = Effect.gen(function* () {
               resume(Effect.fail(unknown("control socket unreachable"))),
             );
             connection.once("connect", () => resume(Effect.succeed(connection)));
+            // An interrupt (the op timeout) before "connect" would otherwise leave this socket open.
+            return Effect.sync(() => connection.destroy());
           }),
           (connection) => Effect.sync(() => connection.destroy()),
         );
