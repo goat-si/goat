@@ -1,6 +1,7 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLocation } from "@tanstack/react-router";
 
 import {
   refreshArchivedThreadsForEnvironment,
@@ -83,6 +84,10 @@ function GoatBotThreadSession({
   readonly member: BotProfile | null;
 }) {
   const taskFocus = getTaskPaneFocus();
+  // An older task's Open Home names this bot's Home in the history entry it navigates to.
+  const openHomeKey = useLocation({ select: (location) => location.state.goatBotOpenHome ?? null });
+  const openHomeEntry = useLocation({ select: (location) => location.state.__TSR_key ?? "" });
+  const openHome = openHomeKey === null ? null : { key: openHomeKey, entry: openHomeEntry };
   // oxlint-disable-next-line goat/react-effect-budget -- Restore focus after the bot thread remounts.
   useLayoutEffect(() => {
     restoreTaskOpener(taskFocus);
@@ -177,6 +182,7 @@ function GoatBotThreadSession({
           {...session}
           environmentId={environmentId}
           unreadSince={unreadSince}
+          openHome={openHome}
           homeMove={
             moveTarget
               ? {

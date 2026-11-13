@@ -5,7 +5,7 @@ import {
   ChannelTaskId,
   type EnvironmentId,
 } from "@goat/contracts";
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 
@@ -64,6 +64,8 @@ const EXAMPLES = [
 
 export interface GoatBotChatViewProps {
   readonly unreadSince?: string | null | undefined;
+  /** History state naming a Home to open, with its entry's key; each entry opens Home once. */
+  readonly openHome?: { readonly key: string; readonly entry: string } | null | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -139,6 +141,7 @@ export function GoatBotChatView({
   onUnarchive,
   onRestore,
   onCheckAgain,
+  openHome = null,
 }: GoatBotChatViewProps) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -171,15 +174,9 @@ export function GoatBotChatView({
   const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
   // A bot or environment switch remounts Home, so its history walk starts over.
   const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
-  // The task pane's Open Home navigates here with this bot's key in history state; each such
-  // history entry opens Home once.
-  const homeEntry = useLocation({
-    select: (location) =>
-      location.state.goatBotOpenHome === homeKey ? (location.state.__TSR_key ?? "") : null,
-  });
   const [openedHomeEntry, setOpenedHomeEntry] = useState<string | null>(null);
-  if (bot && homeEntry !== null && homeEntry !== openedHomeEntry) {
-    setOpenedHomeEntry(homeEntry);
+  if (bot && openHome?.key === homeKey && openHome.entry !== openedHomeEntry) {
+    setOpenedHomeEntry(openHome.entry);
     setPanelOpen(true);
   }
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
