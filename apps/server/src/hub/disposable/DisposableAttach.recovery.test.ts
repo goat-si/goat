@@ -303,3 +303,18 @@ it.effect("a settings read that fails withdraws nothing; the invite stays live",
     }),
   ),
 );
+
+it.effect(
+  "a mint GOAT cannot record is cancelled by its invite id and answers unknown_outcome",
+  () =>
+    world((pen) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`CREATE TRIGGER refuse_invited BEFORE UPDATE OF state ON disposable_machines
+        WHEN NEW.state = 'invited' BEGIN SELECT RAISE(ABORT, 'disk full'); END`;
+        expect(yield* reason(attach(1))).toBe("unknown_outcome");
+        expect(pen.control.tokensSeen).toHaveLength(1);
+        expect(liveMints(pen.book)).toEqual([]);
+      }),
+    ),
+);

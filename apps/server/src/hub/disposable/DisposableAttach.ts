@@ -461,6 +461,7 @@ export const make = Effect.gen(function* () {
               invite_expires_at = ${expiresAt}, state = 'invited', step = 'invite',
               effects_json = ${encodeEffects(done)}, state_since = ${now}, updated_at = ${now}
               WHERE attach_id = ${row.attach_id}`;
+          yield* audit(row.attach_id, "hub.machine_mint", "invited");
         }),
       )
       .pipe(
@@ -468,7 +469,8 @@ export const make = Effect.gen(function* () {
           NotNamed: () =>
             Effect.succeed({ committed: false, reason: "provisioner_refused" } as const),
         }),
-        Effect.mapError(storageFailed),
+        // The commit may or may not have landed, so the token is withheld and its invite cancelled.
+        Effect.catch(() => unrecorded(invite.inviteId)),
       );
     if (!committed.committed)
       return yield* withdrawMinted(
@@ -484,8 +486,17 @@ export const make = Effect.gen(function* () {
     const lost = yield* finalCheck(fresh);
     if (lost !== undefined)
       return yield* withdrawMinted(fresh, { ...intent, state: "done" }, invite.inviteId, lost);
-    yield* audit(row.attach_id, "hub.machine_mint", "invited");
     return status(fresh, { token: invite.token, expiresAt });
+  });
+
+  const unrecorded = Effect.fn("DisposableAttach.unrecorded")(function* (inviteId: string) {
+    const cancelled = yield* pen.cancel({ inviteId }).pipe(Effect.option);
+    return yield* fail(
+      "unknown_outcome",
+      cancelled._tag === "Some" && cancelled.value === "cancelled"
+        ? "GOAT could not record the new invite, so it cancelled it. Attach again with a new request."
+        : "GOAT could not record the new invite and could not confirm its cancel; it expires within 10 minutes.",
+    );
   });
 
   const byRequest = (requestKey: string) =>
