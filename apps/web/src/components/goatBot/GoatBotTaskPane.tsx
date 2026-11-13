@@ -62,13 +62,16 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
+  const { rows, remoteWork, refresh, loaded, failed } = useBotThreads(
+    environmentId,
+    memberThreadsKey(member),
+  );
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
     member?.botId ?? BotId.make("main"),
-    listedTask === undefined && member?.state !== "deleted",
+    loaded && !failed && listedTask === undefined && member?.state !== "deleted",
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
@@ -269,9 +272,20 @@ export function GoatBotTaskPane({
       {lookup.value?.partial && listedTask === undefined && (
         <p role="status">Some task details could not be checked.</p>
       )}
+      {lookup.loading && <p role="status">Loading task…</p>}
+      {lookup.error === "denied" && (
+        <p role="status">Permission to read this task is unavailable.</p>
+      )}
       {lookup.error === "missing" && <p role="status">This task cannot be found here.</p>}
-      {lookup.error === "failed" && <p role="alert">Couldn't load this task.</p>}
-      {task === undefined && !lookup.supported && (
+      {lookup.error === "failed" && (
+        <div>
+          <p role="alert">Couldn't load this task.</p>
+          <Button variant="outline" size="xs" onClick={lookup.reload}>
+            Try again
+          </Button>
+        </div>
+      )}
+      {task === undefined && (!lookup.supported || failed) && (
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3 text-sm text-muted-foreground">
           <p>Status and actions for older work are in {botName}'s Home.</p>
           <Button

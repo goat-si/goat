@@ -7,7 +7,12 @@ import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-type Lookup = { key: string; value?: BotWorkResult; error?: "missing" | "failed" };
+type Lookup = {
+  key: string;
+  value?: BotWorkResult;
+  error?: "missing" | "failed" | "denied";
+  loading?: boolean;
+};
 
 export function useBotTaskLookup(
   environmentId: EnvironmentId,
@@ -40,6 +45,11 @@ export function useBotTaskLookup(
     ) => {
       if (!supported || !permitted || !needed) return;
       const current = ++sequence.current;
+      setAnswer((previous) => ({
+        key,
+        ...(previous?.key === key && previous.value ? { value: previous.value } : {}),
+        loading: true,
+      }));
       void read({ environmentId, input: { taskId, botId } }).then((result) => {
         if (current !== sequence.current) return;
         if (result._tag === "Success") setAnswer({ key, value: result.value });
@@ -53,7 +63,12 @@ export function useBotTaskLookup(
               "reason" in error &&
               error.reason === "not_found"
                 ? "missing"
-                : "failed",
+                : error &&
+                    typeof error === "object" &&
+                    (("_tag" in error && error._tag === "EnvironmentAuthorizationError") ||
+                      ("reason" in error && error.reason === "forbidden"))
+                  ? "denied"
+                  : "failed",
           });
         }
       });
@@ -72,6 +87,7 @@ export function useBotTaskLookup(
     permitted,
     value: supported && permitted && needed && answer?.key === key ? answer.value : undefined,
     error: supported && permitted && needed && answer?.key === key ? answer.error : undefined,
+    loading: eligibleKey !== null && (answer?.key !== key || answer.loading === true),
     reload,
   };
 }

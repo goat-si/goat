@@ -149,6 +149,8 @@ vi.mock("./useBotRoster", () => ({
             }),
           ],
       remoteWork: [],
+      loaded: true,
+      failed: false,
       refresh: state.refresh,
     };
   },

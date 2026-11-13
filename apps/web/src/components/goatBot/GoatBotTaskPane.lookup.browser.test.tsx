@@ -16,6 +16,9 @@ import { act, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   noRows: false,
+  listLoaded: true,
+  listFailed: false,
+  canUpdate: true,
   lookupSupported: false,
   lookup: vi.fn(),
   showMenu: vi.fn(),
@@ -41,7 +44,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) => (atom === "update-permission" ? state.canUpdate : true),
 }));
 vi.mock("~/localApi", async (original) => ({
   ...(await original<typeof import("~/localApi")>()),
@@ -50,7 +53,7 @@ vi.mock("~/localApi", async (original) => ({
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     getBotTask: { permissionAtom: () => null },
-    updateTaskView: { permissionAtom: () => null },
+    updateTaskView: { permissionAtom: () => "update-permission" },
     retryTask: { permissionAtom: () => null },
   },
 }));
@@ -126,6 +129,8 @@ vi.mock("./useBotRoster", () => ({
             }),
           ],
       remoteWork: [],
+      loaded: state.listLoaded,
+      failed: state.listFailed,
       refresh: state.refresh,
     };
   },
@@ -171,6 +176,9 @@ function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: st
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
   state.noRows = false;
+  state.listLoaded = true;
+  state.listFailed = false;
+  state.canUpdate = true;
   state.lookupSupported = false;
   state.lookup.mockReset();
   state.showMenu.mockReset();
@@ -495,4 +503,129 @@ it("does not reuse an old view when switching away from and back to a task", asy
   await screen.rerender(<Pane taskId="task-2" onClose={() => {}} />);
   await screen.rerender(<Pane taskId="task-1" onClose={() => {}} />);
   expect(screen.getByRole("button", { name: "Pin", exact: true }).query()).toBeNull();
+});
+
+it("waits for the current task list before looking up a task", async () => {
+  setup();
+  state.noRows = true;
+  state.listLoaded = false;
+  state.lookupSupported = true;
+  state.lookup.mockReturnValue(new Promise(() => {}));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  expect(state.lookup).not.toHaveBeenCalled();
+  state.noRows = false;
+  state.listLoaded = true;
+  state.row.unread = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Review work" })).toBeVisible();
+  expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("does not look up a task when its current list failed", async () => {
+  setup();
+  state.noRows = true;
+  state.listLoaded = false;
+  state.listFailed = true;
+  state.lookupSupported = true;
+  state.lookup.mockReturnValue(new Promise(() => {}));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Task thread" })).toBeVisible();
+  expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("retries a failed task lookup and shows its result", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("offline")) });
+  state.lookup.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "unavailable",
+        task: {
+          taskId: "task-1",
+          title: "Recovered after retry",
+          status: "running",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: true,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Couldn't load this task.");
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await expect
+    .element(screen.getByRole("heading", { name: "Recovered after retry" }))
+    .toBeVisible();
+});
+
+it("disables view actions for a looked-up task without mutation permission", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.canUpdate = false;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Read only",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: true,
+    mainMessagesSinceQuiet: 0,
+  });
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Read only" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Pin" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Mark read" })).toBeDisabled();
+  expect(state.update).not.toHaveBeenCalled();
+});
+
+it("returns to the older-server pane when lookup capability is withdrawn", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "unavailable",
+        task: {
+          taskId: "task-1",
+          title: "Lookup title",
+          status: "running",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: true,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Lookup title" })).toBeVisible();
+  state.lookupSupported = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Task thread" })).toBeVisible();
+  expect(state.lookup).toHaveBeenCalledOnce();
 });
