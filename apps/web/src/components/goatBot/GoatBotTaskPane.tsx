@@ -181,6 +181,11 @@ export function GoatBotTaskPane({
           </>
         )}
       </header>
+      {task === undefined && (
+        <p className="px-3 pt-3 text-sm text-muted-foreground">
+          Status and actions for older work are in {botName}'s Home.
+        </p>
+      )}
       <div className="px-3">
         <GoatBotWorkDetails
           environmentId={environmentId}

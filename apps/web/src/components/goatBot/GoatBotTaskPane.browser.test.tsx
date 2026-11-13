@@ -349,6 +349,33 @@ it("uses the title carried from a history row when the current list no longer co
   await expect.element(screen.getByText("Task thread")).not.toBeInTheDocument();
 });
 
+it("explains where to find actions for older work absent from the current list", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const close = vi.fn();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      taskTitle="Older task"
+      narrow
+      onClose={close}
+    />,
+  );
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect
+    .element(screen.getByText("Status and actions for older work are in GOAT Bot's Home."))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Pin", exact: true }))
+    .not.toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
+  expect(close).toHaveBeenCalledOnce();
+});
+
 it("opens history-only work with its status and actions and acknowledges unread activity", async () => {
   setup();
   state.noRows = true;
