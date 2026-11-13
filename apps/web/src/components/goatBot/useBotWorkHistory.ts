@@ -14,6 +14,7 @@ import type {
 } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { rememberHistoryRows, acknowledgeHistoryRow, historyTask } from "./botWorkHistoryStore";
 
 interface Walk {
   readonly key: string;
@@ -94,6 +95,9 @@ export function useBotWorkHistory(
           return answer.value;
         },
       });
+      if (currentKey.current === request && result.supported)
+        for (const page of result.pages)
+          rememberHistoryRows(environmentId, page.result.rows, page.result.remoteWork);
       if (currentKey.current === request)
         setStored({
           key,
@@ -107,7 +111,17 @@ export function useBotWorkHistory(
               ? walk.retained
               : [],
           pages: result.supported
-            ? [...walk.pages, ...result.pages.map((page) => page.result)]
+            ? [
+                ...walk.pages,
+                ...result.pages.map((page) => ({
+                  ...page.result,
+                  rows: page.result.rows.map((row) =>
+                    row.kind === "task"
+                      ? (historyTask(environmentId, row.task.taskId) ?? row)
+                      : row,
+                  ),
+                })),
+              ]
             : [],
           unsupported: !result.supported,
           loading: false,
@@ -120,6 +134,26 @@ export function useBotWorkHistory(
   }
   return {
     historySupported,
+    acknowledge: (taskId: ChannelTaskId, through: string) => {
+      acknowledgeHistoryRow(environmentId, taskId, through);
+      const update = (pages: ReadonlyArray<ChannelListBotThreadsResult>) =>
+        pages.map((page) => ({
+          ...page,
+          rows: page.rows.map((row) => {
+            if (row.kind !== "task" || row.task.taskId !== taskId) return row;
+            const activity = Date.parse(row.lastActivityAt);
+            const read = Date.parse(through);
+            return Number.isFinite(activity) && Number.isFinite(read) && activity <= read
+              ? { ...row, unread: false, view: { ...row.view, readThrough: through } }
+              : row;
+          }),
+        }));
+      setStored((previous) =>
+        previous.scope === scope
+          ? { ...previous, pages: update(previous.pages), retained: update(previous.retained) }
+          : previous,
+      );
+    },
     rows: merged.supported && historySupported ? merged.rows : current.rows,
     remoteWork:
       merged.supported && historySupported ? merged.remoteWork : (current.remoteWork ?? []),

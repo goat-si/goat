@@ -943,3 +943,41 @@ it("retains older work when an earlier page of a refreshed walk was partial", as
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
   expect(screen.getByText("Older task").element()).toBeVisible();
 });
+
+it("clears a paged task's unread mark after acknowledging its peek", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    unread: true,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+    view: { ...runningTask.view, taskId: "older" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await userEvent.click(screen.getByRole("button", { name: /^Older task.*Unread/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Back to Home from Older task" }));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Older task.*Unread/ }).query()).toBeNull();
+});
+
+it("reports expansion while walking history and preserves focus when the last button disappears", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  for (let i = 1; i <= 4; i++)
+    mocks.readHistory.mockResolvedValueOnce(historyPage([], { nextCursor: `c${i}` }));
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(showMore(screen)).toHaveAttribute("aria-expanded", "true");
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
+});

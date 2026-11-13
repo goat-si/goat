@@ -102,6 +102,7 @@ vi.mock("./useBotRoster", () => ({
               mainMessagesSinceQuiet: 0,
             }),
           ],
+      remoteWork: [],
       refresh: state.refresh,
     };
   },
@@ -127,6 +128,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { rememberHistoryRows, resetHistoryTasksForTests } from "./botWorkHistoryStore";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -335,4 +337,33 @@ it("uses the title carried from a history row when the current list no longer co
   );
   await expect.element(screen.getByText("Older task")).toBeVisible();
   await expect.element(screen.getByText("Task thread")).not.toBeInTheDocument();
+});
+
+it("opens history-only work with its status and actions and acknowledges unread activity", async () => {
+  setup();
+  resetHistoryTasksForTests();
+  state.noRows = true;
+  rememberHistoryRows(EnvironmentId.make("env"), [
+    decodeBotThreadRow({
+      kind: "task",
+      task: {
+        taskId: "task-1",
+        title: "Earlier task",
+        status: "waiting_input",
+        updatedAt: "2026-11-04T10:00:00.000Z",
+      },
+      view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: "2026-11-04T10:00:00.000Z",
+      unread: true,
+      mainMessagesSinceQuiet: 0,
+    }),
+  ]);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Needs your input")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Pin" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).toBeVisible();
+  expect(state.update).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { taskId: "task-1", readThrough: "2026-11-04T10:00:00.000Z" },
+  });
 });

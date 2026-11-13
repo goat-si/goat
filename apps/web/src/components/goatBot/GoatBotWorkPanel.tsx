@@ -227,7 +227,10 @@ export function GoatBotWorkPanel({
           rows={peekRows(peek.taskId)}
           environmentId={environmentId}
           unreadThrough={peeked?.unread === true ? peeked.lastActivityAt : null}
-          onAcknowledged={refresh}
+          onAcknowledged={() => {
+            if (peeked?.unread) history.acknowledge(peek.taskId, peeked.lastActivityAt);
+            refresh();
+          }}
           onRetry={onRetryInput}
           onBack={() => {
             // Work that finished meanwhile may have pushed this row behind Show more.

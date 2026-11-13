@@ -1,4 +1,4 @@
-import { cloneElement, type ReactElement, type ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode, type Ref } from "react";
 
 import { GroupedCard } from "../ui/grouped-card";
 import { cn } from "~/lib/utils";
@@ -115,19 +115,24 @@ export function GoatBotCardRow({
 export function GoatBotShowMoreRow({
   expanded,
   onToggle,
+  label,
+  buttonRef,
 }: {
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  readonly label?: string;
+  readonly buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return (
     <div className="flex justify-center py-1">
       <button
         type="button"
+        ref={buttonRef}
         aria-expanded={expanded}
         onClick={onToggle}
         className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
-        {expanded ? "Show less" : "Show more"}
+        {label ?? (expanded ? "Show less" : "Show more")}
       </button>
     </div>
   );

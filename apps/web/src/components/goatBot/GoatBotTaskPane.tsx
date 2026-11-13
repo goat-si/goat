@@ -27,6 +27,7 @@ import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
+import { acknowledgeHistoryRow, useHistoryWork } from "./botWorkHistoryStore";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -57,11 +58,22 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const botName = useGoatBotName();
   const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
-  const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
+  const history = useHistoryWork(environmentId, taskId);
+  const historyTask = history?.task;
+  // A direct link after reload has no cached history; its carried title remains available.
+  const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId) ?? historyTask;
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
-  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: refresh });
+  useAcknowledgeTaskRead({
+    environmentId,
+    taskId,
+    readThrough,
+    onAcknowledged: () => {
+      if (readThrough !== null) acknowledgeHistoryRow(environmentId, taskId, readThrough);
+      refresh();
+    },
+  });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);
@@ -166,8 +178,8 @@ export function GoatBotTaskPane({
         <GoatBotWorkDetails
           environmentId={environmentId}
           taskId={taskId}
-          rows={rows}
-          remoteWork={remoteWork}
+          rows={historyTask && !rows.includes(historyTask) ? [...rows, ...history.rows] : rows}
+          remoteWork={history ? [...remoteWork, ...history.remoteWork] : remoteWork}
         />
       </div>
       <GoatBotStepsProvider

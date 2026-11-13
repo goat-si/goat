@@ -14,7 +14,7 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { holdNavigation } from "~/lib/navigationHolds";
 import { cn } from "~/lib/utils";
@@ -113,6 +113,22 @@ export function GoatBotHomeWork({
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
   const finished = showAll ? work.finished : work.finished.slice(0, COLLAPSED_FINISHED);
+  const showMoreRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<ChannelTaskId, HTMLElement>());
+  const pendingFocus = useRef<Set<ChannelTaskId> | null>(null);
+  const showMore = historyAvailable || hidden > 0;
+  // oxlint-disable-next-line goat/react-effect-budget -- Preserve focus when history removes its continuation button.
+  useLayoutEffect(() => {
+    if (showMore || pendingFocus.current === null) return;
+    if (document.activeElement === document.body) {
+      const added = [...work.running, ...work.waiting, ...finished].find(
+        (task) => !pendingFocus.current?.has(task.row.task.taskId),
+      );
+      (added ? rowRefs.current.get(added.row.task.taskId) : containerRef.current)?.focus();
+    }
+    pendingFocus.current = null;
+  });
   const row = (task: BotWorkTask, mark: Mark) => (
     <WorkRow
       key={task.row.task.taskId}
@@ -124,12 +140,16 @@ export function GoatBotHomeWork({
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
       peekable={peekable}
-      focusRef={task.row.task.taskId === focusTaskId ? focusRef : undefined}
+      focusRef={(element) => {
+        if (element) rowRefs.current.set(task.row.task.taskId, element);
+        else rowRefs.current.delete(task.row.task.taskId);
+        if (task.row.task.taskId === focusTaskId) focusRef?.(element);
+      }}
       launchesTruncated={launchesTruncated?.has(task.row.task.taskId) === true}
     />
   );
   return (
-    <div className="flex flex-col">
+    <div ref={containerRef} tabIndex={-1} aria-label="Work" className="flex flex-col">
       {notice}
       {offline ? (
         <p className="px-3 py-3">
@@ -172,12 +192,20 @@ export function GoatBotHomeWork({
       {historyFailed && (
         <p className="px-3 py-2 text-xs text-muted-foreground">Couldn't load older work.</p>
       )}
-      {(historyAvailable || hidden > 0) && (
+      {showMore && (
         <GoatBotShowMoreRow
-          expanded={!historyAvailable && showAll}
+          buttonRef={showMoreRef}
+          expanded={showAll}
+          label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
             if (historyLoading) return;
             if (historyAvailable) {
+              if (document.activeElement === showMoreRef.current)
+                pendingFocus.current = new Set(
+                  [...work.running, ...work.waiting, ...finished].map(
+                    (task) => task.row.task.taskId,
+                  ),
+                );
               onShowAllChange(true);
               onLoadHistory?.();
             } else onShowAllChange(!showAll);
@@ -280,6 +308,7 @@ function WorkRow({
         ) : (
           <Link
             to="/bot"
+            ref={focusRef}
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
