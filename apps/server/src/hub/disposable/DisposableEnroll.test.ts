@@ -821,3 +821,25 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a removal more than 2 hours after the id was stored keeps naming the operation the journal pruned",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        yield* TestClock.adjust(3 * HOUR);
+        host.control.forget(attachId + ".link.1");
+        pen.members.delete(key(1));
+        yield* listed(attachId);
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "failed",
+          message: expect.stringContaining(attachId + ".link.1"),
+        });
+      }),
+    ),
+);

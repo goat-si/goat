@@ -562,9 +562,13 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const outcome =
       row.link_id === null && operationId !== null ? yield* readBack(row, operationId) : undefined;
     const linkId = outcome?.kind === "committed" ? outcome.linkId : row.link_id;
-    // An operation that left nothing (failed_clean, or never journalled) is not named afterwards.
+    // An operation that left nothing (failed_clean, or never journalled while the journal still keeps
+    // every entry, 2 hours from the id's store) is not named afterwards.
+    const storedAtMs = decodeEnroll(row.enroll_json).link?.intentAtMs ?? 0;
+    const fresh = (yield* Clock.currentTimeMillis) - storedAtMs < OPERATION_REPLAY_MS;
     const leftNothing =
-      linkId === null && (outcome?.kind === "failed_clean" || outcome?.kind === "not_found");
+      linkId === null &&
+      (outcome?.kind === "failed_clean" || (outcome?.kind === "not_found" && fresh));
     const now = yield* nowIso;
     const settled = yield* exclusive(
       sql`UPDATE disposable_machines SET state = 'failed', final_at = ${now}, state_since = ${now},

@@ -114,6 +114,8 @@ const Operation = Schema.Struct({
   state: Schema.String,
   reserved: Schema.optionalKey(Schema.Struct({ linkId: Schema.String })),
   error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
+  /** The Child may still hold an enrollment or a plant, whatever the outcome says of the Home. */
+  childResidual: Schema.optionalKey(Schema.Boolean),
 });
 const decodeOperation = Schema.decodeUnknownOption(Schema.fromJsonString(Operation));
 
@@ -151,6 +153,7 @@ export const readOperation = (
         : { kind: "unreadable" };
     }
     case "failed_clean": {
+      if (operation.childResidual === true) return { kind: "unsettled", state: "residual" };
       const code = operation.error?.code;
       return {
         kind: "failed_clean",

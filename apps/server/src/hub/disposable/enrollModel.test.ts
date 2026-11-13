@@ -23,3 +23,19 @@ it("a journal code that would not fit a status step reads as a plain failure", (
     code: "failed",
   });
 });
+
+it("a failed operation that may have left the Child enrolled reads as residual", () => {
+  const expected = { operationId: "a.link.1", alias: "pen-x" };
+  const stdout = JSON.stringify({
+    operationId: "a.link.1",
+    kind: "enroll",
+    alias: "pen-x",
+    state: "failed_clean",
+    error: { code: "child_port_busy", status: 409 },
+    childResidual: true,
+  });
+  expect(readOperation({ code: 0, stdout }, expected)).toEqual({
+    kind: "unsettled",
+    state: "residual",
+  });
+});
