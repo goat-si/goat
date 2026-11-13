@@ -13,7 +13,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { PenMembership } from "./penMembership.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 
-export const PEN_LIVE_LIMIT = 16;
+const PEN_LIVE_LIMIT = 16;
 
 export function decide(input: {
   readonly entries: ReadonlyArray<ConnectionCatalogEntry>;

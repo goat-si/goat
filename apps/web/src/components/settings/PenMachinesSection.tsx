@@ -71,34 +71,27 @@ export function PenMachinesView({
   readonly revokePenMember?: DesktopPenBridge["revokePenMember"];
 }) {
   const [removing, setRemoving] = useState(false);
-  const remove = async (member: PenMemberStatus) => {
+  const remove = (member: PenMemberStatus) => {
     if (removing || membership?.kind !== "ready" || revokePenMember === undefined) return;
     const current = membership.members.find((item) => item.nodeId === member.nodeId);
     if (current === undefined) return;
+    const failed = (description: string) =>
+      toastManager.add({ type: "error", title: "Could not remove from Pen", description });
     setRemoving(true);
-    try {
-      const result = await revokePenMember({
-        meshId: membership.meshId,
-        nodeId: current.nodeId,
-        noisePub: current.noisePub,
-      });
-      if (result.status === "revoked")
-        toastManager.add({ type: "success", title: `Removed ${current.name} from Pen` });
-      if (result.status === "failed")
-        toastManager.add({
-          type: "error",
-          title: "Could not remove from Pen",
-          description: result.message,
-        });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not remove from Pen",
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setRemoving(false);
-    }
+    void revokePenMember({
+      meshId: membership.meshId,
+      nodeId: current.nodeId,
+      noisePub: current.noisePub,
+    })
+      .then(
+        (result) => {
+          if (result.status === "revoked")
+            toastManager.add({ type: "success", title: `Removed ${current.name} from Pen` });
+          if (result.status === "failed") failed(result.message);
+        },
+        (error: unknown) => failed(error instanceof Error ? error.message : String(error)),
+      )
+      .then(() => setRemoving(false));
   };
   const settings = useScopedSettings();
   const update = useUpdateScopedSettings();
@@ -144,7 +137,7 @@ export function PenMachinesView({
                       size="sm"
                       variant="ghost-destructive"
                       disabled={removing}
-                      onClick={() => void remove(member)}
+                      onClick={() => remove(member)}
                     >
                       Remove from Pen...
                     </Button>
