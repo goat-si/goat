@@ -360,7 +360,7 @@ it("failing-first: a folded answer stays anchored across confirmation and resize
   expect(element.scrollTop).toBe(0);
 });
 
-it("failing-first: jump focuses the first new reply and bottom scrolling clears the cue", async () => {
+it("failing-first: jump, pressed from the keyboard, focuses the first new reply and bottom scrolling clears the cue", async () => {
   const host = document.createElement("div");
   host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
   await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
@@ -375,11 +375,10 @@ it("failing-first: jump focuses the first new reply and bottom scrolling clears 
   await screen.rerender(
     <GoatBotTimeline rows={[...rows, reply("new-1"), reply("new-2")]} onRetry={() => {}} />,
   );
-  const jump = [...screen.container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Jump to latest"),
-  );
-  expect(jump).toBeDefined();
-  await act(() => jump!.click());
+  const jump = screen.getByRole("button", { name: "Jump to latest (2 new)", exact: true });
+  await expect.element(jump).toBeVisible();
+  await act(() => jump.element().focus());
+  await userEvent.keyboard("{Enter}");
   const first = screen.container.querySelector<HTMLElement>('[data-bot-row="new-1"]')!;
   expect(
     Math.abs(first.getBoundingClientRect().top - element.getBoundingClientRect().top),
