@@ -1,6 +1,7 @@
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelBotRef,
+  type BotId,
   type ChannelIngestInput,
   type ChannelListBotThreadsInput,
   type ChannelQuestionId,
@@ -13,10 +14,12 @@ import {
 } from "@goat/contracts";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { botRowListedUntil, botRowRetiresAt } from "../goatBot/taskVisibility.ts";
 import { sameBotColor } from "../goatBot/botColor.ts";
+import { selectHomeCurrentOpenableWork } from "../goatBot/homeCurrentOpenableWork.ts";
 import { goatBotListedWork, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import { subscribeOrUnavailable } from "../rpc/client.ts";
 import {
@@ -27,6 +30,7 @@ import {
 } from "./runtime.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
+import { environmentConnectionAtoms } from "./environmentConnections.ts";
 
 const NO_WORK: ReadonlyArray<GoatBotWorkRef> = Object.freeze([]);
 // setTimeout's longest delay; a later expiry re-arms when this one fires.
@@ -123,6 +127,43 @@ export function createChannelEnvironmentAtoms<R, E>(
         environmentId,
     ).pipe(Atom.withLabel(`environment-data:channel:remote-work-openable:${environmentId}`)),
   );
+  const connections = environmentConnectionAtoms(runtime);
+  const listPermission = createCommandPermissions(
+    runtime,
+    CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+  );
+  const currentOpenableFamily = Atom.family((key: string) => {
+    const [environmentId, botId] = JSON.parse(key) as [EnvironmentId, BotId];
+    const input = botId === "main" ? {} : { botId };
+    return Atom.make((get) => {
+      const config = get(sessions.initialConfigValueAtom(environmentId));
+      const connection = Option.getOrNull(AsyncResult.value(get(connections(environmentId))));
+      const eligible =
+        connection?.[0].phase === "connected" &&
+        Option.isSome(connection[1]) &&
+        config?.environment.environmentId === environmentId &&
+        config.environment.capabilities.goatBotTaskThreadsPaged === true &&
+        config.environment.capabilities.goatBotTaskLookupSearch === true &&
+        get(listPermission.permissionAtom(environmentId, input));
+      const result = get(listBotThreads({ environmentId, input }));
+      return selectHomeCurrentOpenableWork({
+        sourceEnvironmentId: environmentId,
+        botId,
+        eligible,
+        current: AsyncResult.isSuccess(result) && !result.waiting ? result.value : null,
+        isOpenable: (destination) => {
+          const state = Option.getOrNull(AsyncResult.value(get(connections(destination))));
+          return (
+            state?.[0].phase === "connected" &&
+            Option.isSome(state[1]) &&
+            get(remoteWorkOpenable(destination))
+          );
+        },
+      });
+    });
+  });
+  const homeCurrentOpenableWorkAtom = (key: readonly [EnvironmentId, BotId]) =>
+    currentOpenableFamily(JSON.stringify(key));
   /**
    * The threads the rows each bot shows open as its own work. A row aged out of the bot's lists
    * stops hiding its thread, and the rows are read again when the next one's retention ends.
@@ -230,6 +271,7 @@ export function createChannelEnvironmentAtoms<R, E>(
     }),
     listBots,
     listedBotWork,
+    homeCurrentOpenableWorkAtom,
     remoteWorkOpenable,
     /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
     updateBot: createEnvironmentRpcCommand(runtime, {
