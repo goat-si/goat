@@ -1,3 +1,4 @@
+import { ForwardCompatibleOptional } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -31,3 +32,26 @@ export const Connection = Schema.Struct({
 });
 export const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
   Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text.trim()));
+
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+/**
+ * What a newer `ocx link status --json` adds to a link row: body byte counters
+ * (?traffic=1), the route in use on a link with several routes (?routes=1) and the link WebSocket
+ * counters (?transport=1). Each is optional, and one that does not decode reads as not reported.
+ */
+export const LinkRowObservationFields = {
+  traffic: ForwardCompatibleOptional(
+    Schema.Struct({
+      epoch: Schema.String.check(Schema.isPattern(/^[0-9a-f]{1,64}$/u)),
+      generation: Count,
+      toHomeBytes: Count,
+      fromHomeBytes: Count,
+    }),
+  ),
+  routes: ForwardCompatibleOptional(Schema.Array(Schema.Struct({ name: Schema.String }))),
+  /** null while none of a multi-route link's routes is proven. */
+  route: ForwardCompatibleOptional(
+    Schema.NullOr(Schema.Struct({ name: Schema.String, since: Schema.String })),
+  ),
+  ws: ForwardCompatibleOptional(Schema.Struct({ open: Count })),
+};

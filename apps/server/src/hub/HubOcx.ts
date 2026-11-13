@@ -12,8 +12,6 @@ import { isSshHostUnreachable } from "@goat/shared/sshFailure";
 import { resolveSshCommand } from "@goat/ssh/command";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
 import * as NodeCrypto from "node:crypto";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's FileSystem cannot open with O_NONBLOCK.
-import * as NodeFS from "node:fs";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -33,6 +31,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
+import { PEN_CONFIG_MAX_BYTES, PEN_READ_TIMEOUT, readPenConfig } from "./penConfigFile.ts";
 import {
   fingerprintOfType,
   isPlainRoute,
@@ -46,16 +45,6 @@ import {
 const MAX_BYTES = 256 * 1024;
 // A busy Home's full process listing passes 256 KiB; this bounds that one transient read.
 const PS_MAX_BYTES = 16 * 1024 * 1024;
-// Pen writes one Host block per member: a name and login user of at most 32 bytes each, about
-// 130 fixed bytes and three local paths. A mesh holds at most 4096 records, so at most 4096
-// members; 1 KiB a block leaves the paths about 800 bytes, so 4 MiB covers any mesh.
-const PEN_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
-const PEN_CONFIG_CHUNK = 64 * 1024;
-// Opening a FIFO for reading would wait for a writer and hold a pool thread; O_NONBLOCK returns at
-// once, and the handle's own stat then refuses anything but a regular file. Windows has no FIFOs.
-const PEN_OPEN_FLAGS = NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NONBLOCK ?? 0);
-// A file read on the Pen path that has not finished by then counts as failed, never as pending.
-const PEN_READ_TIMEOUT = "5 seconds";
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
 /** Arguments are code-built; this keeps every one inert inside single quotes. */
 const SAFE_ARG = /^[A-Za-z0-9_.:=/+-]+$/u;
@@ -573,44 +562,15 @@ const make = Effect.gen(function* () {
   );
   const configUnread = penConfigFailed("GOAT could not read Pen's ssh config in time.");
   const penConfigFile = path.join(homeDirectory, ".ssh", "pen", "config");
-  /** Pen's ssh config, or "" when there is none, read through a non-blocking handle within a cap. */
-  const readPenConfigOnce = Effect.gen(function* () {
-    const found = yield* fs.stat(penConfigFile).pipe(Effect.option);
-    if (Option.isNone(found)) return (yield* fs.exists(penConfigFile)) ? yield* configUnread : "";
-    if (found.value.type !== "File") return yield* configNotRegular;
-    if (found.value.size > BigInt(PEN_CONFIG_MAX_BYTES)) return yield* configTooLarge;
-    return yield* Effect.acquireUseRelease(
-      Effect.tryPromise({
-        try: () => NodeFS.promises.open(penConfigFile, PEN_OPEN_FLAGS),
-        catch: () => configUnread,
-      }),
-      (handle) =>
-        Effect.gen(function* () {
-          const info = yield* Effect.tryPromise({
-            try: () => handle.stat({ bigint: true }),
-            catch: () => configUnread,
-          });
-          if (!info.isFile()) return yield* configNotRegular;
-          const chunks: Buffer[] = [];
-          let size = 0;
-          while (size <= PEN_CONFIG_MAX_BYTES) {
-            const chunk = Buffer.alloc(PEN_CONFIG_CHUNK);
-            const { bytesRead } = yield* Effect.tryPromise({
-              try: () => handle.read(chunk, 0, PEN_CONFIG_CHUNK, null),
-              catch: () => configUnread,
-            });
-            if (bytesRead === 0) break;
-            chunks.push(chunk.subarray(0, bytesRead));
-            size += bytesRead;
-          }
-          if (size > PEN_CONFIG_MAX_BYTES) return yield* configTooLarge;
-          return Buffer.concat(chunks).toString("utf8");
-        }),
-      (handle) => Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
-    );
-  }).pipe(
-    Effect.timeout(PEN_READ_TIMEOUT),
-    Effect.mapError((error) => (error instanceof HubOcxError ? error : configUnread)),
+  /** Pen's ssh config, or "" when there is none; see readPenConfig. */
+  const readPenConfigOnce = readPenConfig(fs, penConfigFile).pipe(
+    Effect.mapError(({ failure }) =>
+      failure === "tooLarge"
+        ? configTooLarge
+        : failure === "notRegular"
+          ? configNotRegular
+          : configUnread,
+    ),
   );
   /** Whether a file exists, within the read deadline; a check that fails is a failed read. */
   const existsWithin = (alias: string, file: string) =>

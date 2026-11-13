@@ -85,7 +85,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { FleetSettings } from "./fleetResources.ts";
 import { GoatclawSettings, GoatclawSettingsPatch } from "./permissionProfiles.ts";
-import { HubSettings, HubSettingsPatch } from "./hubSettings.ts";
+import { HubServerSettingsFields, HubServerSettingsPatchFields } from "./hubSettings.ts";
 import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
@@ -1383,7 +1383,7 @@ export const ServerSettings = Schema.Struct({
   ...SnoozeSettingsFields,
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  ...HubServerSettingsFields,
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   pen: Schema.NullOr(PenTrustRoot).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
@@ -1830,7 +1830,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   /** Each top-level key it names replaces the stored one (see FleetSettings). */
   fleet: Schema.optionalKey(FleetSettings),
   goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
-  hub: Schema.optionalKey(HubSettingsPatch),
+  ...HubServerSettingsPatchFields,
   pen: Schema.optionalKey(Schema.NullOr(PenTrustRoot)),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
