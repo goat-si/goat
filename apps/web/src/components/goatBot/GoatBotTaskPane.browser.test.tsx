@@ -1,5 +1,6 @@
 import {
   BotProfile,
+  ChannelGatewayError,
   BotThreadRow,
   ChannelTaskId,
   type ChannelTaskStatus,
@@ -9,6 +10,7 @@ import {
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { useState, type ReactNode } from "react";
 import * as Schema from "effect/Schema";
+import * as Cause from "effect/Cause";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
@@ -16,6 +18,8 @@ import "~/index.css";
 
 const state = vi.hoisted(() => ({
   noRows: false,
+  lookupSupported: false,
+  lookup: vi.fn(),
   showMenu: vi.fn(),
   send: vi.fn(() => true),
   // One command function serves both commands; a retry is told apart by its clientRequestId.
@@ -54,14 +58,19 @@ vi.mock("~/localApi", async (original) => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    getBotTask: { permissionAtom: () => null },
     updateTaskView: { permissionAtom: () => null },
     retryTask: { permissionAtom: () => null },
   },
 }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.update }));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) =>
+    command === channelEnvironment.getBotTask ? state.lookup : state.update,
+}));
 vi.mock("~/state/entities", async (original) => ({
   ...(await original<typeof import("~/state/entities")>()),
-  useServerConfigs: () => new Map(),
+  useServerConfigs: () =>
+    new Map([["env", { environment: { capabilities: { goatBotTaskLookupSearch: state.lookupSupported } } }]]),
   useThreadShell: () => ({}),
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
@@ -70,7 +79,10 @@ vi.mock("~/hooks/useResizableWidth", () => ({
   RESIZABLE_WIDTH_PROPERTY: "--resizable-width",
   useResizableWidth: () => ({ width: 480, handlers: {} }),
 }));
-vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("./GoatBotWorkDetails", () => ({
+  GoatBotWorkDetails: () => null,
+  GoatBotUnavailableWork: () => null,
+}));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -162,6 +174,7 @@ vi.mock("./useGoatBotSession", () => ({
     };
   },
 }));
+import { channelEnvironment } from "~/state/channels";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
@@ -522,6 +535,8 @@ it("failing-first: a task-pane answer follows its own folded question without mo
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
   state.noRows = false;
+  state.lookupSupported = false;
+  state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
   resetTaskReadAcknowledgementsForTests();
@@ -763,4 +778,140 @@ it("Open Home from an older task goes to the bot's chat with its Home named in h
   expect(screen.router?.state.location.state.goatBotOpenHome).toBe(
     goatBotHomeKey(EnvironmentId.make("env"), null),
   );
+});
+
+it("looks up an older task on a capable server and shows its actions", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "known",
+        row: decodeBotThreadRow({
+          kind: "task",
+          task: {
+            taskId: "task-1",
+            title: "Recovered task",
+            status: "completed",
+            updatedAt: "2026-11-04T10:00:00.000Z",
+          },
+          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: "2026-11-04T10:00:00.000Z",
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+        }),
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: true,
+      partial: false,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Recovered task" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Pin", exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  await expect.element(screen.getByText("Show work")).toBeVisible();
+  expect(state.lookup).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { taskId: "task-1", botId: "main" },
+  });
+});
+
+it("disables view-dependent actions when a task view is unavailable", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "unavailable",
+        task: {
+          taskId: "task-1",
+          title: "Unavailable view",
+          status: "completed",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: true,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Unavailable view" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Pin" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Mark read" })).toBeDisabled();
+  expect(state.update).not.toHaveBeenCalled();
+});
+
+it("does not look up a bare task on an older server", async () => {
+  setup();
+  state.noRows = true;
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Task thread" })).toBeVisible();
+  expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("reports a task that cannot be found here", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Failure",
+    cause: Cause.fail(new ChannelGatewayError({ reason: "not_found" })),
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("This task cannot be found here.")).toBeVisible();
+});
+
+it("does not let a late lookup overwrite the result of a newer action", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const result = (title: string) => ({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "known",
+        row: decodeBotThreadRow({
+          kind: "task",
+          task: {
+            taskId: "task-1",
+            title,
+            status: "completed",
+            updatedAt: "2026-11-04T10:00:00.000Z",
+          },
+          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: "2026-11-04T10:00:00.000Z",
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+        }),
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  let finish!: (value: ReturnType<typeof result>) => void;
+  const late = new Promise<ReturnType<typeof result>>((resolve) => {
+    finish = resolve;
+  });
+  state.lookup.mockResolvedValueOnce(result("First"));
+  state.lookup.mockReturnValueOnce(late);
+  state.lookup.mockResolvedValueOnce(result("Newest"));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "First" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await vi.waitFor(() => expect(state.lookup).toHaveBeenCalledTimes(2));
+  await userEvent.click(screen.getByRole("button", { name: "Mark done" }));
+  await expect.element(screen.getByRole("heading", { name: "Newest" })).toBeVisible();
+  await act(() => finish(result("Outdated")));
+  await expect.element(screen.getByRole("heading", { name: "Newest" })).toBeVisible();
 });

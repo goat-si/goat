@@ -101,6 +101,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
 import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
+import { useGoatBotTaskSearch } from "./goatBot/useGoatBotTaskSearch";
 import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
 import { useAtomValue } from "@effect/atom-react";
 
@@ -1844,6 +1845,12 @@ function OpenCommandPaletteDialog(props: {
           ? changeAppearanceItem.groups
           : (currentView?.groups ?? rootGroups);
 
+  const botTaskGroups = useGoatBotTaskSearch(
+    goatBots,
+    deferredQuery,
+    currentView === null,
+    navigate,
+  );
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
   const filteredGroups = filterCommandPaletteGroups({
@@ -2479,7 +2486,7 @@ function OpenCommandPaletteDialog(props: {
           },
         ];
 
-  let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
+  let displayedGroups: CommandPaletteView["groups"] = [...filteredGroups, ...botTaskGroups];
   if (newProjectFlow !== null) {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),

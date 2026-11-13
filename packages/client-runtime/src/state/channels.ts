@@ -266,6 +266,14 @@ export function createChannelEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     listBotThreads,
+    getBotTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:get-bot-task",
+      tag: CHANNEL_GATEWAY_WS_METHODS.getBotTask,
+    }),
+    searchBotTasks: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:search-bot-tasks",
+      tag: CHANNEL_GATEWAY_WS_METHODS.searchBotTasks,
+    }),
     /** One page of a bot's task history, read on request rather than kept live. */
     listBotThreadsPage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:list-bot-threads-page",
