@@ -304,7 +304,7 @@ export const HubMachineStatus = Schema.Struct({
   steps: Schema.Array(HubMachineStep).check(Schema.isMaxLength(32)),
   message: Schema.String.check(Schema.isMaxLength(500)),
   nextAction: Schema.NullOr(Schema.String.check(Schema.isMaxLength(300))),
-  /** disposable, conflict or kept today; a client treats a value it does not know as kept. */
+  /** disposable, conflict or kept today; a client treats a value it does not know as conflict. */
   class: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
   /** The admitted key has not been confirmed gone from the hub's Pen view. */
   penMember: Schema.Boolean,
