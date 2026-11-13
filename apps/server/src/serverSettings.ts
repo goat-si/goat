@@ -83,6 +83,7 @@ import {
   type HubConsentGenerations,
   makeHubConsentGenerations,
 } from "./hub/hubConsentGenerations.ts";
+import { alsoStampDisposableSwitch } from "./hub/disposable/disposableSwitch.ts";
 import {
   agentWorkspaceTerminalSettingsMethods,
   rejectAgentWorkspaceTerminalPolicyChange,
@@ -958,7 +959,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       updateTestSettings,
       "test settings",
       rejectMemoryHubSettingsPatch,
-      stampGoatclaw,
+      stampSettings,
     ),
     updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
@@ -1126,6 +1127,7 @@ const stampGoatclaw = (current: ServerSettings, next: ServerSettings) =>
           goatclaw: { ...next.goatclaw, updatedAt: DateTime.formatIso(now) },
         })),
       );
+const stampSettings = alsoStampDisposableSwitch(stampGoatclaw);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -2149,7 +2151,7 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings,
       settingsPath,
       rejectMemoryHubSettingsPatch,
-      stampGoatclaw,
+      stampSettings,
     ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
       updateAndPersistSettings(
