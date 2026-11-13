@@ -178,6 +178,35 @@ func receive(t *testing.T, c *websocket.Conn, size int) {
 	}
 }
 
+// The relay writes one socket's messages in order and counts a data message only after its write returns, so a
+// peer can read data before it is counted. A pong comes behind everything queued before it and is never counted:
+// once a socket's pong arrives, all data written to that socket so far is in the totals.
+
+// counted waits until the data the relay wrote to client socket c so far is counted.
+func counted(t *testing.T, c *websocket.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	if err := c.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if typ, p, err := c.Read(ctx); err != nil || typ != websocket.MessageText || string(p) != "pong" {
+		t.Fatalf("client read %q (%v) after its ping, want pong", p, err)
+	}
+}
+
+// counted waits until the data the relay wrote to the node's uplink so far is counted.
+func (n *liveNode) counted(t *testing.T) {
+	t.Helper()
+	if err := n.ws.Write(context.Background(), websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-n.pongs:
+	case <-time.After(failsafe):
+		t.Fatal("no pong reached the node")
+	}
+}
+
 // session dials a session to n and returns its client socket and sid.
 func (lv *live) session(t *testing.T, n *liveNode) (*websocket.Conn, uint32) {
 	t.Helper()
@@ -391,6 +420,8 @@ func TestSummariesCountOpenSessionsOnceAndStaySilentWhenNothingChanged(t *testin
 	n.nextFrame(t, sid)
 	n.data(t, sid, 800)
 	receive(t, c, 800)
+	n.counted(t)
+	counted(t, c)
 	lv.s.Summarize()
 	nodes := log.lines(t, "node")
 	if len(nodes) != 1 || nodes[0]["toNode"] != float64(300) || nodes[0]["fromNode"] != float64(800) || nodes[0]["sessions"] != float64(0) {
