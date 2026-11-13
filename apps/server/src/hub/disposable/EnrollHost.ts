@@ -87,7 +87,7 @@ export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
 }> {}
 
 /**
- * Writes a machine's one-line known_hosts once, through a temporary file renamed into place, so a
+ * Writes a machine's one-line known_hosts once, through a temporary file linked into place, so a
  * failed write never leaves a partial file; a file holding anything else is "changed".
  */
 export const writeKnownHostsOnce = Effect.fn("EnrollHost.writeKnownHostsOnce")(
@@ -95,6 +95,10 @@ export const writeKnownHostsOnce = Effect.fn("EnrollHost.writeKnownHostsOnce")(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const file = path.join(directory, attachId);
+    // One step per record runs at a time, so a temporary file of this record is a crash's leftover.
+    for (const name of yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => [])))
+      if (name.startsWith(attachId + ".new-"))
+        yield* Effect.ignore(fs.remove(path.join(directory, name)));
     const compare = (existing: string) =>
       existing === line
         ? Effect.succeed(file)

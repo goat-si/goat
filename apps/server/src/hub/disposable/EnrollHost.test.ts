@@ -70,12 +70,26 @@ it.live.skipIf(WINDOWS)("the known_hosts line is published whole and written onc
     const file = yield* writeKnownHostsOnce(dir, "a1", line);
     expect(yield* fs.readFileString(file)).toBe(line);
     expect(yield* writeKnownHostsOnce(dir, "a1", line)).toBe(file);
-    // Only the published file is left: the line went through a temporary file and a rename.
+    // Only the published file is left: the line went through a temporary file and a link.
     expect(yield* fs.readDirectory(dir)).toEqual(["a1"]);
     expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600);
     yield* fs.writeFileString(file, "");
     const changed = yield* writeKnownHostsOnce(dir, "a1", line).pipe(Effect.flip);
     expect(changed.reason).toBe("changed");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)("a temporary known_hosts file a crash left behind is removed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(yield* fs.makeTempDirectoryScoped(), "known_hosts");
+    const line = "pen-x ssh-ed25519 AAAA\n";
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(path.join(dir, "a1.new-crashed"), line);
+    yield* fs.writeFileString(path.join(dir, "a2.new-other"), line);
+    yield* writeKnownHostsOnce(dir, "a1", line);
+    expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(["a1", "a2.new-other"]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
