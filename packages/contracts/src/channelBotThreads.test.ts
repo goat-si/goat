@@ -5,6 +5,7 @@ import {
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
+  ChannelSearchBotTasksInput,
 } from "./channelGateway.ts";
 import { BotId } from "./botProfile.ts";
 
@@ -22,6 +23,11 @@ const decodeRowsBefore = Schema.decodeUnknownSync(
 const at = "2026-11-04T10:00:00.000Z";
 
 describe("bot thread contracts", () => {
+  it("rejects a NUL in a bot task search query", () => {
+    const decode = Schema.decodeUnknownSync(ChannelSearchBotTasksInput);
+    expect(() => decode({ botId: "main", query: "abc\0zzz" })).toThrow();
+    expect(() => decode({ botId: "main", query: "abc", limit: 51 })).toThrow();
+  });
   it("bounds a history cursor, and an older server's input drops the history key", () => {
     const decodeInput = Schema.decodeUnknownSync(ChannelListBotThreadsInput);
     expect(
