@@ -845,8 +845,8 @@ member's sessions load which relay.
   are lost while no daemon counts or the clock is unsure, and otherwise land at most one bucket after the one their
   bytes crossed the relay in, except where the reporter cannot see what happened, as when: a node that took a
   report's line handles it more than 1 s later and places it then; the wall clock is set or slewed while a report is
-  in flight (on macOS Go's monotonic clock does not follow slew), which the next report sees only after that report
-  was placed; the wall clock moves and moves back between two readings and shows no step at all; or a send or
+  in flight (on macOS Go's monotonic clock does not follow slew), which the next report can see only after that report
+  was placed, and a slew under 1 s never; the wall clock moves and moves back between two readings and shows no step at all; or a send or
   receive still in progress when a report is due returns later, and its bytes are counted as if they had just
   crossed.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
