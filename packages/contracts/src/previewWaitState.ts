@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Conditions a tab wait can add to its one target element; each needs a locator or selector. */
 export const PreviewWaitStateFields = {
@@ -21,6 +22,33 @@ export const PreviewWaitStateFields = {
 };
 
 const STATE_KEYS = ["enabled", "value", "checked", "selected"] as const;
+
+/** Conditions on the tab rather than one element; only the server browser reads them. */
+export const PreviewWaitPageFields = {
+  urlGlob: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))).annotate({
+    description:
+      "The URL matches this glob: * spans any characters, including /, and it is anchored unless it starts or ends with *. Without *, a substring.",
+  }),
+  download: Schema.optional(Schema.Literal(true)).annotate({
+    description:
+      "A download that started after this tab's latest agent input has saved; the result names its file. Each wait takes the next one.",
+  }),
+};
+
+const CONDITION_KEYS = [
+  "selector",
+  "locator",
+  "text",
+  "urlIncludes",
+  "urlGlob",
+  "loadState",
+  "download",
+] as const;
+
+/** Whether a wait names anything to wait for. */
+export const hasWaitCondition = (input: {
+  readonly [key in (typeof CONDITION_KEYS)[number]]?: unknown;
+}) => CONDITION_KEYS.some((key) => input[key] !== undefined);
 
 /** Why a wait's state or element conditions cannot hold, or undefined when they can. */
 export const waitStateConflict = (input: {
