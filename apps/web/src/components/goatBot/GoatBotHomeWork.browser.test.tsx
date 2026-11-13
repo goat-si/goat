@@ -3,7 +3,7 @@ import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import "~/index.css";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const actions = vi.hoisted(() => ({
   show: vi.fn(),
@@ -42,6 +42,12 @@ vi.mock("~/state/query", () => ({
 }));
 
 import { GoatBotHomeWork } from "./GoatBotHomeWork";
+import {
+  rememberHistoryRows,
+  resetHistoryTasksForTests,
+  useHistoryWork,
+} from "./botWorkHistoryStore";
+import { ChannelTaskId } from "@goat/contracts";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -290,4 +296,70 @@ it("offers history continuation and explains incomplete older work and truncated
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("updates a history-only row when its Home menu pins and marks it read", async () => {
+  resetHistoryTasksForTests();
+  const [row] = setup([
+    taskRow("old", "Older task", "running", "2026-11-09T01:00:00.000Z", { unread: true }),
+  ]);
+  if (!row) throw new Error("missing fixture");
+  rememberHistoryRows(environmentId, [row]);
+  function Home() {
+    const cached = useHistoryWork(environmentId, ChannelTaskId.make("old"));
+    return view(cached ? [cached.task] : []);
+  }
+  await using screen = await render(<Home />);
+  actions.show.mockResolvedValueOnce("pin");
+  actions.update.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { ...row.view, pinnedAt: "2026-11-09T02:00:00.000Z" },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  expect(actions.show.mock.calls[1]?.[0]).toContainEqual({ id: "pin", label: "Unpin" });
+  actions.show.mockResolvedValueOnce("read");
+  actions.update.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { ...row.view, pinnedAt: "2026-11-09T02:00:00.000Z", readThrough: row.lastActivityAt },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await expect
+    .element(screen.getByRole("button", { name: /^Older task.*Unread/ }))
+    .not.toBeInTheDocument();
+});
+
+it("does not steal focus after a person leaves Show more while history is pending", async () => {
+  setup();
+  let finish: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  function Home() {
+    const [loaded, setLoaded] = useState(false);
+    const [expanded, setExpanded] = useState(false);
+    const rows = loaded
+      ? [taskRow("older", "Older task", "running", "2026-11-09T01:00:00.000Z")]
+      : [];
+    return (
+      <>
+        <p>Outside text</p>
+        {view(rows, {
+          historyAvailable: !loaded,
+          showAll: expanded,
+          onShowAllChange: setExpanded,
+          onLoadHistory: () => {
+            void waiting.then(() => setLoaded(true));
+          },
+        })}
+      </>
+    );
+  }
+  await using screen = await render(<Home />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await userEvent.click(screen.getByText("Outside text"));
+  expect(document.activeElement).toBe(document.body);
+  await act(() => finish());
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  expect(document.activeElement).toBe(document.body);
 });

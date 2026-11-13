@@ -89,26 +89,8 @@ export function acknowledgeHistoryRow(
   taskId: ChannelTaskId,
   through: string,
 ) {
-  const id = key(environmentId, taskId);
-  const entry = entries.get(id);
-  if (!entry) return;
-  const previous = entry.acknowledgedThrough;
-  const acknowledgedThrough =
-    previous !== null && atOrBefore(through, previous) ? previous : through;
-  const task = atOrBefore(entry.task.lastActivityAt, acknowledgedThrough)
-    ? {
-        ...entry.task,
-        unread: false,
-        view: { ...entry.task.view, readThrough: acknowledgedThrough },
-      }
-    : entry.task;
-  entries.set(id, {
-    ...entry,
-    task,
-    rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
-    acknowledgedThrough,
-  });
-  notify();
+  const entry = entries.get(key(environmentId, taskId));
+  if (entry) updateHistoryView(environmentId, taskId, { ...entry.task.view, readThrough: through });
 }
 
 export function updateHistoryView(
@@ -119,11 +101,33 @@ export function updateHistoryView(
   const id = key(environmentId, taskId);
   const entry = entries.get(id);
   if (!entry) return;
-  const task = { ...entry.task, view };
+  const previous = entry.acknowledgedThrough;
+  const incoming = view.readThrough;
+  const through =
+    incoming !== null &&
+    Number.isFinite(Date.parse(incoming)) &&
+    (previous === null || !Number.isFinite(Date.parse(previous)) || !atOrBefore(incoming, previous))
+      ? incoming
+      : previous;
+  const task = {
+    ...entry.task,
+    unread:
+      entry.task.unread && !(through !== null && atOrBefore(entry.task.lastActivityAt, through)),
+    view: { ...view, readThrough: through },
+  };
   entries.set(id, {
     ...entry,
     task,
     rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
+    acknowledgedThrough: through,
   });
+  notify();
+}
+
+export function clearHistoryEnvironment(environmentId: EnvironmentId) {
+  for (const id of entries.keys()) {
+    const [environment] = JSON.parse(id) as [string, string];
+    if (environment === environmentId) entries.delete(id);
+  }
   notify();
 }

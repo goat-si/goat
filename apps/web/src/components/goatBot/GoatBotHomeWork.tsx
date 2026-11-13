@@ -32,6 +32,7 @@ import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { updateHistoryView } from "./botWorkHistoryStore";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 
@@ -196,6 +197,9 @@ export function GoatBotHomeWork({
       {showMore && (
         <GoatBotShowMoreRow
           buttonRef={showMoreRef}
+          onBlur={() => {
+            pendingFocus.current = null;
+          }}
           expanded={showAll}
           label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
@@ -289,7 +293,10 @@ function WorkRow({
             ? { taskId: row.task.taskId, readThrough: row.lastActivityAt }
             : { taskId: row.task.taskId };
     const result = await update({ environmentId, input });
-    if (result._tag === "Success") onRefresh();
+    if (result._tag === "Success") {
+      updateHistoryView(environmentId, row.task.taskId, result.value);
+      onRefresh();
+    }
   }
   return (
     <div className="border-t border-border/50 first:border-t-0">

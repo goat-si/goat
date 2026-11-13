@@ -119,17 +119,20 @@ export function GoatBotShowMoreRow({
   onToggle,
   label,
   buttonRef,
+  onBlur,
 }: {
   readonly expanded: boolean;
   readonly onToggle: () => void;
   readonly label?: string | undefined;
   readonly buttonRef?: Ref<HTMLButtonElement>;
+  readonly onBlur?: () => void;
 }) {
   return (
     <div className="flex justify-center py-1">
       <button
         type="button"
         ref={buttonRef}
+        onBlur={onBlur}
         aria-expanded={expanded}
         onClick={onToggle}
         className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
