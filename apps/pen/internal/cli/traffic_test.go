@@ -208,7 +208,7 @@ func TestPipeReportsWhileItRunsAndCountsNothingTwice(t *testing.T) {
 	if _, err := inW.Write(make([]byte, 100)); err != nil {
 		t.Fatal(err)
 	}
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
 		t.Fatalf("interval report: %v", err)
@@ -420,13 +420,13 @@ func TestPipeDoesNotReportBytesTwiceWhenAnAnswerIsLost(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	if err := <-reported; err == nil {
 		t.Fatal("the report whose answer was dropped succeeded")
 	}
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	inW.Close()
 	if got := <-code; got != 0 {
 		t.Fatalf("pipe exit %d, stderr %q", got, errOut.String())
@@ -543,12 +543,12 @@ func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsItsAnswers(t *testing.T)
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	<-got
 	// More bytes after the periodic report took its count, so the end has a report of its own to send.
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	inW.Close()
 	endShutdown()
 	if c := <-code; c != 0 || errOut.Len() != 0 {
@@ -595,12 +595,12 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: those 100 bytes wait
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	// The daemon answers again only a bucket after the refused bytes began: they are dropped, not counted now.
 	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now()
@@ -685,12 +685,12 @@ func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 100 bytes from the start
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	set(start.Add(14*time.Minute), 14*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 150, of which 50 from +2 min
@@ -742,12 +742,12 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now() // the first report comes a bucket late
 	ticks <- time.Now() // taken only once the late report has finished
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	inW.Close()
 	if c := <-code; c != 0 {
 		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
@@ -831,7 +831,7 @@ func TestPipeDropsBytesPendingWhenTheWallClockGoesBack(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(noon.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
@@ -839,12 +839,12 @@ func TestPipeDropsBytesPendingWhenTheWallClockGoesBack(t *testing.T) {
 	}
 	// The wall clock goes back to 11:58 a minute later; 50 bytes cross at 11:59.
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	set(noon.Add(-time.Minute), 4*time.Minute)
 	ticks <- time.Now()
 	ticks <- time.Now() // taken once the report above returned
 	inW.Write(make([]byte, 30))
-	out.wait(180)
+	echoedAndCounted(out, inW, 180)
 	set(noon.Add(time.Minute), 6*time.Minute)
 	ticks <- time.Now()
 	if err := <-reported; err == nil {
@@ -903,11 +903,11 @@ func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadlin
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	<-lines // the periodic report, held
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	inW.Close()
 	<-began // the end of the session has begun while the periodic report is still held
 	answers <- `{"t":"counted"}`
@@ -1006,4 +1006,12 @@ func TestPipeKeepsBytesWhenTheWallClockSlewsHalfASecond(t *testing.T) {
 	if r := got(); len(r) != 2 || r[0].In != 100 || r[0].Out != 100 || r[1].In != 50 || r[1].Out != 50 {
 		t.Fatalf("reports %+v; want 100 then 50 bytes each way counted across a 500 ms slew", r)
 	}
+}
+
+// echoedAndCounted waits until the echo of n bytes in all reached stdout and the pipe has read its stdin again. The pipe
+// reads stdin, sends, then reads again, and the session counts a send before the call returns, so once that empty
+// write is taken every byte written before it is counted both ways; the echo alone can come back first.
+func echoedAndCounted(out *signalWriter, inW *io.PipeWriter, n int) {
+	out.wait(n)
+	inW.Write(nil)
 }
