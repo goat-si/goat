@@ -621,7 +621,6 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 // counted from the burn, however far off the invite's expiry is.
 func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
-	defer close(release)
 	oldLink, oldExpiry := serveJoinLink, inviteExpiry
 	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
 	timers := make(chan chan time.Time, 2)
@@ -651,7 +650,10 @@ func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, _ := mesh.ParseToken(r.Token)
-	go Join(ctx, jst, jid, tok, "j")
+	joined := make(chan error, 1)
+	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
+	// The held join is let go and drained before the test's directories are removed.
+	defer func() { close(release); <-joined }()
 	<-entered
 	<-timers                 // the invite's expiry, an hour off, never fires
 	(<-timers) <- time.Now() // the join's own time, counted from the burn, is up
