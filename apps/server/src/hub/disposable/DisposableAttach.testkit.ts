@@ -11,6 +11,7 @@ import * as Settings from "../../serverSettings.ts";
 import type { Delegation } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import * as Store from "./DisposableMachineStore.ts";
+import { withPersonConsent } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts } from "./features.ts";
 import {
   PEN_ATTACH_FEATURES,
@@ -202,12 +203,14 @@ export const world = <A, E>(
   return Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 146 });
     const settings = yield* Settings.ServerSettingsService;
-    yield* settings.updateSettings({
-      hub: {
-        enabled: true,
-        attachDisposableMachines: { enabled: true, provisioners: [THREAD as never], cap: 2 },
-      },
-    });
+    yield* withPersonConsent(
+      settings.updateSettings({
+        hub: {
+          enabled: true,
+          attachDisposableMachines: { enabled: true, provisioners: [THREAD as never], cap: 2 },
+        },
+      }),
+    );
     return yield* body(pen, home, grant);
   }).pipe(
     Effect.provideServiceEffect(Attach.DisposableAttach, Attach.make),
@@ -257,9 +260,10 @@ export const rows = Effect.flatMap(
   SqlClient.SqlClient,
   (sql) => sql<Record<string, unknown>>`SELECT * FROM disposable_machines ORDER BY created_at`,
 );
+// A person changes the switch in Settings.
 export const switchTo = (patch: Record<string, unknown>) =>
   Effect.flatMap(Settings.ServerSettingsService, (settings) =>
-    settings.updateSettings({ hub: { attachDisposableMachines: patch } }),
+    withPersonConsent(settings.updateSettings({ hub: { attachDisposableMachines: patch } })),
   );
 export const reconcile = Effect.flatMap(Attach.DisposableAttach, (service) => service.reconcile);
 export const listed = (attachId: string) =>
