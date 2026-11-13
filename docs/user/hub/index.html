@@ -91,6 +91,20 @@ To move a Child to another SSH alias of the same machine, such as its
 once, for both aliases, the machine, the old link and the new host key, and GOAT
 leaves the old alias and links the new one. If the new link fails, the same
 approval finishes the move later. Aliases that name different machines are refused.</p>
+<p><strong>Routes</strong> on a Remote Link Child’s row, in the web and desktop apps, lists the
+SSH aliases the hub tries for its link, in order, and marks the pinned one. Add
+another alias of the same machine, such as a LAN or Tailscale alias ahead of its
+<code>pen-&lt;name&gt;</code> alias, to keep its traffic off the Pen relay: the hub stores a new
+route only after it proves that machine’s pinned host key over it. Move a route
+up or down, or remove one; the pinned alias stays. A link created with one
+exclusive route keeps that route and cannot be edited, and a Child that opened
+its own link to the hub has no routes to change. When you cannot answer hub
+decisions yourself, a change waits in the decision inbox; continue it from the
+row once it is approved, until the page reloads. If the hub does not answer
+within 2 minutes, the change may still finish there, so open the routes again
+before you retry. Agents use <code>goat_hub_device_routes_update</code>, and a profile
+other than owner asks you first. Routes need an OpenCodex release with link
+routes on the hub; an older one says so.</p>
 <h2 id="sync-opencodex-models">Sync OpenCodex models</h2>
 <p><strong>Sync OpenCodex</strong> loads OpenCodex’s current models into Codex, on the hub first
 and then on each linked Child. Find it in <strong>Settings → Hub → OpenCodex models</strong>,
@@ -161,8 +175,16 @@ reading of the hub’s OpenCodex, so traffic before that does not show, and a sh
 measurement says how long it covers. Bytes whose route GOAT could not confirm
 are shown apart from relay and direct ones. A row says <strong>not measured</strong> when the
 hub’s OpenCodex does not report a number yet.</p>
+<p>GOAT keeps these counts in memory, so they start over when GOAT restarts on the
+hub, and the hub-wide warning covers only what it counted since then. GOAT reads
+the numbers only while someone has Hub or Fleet open or an agent reads host
+status: bytes across a longer gap are spread evenly over it, and the row says
+<strong>averaged</strong>. A row says the figures are a lower bound when some requests to the
+hub carried no length, and for 24 hours after a link WebSocket was open, since
+WebSocket traffic is not counted.</p>
 <p>GOAT warns in Hub and Fleet when one Child sends more than 5 GB through the relay
 in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
-turn a warning off, in <strong>Settings → Hub → Relay traffic warning</strong>. A warning
-never stops a turn or a link.</p>
+turn a warning off, in <strong>Settings → Hub → Relay traffic warning</strong> on the web or
+desktop app, or ask an agent to change them. A warning never stops a turn or a
+link.</p>
 </article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#turn-it-on">Turn it on</a></li><li><a href="#add-repair-or-remove-a-device">Add, repair, or remove a device</a></li><li><a href="#sync-opencodex-models">Sync OpenCodex models</a></li><li><a href="#permission-profiles">Permission profiles</a></li><li><a href="#read-a-device">Read a device</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
