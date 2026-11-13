@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { describe, expect } from "vite-plus/test";
 
+import { renderDigest } from "../orchestration-v2/TurnDigest.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { launchedResultOwed, owesLaunched, type LaunchedEnd } from "./channelLaunchedResults.ts";
 
@@ -164,5 +165,170 @@ it.effect("keeps a session busy while a wake that arrived since its first read s
       [record as never],
     );
     expect(owed).toBe(true);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+const digestOf = (ids: ReadonlyArray<string>) => ({
+  id: ids[0]!,
+  text: renderDigest(
+    ids[0]!,
+    ids.map((id) => ({ id, text: "A launched thread finished." })),
+  ),
+});
+
+describe("launch wakes folded into one turn", () => {
+  const first = wakeId("run:run:c:1", session, "", "channel-child-work:first");
+  const mine = wakeId("run:run:c:1");
+
+  it("regression: a wake folded behind another one in a task's own turn settles its end", () => {
+    const run = ownRun(first);
+    expect(launchedResultOwed(end(), [run], [run], { messages: [digestOf([first, mine])] })).toBe(
+      false,
+    );
+  });
+
+  it("contract: a wake another task's turn holds settles the end only when recovery settled it", () => {
+    const run = ownRun(first);
+    const messages = [digestOf([first, mine])];
+    expect(launchedResultOwed(end(), [], [run], { messages })).toBe(true);
+    expect(launchedResultOwed(end(), [], [run], { messages, settled: new Set([mine]) })).toBe(
+      false,
+    );
+  });
+});
+
+/** A session whose launching runs and their child-work rows are stored, with one digest run. */
+const foldedSession = (input: {
+  readonly launches: ReadonlyArray<{
+    readonly task: string;
+    readonly run: string;
+    readonly threads: ReadonlyArray<string>;
+  }>;
+  readonly digest: ReadonlyArray<string>;
+  readonly stored?: (thread: string) => boolean;
+}) =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const sql = yield* SqlClient.SqlClient;
+    const records: Array<{ readonly taskId: string }> = [];
+    for (const launch of input.launches) {
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${session}, ${"message:" + launch.run}, ${launch.task}, 1, 'task', '2026-11-07T00:00:00.000Z')`;
+      for (const thread of launch.threads) {
+        const record = {
+          ownerId: "owner",
+          taskId: ChannelTaskId.make(launch.task),
+          childWorkId: ChannelChildWorkId.make(launch.run + "-" + thread),
+          generation: 1,
+          callerThreadId: session,
+          callerRunId: RunId.make(launch.run),
+          requestKey: launch.run + thread,
+          promptDigest: "digest",
+          surface: "thread_launch",
+          destination: { threadId: ThreadId.make(thread) },
+          state: "completed",
+          createdAt: "2026-11-07T00:00:00.000Z",
+          updatedAt: "2026-11-07T00:00:00.000Z",
+        } as const;
+        records.push(record);
+        if (input.stored?.(thread) === false) continue;
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          VALUES (${"child-work:" + launch.task + ":" + record.childWorkId}, ${JSON.stringify(record)}, '2026-11-07T00:00:00.000Z')`;
+      }
+    }
+    const wakes = input.digest.map((thread) => wakeId("run:run:c:1", session, "", thread));
+    const digest = digestOf(wakes);
+    const sessionRuns = [
+      ...input.launches.map((launch, index) => ({
+        id: RunId.make(launch.run),
+        ordinal: index + 1,
+        status: "completed",
+        userMessageId: "message:" + launch.run,
+      })),
+      {
+        id: RunId.make("digest"),
+        ordinal: input.launches.length + 1,
+        status: "completed",
+        userMessageId: digest.id,
+      },
+    ];
+    const threads = {
+      getThreadRecords: (threadId: string) =>
+        Effect.succeed(
+          threadId === session
+            ? { runs: sessionRuns, messages: [digest] }
+            : { runs: [{ id: runId, ordinal: 1, status: "completed", completedAt: null }] },
+        ),
+    } as never;
+    const owes = (task: string) =>
+      owesLaunched(
+        {
+          threads,
+          sql,
+          watch: () => Effect.succeed({ detached: false, skippedRuns: [], reportedEnds: {} }),
+        },
+        session,
+        { taskId: ChannelTaskId.make(task), generation: 1 },
+        records.filter((record) => record.taskId === task) as never,
+      );
+    return { owes };
+  });
+
+const childA = "channel-child-work:a";
+const childB = "channel-child-work:b";
+
+it.effect(
+  "regression: a session whose task's two launched threads ended in one folded turn owes nothing, so it can rotate",
+  () =>
+    Effect.gen(function* () {
+      const { owes } = yield* foldedSession({
+        launches: [{ task: "task:one", run: "launch-one", threads: [childA, childB] }],
+        digest: [childA, childB],
+      });
+      expect(yield* owes("task:one")).toBe(false);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "regression: a digest folded before wakes named their launching run settles each task's own end",
+  () =>
+    Effect.gen(function* () {
+      const { owes } = yield* foldedSession({
+        launches: [
+          { task: "task:one", run: "launch-one", threads: [childA] },
+          { task: "task:two", run: "launch-two", threads: [childB] },
+        ],
+        digest: [childA, childB],
+      });
+      expect(yield* owes("task:one")).toBe(false);
+      expect(yield* owes("task:two")).toBe(false);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("invariant: a folded wake whose launching run is unknown or ambiguous stays owed", () =>
+  Effect.gen(function* () {
+    const ambiguous = yield* foldedSession({
+      launches: [
+        { task: "task:one", run: "launch-one", threads: [childA] },
+        { task: "task:two", run: "launch-two", threads: [childB] },
+        { task: "task:three", run: "launch-three", threads: [childB] },
+      ],
+      digest: [childA, childB],
+    });
+    expect(yield* ambiguous.owes("task:two")).toBe(true);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("invariant: a folded wake with no stored launch record stays owed", () =>
+  Effect.gen(function* () {
+    const missing = yield* foldedSession({
+      launches: [
+        { task: "task:one", run: "launch-one", threads: [childA] },
+        { task: "task:two", run: "launch-two", threads: [childB] },
+      ],
+      digest: [childA, childB],
+      stored: (thread) => thread !== childB,
+    });
+    expect(yield* missing.owes("task:two")).toBe(true);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

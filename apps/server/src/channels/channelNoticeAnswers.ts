@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import type * as ChannelLedger from "./ChannelLedger.ts";
 import { replyDelivery } from "./channelReplyDelivery.ts";
@@ -27,7 +28,10 @@ export const noticeMessageIds = (
 ) =>
   new Set(
     messages.flatMap((message) =>
-      message.notification?.aboutRunId === undefined ? [] : [message.id],
+      message.notification?.aboutRunId === undefined ||
+      message.id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)
+        ? []
+        : [message.id],
     ),
   );
 
@@ -76,6 +80,7 @@ export const deliverNoticeAnswers = Effect.fn("ChannelWorkerReports.noticeAnswer
     LEFT JOIN channel_runtime_state s ON s.key = 'notice-answer:' || r.thread_id || ':' || r.run_id
     WHERE r.thread_id >= 'goat-bot-session:' AND r.thread_id < 'goat-bot-session;'
       AND json_extract(m.payload_json, '$.notification.aboutRunId') IS NOT NULL
+      AND substr(m.message_id, 1, ${LAUNCH_WATCH_MESSAGE_PREFIX.length}) != ${LAUNCH_WATCH_MESSAGE_PREFIX}
       AND r.status IN ${sql.in(ENDED)}
       AND (s.key IS NULL OR (json_extract(s.value_json, '$.state') = 'retry'
         AND json_extract(s.value_json, '$.nextAt') <= ${nowIso}))
