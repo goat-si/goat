@@ -199,3 +199,31 @@ it("a read the server refuses for this device's access says so instead of offeri
   await net.calls[1]?.fail("forbidden");
   expect(state()).toBe("denied");
 });
+
+it("a reload kept from before the lookup stopped asking sends nothing", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  const earlier = seen.current;
+  await show({ supported: false });
+  if (earlier?.state === "known") earlier.reload();
+  await show({ needed: false });
+  if (earlier?.state === "known") earlier.reload();
+  await act(async () => root?.unmount());
+  root = null;
+  if (earlier?.state === "known") earlier.reload();
+  expect(net.calls).toHaveLength(1);
+});
+
+it("after leaving a task and coming back, an earlier reload rereads that same task and its answer lands", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  const earlier = seen.current;
+  await show({ taskId: "t2" as Props["taskId"] });
+  await show();
+  if (earlier?.state === "known") earlier.reload();
+  expect(net.calls.map((call) => call.input.taskId)).toEqual(["t1", "t2", "t1", "t1"]);
+  await net.calls[3]?.answer(known("t1"));
+  expect(state()).toBe("known");
+});

@@ -80,7 +80,7 @@ export function useMobileBotTaskLookup(input: {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [failedKey, setFailedKey] = useState<string | null>(null);
   const sequence = useRef(0);
-  // The task this screen reads now; a reload kept from an earlier one sends nothing.
+  // The task this screen reads now, while it asks; a reload kept from before sends nothing.
   const shown = useRef<string | null>(null);
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
     const key = JSON.stringify([environmentId, botId, taskId]);
@@ -110,10 +110,11 @@ export function useMobileBotTaskLookup(input: {
   const readShown = useEffectEvent(read);
   // oxlint-disable-next-line goat/react-effect-budget -- Reads the shown task from the server and drops a read that a newer one replaced.
   useEffect(() => {
-    shown.current = key;
     if (!asking || environmentId === null || taskId === null) return;
+    shown.current = key;
     readShown(environmentId, botId, taskId);
     return () => {
+      shown.current = null;
       sequence.current++;
     };
   }, [asking, key, environmentId, botId, taskId]);

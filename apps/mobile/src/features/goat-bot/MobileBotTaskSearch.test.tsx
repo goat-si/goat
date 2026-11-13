@@ -290,3 +290,22 @@ it("holds at most 50 results: the last page asks only for what is left, then off
     vi.useRealTimers();
   }
 });
+
+it("returning to a query that was answered before shows nothing old and waits a quiet moment again", async () => {
+  vi.useFakeTimers();
+  try {
+    await setup();
+    await type("report");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await net.calls[0]?.answer({ tasks: [hit("t1", "Weekly report")], nextCursor: "c1" });
+    expect(text()).toContain("Weekly report");
+    await type("notes");
+    await type("report");
+    expect(text()).not.toContain("Weekly report");
+    expect(button("Load more")).toBeUndefined();
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    expect(net.calls[1]?.input).toEqual({ botId: "main", query: "report", limit: 20 });
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -58,6 +58,12 @@ export function useMobileBotTaskSearch(input: {
   const query = taskSearchQuery(input.text);
   const key = query === null ? null : JSON.stringify([environmentId, botId, query]);
   const [state, setState] = useState<{ key: string; value: MobileTaskSearchState } | null>(null);
+  // Results belong to one visit of a query: leaving it drops them, so a return asks again.
+  const [shownKey, setShownKey] = useState(key);
+  if (shownKey !== key) {
+    setShownKey(key);
+    setState(null);
+  }
   // The field's current query, the request in flight, and one waiting behind it.
   const generation = useRef(0);
   const busy = useRef(false);
