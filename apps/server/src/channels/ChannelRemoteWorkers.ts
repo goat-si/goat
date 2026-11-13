@@ -73,6 +73,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { REMOTE_COPY } from "./channelRemoteCopy.ts";
+import { sameAttempt } from "./channelRemoteAttempt.ts";
 import { requesterForDelivery } from "./channelSenderAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
 import { channelBotFilesFor, readChannelBotNotesSnapshot } from "./channelBotNotes.ts";
@@ -2536,14 +2537,18 @@ const make = Effect.gen(function* () {
               : Effect.fail(new AuthorityLost()),
         ),
       );
-      // Each refusal holds only while the task still runs this attempt; a moved one is left to the
-      // next pass, which drops it. Whether an earlier try reached the host stays unknown.
+      // Each refusal holds only while the task and its remote state still run this attempt; a
+      // moved one is left to the next pass. Whether an earlier try reached the host stays unknown.
       const refuse = (text: string) =>
         refuseForward(ledger, stored, text, owner, pending.sequence, [ids.messageId], (latest) =>
-          Effect.succeed(
-            latest.task.generation === stored.task.generation &&
-              latest.task.worker?.threadId === worker.threadId &&
-              latest.task.worker.host === worker.host,
+          readState(stored.task.taskId).pipe(
+            Effect.map(
+              (current) =>
+                latest.task.generation === stored.task.generation &&
+                latest.task.worker?.threadId === worker.threadId &&
+                latest.task.worker.host === worker.host &&
+                sameAttempt(state, current),
+            ),
           ),
         );
       const refuseSender = (refused: SenderRefused) =>

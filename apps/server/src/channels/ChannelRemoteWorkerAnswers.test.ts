@@ -557,4 +557,47 @@ describe("remote answer refusals", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect(
+    "regression: a remote state taken over after the authority check, with the task unchanged, is not refused against",
+    () => {
+      const { machine, harness } = pinnedHarness();
+      return Effect.gen(function* () {
+        yield* askedOnRemote(machine, "do@mac-studio: ask me", "state-after");
+        const sql = yield* SqlClient.SqlClient;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const writes = yield* taskWriteMilestones();
+        const taskId = (yield* onlyTask).taskId;
+        onFirstSend(machine, revoke().pipe(Effect.provideService(SqlClient.SqlClient, sql)));
+        // After the refused authorization read it, the remote state moves on; the task row does not.
+        machine.onAuthorizationDenied = (call) =>
+          call.tool === "goat_thread_send"
+            ? Effect.suspend(() => {
+                machine.onAuthorizationDenied = undefined;
+                return ledger.updateRemoteWorker({
+                  owner: runtime.ownerToken,
+                  now: "2026-10-12T02:00:00.000Z",
+                  update: {
+                    taskId,
+                    update: (json) =>
+                      JSON.stringify({ ...JSON.parse(json!), remoteThreadId: "moved-thread" }),
+                  },
+                });
+              }).pipe(Effect.orDie, Effect.asVoid)
+            : Effect.void;
+        yield* answer("state-after");
+        yield* runtime.drain;
+        const [pending] = yield* ledger.listPendingForwards(10);
+        yield* runtime.drain;
+        if (pending !== undefined) yield* writes.waitForForward(pending.sequence);
+        assert.deepStrictEqual(
+          (yield* openQuestionTexts).filter((text) => text.includes("no longer covers")),
+          [],
+        );
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
