@@ -7,7 +7,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { AVAILABLE_CONNECTION_STATE, PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  type PreparedConnection,
+  PrimaryConnectionTarget,
+} from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { isHubMachinesUnsupportedError, isHubNodesUnsupportedError } from "../hubNodes.ts";
 import type { WsRpcProtocolClient } from "./protocol.ts";
@@ -35,7 +39,7 @@ const supervisorFor = Effect.fn("TestOlderHub.supervisor")(function* (client: Ws
     target,
     state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
     session: yield* SubscriptionRef.make(Option.some(session)),
-    prepared: yield* SubscriptionRef.make(Option.none()),
+    prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none()),
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Ref.make(0).pipe(Effect.asVoid),
