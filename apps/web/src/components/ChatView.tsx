@@ -3,6 +3,7 @@ import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
+import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpen";
 import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
 import {
   deriveAvailableRevertTurnCounts,
@@ -2293,15 +2294,11 @@ export default function ChatView(props: ChatViewProps) {
     timelineAnchorMessageId,
     setTimelineAnchor,
   });
-  useEffect(() => {
-    if (!activeThread?.id || terminalUiState.terminalOpen) return;
-    const frame = window.requestAnimationFrame(() => {
-      focusComposerStable();
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [activeThread?.id, focusComposerStable, terminalUiState.terminalOpen]);
+  useFocusComposerOnThreadOpen(
+    activeThread?.id,
+    !terminalUiState.terminalOpen,
+    focusComposerStable,
+  );
   useEffect(() => {
     if (embedded) return;
     if (!activeThread?.id || terminalUiState.terminalOpen || isMobileViewport) return;
