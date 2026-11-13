@@ -147,7 +147,11 @@ export function GoatBotHomeWork({
         else rowRefs.current.delete(task.row.task.taskId);
         if (task.row.task.taskId === focusTaskId) focusRef?.(element);
       }}
-      launchesTruncated={history?.launchesTruncated.has(task.row.task.taskId) === true}
+      launchesTruncated={
+        history?.supported === true &&
+        !history.currentTaskIds.has(task.row.task.taskId) &&
+        history.launchesTruncated.has(task.row.task.taskId)
+      }
     />
   );
   return (

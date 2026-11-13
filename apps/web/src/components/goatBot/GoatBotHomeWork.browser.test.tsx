@@ -318,6 +318,7 @@ it("offers history continuation and explains incomplete older work and truncated
   await using screen = await render(
     view(rows, {
       history: history({
+        supported: true,
         hasMore: true,
         incomplete: true,
         launchesTruncated: new Set([ChannelTaskId.make("task-a")]),
@@ -331,6 +332,25 @@ it("offers history continuation and explains incomplete older work and truncated
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("removes the truncated history note when the task returns to the current list", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const truncated = new Set([ChannelTaskId.make("task-a")]);
+  await using screen = await render(
+    view(rows, { history: history({ supported: true, launchesTruncated: truncated }) }),
+  );
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  await screen.rerender(
+    view(rows, {
+      history: history({
+        supported: true,
+        launchesTruncated: truncated,
+        currentTaskIds: truncated,
+      }),
+    }),
+  );
+  expect(screen.getByText("Some threads are listed in Threads.").query()).toBeNull();
 });
 
 it("a failed older-work read is announced in the status region", async () => {
