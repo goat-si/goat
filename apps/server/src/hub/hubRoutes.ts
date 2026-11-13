@@ -222,7 +222,7 @@ export const makeRoutes = (deps: RoutesDeps) => {
     if (status.role === "child")
       return {
         failed: "This machine is a Child and has no Home links.",
-        code: "not_home",
+        code: "this_machine_is_child",
       } as const;
     const record = status.links.find((entry) => entry.alias === alias);
     return record === undefined
