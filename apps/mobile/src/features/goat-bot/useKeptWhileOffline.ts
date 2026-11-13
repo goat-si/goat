@@ -10,7 +10,7 @@ export function useKeptWhileOffline<T>(data: T | null, scope: string, offline: b
   if (
     signature !== null &&
     data !== null &&
-    (kept?.scope !== scope || kept.signature !== signature)
+    (kept === null || kept.scope !== scope || kept.signature !== signature)
   )
     setKept({ scope, signature, data });
   return data ?? (offline && kept?.scope === scope ? kept.data : null);

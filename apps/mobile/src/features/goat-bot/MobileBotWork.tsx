@@ -135,7 +135,13 @@ export function MobileBotWork(props: {
   const home = useMobileGoatBotHomeMode();
   // The sheet reaches the bottom of the screen; its last entry clears the home indicator.
   const bottomInset = useSafeAreaInsets().bottom + 24;
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const picked = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  // With no bot computer saved the pick follows connected computers; while none is, the last
+  // one stays selected, offline, so its kept work stays readable.
+  const pickedId = picked?.environmentId ?? null;
+  const lastId = useKeptWhileOffline(pickedId, props.member?.threadId ?? "main", true);
+  const selected =
+    picked ?? home.environments.find((environment) => environment.environmentId === lastId) ?? null;
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities = environmentId

@@ -125,6 +125,13 @@ const state = vi.hoisted(() => ({
   remoteOpenable: true,
   connected: true,
   retrySupported: false,
+  botRef: { threadId: "bot", environmentId: "env" } as {
+    threadId: string;
+    environmentId: string;
+  } | null,
+  otherConnected: false,
+  rows2: [] as BotThreadRow[],
+  taskKeys: [] as string[],
   taskSupported: true,
   childSupported: true,
   membersSupported: true,
@@ -167,7 +174,10 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
-    listBotThreads: () => "task",
+    listBotThreads: (key: { environmentId: string }) => {
+      state.taskKeys.push(key.environmentId);
+      return key.environmentId === "env2" ? "task2" : "task";
+    },
     listChildWork: (key: unknown) => {
       state.childKeys.push(key);
       return "child";
@@ -213,23 +223,41 @@ vi.mock("../../state/environments", () => ({
           },
         },
       ],
+
+      [
+        "env2",
+        {
+          serverConfig: {
+            environment: {
+              capabilities: {
+                goatBotTaskThreads: state.taskSupported,
+                goatBotChildWork: state.childSupported,
+                goatBotMembers: state.membersSupported,
+                goatBotTaskRetry: state.retrySupported,
+              },
+            },
+          },
+        },
+      ],
     ]),
   }),
 }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) => ({
     data:
-      key === "task"
-        ? state.taskPending
-          ? null
-          : { rows: state.rows, remoteWork: state.remoteWork }
-        : key === "child"
-          ? state.childPending || state.childError
+      key === "task2"
+        ? { rows: state.rows2, remoteWork: [] }
+        : key === "task"
+          ? state.taskPending
             ? null
-            : { groups: state.groups }
-          : key === "routines"
-            ? { tasks: state.routineTasks }
-            : null,
+            : { rows: state.rows, remoteWork: state.remoteWork }
+          : key === "child"
+            ? state.childPending || state.childError
+              ? null
+              : { groups: state.groups }
+            : key === "routines"
+              ? { tasks: state.routineTasks }
+              : null,
     error: key === "task" ? state.taskError : key === "child" ? state.childError : null,
     cause: key === "task" ? state.taskError : null,
     isPending: key === "child" && state.childPending,
@@ -279,15 +307,32 @@ vi.mock("./MobileBotMemory", () => ({
     <button onClick={() => props.onDraft?.("Remember this")}>Draft a note</button>
   ),
 }));
-vi.mock("./goatBotHomeMode", () => ({
-  pickMobileGoatBotEnvironment: () => ({
-    environmentId: "env",
-    connected: state.connected,
-    label: "jun-mac",
-  }),
-}));
+// The real environment selector runs over these computers; "env2" is a second one, connected only
+// when a test asks for it.
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
+  useMobileGoatBotHomeMode: () => ({
+    environments: [
+      {
+        environmentId: "env",
+        connected: state.connected,
+        supportsChannelLedger: true,
+        primary: true,
+        label: "jun-mac",
+      },
+      ...(state.otherConnected
+        ? [
+            {
+              environmentId: "env2",
+              connected: true,
+              supportsChannelLedger: true,
+              primary: false,
+              label: "zz-mini",
+            },
+          ]
+        : []),
+    ],
+    botRef: state.botRef,
+  }),
 }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotMarkdown", () => ({
@@ -369,6 +414,10 @@ afterEach(async () => {
     childSupported: true,
     membersSupported: true,
     retrySupported: false,
+    botRef: { threadId: "bot", environmentId: "env" },
+    otherConnected: false,
+    rows2: [],
+    taskKeys: [],
     taskError: null,
     taskPending: false,
     canUpdate: true,
@@ -615,6 +664,8 @@ it("keeps Home's expanded child-only work readable offline, with its links close
   await open();
   expect(home()?.textContent).toContain("studio · running");
   expect(home()?.textContent).not.toContain("No other work.");
+  expect(home()?.textContent).not.toContain("Loading work…");
+  expect(home()?.textContent).not.toContain("Couldn't load subagents.");
   const link = button("Open work thread");
   expect(link?.hasAttribute("disabled")).toBe(true);
   await act(async () => link?.click());
@@ -690,9 +741,13 @@ it("keeps an offline task listed, but it neither opens nor offers task actions",
   setupReads();
   state.rows = [unreadTask("t1", "Check the disks")];
   await open();
-  // The list was read while connected; the computer then goes offline.
+  await press("Check the disks");
+  expect(button("Back to home. Check the disks")).toBeDefined();
+  const sent = reads().length;
+  // The list was read while connected; the computer then goes offline with the peek open.
   state.connected = false;
   await open();
+  expect(button("Back to home. Check the disks")).toBeUndefined();
   expect(button("Check the disks")?.hasAttribute("disabled")).toBe(true);
   await press("Actions for Check the disks");
   expect(
@@ -700,5 +755,34 @@ it("keeps an offline task listed, but it neither opens nor offers task actions",
       (item) => item.text,
     ),
   ).toEqual(["Show work"]);
-  expect(reads()).toEqual([]);
+  expect(reads()).toHaveLength(sent);
+});
+
+it("with no bot computer saved, keeps the last computer's work listed and closed while none is connected", async () => {
+  state.botRef = null;
+  state.rows = [task("t1", "Fix the build")];
+  await open();
+  const listReads = state.taskKeys.length;
+  state.connected = false;
+  await open();
+  expect(button("Fix the build")?.hasAttribute("disabled")).toBe(true);
+  expect(state.taskKeys).toHaveLength(listReads);
+  state.connected = true;
+  await open();
+  expect(state.taskKeys.length).toBeGreaterThan(listReads);
+  expect(button("Fix the build")?.hasAttribute("disabled")).toBe(false);
+});
+
+it("with no bot computer saved, follows another connected computer and shows only its work", async () => {
+  state.botRef = null;
+  state.otherConnected = true;
+  state.rows = [task("t1", "Fix the build")];
+  state.rows2 = [task("t2", "Patch the mini")];
+  await open();
+  expect(button("Fix the build")).toBeDefined();
+  state.connected = false;
+  await open();
+  expect(state.taskKeys.at(-1)).toBe("env2");
+  expect(button("Patch the mini")?.hasAttribute("disabled")).toBe(false);
+  expect(button("Fix the build")).toBeUndefined();
 });
