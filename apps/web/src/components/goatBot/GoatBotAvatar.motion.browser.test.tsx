@@ -132,15 +132,22 @@ it("separates an accent from its status ring and outlines the waiting dot on the
   );
   const colored = screen.container.querySelector('[data-avatar="accent"] [role="img"]');
   const fill = colored?.querySelector<HTMLElement>("[data-goat-avatar-fill]");
-  expect(colored?.classList.contains("border-destructive")).toBe(true);
-  expect(colored?.classList.contains("bg-popover")).toBe(true);
-  expect(fill?.classList.contains("inset-px")).toBe(true);
+  if (!(colored instanceof HTMLElement) || !fill) throw new Error("Expected the accent avatar");
+  // The ring is the 1 px border; the colour starts 1 px inside it, so the surface shows between.
+  const outer = colored.getBoundingClientRect();
+  const inner = fill.getBoundingClientRect();
+  expect(inner.left - outer.left).toBeCloseTo(2, 1);
+  expect(outer.right - inner.right).toBeCloseTo(2, 1);
+  expect(getComputedStyle(colored).backgroundColor).not.toBe("rgb(47, 111, 237)");
+  expect(getComputedStyle(fill).backgroundColor).toBe("rgb(47, 111, 237)");
   expect(
     screen.container.querySelector('[data-avatar="neutral"] [data-goat-avatar-fill]'),
   ).toBeNull();
   const dot = screen.container.querySelector<HTMLElement>(
     '[data-avatar="waiting"] [data-goat-waiting-dot]',
   );
-  expect(dot?.classList.contains("border-popover")).toBe(true);
-  expect(Number.parseFloat(dot?.style.borderWidth ?? "0")).toBeGreaterThan(0);
+  if (!dot) throw new Error("Expected the waiting dot");
+  // The dot's ring is the surface the avatar sits on.
+  expect(Number.parseFloat(getComputedStyle(dot).borderTopWidth)).toBeGreaterThan(0);
+  expect(getComputedStyle(dot).borderTopColor).toBe(getComputedStyle(colored).backgroundColor);
 });
