@@ -235,6 +235,7 @@ import {
   getComposerPromptLengthValidationMessage,
   getComposerSubmissionValidationMessage,
   isComposerSubmissionBlocked,
+  resumeEmptyComposer,
   submitComposerDraft,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -2132,6 +2133,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return false;
     }
     if (sendAfterUploads.intercept(event, fromQueue)) return false;
+    if (showResumeAction && !activePendingProgress)
+      return resumeEmptyComposer(event, isSendBusy || environmentUnavailable !== null, onResume);
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget,

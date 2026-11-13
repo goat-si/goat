@@ -3,6 +3,17 @@ import { expandAssistantCitationsForProvider } from "@goat/shared/assistantCitat
 
 type ComposerSubmitEvent = { preventDefault: () => void };
 
+export function resumeEmptyComposer(
+  event: ComposerSubmitEvent | undefined,
+  blocked: boolean,
+  resume: () => void,
+): boolean {
+  event?.preventDefault();
+  if (blocked) return false;
+  resume();
+  return true;
+}
+
 type ComposerSubmissionInput = {
   prompt: string;
   providerInput?: string;

@@ -17,6 +17,7 @@ import {
   ENVIRONMENT_ID,
   PROJECT_ID,
   installFakeEnvironment,
+  threadWithHistory,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
 import { render } from "../../test/render";
@@ -98,4 +99,34 @@ it("a stashed prompt ending in a file chip restores with the chip", async () => 
   await vi.waitFor(() => expect(editor.element().textContent).toContain("Check"));
   expect(editor.element().textContent).not.toContain("[package.json](package.json)");
   await expect.element(chip).toBeVisible();
+});
+
+it("Enter on an empty prompt resumes an interrupted thread", async () => {
+  const history = threadWithHistory("interrupted", 1);
+  const interruptedRun = { ...history.runs[0]!, status: "interrupted" as const };
+  const thread = { ...history, runs: [interruptedRun] };
+  const onCommand = vi.fn().mockResolvedValue({ sequence: 100 });
+  using _environment = installFakeEnvironment([thread], { onCommand });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByRole("button", { name: "Resume thread" })).toBeVisible();
+
+  await userEvent.click(page.getByTestId("composer-editor"));
+  await userEvent.keyboard("{Enter}");
+
+  await vi.waitFor(() =>
+    expect(onCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ manualContinuationOfRunId: interruptedRun.id }),
+    ),
+  );
 });
