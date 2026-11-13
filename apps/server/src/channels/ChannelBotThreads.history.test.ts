@@ -4,10 +4,13 @@ import {
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelChildWorkId,
   ChannelInputId,
+  WsChannelRpcGroup,
   ChannelTaskId,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
@@ -21,6 +24,7 @@ import * as TaskViews from "./channelTaskViews.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import {
   botThreadId,
   goatInput,
@@ -49,6 +53,447 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history", () => {
+  it.effect("bounds lookup task and coding titles without changing the stored task", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("title-lookup", { status: "running", createdAt: at(1) });
+        yield* launch("title-lookup", "long-child", "thread_launch", 1);
+        const sql = yield* SqlClient.SqlClient;
+        const title = "a".repeat(199) + " " + "b".repeat(4800);
+        const codingTitle = "x".repeat(199) + "😀tail";
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${title}) WHERE task_id = 'title-lookup'`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES ('thread:long-child', 'project:repo', ${codingTitle}, 'codex', 'full-access', 'default', ${at(1)}, ${at(1)}, '{}')`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const input = { taskId: ChannelTaskId.make("title-lookup"), botId: BotId.make("main") };
+        const known = yield* service.getBotTask(input, owner);
+        assert.strictEqual(known.task.state, "known");
+        if (known.task.state === "known") {
+          assert.strictEqual(known.task.row.task.title, "a".repeat(199));
+          assert.strictEqual(known.task.row.task.titleTruncated, true);
+        }
+        const rpc = WsChannelRpcGroup.requests.get("channel.getBotTask") as
+          | Extract<
+              RpcGroup.Rpcs<typeof WsChannelRpcGroup>,
+              { readonly _tag: "channel.getBotTask" }
+            >
+          | undefined;
+        if (rpc === undefined) throw new Error("missing lookup RPC");
+        const codec = Schema.toCodecJson(rpc.successSchema);
+        const encoded = yield* Schema.encodeEffect(codec)(known);
+        const decoded = yield* Schema.decodeEffect(codec)(encoded);
+        assert.deepStrictEqual(decoded, known);
+        assert.strictEqual(known.codingRows[0]?.title, "x".repeat(199) + "😀");
+        assert.strictEqual(known.codingRows[0]?.titleTruncated, true);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual((yield* ledger.getTask(input.taskId))?.task.title, title);
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${TaskViews.taskViewKey(ownerId, input.taskId)}, '{', ${at(1)})`;
+        const unavailable = yield* service.getBotTask(input, owner);
+        assert.strictEqual(unavailable.task.state, "unavailable");
+        if (unavailable.task.state === "unavailable") {
+          assert.strictEqual(unavailable.task.task.title, "a".repeat(199));
+          assert.strictEqual(unavailable.task.task.titleTruncated, true);
+        }
+      }),
+    ),
+  );
+  it.effect("excludes non-GOAT conversations and turn tasks from search", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle-work", { status: "completed", createdAt: at(1) });
+        yield* insertTask("needle-turn", { status: "completed", createdAt: at(2), kind: "turn" });
+        const sql = yield* SqlClient.SqlClient;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          first.tasks.map((task) => String(task.taskId)),
+          ["needle-work"],
+        );
+        yield* sql`UPDATE channel_conversations SET kind = 'slack' WHERE conversation_id = 'conv:bot'`;
+        const lookup = yield* Effect.flip(
+          service.getBotTask(
+            { taskId: ChannelTaskId.make("needle-work"), botId: BotId.make("main") },
+            owner,
+          ),
+        );
+        assert.strictEqual(lookup.reason, "not_found");
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(second.tasks, []);
+      }),
+    ),
+  );
+
+  it.effect("matches ASCII without case and keeps non-ASCII case distinct", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("Hello-Ä", { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const ascii = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "hELLo" },
+          owner,
+        );
+        const nonAscii = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "ä" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          ascii.tasks.map((task) => String(task.taskId)),
+          ["Hello-Ä"],
+        );
+        assert.deepStrictEqual(nonAscii.tasks, []);
+      }),
+    ),
+  );
+  it.effect("returns persistence failure when a lookup database read fails", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("sql-failure", { status: "running", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        const service = yield* BotThreads.ChannelBotThreads;
+        yield* service.searchBotTasks({ botId: BotId.make("main"), query: "init" }, owner);
+        yield* sql`ALTER TABLE channel_tasks RENAME TO channel_tasks_unavailable`;
+        const byId = yield* Effect.flip(
+          service.getBotTask(
+            { taskId: ChannelTaskId.make("sql-failure"), botId: BotId.make("main") },
+            owner,
+          ),
+        );
+        const search = yield* Effect.flip(
+          service.searchBotTasks({ botId: BotId.make("main"), query: "sql" }, owner),
+        );
+        assert.strictEqual(byId.reason, "persistence_failed");
+        assert.strictEqual(search.reason, "persistence_failed");
+      }),
+    ),
+  );
+
+  it.effect("keeps creation order stable when an unvisited task is updated", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("match-a", { status: "running", createdAt: at(1) });
+        yield* insertTask("match-b", { status: "running", createdAt: at(2) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "match", limit: 1 },
+          owner,
+        );
+        yield* setStatus("match-b", "completed", true);
+        const next = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "match", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          [...first.tasks, ...next.tasks].map((task) => String(task.taskId)),
+          ["match-a", "match-b"],
+        );
+      }),
+    ),
+  );
+  it.effect("gives a missing task view the known default", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("default-view", { status: "running", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("default-view"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.strictEqual(result.task.state, "known");
+        if (result.task.state === "known") {
+          assert.isNull(result.task.row.view.pinnedAt);
+          assert.isNull(result.task.row.view.doneAt);
+          assert.isNull(result.task.row.view.readThrough);
+        }
+        assert.strictEqual(result.partial, false);
+      }),
+    ),
+  );
+
+  it.effect("keeps malformed lookahead out of the current search page", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        yield* service.searchBotTasks({ botId: BotId.make("main"), query: "needle" }, owner);
+        for (let index = 0; index < 501; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = '{' WHERE task_id = ${name(500)}`;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.isUndefined(first.partial);
+        assert.isString(first.nextCursor);
+        const next = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.strictEqual(next.partial, true);
+      }),
+    ),
+  );
+  it.effect("bounds the combined launches returned by bot task lookup", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("busy-lookup", { status: "running", createdAt: at(40) });
+        for (let index = 0; index < 21; index++)
+          yield* launch(
+            "busy-lookup",
+            `lookup-${index}`,
+            index % 2 ? "ssh_thread_launch" : "thread_launch",
+            index,
+          );
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("busy-lookup"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.strictEqual(result.launchesTruncated, true);
+        assert.strictEqual(result.codingRows.length + result.remoteWork.length, 20);
+        assert.notProperty(result, "instruction");
+      }),
+    ),
+  );
+
+  it.effect("rejects search cursors for a different query, bot or owner", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("match-one", { status: "completed", createdAt: at(1) });
+        yield* insertTask("match-two", { status: "completed", createdAt: at(2) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "match", limit: 1 },
+          owner,
+        );
+        assert.isString(first.nextCursor);
+        for (const [botId, query, requestOwner, cursor] of [
+          ["main", "other", owner, first.nextCursor],
+          ["other", "match", owner, first.nextCursor],
+          ["main", "match", { ...owner, ownerId: "another-owner" }, first.nextCursor],
+          ["main", "match", owner, "v1.@@@"],
+        ] as const) {
+          const error = yield* Effect.flip(
+            service.searchBotTasks(
+              { botId: BotId.make(botId), query, cursor: cursor ?? "" },
+              requestOwner,
+            ),
+          );
+          assert.strictEqual(error.reason, "invalid_input");
+        }
+      }),
+    ),
+  );
+  it.effect("marks malformed processed search candidates partial", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        yield* service.searchBotTasks({ botId: BotId.make("main"), query: "nothing" }, owner);
+        yield* insertTask("broken", { status: "completed", createdAt: at(1) });
+        yield* insertTask("missing-title", { status: "completed", createdAt: at(2) });
+        yield* insertTask("needle", { status: "completed", createdAt: at(3) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = '{' WHERE task_id = 'broken'`;
+        yield* sql`UPDATE channel_tasks SET task_json = json_remove(task_json, '$.title') WHERE task_id = 'missing-title'`;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.strictEqual(result.partial, true);
+        assert.deepStrictEqual(
+          result.tasks.map((task) => String(task.taskId)),
+          ["needle"],
+        );
+      }),
+    ),
+  );
+
+  it.effect("does not process malformed candidates beyond a filled result limit", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        yield* service.searchBotTasks({ botId: BotId.make("main"), query: "needle" }, owner);
+        yield* insertTask("needle", { status: "completed", createdAt: at(1) });
+        yield* insertTask("broken", { status: "completed", createdAt: at(2) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = '{' WHERE task_id = 'broken'`;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.isUndefined(first.partial);
+        assert.isString(first.nextCursor);
+        const next = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.strictEqual(next.partial, true);
+      }),
+    ),
+  );
+
+  it.effect("truncates search titles at a trimmed Unicode code point boundary", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("long-title", { status: "completed", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        const title = "a".repeat(199) + " " + "emoji😀needle";
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${title}) WHERE task_id = 'long-title'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.strictEqual(result.tasks[0]?.title, "a".repeat(199));
+        assert.strictEqual(result.tasks[0]?.titleTruncated, true);
+      }),
+    ),
+  );
+  it.effect("searches a stored title only up to its first NUL character", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("nul-title", { status: "completed", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${"abc\0def"}) WHERE task_id = 'nul-title'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const before = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "abc" },
+          owner,
+        );
+        const after = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "def" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          before.tasks.map((task) => String(task.taskId)),
+          ["nul-title"],
+        );
+        assert.deepStrictEqual(after.tasks, []);
+      }),
+    ),
+  );
+
+  it.effect("marks an unreadable task view unavailable without inventing unread state", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("bad-view", { status: "running", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${TaskViews.taskViewKey(ownerId, ChannelTaskId.make("bad-view"))}, '{', ${at(1)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("bad-view"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.strictEqual(result.task.state, "unavailable");
+        assert.strictEqual(result.partial, true);
+        assert.notProperty(result.task, "view");
+        assert.notProperty(result.task, "unread");
+      }),
+    ),
+  );
+
+  it.effect("continues search after 500 nonmatching candidates", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 501; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        yield* insertTask("needle", { status: "completed", createdAt: at(501) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(first.tasks, []);
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          second.tasks.map((task) => String(task.taskId)),
+          ["needle"],
+        );
+      }),
+    ),
+  );
+  it.effect("does not reveal a task to another owner or bot", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("scoped", { status: "running", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const taskId = ChannelTaskId.make("scoped");
+        for (const [id, botId, requestOwner] of [
+          [taskId, BotId.make("other"), owner],
+          [taskId, BotId.make("main"), { ...owner, ownerId: "other-owner" }],
+          [ChannelTaskId.make("missing"), BotId.make("main"), owner],
+        ] as const) {
+          const error = yield* Effect.flip(service.getBotTask({ taskId: id, botId }, requestOwner));
+          assert.strictEqual(error.reason, "not_found");
+        }
+      }),
+    ),
+  );
+
+  it.effect("searches literal title characters within the selected bot", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("literal%_\\value", { status: "completed", createdAt: at(1) });
+        yield* insertTask("literal-other-value", { status: "completed", createdAt: at(2) });
+        yield* insertTask("other%_\\value", {
+          status: "completed",
+          createdAt: at(3),
+          botId: "other",
+        });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "%_\\" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          result.tasks.map((task) => String(task.taskId)),
+          ["literal%_\\value"],
+        );
+      }),
+    ),
+  );
+
+  it.effect("looks up an owner and bot scoped task without exposing its instruction", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("lookup", { status: "running", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("lookup"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.strictEqual(result.task.state, "known");
+        assert.notProperty(result, "instruction");
+      }),
+    ),
+  );
+
   it.effect("walks every task once, in creation order, while tasks change between pages", () =>
     provide(
       Effect.gen(function* () {

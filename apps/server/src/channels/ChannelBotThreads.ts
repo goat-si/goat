@@ -4,6 +4,7 @@ import {
   ChannelChildWork,
   ChannelGatewayError,
   ChannelTask,
+  ChannelConversationId,
   type BotRemoteWork,
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
@@ -16,6 +17,10 @@ import {
   type ChannelRetryTaskInput,
   type ChannelRetryTaskResult,
   type ChannelUpdateTaskViewInput,
+  type ChannelGetBotTaskInput,
+  type ChannelSearchBotTasksInput,
+  type ChannelSearchBotTasksResult,
+  type BotWorkResult,
   GoatBotWorkKind,
   MAIN_BOT_ID,
   ProjectId,
@@ -40,6 +45,7 @@ import {
 } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
+import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
@@ -71,6 +77,14 @@ export class ChannelBotThreads extends Context.Service<
       input: ChannelListChildWorkInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelListChildWorkResult, ChannelGatewayError>;
+    readonly getBotTask: (
+      input: ChannelGetBotTaskInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<BotWorkResult, ChannelGatewayError>;
+    readonly searchBotTasks: (
+      input: ChannelSearchBotTasksInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelSearchBotTasksResult, ChannelGatewayError>;
     /** A person runs a failed or stopped task again as its next attempt. */
     readonly retry: (
       input: ChannelRetryTaskInput,
@@ -91,7 +105,11 @@ const make = Effect.gen(function* () {
     environmentId: EnvironmentId,
     viewsByTask: ReadonlyMap<string, ChannelTaskView>,
     tasks: ReadonlyArray<ChannelTask>,
-    options: { readonly threadsOnly?: ReadonlySet<string>; readonly launchLimit?: number },
+    options: {
+      readonly threadsOnly?: ReadonlySet<string>;
+      readonly launchLimit?: number;
+      readonly unknownView?: boolean;
+    },
   ) {
     const countInputs = encodeJson(
       tasks.map((task) => ({
@@ -186,13 +204,13 @@ const make = Effect.gen(function* () {
       truncated.has(task.taskId) ? [task.taskId] : [],
     );
     for (const task of tasks) {
-      const view = viewsByTask.get(task.taskId) ?? {
-        taskId: task.taskId,
-        pinnedAt: null,
-        doneAt: null,
-        readThrough: null,
-      };
-      if (!options.threadsOnly?.has(task.taskId))
+      if (!options.unknownView && !options.threadsOnly?.has(task.taskId)) {
+        const view = viewsByTask.get(task.taskId) ?? {
+          taskId: task.taskId,
+          pinnedAt: null,
+          doneAt: null,
+          readThrough: null,
+        };
         rows.push({
           kind: "task",
           task: {
@@ -218,6 +236,7 @@ const make = Effect.gen(function* () {
                 },
               }),
         });
+      }
       for (const { child, title, projectId, recordedKind } of children) {
         if (child.ownerId !== owner.ownerId || child.taskId !== task.taskId) continue;
         const destination = child.destination;
@@ -420,11 +439,102 @@ const make = Effect.gen(function* () {
   ) {
     return yield* listChildWork(ledger, childWork, owner.ownerId, input);
   });
+  const getBotTask = Effect.fn("ChannelBotThreads.getBotTask")(function* (
+    input: ChannelGetBotTaskInput,
+    owner: ChannelConnectionOwner,
+  ) {
+    yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
+    const rows = yield* sql<{
+      readonly task_id: string;
+      readonly conversation_id: string;
+      readonly task_json: string;
+    }>`SELECT t.task_id, t.conversation_id, t.task_json FROM channel_tasks t
+      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
+      WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
+        AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
+    const stored = rows[0];
+    if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
+    const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
+      Effect.mapError(failed),
+    );
+    if (
+      decodedTask.taskId !== stored.task_id ||
+      decodedTask.conversationId !== stored.conversation_id
+    )
+      return yield* new ChannelGatewayError({ reason: "not_found" });
+    const task = {
+      ...decodedTask,
+      taskId: input.taskId,
+      conversationId: ChannelConversationId.make(stored.conversation_id),
+    };
+    const bot = yield* ledger.getBotById(owner.ownerId, input.botId).pipe(Effect.mapError(failed));
+    if (bot === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
+    const viewRows = yield* sql<{
+      readonly value_json: string;
+    }>`SELECT value_json FROM channel_runtime_state WHERE key = ${TaskViews.taskViewKey(owner.ownerId, task.taskId)}`.pipe(
+      Effect.mapError(failed),
+    );
+    const storedView = viewRows[0];
+    const view =
+      storedView === undefined
+        ? { taskId: task.taskId, pinnedAt: null, doneAt: null, readThrough: null }
+        : yield* Effect.try(() => decodeView(storedView.value_json)).pipe(
+            Effect.orElseSucceed(() => undefined),
+          );
+    const known = view !== undefined && view.taskId === task.taskId;
+    const built = yield* rowsFor(
+      owner,
+      bot.bot.environmentId,
+      known ? new Map([[task.taskId, view]]) : new Map(),
+      [task],
+      {
+        launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
+        unknownView: !known,
+      },
+    );
+    const summary = {
+      taskId: task.taskId,
+      ...cutBotWorkTitle(task.title),
+      status: task.status,
+      updatedAt: task.updatedAt,
+      ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+      ...(task.generation > 1 ? { generation: task.generation } : {}),
+    };
+    const worker =
+      task.worker === undefined || task.worker.host !== undefined
+        ? {}
+        : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } };
+    const row = built.rows.find((item) => item.kind === "task");
+    if (known && row === undefined) return yield* failed();
+    return {
+      task:
+        known && row?.kind === "task"
+          ? { state: "known" as const, row: { ...row, task: summary } }
+          : { state: "unavailable" as const, task: summary, ...worker },
+      codingRows: built.rows.flatMap((item) =>
+        item.kind === "coding"
+          ? [{ ...item, ...(item.title === undefined ? {} : cutBotWorkTitle(item.title)) }]
+          : [],
+      ),
+      remoteWork: built.remoteWork,
+      launchesTruncated: built.launchesTruncated.length > 0,
+      partial: !known || built.skippedLaunches > 0,
+    };
+  });
+  const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (
+    input: ChannelSearchBotTasksInput,
+    owner: ChannelConnectionOwner,
+  ) {
+    yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
+    return yield* searchTasks(sql, owner.ownerId, input);
+  });
   return ChannelBotThreads.of({
     list,
     update: views.update,
     listChildWork: listChildWorkFor,
     retry,
+    getBotTask,
+    searchBotTasks,
   });
 });
 export const layer = Layer.effect(ChannelBotThreads, make);
@@ -441,4 +551,8 @@ export const rpcHandlers = (
     service.listChildWork(input, owner),
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: (input: ChannelRetryTaskInput) =>
     service.retry(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: (input: ChannelGetBotTaskInput) =>
+    service.getBotTask(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: (input: ChannelSearchBotTasksInput) =>
+    service.searchBotTasks(input, owner),
 });

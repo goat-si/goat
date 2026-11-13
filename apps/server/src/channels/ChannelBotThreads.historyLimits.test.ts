@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts";
+import { BotId, ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import { searchStatement } from "./channelBotTaskSearch.ts";
 import {
   CHANNEL_BOT_THREADS_HISTORY_EXAMINED,
   quietMessagesStatement,
@@ -25,6 +26,180 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("continues after a full search page without skipping later matches", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 4; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', 'needle') WHERE task_id IN (${name(0)}, ${name(3)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.deepStrictEqual(
+          first.tasks.map((task) => String(task.taskId)),
+          [name(0)],
+        );
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          second.tasks.map((task) => String(task.taskId)),
+          [name(3)],
+        );
+        assert.isUndefined(second.nextCursor);
+      }),
+    ),
+  );
+  it.effect("permits an empty continuation after a full final match page", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle", { status: "completed", createdAt: at(0) });
+        yield* insertTask("other", { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(second.tasks, []);
+        assert.isUndefined(second.nextCursor);
+      }),
+    ),
+  );
+  it.effect("continues after 500 sparse candidates and finds the 550th", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 600; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', 'needle') WHERE task_id = ${name(549)}`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(first.tasks, []);
+        assert.isUndefined(first.partial);
+        assert.isString(first.nextCursor);
+        const cursor = JSON.parse(
+          Buffer.from((first.nextCursor ?? "").slice(3), "base64url").toString("utf8"),
+        );
+        assert.strictEqual(cursor[3], at(499));
+        assert.strictEqual(cursor[4], name(499));
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          second.tasks.map((task) => String(task.taskId)),
+          [name(549)],
+        );
+      }),
+    ),
+  );
+  it.effect("treats a mismatched stored task view as unavailable", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("mismatch-view", { status: "running", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        const taskId = ChannelTaskId.make("mismatch-view");
+        const view = JSON.stringify({
+          taskId: "other",
+          pinnedAt: null,
+          doneAt: null,
+          readThrough: null,
+        });
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${TaskViews.taskViewKey(ownerId, taskId)}, ${view}, ${at(1)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask({ taskId, botId: BotId.make("main") }, owner);
+        assert.strictEqual(result.task.state, "unavailable");
+        assert.strictEqual(result.partial, true);
+        assert.notProperty(result.task, "view");
+      }),
+    ),
+  );
+  it.effect("returns at most 50 search matches and keeps creation-time ties stable", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 52; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "task", limit: 50 },
+          owner,
+        );
+        assert.lengthOf(first.tasks, 50);
+        assert.isString(first.nextCursor);
+        const last = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "task", limit: 50, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          [...first.tasks, ...last.tasks].map((task) => String(task.taskId)),
+          Array.from({ length: 52 }, (_, index) => name(51 - index)),
+        );
+        assert.isUndefined(last.nextCursor);
+      }),
+    ),
+  );
+  it.effect("rejects a search query longer than 256 UTF-8 bytes", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const error = yield* Effect.flip(
+          service.searchBotTasks({ botId: BotId.make("main"), query: "😀".repeat(65) }, owner),
+        );
+        assert.strictEqual(error.reason, "invalid_input");
+      }),
+    ),
+  );
+  it.effect("materializes a bounded indexed search before matching conversations", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 510; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        for (const after of [undefined, { createdAt: at(250), taskId: name(250) }]) {
+          const statement = searchStatement(
+            sql,
+            { ownerId, botId: "main", query: "needle" },
+            after,
+          );
+          const plan = (yield* sql<{
+            readonly detail: string;
+          }>`EXPLAIN QUERY PLAN ${statement}`).map((row) => row.detail);
+          yield* Effect.logInfo(
+            (after === undefined ? "SEARCH FIRST PAGE PLAN\n" : "SEARCH CONTINUATION PLAN\n") +
+              plan.join("\n"),
+          );
+          assert.match(
+            plan.join("\n"),
+            /SEARCH channel_tasks USING INDEX channel_tasks_owner_bot_created \(owner_id=\? AND bot_id=\?/,
+          );
+          assert.notInclude(plan.join("\n"), "SCAN channel_tasks");
+          if (after !== undefined) assert.include(plan.join("\n"), "(created_at,task_id)<(?,?)");
+          assert.match(plan.join("\n"), /MATERIALIZE candidates/);
+          assert.match(plan.join("\n"), /SEARCH c USING INDEX/);
+        }
+      }),
+    ),
+  );
   it.effect("reads a page from its index in order, without sorting", () =>
     provide(
       Effect.gen(function* () {
