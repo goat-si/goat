@@ -1,13 +1,113 @@
 import { assert, describe, it } from "@effect/vitest";
-import { BotId, ChannelTaskId } from "@goat/contracts";
+import { BotId, ChannelTaskId, WsChannelRpcGroup } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import { owner } from "./testkit/ChannelHarness.ts";
 import { at, insertTask, provide, setup } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("bot task search boundaries", () => {
-  it.effect("marks a stored title cut at its first NUL", () =>
+  it.effect("does not mark a nonmatching task partial for an unread status", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("other", { status: "completed", createdAt: at(1) });
+        yield* insertTask("needle-valid", { status: "completed", createdAt: at(2) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.status', 'bogus') WHERE task_id = 'other'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const page = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          page.tasks.map((task) => String(task.taskId)),
+          ["needle-valid"],
+        );
+        assert.isUndefined(page.partial);
+      }),
+    ),
+  );
+  it.effect("encodes titles trimmed before the 200-code-point cut", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("spaces", { status: "completed", createdAt: at(1) });
+        yield* insertTask("unicode-spaces", { status: "completed", createdAt: at(2) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${" ".repeat(200) + "needle"}) WHERE task_id = 'spaces'`;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${"\u3000".repeat(200) + "needle"}) WHERE task_id = 'unicode-spaces'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        const rpc = WsChannelRpcGroup.requests.get("channel.searchBotTasks") as
+          | Extract<
+              RpcGroup.Rpcs<typeof WsChannelRpcGroup>,
+              { readonly _tag: "channel.searchBotTasks" }
+            >
+          | undefined;
+        if (rpc === undefined) throw new Error("missing search RPC");
+        const codec = Schema.toCodecJson(rpc.successSchema);
+        const encoded = yield* Schema.encodeEffect(codec)(result);
+        const roundtrip = yield* Schema.decodeEffect(codec)(encoded);
+        assert.deepStrictEqual(
+          roundtrip.tasks.map((task) => task.title),
+          ["needle", "needle"],
+        );
+      }),
+    ),
+  );
+  it.effect("skips an invalid matching task and returns a valid match with partial", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle-invalid", { status: "completed", createdAt: at(1) });
+        yield* insertTask("needle-valid", { status: "completed", createdAt: at(2) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.status', 'bogus') WHERE task_id = 'needle-invalid'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const page = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          page.tasks.map((task) => String(task.taskId)),
+          ["needle-valid"],
+        );
+        assert.strictEqual(page.partial, true);
+      }),
+    ),
+  );
+  it.effect("marks an unknown matching kind partial and silently excludes a turn", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle-unknown", { status: "completed", createdAt: at(1) });
+        yield* insertTask("needle-turn", { status: "completed", createdAt: at(2), kind: "turn" });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.kind', 'unknown') WHERE task_id = 'needle-unknown'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const page = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(page.tasks, []);
+        assert.strictEqual(page.partial, true);
+        yield* sql`DELETE FROM channel_tasks WHERE task_id = 'needle-unknown'`;
+        const turn = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(turn.tasks, []);
+        assert.isUndefined(turn.partial);
+      }),
+    ),
+  );
+  it.effect("returns a stored title including its NUL without cutting it", () =>
     provide(
       Effect.gen(function* () {
         yield* setup;
@@ -20,8 +120,8 @@ describe("bot task search boundaries", () => {
           owner,
         );
         assert.lengthOf(result.tasks, 1);
-        assert.strictEqual(result.tasks[0]?.title, "abc");
-        assert.strictEqual(result.tasks[0]?.titleTruncated, true);
+        assert.strictEqual(result.tasks[0]?.title, "abc\0def");
+        assert.isUndefined(result.tasks[0]?.titleTruncated);
       }),
     ),
   );
