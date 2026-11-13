@@ -166,6 +166,7 @@ export function createChannelEnvironmentAtoms<R, E>(
   const retained = Atom.family((key: string) => {
     const [environmentId, input] = JSON.parse(key) as [EnvironmentId, ChannelListBotThreadsInput];
     const pendingSince = new Map<string, number>();
+    let failingSince: number | null = null;
     return Atom.make((get) => {
       // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
       const now = Date.now();
@@ -177,7 +178,19 @@ export function createChannelEnvironmentAtoms<R, E>(
         const result = get(listBotThreads({ environmentId, input }));
         if (!AsyncResult.isSuccess(result)) {
           everyListRead = false;
+          // A failed list re-reads itself for a bounded while from the first failure in a row.
+          const connection = Option.getOrNull(AsyncResult.value(get(connections(environmentId))));
+          if (
+            result._tag === "Failure" &&
+            !result.waiting &&
+            connection?.[0].phase === "connected"
+          ) {
+            failingSince ??= now;
+            if (now - failingSince < CUTOFF_RETRY_WINDOW_MS)
+              nextExpiry = Math.min(nextExpiry, now + CUTOFF_RETRY_MS);
+          }
         } else {
+          failingSince = null;
           const shown = [];
           const retiredTasks = new Set<string>();
           for (const row of result.value.rows) {
