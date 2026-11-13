@@ -26,6 +26,84 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("continues after a full search page without skipping later matches", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 4; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', 'needle') WHERE task_id IN (${name(0)}, ${name(3)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.deepStrictEqual(
+          first.tasks.map((task) => String(task.taskId)),
+          [name(0)],
+        );
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          second.tasks.map((task) => String(task.taskId)),
+          [name(3)],
+        );
+        assert.isUndefined(second.nextCursor);
+      }),
+    ),
+  );
+  it.effect("permits an empty continuation after a full final match page", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle", { status: "completed", createdAt: at(0) });
+        yield* insertTask("other", { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(second.tasks, []);
+        assert.isUndefined(second.nextCursor);
+      }),
+    ),
+  );
+  it.effect("continues after 500 sparse candidates and finds the 550th", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 600; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', 'needle') WHERE task_id = ${name(549)}`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(first.tasks, []);
+        assert.isUndefined(first.partial);
+        assert.isString(first.nextCursor);
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          second.tasks.map((task) => String(task.taskId)),
+          [name(549)],
+        );
+      }),
+    ),
+  );
   it.effect("treats a mismatched stored task view as unavailable", () =>
     provide(
       Effect.gen(function* () {
@@ -105,7 +183,12 @@ describe("ChannelBotThreads history limits", () => {
             (after === undefined ? "SEARCH FIRST PAGE PLAN\n" : "SEARCH CONTINUATION PLAN\n") +
               plan.join("\n"),
           );
-          assert.include(plan.join("\n"), "channel_tasks_owner_bot_created");
+          assert.match(
+            plan.join("\n"),
+            /SEARCH channel_tasks USING INDEX channel_tasks_owner_bot_created \(owner_id=\? AND bot_id=\?/,
+          );
+          assert.notInclude(plan.join("\n"), "SCAN channel_tasks");
+          if (after !== undefined) assert.include(plan.join("\n"), "(created_at,task_id)<(?,?)");
           assert.match(plan.join("\n"), /MATERIALIZE candidates/);
           assert.match(plan.join("\n"), /SEARCH c USING INDEX/);
         }
