@@ -14,6 +14,7 @@ const actions = vi.hoisted(() => ({
     eligible: boolean;
     list: string;
     links: unknown[];
+    work?: unknown;
   },
   children: [] as unknown[],
 }));
@@ -477,6 +478,11 @@ it("uses current atom links, preserves child-only and history links, and falls b
   actions.current = {
     eligible: true,
     list: "ready",
+    work: {
+      running: [{ row: current, remote: [{ childWorkId: "kept" }, { childWorkId: "dropped" }] }],
+      waiting: [],
+      finished: [],
+    },
     links: [
       { taskId: "current", environmentId, threadId: "worker", kind: "worker" },
       { taskId: "current", environmentId, threadId: "coding", kind: "coding" },
@@ -516,6 +522,15 @@ it("uses current atom links, preserves child-only and history links, and falls b
       environmentId: "remote",
     },
   ];
+  remote.push({
+    childWorkId: "history",
+    taskId: "current",
+    callerThreadId: "caller",
+    host: "history-host",
+    state: "released",
+    threadId: "history",
+    environmentId: "remote",
+  });
   const options = {
     remoteWork: remote,
     history: history({ supported: true, currentTaskIds: new Set([ChannelTaskId.make("current")]) }),
@@ -531,6 +546,13 @@ it("uses current atom links, preserves child-only and history links, and falls b
   expect(hrefs()).toContain("/env/coding");
   expect(hrefs()).toContain("/remote/kept");
   expect(hrefs()).not.toContain("/remote/dropped");
+  await expect.element(screen.getByText("dropped-host · Unavailable")).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on kept-host" }))
+    .toHaveAttribute("href", "/remote/kept");
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on history-host" }))
+    .toHaveAttribute("href", "/remote/history");
   expect(hrefs()).toContain("/env/child-only");
   expect(hrefs()).toContain("/env/history-worker");
   actions.current = { eligible: true, list: "failed", links: [] };

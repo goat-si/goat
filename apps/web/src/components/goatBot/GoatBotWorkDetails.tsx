@@ -21,15 +21,21 @@ import { Button } from "../ui/button";
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
 
 /** A thread the bot launched on another machine: a link while this client can open it there. */
-function GoatBotRemoteWork({ item }: { item: BotRemoteWork }) {
-  const openable = useAtomValue(
-    item.environmentId === undefined
+function GoatBotRemoteWork({
+  item,
+  openable,
+}: {
+  item: BotRemoteWork;
+  openable?: boolean | undefined;
+}) {
+  const connected = useAtomValue(
+    openable !== undefined || item.environmentId === undefined
       ? NOT_OPENABLE
       : channelEnvironment.remoteWorkOpenable(item.environmentId),
   );
   const target = resolveRemoteBotWork(
     item,
-    (environmentId) => environmentId === item.environmentId && openable,
+    (environmentId) => environmentId === item.environmentId && (openable ?? connected),
   );
   if (target.kind === "unavailable")
     return (
@@ -50,12 +56,14 @@ export function GoatBotWorkDetails({
   rows,
   remoteWork,
   currentLinks = null,
+  currentRemoteIds = null,
 }: {
   environmentId: EnvironmentId;
   taskId: ChannelTaskId;
   rows: readonly BotThreadRow[];
   remoteWork: readonly BotRemoteWork[];
   currentLinks?: ReadonlyArray<HomeCurrentOpenableLink> | null;
+  currentRemoteIds?: ReadonlyArray<string> | null;
 }) {
   const environment = useEnvironment(environmentId);
   const supported =
@@ -113,47 +121,19 @@ export function GoatBotWorkDetails({
           Open work thread
         </Link>
       ))}
-      {currentLinks === null ? (
-        task.remote.map((item) => <GoatBotRemoteWork key={item.childWorkId} item={item} />)
-      ) : (
-        <>
-          {currentLinks
-            .filter((link) => link.kind === "remote")
-            .map((link) => {
-              const item = task.remote.find(
-                (remote) => remote.childWorkId === link.remoteChildWorkId,
-              );
-              return (
-                <Link
-                  key={link.remoteChildWorkId}
-                  to="/$environmentId/$threadId"
-                  params={link}
-                  className="underline"
-                >
-                  Open work thread on {item?.host ?? "remote"}
-                </Link>
-              );
-            })}
-          {task.remote
-            .filter(
-              (item) =>
-                !currentLinks.some(
+      {task.remote.map((item) => (
+        <GoatBotRemoteWork
+          key={item.childWorkId}
+          item={item}
+          openable={
+            currentLinks !== null && currentRemoteIds?.includes(item.childWorkId)
+              ? currentLinks.some(
                   (link) => link.kind === "remote" && link.remoteChildWorkId === item.childWorkId,
-                ),
-            )
-            .map((item) => {
-              const target = resolveRemoteBotWork(item, () => false);
-              return target.kind === "unavailable" ? (
-                <span
-                  key={item.childWorkId}
-                  className="rounded-full border border-border px-2 py-1"
-                >
-                  {target.host} · {target.label}
-                </span>
-              ) : null;
-            })}
-        </>
-      )}
+                )
+              : undefined
+          }
+        />
+      ))}
       {task.truncated && <span>More work is available.</span>}
       {query.error && (
         <>
