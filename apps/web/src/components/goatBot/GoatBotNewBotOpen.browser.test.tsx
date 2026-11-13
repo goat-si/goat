@@ -55,6 +55,7 @@ const roster = vi.hoisted(() => {
   };
 });
 const channels = vi.hoisted(() => ({
+  homeCurrentOpenableWorkByEnvironment: () => "home-work",
   createBot: { permissionAtom: () => null },
   updateBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -72,7 +73,7 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) => (atom === "home-work" ? { byBot: [{ eligible: false }] } : true),
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),

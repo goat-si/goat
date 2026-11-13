@@ -23,8 +23,10 @@ const bots = vi.hoisted(() => ({
   supportsMembers: false,
   memberShell: null as object | null,
   error: null as string | null,
+  eligible: false,
 }));
 const channels = vi.hoisted(() => ({
+  homeCurrentOpenableWorkByEnvironment: () => "home-work",
   updateTaskView: { permissionAtom: () => null },
   createBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -92,7 +94,8 @@ vi.mock("./GoatBotSidebarRow", () => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) =>
+    atom === "home-work" ? { byBot: [{ eligible: bots.eligible }] } : true,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
@@ -205,6 +208,7 @@ function setup() {
   bots.supportsMembers = false;
   bots.memberShell = null;
   bots.error = null;
+  bots.eligible = false;
   actions.create.mockReset();
   navigation.pathname = "/";
   navigation.environmentId = "";
@@ -456,4 +460,21 @@ it("draws a member bot's face from its own session, never the main bot's waiting
     bots.members = [];
     bots.memberShell = null;
   }
+});
+
+it("removes legacy child rows when eligible and restores them when eligibility is withdrawn", async () => {
+  setup();
+  bots.eligible = true;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to inspect the sidebar without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByText("Helper Main")).toBeVisible();
+  expect(screen.getByText("Review work").query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Actions for Review work" }).query()).toBeNull();
+  bots.eligible = false;
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Actions for Review work" }))
+    .toBeVisible();
 });

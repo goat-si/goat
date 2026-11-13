@@ -87,7 +87,7 @@ export function GoatBotSidebarTabs() {
             main={roster[0]?.profile ?? null}
           />
           {environmentId && (
-            <GoatBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
+            <LegacyBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
           )}
           {environmentId && supportsMembers ? (
             <>
@@ -106,6 +106,13 @@ export function GoatBotSidebarTabs() {
       )}
     </>
   );
+}
+
+function LegacyBotChildRows(props: Parameters<typeof GoatBotChildRows>[0]) {
+  const work = useAtomValue(
+    channelEnvironment.homeCurrentOpenableWorkByEnvironment(props.environmentId),
+  );
+  return work.byBot.every((bot) => bot.eligible) ? null : <GoatBotChildRows {...props} />;
 }
 
 function NewBotButton({
