@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ProcessRunner from "../../processRunner.ts";
@@ -45,7 +46,7 @@ const machinePublicLine = (text: string) => {
 
 /**
  * Makes the key with ssh-keygen in GOAT's state folder (0700), under a lock so two first uses make
- * one key. An existing private key is kept; its public line is derived again when missing.
+ * one key. An existing private key is kept and checked; its public line is derived from it.
  */
 export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -65,34 +66,43 @@ export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
     Effect.map(machinePublicLine),
     Effect.orElseSucceed(() => undefined),
   );
+  // A key that passed its checks once is the hub's key for the life of this server.
+  const verified = yield* Ref.make<string | undefined>(undefined);
+  /** The private key must be ours alone and an ed25519 key; its public half is rebuilt from it. */
+  const verify = Effect.gen(function* () {
+    const cached = yield* Ref.get(verified);
+    if (cached !== undefined) return cached;
+    if ((Number((yield* fs.stat(privateKeyFile)).mode) & 0o077) !== 0)
+      return yield* failed("Others can read the machine key, so GOAT does not use it.")();
+    const line = machinePublicLine((yield* keygen(["-y", "-f", privateKeyFile])).stdout);
+    if (line === undefined) return yield* failed("The machine key is not an ed25519 key.")();
+    if ((yield* readPublic) !== line)
+      yield* fs.writeFileString(privateKeyFile + ".pub", line + "\n", { mode: 0o644 });
+    yield* Ref.set(verified, line);
+    return line;
+  });
   const create = Effect.gen(function* () {
-    if (!(yield* fs.exists(privateKeyFile).pipe(Effect.orElseSucceed(() => false)))) {
+    // An unanswerable check fails closed: a key GOAT cannot see is never replaced.
+    if (!(yield* fs.exists(privateKeyFile))) {
       yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
       yield* fs.chmod(directory, 0o700);
       const temporary = privateKeyFile + ".new-" + NodeCrypto.randomUUID();
       yield* keygen(["-q", "-t", "ed25519", "-N", "", "-C", COMMENT, "-f", temporary]);
       yield* fs.chmod(temporary, 0o600);
-      yield* fs.rename(temporary + ".pub", privateKeyFile + ".pub");
-      // The private file appears last: once it exists, the key is made.
-      yield* fs.rename(temporary, privateKeyFile);
+      // link refuses an existing name, so a key made meanwhile is never overwritten.
+      yield* fs.link(temporary, privateKeyFile);
+      yield* Effect.ignore(fs.remove(temporary));
+      yield* Effect.ignore(fs.remove(temporary + ".pub"));
     }
-    const known = yield* readPublic;
-    if (known !== undefined) return known;
-    const derived = yield* keygen(["-y", "-f", privateKeyFile]);
-    const line = machinePublicLine(derived.stdout);
-    if (line === undefined) return yield* failed("The machine key is not an ed25519 key.")();
-    yield* fs.writeFileString(privateKeyFile + ".pub", line + "\n");
-    return line;
+    return yield* verify;
   }).pipe(
-    Effect.catchTags({ PlatformError: failed("GOAT could not store its machine key.") }),
+    Effect.catchTags({ PlatformError: failed("GOAT could not read or store its machine key.") }),
     once,
   );
   const known = Effect.gen(function* () {
-    if (!(yield* fs.exists(privateKeyFile).pipe(Effect.orElseSucceed(() => false))))
-      return undefined;
-    const publicLine = yield* readPublic;
-    return publicLine === undefined ? undefined : { privateKeyFile, publicLine };
-  });
+    if (!(yield* fs.exists(privateKeyFile))) return undefined;
+    return { privateKeyFile, publicLine: yield* once(verify) };
+  }).pipe(Effect.orElseSucceed(() => undefined));
   return MachineKey.of({
     known,
     identity: Effect.map(create, (publicLine) => ({ privateKeyFile, publicLine })).pipe(

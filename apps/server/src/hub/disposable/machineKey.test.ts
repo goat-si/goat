@@ -55,3 +55,38 @@ it.live.skipIf(WINDOWS)("reading the key before attach makes one creates nothing
     expect(yield* service.known).toEqual(made);
   }).pipe(Effect.scoped, Effect.provide(services)),
 );
+
+it.live.skipIf(WINDOWS)("a key folder GOAT cannot read never gets a replacement key", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = path.join(yield* fs.makeTempDirectoryScoped(), "disposable");
+    const made = yield* (yield* make(directory)).identity;
+    const before = yield* fs.readFileString(made.privateKeyFile);
+    yield* fs.chmod(directory, 0o000);
+    const later = yield* (yield* make(directory)).identity.pipe(Effect.flip);
+    yield* fs.chmod(directory, 0o700);
+    expect(later._tag).toBe("MachineKeyError");
+    expect(yield* fs.readFileString(made.privateKeyFile)).toBe(before);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live.skipIf(WINDOWS)(
+  "a key others can read is refused, and a public half that does not match is rebuilt",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = path.join(yield* fs.makeTempDirectoryScoped(), "disposable");
+      const made = yield* (yield* make(directory)).identity;
+      yield* fs.writeFileString(
+        made.privateKeyFile + ".pub",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFcDqbodCFNuBkK2emUwDpZghtdTw4e9ROT+jlVvIhId other\n",
+      );
+      expect(yield* (yield* make(directory)).identity).toEqual(made);
+      yield* fs.chmod(made.privateKeyFile, 0o644);
+      const open = yield* (yield* make(directory)).identity.pipe(Effect.flip);
+      expect(open._tag).toBe("MachineKeyError");
+      expect(yield* (yield* make(directory)).known).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
