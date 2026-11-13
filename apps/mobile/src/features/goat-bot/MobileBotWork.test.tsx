@@ -324,7 +324,8 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   await render();
   // The last read was empty, but a failed read says nothing about whether tasks exist now.
   expect(container.textContent).not.toContain("No tasks yet");
-  await press("Couldn't load tasks");
+  expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
+  await press("Try again");
   expect(state.task.refresh).toHaveBeenCalledOnce();
   // Routines sit on Home with machines and work.
   expect(container.textContent).toContain("Loading routines");
@@ -361,7 +362,7 @@ it("lists the tasks the chat shows while the work list loads or after it failed"
   expect(container.textContent).toContain("Earlier in chat");
   Object.assign(state.task, { isPending: false, error: "failed" });
   await render(undefined, undefined, [], [card]);
-  expect(container.textContent).toContain("Couldn't load tasks");
+  expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
   expect(container.textContent).toContain("Earlier in chat");
 });
 
@@ -397,7 +398,8 @@ it("keeps known tasks in view while they refresh and after a refresh fails", asy
   Object.assign(state.task, { isPending: false, isSuccess: false, error: "failed" });
   await render();
   expect(container.textContent).toContain("Known task");
-  await press("Couldn't load tasks");
+  expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
+  await press("Try again");
   expect(state.task.refresh).toHaveBeenCalledOnce();
 });
 
