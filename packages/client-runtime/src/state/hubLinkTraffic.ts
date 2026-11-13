@@ -29,10 +29,16 @@ function formatLinkBytes(bytes: number): string {
 
 const eachWay = (to: number, from: number) => `↑${formatLinkBytes(to)} ↓${formatLinkBytes(from)}`;
 
-function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string | null {
-  if (window.measuredMs >= fullMs * 0.95) return null;
-  const minutes = Math.max(1, Math.round(window.measuredMs / 60_000));
+const duration = (ms: number) => {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
   return minutes < 120 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
+};
+
+function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string | null {
+  // Nothing measured: only averaged gaps, which say so themselves.
+  return window.measuredMs >= fullMs * 0.95 || window.measuredMs === 0
+    ? null
+    : duration(window.measuredMs);
 }
 
 /**
@@ -63,9 +69,18 @@ function hubLinkTrafficFacts(
       ? `route not confirmed ${eachWay(hourUnconfirmed.to, hourUnconfirmed.from)} last hour · ${eachWay(dayUnconfirmed.to, dayUnconfirmed.from)} in 24 h`
       : null,
   ].filter((part) => part !== null);
+  const averaged = day.averagedMs ?? 0;
+  const uncounted = day.uncountedRequests ?? 0;
   return [
     ...(parts.length === 0 ? ["nothing sent in 24 h"] : parts),
     ...(measured === null ? [] : [`measured over ${measured}`]),
+    ...(averaged === 0 ? [] : [`averaged over ${duration(averaged)} without readings`]),
+    ...(uncounted === 0
+      ? []
+      : [`↑ is at least: ${uncounted} ${uncounted === 1 ? "request" : "requests"} had no length`]),
+    ...(traffic.httpBodiesOnly === true
+      ? ["HTTP bodies only: link WebSocket traffic not counted"]
+      : []),
   ];
 }
 
