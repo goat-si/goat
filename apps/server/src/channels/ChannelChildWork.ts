@@ -30,6 +30,7 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -62,6 +63,8 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
 /** Child-work rows one reconcile pass reads while repairing settled remote launches. */
 export const REMOTE_THREAD_REPAIR_PAGE = 200;
+/** How long a stopped repair waits before one more walk: a lost launch's dispatch can gain its thread later. */
+export const REMOTE_THREAD_REPAIR_REARM_MS = 10 * 60_000;
 
 const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
   surface === "delegate_local" || surface === "delegate_remote"
@@ -713,11 +716,18 @@ const make = Effect.gen(function* () {
 
   // A remote launch that settled before its bind kept no thread, and the pass above only visits
   // active records; its dispatch row still holds the thread the host acknowledged. Binds fill
-  // every newer record, so the walk ends for this process once a whole walk fills nothing.
-  const repairWalk = yield* Ref.make({ after: "", filled: 0, done: false });
+  // every newer record, so the walk stops once a whole walk fills nothing, and walks again only
+  // after REMOTE_THREAD_REPAIR_REARM_MS, when a recovered launch's dispatch may have its thread.
+  const repairWalk = yield* Ref.make({
+    after: "",
+    filled: 0,
+    stoppedAt: undefined as number | undefined,
+  });
   const repairSettledLaunches = Effect.gen(function* () {
     const walk = yield* Ref.get(repairWalk);
-    if (walk.done) return 0;
+    const now = yield* Clock.currentTimeMillis;
+    if (walk.stoppedAt !== undefined && now - walk.stoppedAt < REMOTE_THREAD_REPAIR_REARM_MS)
+      return 0;
     const page = yield* store.pageSettledLaunches(walk.after, REMOTE_THREAD_REPAIR_PAGE);
     let filled = 0;
     for (const { record, remoteThreadId } of page.candidates) {
@@ -730,8 +740,8 @@ const make = Effect.gen(function* () {
     yield* Ref.set(
       repairWalk,
       ended
-        ? { after: "", filled: 0, done: walk.filled + filled === 0 }
-        : { after: page.lastKey, filled: walk.filled + filled, done: false },
+        ? { after: "", filled: 0, stoppedAt: walk.filled + filled === 0 ? now : undefined }
+        : { after: page.lastKey, filled: walk.filled + filled, stoppedAt: undefined },
     );
     return filled;
   }).pipe(
