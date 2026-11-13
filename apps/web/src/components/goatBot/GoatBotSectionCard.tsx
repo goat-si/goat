@@ -24,7 +24,9 @@ export function GoatBotSectionCard({
   return (
     <section aria-label={title} className={cn("flex flex-col gap-2", className)}>
       <div className="flex min-h-6 items-center justify-between gap-2 px-1">
-        <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+        <h3 tabIndex={-1} className="text-xs font-medium text-muted-foreground">
+          {title}
+        </h3>
         {action === null ? null : <div className="flex items-center">{action}</div>}
       </div>
       <GroupedCard radius="lg" className="overflow-hidden">

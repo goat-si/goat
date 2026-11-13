@@ -14,7 +14,12 @@ import type {
 } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { rememberHistoryRows, acknowledgeHistoryRow, historyTask } from "./botWorkHistoryStore";
+import {
+  rememberHistoryRows,
+  acknowledgeHistoryRow,
+  historyTask,
+  useHistoryRevision,
+} from "./botWorkHistoryStore";
 
 interface Walk {
   readonly key: string;
@@ -69,8 +74,12 @@ export function useBotWorkHistory(
     return () => {
       currentKey.current = null;
     };
-  }, [key]);
+  }, [key, currentKey]);
+  useHistoryRevision();
   const merged = mergeBotThreadHistory(current, [...walk.pages, ...walk.retained]);
+  const currentTasks = new Set(
+    current.rows.filter((row) => row.kind === "task").map((row) => row.task.taskId),
+  );
   const cursor = walk.pages.at(-1)?.history?.nextCursor;
   const historySupported =
     botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
@@ -154,7 +163,16 @@ export function useBotWorkHistory(
           : previous,
       );
     },
-    rows: merged.supported && historySupported ? merged.rows : current.rows,
+    rows:
+      merged.supported && historySupported
+        ? merged.rows.map((row) => {
+            if (row.kind !== "task" || currentTasks.has(row.task.taskId)) return row;
+            const cached = historyTask(environmentId, row.task.taskId);
+            return cached && Date.parse(cached.lastActivityAt) >= Date.parse(row.lastActivityAt)
+              ? cached
+              : row;
+          })
+        : current.rows,
     remoteWork:
       merged.supported && historySupported ? merged.remoteWork : (current.remoteWork ?? []),
     launchesTruncated:

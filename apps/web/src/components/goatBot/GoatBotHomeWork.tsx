@@ -125,7 +125,8 @@ export function GoatBotHomeWork({
       const added = [...work.running, ...work.waiting, ...finished].find(
         (task) => !pendingFocus.current?.has(task.row.task.taskId),
       );
-      (added ? rowRefs.current.get(added.row.task.taskId) : containerRef.current)?.focus();
+      const heading = containerRef.current?.closest("section")?.querySelector<HTMLElement>("h3");
+      (added ? rowRefs.current.get(added.row.task.taskId) : heading)?.focus();
     }
     pendingFocus.current = null;
   });

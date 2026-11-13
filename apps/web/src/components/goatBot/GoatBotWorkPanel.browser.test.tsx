@@ -119,11 +119,13 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
+import { resetHistoryTasksForTests } from "./botWorkHistoryStore";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   resetTaskReadAcknowledgementsForTests();
+  resetHistoryTasksForTests();
   mocks.canEdit = false;
   mocks.historySupported = false;
   mocks.revision = 0;
@@ -980,4 +982,13 @@ it("reports expansion while walking history and preserves focus when the last bu
   await expect.element(showMore(screen)).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(showMore(screen));
   await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
+});
+
+it("returns focus to the Work heading when history ends without adding a row", async () => {
+  setup([]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValueOnce(historyPage([], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("heading", { name: "Work" })).toHaveFocus();
 });

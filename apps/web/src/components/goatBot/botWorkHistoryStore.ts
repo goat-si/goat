@@ -1,4 +1,10 @@
-import type { BotRemoteWork, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import type {
+  BotRemoteWork,
+  BotThreadRow,
+  ChannelTaskId,
+  ChannelTaskView,
+  EnvironmentId,
+} from "@goat/contracts";
 import { useSyncExternalStore } from "react";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -13,7 +19,20 @@ const entries = new Map<string, HistoryWork>();
 const listeners = new Set<() => void>();
 const key = (environmentId: EnvironmentId, taskId: ChannelTaskId) =>
   JSON.stringify([environmentId, taskId]);
-const notify = () => listeners.forEach((listener) => listener());
+let revision = 0;
+const notify = () => {
+  revision += 1;
+  listeners.forEach((listener) => listener());
+};
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+export function useHistoryRevision() {
+  return useSyncExternalStore(subscribe, () => revision);
+}
 const atOrBefore = (activity: string, through: string) => {
   const a = Date.parse(activity);
   const b = Date.parse(through);
@@ -57,15 +76,7 @@ export function historyTask(environmentId: EnvironmentId, taskId: ChannelTaskId)
 }
 
 export function useHistoryWork(environmentId: EnvironmentId, taskId: ChannelTaskId) {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    () => entries.get(key(environmentId, taskId)),
-  );
+  return useSyncExternalStore(subscribe, () => entries.get(key(environmentId, taskId)));
 }
 
 export function resetHistoryTasksForTests() {
@@ -96,6 +107,23 @@ export function acknowledgeHistoryRow(
     task,
     rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
     acknowledgedThrough,
+  });
+  notify();
+}
+
+export function updateHistoryView(
+  environmentId: EnvironmentId,
+  taskId: ChannelTaskId,
+  view: ChannelTaskView,
+) {
+  const id = key(environmentId, taskId);
+  const entry = entries.get(id);
+  if (!entry) return;
+  const task = { ...entry.task, view };
+  entries.set(id, {
+    ...entry,
+    task,
+    rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
   });
   notify();
 }

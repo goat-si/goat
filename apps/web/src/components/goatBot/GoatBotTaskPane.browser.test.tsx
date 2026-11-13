@@ -148,6 +148,7 @@ function Pane({ onClose }: { onClose: () => void }) {
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
   state.noRows = false;
+  resetHistoryTasksForTests();
   resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
@@ -341,7 +342,6 @@ it("uses the title carried from a history row when the current list no longer co
 
 it("opens history-only work with its status and actions and acknowledges unread activity", async () => {
   setup();
-  resetHistoryTasksForTests();
   state.noRows = true;
   rememberHistoryRows(EnvironmentId.make("env"), [
     decodeBotThreadRow({
@@ -366,4 +366,15 @@ it("opens history-only work with its status and actions and acknowledges unread 
     environmentId: "env",
     input: { taskId: "task-1", readThrough: "2026-11-04T10:00:00.000Z" },
   });
+  state.update.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      taskId: "task-1",
+      pinnedAt: "2026-11-04T11:00:00.000Z",
+      doneAt: null,
+      readThrough: "2026-11-04T10:00:00.000Z",
+    },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
 });
