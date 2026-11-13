@@ -208,18 +208,36 @@ type Signals struct {
 	Cancelled, Burned chan struct{}
 }
 
-// BurnedNow reports, under the book's lock, whether a join has burned the invite sig belongs to. A burn checks the
-// invite, saves and closes Burned in one hold of that lock, so a burn in progress is waited for, and a bound invite's
-// burn that comes later reads its clock after this call.
-func (iv *Invites) BurnedNow(sig *Signals) bool {
+// WaitExpiry decides, under the book's lock and by clock, what a wait on invite id answers when its timer fires. The
+// timer runs on the monotonic clock and the invite expires by the node's clock, so: burned when a join used the
+// invite (a burn checks, saves and closes Burned in one hold of this lock, so one in progress is waited for);
+// cancelled; live with the time left while clock has not reached the expiry; otherwise expired, after the expiry is
+// written, so no burn can come after the answer. A failed write is returned, and the wait must not answer expired.
+func (iv *Invites) WaitExpiry(id string, sig *Signals, clock func() time.Time) (state string, left time.Duration, err error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	select {
 	case <-sig.Burned:
-		return true
+		return InviteBurned, 0, nil
+	case <-sig.Cancelled:
+		return InviteCancelled, 0, nil
 	default:
-		return false
 	}
+	now := clock()
+	x, ok := iv.byID[id]
+	switch {
+	case !ok:
+		// Neither burned nor cancelled: an ordinary invite pruned at its expiry.
+		return InviteExpired, 0, nil
+	case x.State != "":
+		return x.State, 0, nil
+	case !expired(x, now):
+		return InviteLive, time.UnixMilli(x.ExpiresAt).Sub(now), nil
+	}
+	if err := iv.saveLocked(now); err != nil {
+		return "", 0, err
+	}
+	return InviteExpired, 0, nil
 }
 
 // NewSignals makes a fresh pair.

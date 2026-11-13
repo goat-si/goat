@@ -480,9 +480,8 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 	d.awaitJoin(ctx, c, r, id, sig, reply)
 }
 
-// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
-// the invite's cancel signal, attached when the invite was made. Admission needs no
-// such care: nobody holds the token before r is answered, after the waiter is registered.
+// awaitJoin answers r, then what became of the invite (a join's outcome, its cancel or its expiry) until the client
+// hangs up. sig is the invite's Cancelled and Burned pair, attached when it was made.
 func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, sig *mesh.Signals, reply func(any)) {
 	wait := make(chan joinOutcome, 1)
 	d.mu.Lock()
@@ -496,7 +495,7 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	reply(r)
 	gone := clientGone(c)
 	expiry, stop := inviteExpiry(time.Until(time.UnixMilli(r.ExpiresAt)))
-	defer stop()
+	defer func() { stop() }()
 	outcome := func(o joinOutcome) {
 		switch {
 		case o.delivered:
@@ -507,23 +506,41 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 			reply(map[string]any{"t": "burned"})
 		}
 	}
-	select {
-	case o := <-wait:
-		outcome(o)
-		return
-	case <-sig.Cancelled:
-		reply(map[string]any{"t": "cancelled"})
-		return
-	case <-expiry:
-		if !d.inviteBook().BurnedNow(sig) {
-			reply(map[string]any{"t": "expired"})
+waiting:
+	for {
+		select {
+		case o := <-wait:
+			outcome(o)
+			return
+		case <-sig.Cancelled:
+			reply(map[string]any{"t": "cancelled"})
+			return
+		case <-expiry:
+			state, left, err := d.inviteBook().WaitExpiry(id, sig, d.now)
+			switch {
+			case err != nil:
+				reply(map[string]string{"error": "could not record the invite's expiry: " + err.Error()})
+				return
+			case state == mesh.InviteLive:
+				// Fired early by the node's clock (it was set back): wait for the time left.
+				stop()
+				expiry, stop = inviteExpiry(left)
+				continue
+			case state == mesh.InviteBurned:
+				break waiting
+			case state == mesh.InviteCancelled:
+				reply(map[string]any{"t": "cancelled"})
+			default:
+				reply(map[string]any{"t": "expired"})
+			}
+			return
+		case <-sig.Burned:
+			break waiting
+		case <-gone:
+			return
+		case <-ctx.Done():
 			return
 		}
-	case <-sig.Burned:
-	case <-gone:
-		return
-	case <-ctx.Done():
-		return
 	}
 	// A join used the invite: its outcome is the answer, for as long as that join may run, counted from here; past
 	// that the invite was used and this wait cannot say whom it admitted.

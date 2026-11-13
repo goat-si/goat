@@ -660,3 +660,80 @@ func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
 		t.Fatalf("the waiting caller got %+v (%v); want burned", ev, err)
 	}
 }
+
+// A wait's expiry timer runs on the monotonic clock and the invite expires by the node's clock. When the timer fires
+// early by the node's clock (it was set back), the wait re-arms for the time left and later hears the subject's join;
+// when it fires on time, the wait writes the expired entry and answers expired.
+func TestAWaitDecidesItsExpiryByTheNodesClock(t *testing.T) {
+	type timer struct {
+		ch chan time.Time
+		d  time.Duration
+	}
+	timers := make(chan timer, 4)
+	oldExpiry := inviteExpiry
+	inviteExpiry = func(d time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time)
+		timers <- timer{ch, d}
+		return ch, func() bool { return true }
+	}
+	t.Cleanup(func() { inviteExpiry = oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	wait := func(m string) (*Client, InviteReply) {
+		t.Helper()
+		cl, err := Dial(a.st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cl.Close() })
+		fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":%q,"expiresAt":%d,"subject":%s}`, m, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")))
+		var r InviteReply
+		if err := cl.Next(&r); err != nil {
+			t.Fatal(err)
+		}
+		return cl, r
+	}
+
+	cl, r := wait("early")
+	(<-timers).ch <- time.Now() // fires while the node's clock is still a minute short of the expiry
+	if again := <-timers; again.d != time.Minute {
+		t.Fatalf("re-armed for %v; want the minute left by the node's clock", again.d)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
+		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "admitted" {
+		t.Fatalf("after an early timer the waiting caller got %+v (%v); want admitted", ev, err)
+	}
+
+	cl, _ = wait("late")
+	clk.advance(2 * time.Minute)
+	late := <-timers
+	for late.d == meshSessionTimeout {
+		late = <-timers // the first wait's timer for its join, which it may have started after the burn
+	}
+	late.ch <- time.Now()
+	if err := cl.Next(&ev); err != nil || ev.T != "expired" {
+		t.Fatalf("past its expiry the waiting caller got %+v (%v); want expired", ev, err)
+	}
+	var books []mesh.Invite
+	if _, err := a.st.ReadJSON("offers.json", &books); err != nil {
+		t.Fatal(err)
+	}
+	written := false
+	for _, x := range books {
+		written = written || x.MintID == "late" && x.State == "expired"
+	}
+	if !written {
+		t.Fatalf("offers.json %+v; want the late invite written as expired before the answer", books)
+	}
+}
