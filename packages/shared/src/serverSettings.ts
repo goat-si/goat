@@ -14,6 +14,7 @@ import {
   resolveProviderInstanceEnabled,
   isProviderTextGenerationCapable,
   type ModelSelection,
+  patchDisposableMachines,
   type ProjectId,
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
@@ -726,7 +727,18 @@ export function applyServerSettingsPatch(
       : {}),
     ...(fleetPatch !== undefined ? { fleet: { ...current.fleet, ...fleetPatch } } : {}),
     ...(goatclawPatch !== undefined ? { goatclaw: { ...current.goatclaw, ...goatclawPatch } } : {}),
-    ...(hubPatch !== undefined ? { hub: { ...current.hub, ...hubPatch } } : {}),
+    ...(hubPatch !== undefined
+      ? {
+          hub: {
+            ...current.hub,
+            ...hubPatch,
+            attachDisposableMachines: patchDisposableMachines(
+              current.hub.attachDisposableMachines,
+              hubPatch.attachDisposableMachines,
+            ),
+          },
+        }
+      : {}),
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),
