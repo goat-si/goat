@@ -704,8 +704,15 @@ it.effect("Pen's exact block for a node is a route only with the Noise key GOAT 
     expect(yield* ocx.penExactRoute(node, pen)).toEqual({
       kind: "route",
       alias: EXACT_ALIAS,
-      // Pen wrote the bare form; the route GOAT runs names the confirmed home.
-      proxyCommand: "env PEN_HOME='" + pen.stateDir + "' " + EXACT_PROXY,
+      // Whatever form Pen wrote, GOAT runs the confirmed pen with its home, unquoted.
+      proxyCommand:
+        "/home/u/.local/bin/pen pipe --node " +
+        EXACT_NODE +
+        " --noise " +
+        EXACT_NOISE +
+        " --home " +
+        pen.stateDir +
+        " 22",
       user: "runner",
       hostKey: "ssh-ed25519 " + ED_KEY,
       fingerprint: "SHA256:nz9cVTpQx8PimslFh9CITEcWGb7QKBXpUlHyEaSApSw",
@@ -784,7 +791,18 @@ it.effect("an exact route run by any pen or Pen home but the confirmed one is re
       ...explicit.pen,
       stateDir: confirmed.pen.stateDir,
     });
-    expect(route).toMatchObject({ kind: "route", proxyCommand: named });
+    expect(route).toMatchObject({ kind: "route" });
+    // A confirmed Pen home that needs quoting has no route OpenCodex could take.
+    const spaced = { ...explicit.pen, stateDir: confirmed.pen.stateDir + " x" };
+    const quoted = "env PEN_HOME='" + spaced.stateDir + "' " + EXACT_PROXY;
+    const unsafe = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, quoted),
+      quoted,
+    );
+    expect(yield* unsafe.ocx.penExactRoute(unsafe.node, spaced)).toEqual({
+      kind: "refused",
+      reason: "unsafe_pen_path",
+    });
     // A confirmed Pen installed under another name is still that Pen.
     const renamed = EXACT_PROXY.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
     const renamedPen = yield* exactMachine(

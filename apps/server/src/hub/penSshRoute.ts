@@ -70,18 +70,36 @@ export interface PenInstall {
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+// Words OpenCodex accepts in a link's explicit route (O6): no quotes, shell syntax or % tokens.
+const ROUTE_PATH = /^\/[A-Za-z0-9._/:@+,=-]*$/u;
+
 /**
- * A route GOAT runs names the Pen home itself, so a PEN_HOME the server inherited cannot pick
- * another Pen view: env PEN_HOME='<home>' '<binary>' pipe --node <id> --noise <key> 22.
+ * The ProxyCommand GOAT runs for a node: the confirmed pen with its state folder as --home, so an
+ * inherited PEN_HOME or a later ssh_config edit cannot pick another Pen. Unquoted, as OpenCodex's
+ * explicit link route requires; undefined for a path that would need quoting.
  */
-export const isPinnedPenRoute = (command: string, node: PenNode) =>
-  command.startsWith("env PEN_HOME=") &&
-  penExactRoute(new Map([["proxycommand", command]]), node) === command;
+export const penRunCommand = (node: PenNode, pen: PenInstall) => {
+  if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return undefined;
+  if (!ROUTE_PATH.test(pen.executablePath) || !ROUTE_PATH.test(pen.stateDir)) return undefined;
+  const command = `${pen.executablePath} pipe --node ${node.nodeId} --noise ${node.noisePub} --home ${pen.stateDir} 22`;
+  return command.length <= 1024 ? command : undefined;
+};
+
+/** Whether a recorded command is penRunCommand's for `node`. */
+export const isPenRunCommand = (command: string, node: PenNode) => {
+  const words = /^(\S+) pipe --node \S+ --noise \S+ --home (\S+) 22$/u.exec(command);
+  return (
+    words !== null &&
+    penRunCommand(node, { executablePath: words[1] ?? "", stateDir: words[2] ?? "" }) === command
+  );
+};
+
+/** A user OpenCodex accepts in an explicit route, and ssh takes as one word. */
+export const isRouteUser = (user: string) => /^[A-Za-z_][A-Za-z0-9._-]{0,31}$/u.test(user);
 
 /**
  * The ProxyCommands `pen ssh-config` writes for `node` when it is the confirmed Pen, as ssh -G
- * prints them: with PEN_HOME when it was set, and without it only for Pen's default ~/.pen. The
- * first is the one GOAT runs.
+ * prints them: with PEN_HOME when it was set, and without it only for Pen's default ~/.pen.
  */
 export const penExactCommands = (node: PenNode, pen: PenInstall, defaultStateDir: string) => {
   if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return [];

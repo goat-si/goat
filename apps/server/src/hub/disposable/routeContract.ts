@@ -1,11 +1,11 @@
-import { isPinnedPenRoute } from "../penSshRoute.ts";
+import { isPenRunCommand, isRouteUser } from "../penSshRoute.ts";
 
 /** What GOAT recorded for a disposable machine's route at attach step 3. */
 export interface DisposableRoute {
   readonly nodeId: string;
   /** The Noise key the machine's provisioner reported and its invite was bound to. */
   readonly noisePub: string;
-  /** Pen's exact ProxyCommand for the node, naming the confirmed Pen home. */
+  /** penRunCommand for the node: the confirmed pen and its home, unquoted. */
   readonly proxyCommand: string;
   /** The User of Pen's block for the node, from the member's hostkeys record. */
   readonly user: string;
@@ -13,7 +13,6 @@ export interface DisposableRoute {
   readonly knownHostsFile: string;
 }
 
-const USER = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/u;
 // ssh splits UserKnownHostsFile on spaces and expands % tokens in it.
 const FILE = /^\/[^\s"'%]+$/u;
 const ED25519_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/u;
@@ -25,8 +24,8 @@ const ED25519_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/u;
  */
 export const disposableSshOptions = (route: DisposableRoute) => {
   if (
-    !isPinnedPenRoute(route.proxyCommand, route) ||
-    !USER.test(route.user) ||
+    !isPenRunCommand(route.proxyCommand, route) ||
+    !isRouteUser(route.user) ||
     !FILE.test(route.knownHostsFile)
   )
     return undefined;

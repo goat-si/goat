@@ -1,11 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
-  isPinnedPenRoute,
+  isPenRunCommand,
   penExactCommands,
   penExactRoute,
   penHostOption,
   penKnownHostsFile,
+  penRunCommand,
   sshSettings,
 } from "./penSshRoute.ts";
 
@@ -85,17 +86,29 @@ describe("Pen's exact per-node route", () => {
     expect(penHostOption(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz", "User")).toBeUndefined();
     expect(penHostOption(config, "pen-missing", "User")).toBeUndefined();
   });
-  it("accepts any confirmed binary name, and runs only a route that names its Pen home", () => {
+  it("accepts any confirmed binary name in Pen's block", () => {
     const renamed = exact.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
     expect(penExactRoute(settings(renamed), node)).toBe(renamed);
-    expect(isPinnedPenRoute(renamed, node)).toBe(false);
-    expect(isPinnedPenRoute("env PEN_HOME='/home/u/.pen' " + renamed, node)).toBe(true);
+  });
+
+  it("runs the confirmed pen with its home as --home, unquoted, or not at all", () => {
+    const pen = { executablePath: "/opt/bin/pen-v1", stateDir: "/home/u/.pen" };
+    const run =
+      "/opt/bin/pen-v1 pipe --node " + NODE + " --noise " + NOISE + " --home /home/u/.pen 22";
+    expect(penRunCommand(node, pen)).toBe(run);
+    expect(isPenRunCommand(run, node)).toBe(true);
+    expect(isPenRunCommand(run, { ...node, nodeId: "b".repeat(26) })).toBe(false);
+    // OpenCodex's explicit route takes no quoting, so a path that needs it has no route.
+    expect(penRunCommand(node, { ...pen, stateDir: "/home/u/pen state" })).toBeUndefined();
+    expect(penRunCommand(node, { ...pen, executablePath: "/opt/it's/pen" })).toBeUndefined();
+    expect(penRunCommand(node, { ...pen, stateDir: "/srv/p%n" })).toBeUndefined();
     expect(
-      isPinnedPenRoute("env PEN_HOME='/home/u/.pen' " + renamed, {
-        ...node,
-        nodeId: "b".repeat(26),
-      }),
+      isPenRunCommand(
+        "env PEN_HOME='/home/u/.pen' '/opt/bin/pen-v1'" + exact.slice(exact.indexOf(" pipe")),
+        node,
+      ),
     ).toBe(false);
+    expect(isPenRunCommand(run.replace(" --home /home/u/.pen", ""), node)).toBe(false);
   });
 
   it("names the commands the confirmed Pen writes, as ssh -G prints them", () => {

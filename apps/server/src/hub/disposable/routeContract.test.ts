@@ -10,8 +10,7 @@ import { disposableKnownHosts, disposableSshOptions } from "./routeContract.ts";
 
 const NODE = "abcdefghijklmnopqrstuvwxyz";
 const NOISE = "N".repeat(43);
-const BARE = "'/opt/pen' pipe --node " + NODE + " --noise " + NOISE + " 22";
-const PROXY = "env PEN_HOME='/srv/pen' " + BARE;
+const PROXY = "/opt/pen pipe --node " + NODE + " --noise " + NOISE + " --home /srv/pen 22";
 const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFcDqbodCFNuBkK2emUwDpZghtdTw4e9ROT+jlVvIhId";
 
 // Everything a person's ssh_config could set to move or loosen the route, for every pen-* alias.
@@ -132,9 +131,15 @@ it.effect("refuses a route it cannot pass to ssh unchanged", () =>
       disposableSshOptions({ ...route, proxyCommand: PROXY.replace(NODE, "b".repeat(26)) }),
     ).toBeUndefined();
     expect(disposableSshOptions({ ...route, noisePub: "M".repeat(43) })).toBeUndefined();
-    // Without PEN_HOME the pipe would use whatever Pen home the server inherited.
-    expect(disposableSshOptions({ ...route, proxyCommand: BARE })).toBeUndefined();
+    // Without --home the pipe would use whatever Pen home the server inherited.
+    expect(
+      disposableSshOptions({ ...route, proxyCommand: PROXY.replace(" --home /srv/pen", "") }),
+    ).toBeUndefined();
+    expect(
+      disposableSshOptions({ ...route, proxyCommand: "env PEN_HOME='/srv/pen' " + PROXY }),
+    ).toBeUndefined();
     expect(disposableSshOptions({ ...route, user: "-oProxyCommand=x" })).toBeUndefined();
+    expect(disposableSshOptions({ ...route, user: "1runner" })).toBeUndefined();
     expect(disposableSshOptions({ ...route, knownHostsFile: "/s/a b" })).toBeUndefined();
     expect(disposableSshOptions({ ...route, knownHostsFile: "/s/%d" })).toBeUndefined();
     expect(disposableSshOptions({ ...route, knownHostsFile: "relative" })).toBeUndefined();

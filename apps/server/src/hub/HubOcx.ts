@@ -40,6 +40,8 @@ import {
   penGlobalFiles,
   penExactCommands,
   penHostOption,
+  penRunCommand,
+  isRouteUser,
   penKnownHostsFile,
   penRevision,
   type PenInstall,
@@ -162,7 +164,13 @@ export type PenExactRoute =
     }
   | {
       readonly kind: "refused";
-      readonly reason: "no_exact_block" | "other_pen" | "no_user" | "no_key" | "several_keys";
+      readonly reason:
+        | "no_exact_block"
+        | "other_pen"
+        | "unsafe_pen_path"
+        | "no_user"
+        | "no_key"
+        | "several_keys";
     };
 
 /** The only seam to OpenCodex and SSH; tests replace it with a scripted runner. */
@@ -812,8 +820,10 @@ const make = Effect.gen(function* () {
         penHostOption(member.config, alias, "ProxyCommand") !== proxyCommand
       )
         return { kind: "refused", reason: "other_pen" } as const;
+      const run = penRunCommand(node, pen);
+      if (run === undefined) return { kind: "refused", reason: "unsafe_pen_path" } as const;
       const user = penHostOption(member.config, alias, "User");
-      if (user === undefined || member.settings.get("user") !== user)
+      if (user === undefined || !isRouteUser(user) || member.settings.get("user") !== user)
         return { kind: "refused", reason: "no_user" } as const;
       const keys = member.recorded
         .split(/\r?\n/u)
@@ -827,8 +837,7 @@ const make = Effect.gen(function* () {
       return {
         kind: "route",
         alias,
-        // Named with the confirmed home even when Pen wrote the bare form.
-        proxyCommand: trusted[0] ?? proxyCommand,
+        proxyCommand: run,
         user,
         hostKey,
         fingerprint: `SHA256:${digest.digest("base64").replace(/=+$/u, "")}`,
