@@ -20,7 +20,8 @@ import (
 // missedCloseConn is a holder connection whose reads follow a script. A step "timeout" stands for a read that saw
 // nothing within its deadline. It needs a read deadline set since the previous timeout step; without one the read
 // would block forever, as a read that missed the holder's close does on Windows, and the step fails at once with
-// errNoDeadline. After the script every read returns EOF, as a fresh read of a closed connection does.
+// errNoDeadline. After the script every read returns EOF: this fake models a fresh read that sees the close, the
+// outcome the recheck relies on.
 type missedCloseConn struct {
 	mu     sync.Mutex
 	script []string
