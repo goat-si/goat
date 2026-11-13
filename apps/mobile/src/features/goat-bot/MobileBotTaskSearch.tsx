@@ -47,6 +47,9 @@ export function MobileBotTaskSearch(props: {
         clearButtonMode="while-editing"
         className="min-h-[44px] rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground"
       />
+      {search.tooLong ? (
+        <Text className="text-foreground-muted">Search text is too long.</Text>
+      ) : null}
       {search.query === null || value === null ? null : (
         <>
           {value.tasks.map((task) => {

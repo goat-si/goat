@@ -252,7 +252,8 @@ vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"
-      ? state.task
+      ? // As the real query: a success counts only once settled, not while a read is waiting.
+        { ...state.task, successResult: state.task.isSuccess && !state.task.isPending ? {} : null }
       : key === "routines"
         ? state.routines
         : {
@@ -936,4 +937,26 @@ it("a read mark that settles after the screen moved to another bot does not rere
   expect(state.lookup).toHaveBeenCalledTimes(2);
   await act(async () => settle(AsyncResult.success({})));
   expect(state.lookup).toHaveBeenCalledTimes(2);
+});
+
+it("looks nothing up until the current list has settled, and not when the settled list holds the task", async () => {
+  reset();
+  state.lookupCapable = true;
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId: "task", title: "Review", status: "running", updatedAt: at },
+    view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  await render(ChannelTaskId.make("task"));
+  // A list being read again still holds its earlier answer, which lacks the task.
+  Object.assign(state.task, { isPending: true, isSuccess: true, data: { rows: [] } });
+  await render(ChannelTaskId.make("task"));
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  await render(ChannelTaskId.make("task"));
+  expect(container.textContent).toContain("Review");
+  expect(state.lookup).not.toHaveBeenCalled();
 });

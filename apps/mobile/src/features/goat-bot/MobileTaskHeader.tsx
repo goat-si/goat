@@ -92,10 +92,14 @@ export function MobileTaskHeader(props: {
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
       {props.older && lookup.state === "loading" ? (
-        <Text className="text-foreground-muted">Loading task…</Text>
+        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+          Loading task…
+        </Text>
       ) : null}
       {props.older && lookup.state === "missing" ? (
-        <Text className="text-foreground-muted">This task isn't available.</Text>
+        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+          This task isn't available.
+        </Text>
       ) : null}
       {props.older &&
       (lookup.state === "off" || lookup.state === "denied" || lookup.state === "failed") ? (

@@ -309,3 +309,27 @@ it("returning to a query that was answered before shows nothing old and waits a 
     vi.useRealTimers();
   }
 });
+
+it("counts the query in UTF-8 bytes as the server does: up to 256 is sent, past it nothing and one line", async () => {
+  vi.useFakeTimers();
+  try {
+    await setup();
+    const cases: Array<[string, boolean]> = [
+      ["a".repeat(256), true],
+      ["한".repeat(85), true],
+      ["한".repeat(86), false],
+      ["😀".repeat(64), true],
+      ["😀".repeat(65), false],
+    ];
+    for (const [query, sent] of cases) {
+      const before = net.calls.length;
+      await type(query);
+      await wait(TASK_SEARCH_DEBOUNCE_MS);
+      expect(net.calls.length - before).toBe(sent ? 1 : 0);
+      expect(text().includes("Search text is too long.")).toBe(!sent);
+      await net.calls[before]?.answer({ tasks: [] });
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});

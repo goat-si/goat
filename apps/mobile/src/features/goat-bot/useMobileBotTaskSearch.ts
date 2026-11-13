@@ -7,7 +7,9 @@ import { channelEnvironment } from "../../state/channels";
 
 /** Quiet time after the last keystroke before a query is sent. */
 export const TASK_SEARCH_DEBOUNCE_MS = 300;
-const QUERY_MAX = 256;
+/** The server's bound, in UTF-8 bytes after trimming. */
+const QUERY_MAX_BYTES = 256;
+const utf8 = new TextEncoder();
 const PAGE_SIZE = 20;
 /** The most results one search holds; past it the walk offers no more. */
 export const TASK_SEARCH_MAX_RESULTS = 50;
@@ -40,7 +42,12 @@ type Request = {
 /** The text a person typed as the server takes it, or null when it would not be sent. */
 export function taskSearchQuery(text: string): string | null {
   const query = text.trim();
-  return query.length > 0 && query.length <= QUERY_MAX && !query.includes("\u0000") ? query : null;
+  return query.length > 0 && !query.includes("\u0000") && !taskSearchTooLong(query) ? query : null;
+}
+
+/** Longer than the server reads; such a query is never sent. */
+export function taskSearchTooLong(text: string) {
+  return utf8.encode(text.trim()).length > QUERY_MAX_BYTES;
 }
 
 /**
@@ -166,6 +173,7 @@ export function useMobileBotTaskSearch(input: {
       : { key, environmentId, botId, query, generation: generation.current };
   return {
     query,
+    tooLong: taskSearchTooLong(input.text),
     value,
     loadMore: () => {
       const request = now();
