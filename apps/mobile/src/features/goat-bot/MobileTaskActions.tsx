@@ -25,14 +25,12 @@ export function MobileTaskActions(props: {
   const id = task.row.task.taskId;
   return (
     <View className="flex-row flex-wrap gap-3">
-      {props.environmentId &&
-      props.enabled &&
-      props.canRetry &&
-      isRetryableTaskStatus(task.row.task.status) ? (
+      {props.environmentId && props.canRetry && isRetryableTaskStatus(task.row.task.status) ? (
         <MobileTaskRetry
           environmentId={props.environmentId}
           taskId={id}
           onStarted={props.onRetried}
+          disabled={closed}
         />
       ) : null}
       <Pressable

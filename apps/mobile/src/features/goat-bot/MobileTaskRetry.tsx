@@ -16,13 +16,15 @@ export function MobileTaskRetry(props: {
   readonly environmentId: EnvironmentId;
   readonly taskId: ChannelTaskId;
   readonly onStarted: () => void;
+  /** Offline the button stays, closed, and any problem it showed stays with it. */
+  readonly disabled?: boolean;
 }) {
   const canRetry = useAtomValue(channelEnvironment.retryTask.permissionAtom(props.environmentId));
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   if (!canRetry) return null;
   const run = async () => {
-    if (busy) return;
+    if (busy || props.disabled) return;
     setBusy(true);
     setProblem(null);
     const result = await runAtomCommand(
@@ -48,8 +50,8 @@ export function MobileTaskRetry(props: {
     <View className="gap-1">
       <Pressable
         accessibilityRole="button"
-        accessibilityState={{ disabled: busy }}
-        disabled={busy}
+        accessibilityState={{ disabled: busy || props.disabled === true }}
+        disabled={busy || props.disabled === true}
         onPress={() => void run()}
         className="min-h-[44px] justify-center"
       >

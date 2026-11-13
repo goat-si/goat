@@ -124,6 +124,7 @@ const state = vi.hoisted(() => ({
   contentChanged: () => {},
   remoteOpenable: true,
   connected: true,
+  retrySupported: false,
   taskSupported: true,
   childSupported: true,
   membersSupported: true,
@@ -206,6 +207,7 @@ vi.mock("../../state/environments", () => ({
                 goatBotTaskThreads: state.taskSupported,
                 goatBotChildWork: state.childSupported,
                 goatBotMembers: state.membersSupported,
+                goatBotTaskRetry: state.retrySupported,
               },
             },
           },
@@ -312,7 +314,7 @@ vi.mock("../../components/ui/Button", () => ({
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
   const runAtomCommand = ((...args: Parameters<typeof real.runAtomCommand>) =>
-    ["readThrough", "pinned"].some(
+    ["readThrough", "pinned", "clientRequestId"].some(
       (key) =>
         (args[2] as { input?: Record<string, unknown> } | undefined)?.input?.[key] !== undefined,
     )
@@ -366,6 +368,7 @@ afterEach(async () => {
     taskSupported: true,
     childSupported: true,
     membersSupported: true,
+    retrySupported: false,
     taskError: null,
     taskPending: false,
     canUpdate: true,
@@ -466,44 +469,18 @@ it("does not call a task's work empty when the read left that task out", async (
   expect(home()?.textContent).not.toContain("No other work.");
 });
 
-it("keeps an offline task screen's actions and links listed but inert, until it reconnects", async () => {
-  setupReads();
-  state.rows = [task("t1", "Fix the build", "worker")];
-  state.remoteWork = [
+it("does not call a task's work empty while its only child has no thread to show yet", async () => {
+  state.rows = [task("t1", "Fix the build")];
+  state.groups = [
     {
-      childWorkId: "r1",
       taskId: "t1",
-      callerThreadId: "bot",
-      host: "mini",
-      state: "running",
-      lastActivityAt: at,
-      environmentId: "remote",
-      threadId: "remote-thread",
+      truncated: false,
+      children: [{ childWorkId: "c1", surface: "thread_launch", state: "running" }],
     },
   ];
-  const pins = () =>
-    state.run.mock.calls.filter(
-      (call) =>
-        (call as unknown as [unknown, unknown, { input: { pinned?: boolean } }])[2]?.input
-          ?.pinned !== undefined,
-    ).length;
-  await open("t1");
-  state.connected = false;
-  await open("t1");
-  for (const label of ["Pin", "Mark done", "Open work thread", "Open work thread on mini"]) {
-    const control = button(label);
-    expect(control?.hasAttribute("disabled"), label).toBe(true);
-    expect(control?.getAttribute("aria-disabled"), label).toBe("true");
-    await act(async () => control?.click());
-  }
-  expect(state.openThread).not.toHaveBeenCalled();
-  expect(pins()).toBe(0);
-  state.connected = true;
-  await open("t1");
-  await press("Pin");
-  expect(pins()).toBe(1);
-  await press("Open work thread");
-  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "worker" });
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).not.toContain("No other work.");
 });
 
 it("does not call a task's work empty when this server cannot read sub-work", async () => {
@@ -512,47 +489,6 @@ it("does not call a task's work empty when this server cannot read sub-work", as
   await open();
   await toggleWork("Fix the build");
   expect(home()?.textContent).not.toContain("No other work.");
-});
-
-it("offline, an expanded task's thread and remote links stay listed but do not open", async () => {
-  state.rows = [
-    task("t1", "Fix the build", "worker"),
-    decode({
-      kind: "coding",
-      taskId: "t1",
-      environmentId: "env",
-      threadId: "thread-a",
-      title: "Patch web",
-      state: "bound",
-      lastActivityAt: at,
-    }),
-  ];
-  state.remoteWork = [
-    {
-      childWorkId: "r1",
-      taskId: "t1",
-      callerThreadId: "bot",
-      host: "mini",
-      state: "running",
-      lastActivityAt: at,
-      environmentId: "remote",
-      threadId: "remote-thread",
-    },
-  ];
-  await open();
-  await toggleWork("Fix the build");
-  await press("GOAT thread: Patch web");
-  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "thread-a" });
-  state.openThread.mockClear();
-  state.connected = false;
-  await open();
-  for (const label of ["GOAT thread: Patch web", "Open work thread on mini"]) {
-    const link = button(label);
-    expect(link?.hasAttribute("disabled"), label).toBe(true);
-    expect(link?.getAttribute("aria-disabled"), label).toBe("true");
-    await act(async () => link?.click());
-  }
-  expect(state.openThread).not.toHaveBeenCalled();
 });
 
 it("names each coding thread of an expanded task, so two threads can be told apart", async () => {
@@ -774,30 +710,6 @@ it("retains list work without a child capability and reads again after collapse 
   expect(state.childKeys.at(-1)).toEqual({ environmentId: "env", input: { taskIds: ["t1"] } });
 });
 
-it("keeps list-derived work visible after disconnect without reading children", async () => {
-  state.rows = [task("t1", "Task one", "worker")];
-  state.remoteWork = [
-    {
-      childWorkId: "r1",
-      taskId: "t1",
-      callerThreadId: "bot",
-      host: "mini",
-      state: "running",
-      lastActivityAt: at,
-      environmentId: "remote",
-      threadId: "remote-thread",
-    },
-  ];
-  await open();
-  await toggleWork("Task one");
-  state.childKeys = [];
-  state.connected = false;
-  await open();
-  expect(state.childKeys).toEqual([]);
-  expect(home()?.textContent).toContain("Open work thread on mini");
-  expect(home()?.textContent).toContain("Open work thread");
-});
-
 const unreadTask = (taskId: string, title: string) =>
   decode({
     kind: "task",
@@ -913,21 +825,4 @@ it("marks a shown task read again when newer activity arrives, on its screen and
   ]);
   await open("t1");
   expect(reads()).toHaveLength(3);
-});
-
-it("keeps an offline task listed, but it neither opens nor offers task actions", async () => {
-  setupReads();
-  state.rows = [unreadTask("t1", "Check the disks")];
-  await open();
-  // The list was read while connected; the computer then goes offline.
-  state.connected = false;
-  await open();
-  expect(button("Check the disks")?.hasAttribute("disabled")).toBe(true);
-  await press("Actions for Check the disks");
-  expect(
-    ((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>).map(
-      (item) => item.text,
-    ),
-  ).toEqual(["Show work"]);
-  expect(reads()).toEqual([]);
 });

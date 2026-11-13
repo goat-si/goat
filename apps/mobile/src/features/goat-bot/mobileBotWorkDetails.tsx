@@ -13,8 +13,8 @@ export function mobileBotWorkDetails(props: {
   supported: boolean;
   error: string | null;
   pending: boolean;
-  /** The read answered for this task; a task the server left out is unknown, not empty. */
-  groupLoaded: boolean;
+  /** How many children the read returned for this task; null when it left the task out. */
+  groupChildren: number | null;
   openThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
 }): MobileBotHomeItem[] {
   const { entry, openThread } = props;
@@ -70,7 +70,7 @@ export function mobileBotWorkDetails(props: {
       key: JSON.stringify(["task-detail-status", id]),
       render: () => <Text className="text-danger-foreground">Couldn't load subagents.</Text>,
     });
-  else if (supported && !props.groupLoaded && props.pending)
+  else if (supported && props.groupChildren === null && props.pending)
     items.push({
       key: JSON.stringify(["task-detail-status", id]),
       render: () => <Text className="text-foreground-muted">Loading work…</Text>,
@@ -80,7 +80,7 @@ export function mobileBotWorkDetails(props: {
       key: JSON.stringify(["task-detail-status", id]),
       render: () => <Text className="text-foreground-muted">More work is available.</Text>,
     });
-  else if (supported && props.groupLoaded && items.length === 0)
+  else if (supported && props.groupChildren === 0 && items.length === 0)
     items.push({
       key: JSON.stringify(["task-detail-status", id]),
       render: () => <Text className="text-foreground-muted">No other work.</Text>,

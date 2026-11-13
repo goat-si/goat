@@ -55,6 +55,7 @@ import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./Mobile
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { MobileTaskActions } from "./MobileTaskActions";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
@@ -156,20 +157,8 @@ export function MobileBotWork(props: {
       : null,
   );
   const workScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
-  const [lastWork, setLastWork] = useState<{
-    scope: string;
-    signature: string;
-    data: NonNullable<typeof threads.data>;
-  } | null>(null);
-  const listSignature = threads.data === null ? null : JSON.stringify(threads.data);
-  if (
-    threads.data !== null &&
-    (lastWork?.scope !== workScope || lastWork.signature !== listSignature)
-  )
-    setLastWork({ scope: workScope, signature: listSignature ?? "", data: threads.data });
-  const listData =
-    threads.data ??
-    (selected?.connected !== true && lastWork?.scope === workScope ? lastWork.data : null);
+  const offline = selected?.connected !== true;
+  const listData = useKeptWhileOffline(threads.data, workScope, offline);
   const rows = listData?.rows ?? [];
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
@@ -184,8 +173,9 @@ export function MobileBotWork(props: {
       ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
       : null,
   );
+  const childData = useKeptWhileOffline(children.data, workScope, offline);
   const work = environmentId
-    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, listData?.remoteWork)
+    ? groupBotWork(rows, childData?.groups ?? [], environmentId, listData?.remoteWork)
     : { inProgress: [], done: [] };
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
@@ -303,9 +293,10 @@ export function MobileBotWork(props: {
       ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [...expanded] } })
       : null,
   );
+  const expandedData = useKeptWhileOffline(expandedChildren.data, workScope, offline);
   const detailWork =
     environmentId && expanded.length > 0
-      ? groupBotWork(rows, expandedChildren.data?.groups ?? [], environmentId, listData?.remoteWork)
+      ? groupBotWork(rows, expandedData?.groups ?? [], environmentId, listData?.remoteWork)
       : null;
   const toggleExpanded = (id: ChannelTaskId) =>
     setExpandedByScope((current) => {
@@ -587,8 +578,9 @@ export function MobileBotWork(props: {
                     supported: enabled && capabilities?.goatBotChildWork === true,
                     error: expandedChildren.error,
                     pending: expandedChildren.isPending,
-                    groupLoaded:
-                      expandedChildren.data?.groups.some((group) => group.taskId === id) === true,
+                    groupChildren:
+                      expandedData?.groups.find((group) => group.taskId === id)?.children.length ??
+                      null,
                     openThread: (thread) => {
                       closeSheet();
                       props.onOpenThread(thread);
