@@ -241,23 +241,26 @@ export function createChannelEnvironmentAtoms<R, E>(
     const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
       .capabilities;
     const inputs: ChannelListBotThreadsInput[] = [{}];
+    let rosterKnown = true;
     if (capabilities?.goatBotMembers === true && capabilities.goatBotProfiles === true) {
       const bots = get(listBots({ environmentId, input: { includeDeleted: true } }));
+      rosterKnown = AsyncResult.isSuccess(bots);
       for (const bot of AsyncResult.isSuccess(bots) ? bots.value.bots : []) {
         if (bot.role === "member" && bot.state !== "deleted") inputs.push({ botId: bot.botId });
       }
     }
-    return inputs;
+    return { inputs, rosterKnown };
   };
   const homeCurrentOpenableWorkByEnvironment = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
-      const inputs = botInputs(get, environmentId);
+      const { inputs, rosterKnown } = botInputs(get, environmentId);
       const byBot = inputs.map((input) => {
         const botId = input.botId ?? ("main" as BotId);
         const value = get(homeCurrentOpenableWorkAtom([environmentId, botId]));
         return { botId, eligible: value.eligible, list: value.list };
       });
       return {
+        rosterKnown,
         byBot,
         links: inputs.flatMap(
           (input) =>
@@ -281,7 +284,7 @@ export function createChannelEnvironmentAtoms<R, E>(
             .goatBotTaskThreads !== true
         )
           return NO_WORK;
-        return botInputs(get, environmentId).flatMap((input) => {
+        return botInputs(get, environmentId).inputs.flatMap((input) => {
           const value = get(retainedFor(environmentId, input));
           return value === null
             ? []

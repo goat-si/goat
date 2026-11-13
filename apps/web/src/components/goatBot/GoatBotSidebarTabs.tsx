@@ -4,6 +4,7 @@ import {
   dismissCreatedBot,
   dismissNewBot,
   forgetNewBotIntentsOf,
+  homeWorkGoverns,
   retryNewBot,
   settleListedNewBots,
   startNewBot,
@@ -112,7 +113,7 @@ function LegacyBotChildRows(props: Parameters<typeof GoatBotChildRows>[0]) {
   const work = useAtomValue(
     channelEnvironment.homeCurrentOpenableWorkByEnvironment(props.environmentId),
   );
-  return work.byBot.every((bot) => bot.eligible) ? null : <GoatBotChildRows {...props} />;
+  return homeWorkGoverns(work) ? null : <GoatBotChildRows {...props} />;
 }
 
 function NewBotButton({

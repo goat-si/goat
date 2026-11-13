@@ -124,8 +124,12 @@ export function GoatBotWorkPanel({
     const active = document.activeElement;
     // Home restores its own scroll, so the row it returns to does not drag the panel with it.
     if (homeReturn !== null && focusTarget !== "home") element.scrollIntoView({ block: "nearest" });
-    if (active === null || active === document.body || active === homeReturn?.focusFrom)
-      element.focus({ preventScroll: true });
+    // Back's return lands only where focus still is what Back left; a closed peek's, on the body.
+    const returning = homeReturn !== null && focusTarget === homeReturn.taskId;
+    const settled = returning
+      ? (active ?? document.body) === (homeReturn.focusFrom ?? document.body)
+      : active === null || active === document.body;
+    if (settled) element.focus({ preventScroll: true });
     setFocusTarget(null);
   };
   // Back also returns Home to where it was scrolled, once per mount; a routine landing scrolls it.

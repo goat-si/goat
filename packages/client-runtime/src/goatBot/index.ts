@@ -36,4 +36,4 @@ export * from "@goat/shared/goatBotNames";
 export * from "./newBots.ts";
 export * from "./botNameRowDismissal.ts";
 
-export type { HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
+export { homeWorkGoverns, type HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
