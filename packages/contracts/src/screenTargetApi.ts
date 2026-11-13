@@ -37,7 +37,7 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // nothingSent covers only its own call: a cell ending on it after an earlier input went out keeps
 // that input's safety, and its nextStep names that input; read again before resending it.
 // Pass { send: true } only on the final action that submits or sends a message, after the person confirmed;
-// keep it off while typing a draft or pressing Enter to search. Never press cmd+v unless this cell copied the clipboard itself.
+// keep it off while typing a draft or pressing Enter to search. Never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep their numbers. Tab focus changes use focus [N] or focus none.
 // obs.ref(n) holds an element across awaits, passed as the target argument itself; refused unsent (stale_reference) after the target is read again (observe({after}) pages keep it). Bare numbers always mean the latest observation. Arguments are plain data.
 interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?: string; // first post-input diff: window evidence, not proof of the intended effect
@@ -55,7 +55,7 @@ interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?:
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy too when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
-  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read stay valid until rows are added, removed or renumbered, then use the latest observation's, or diff: false for the whole tree
+  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read stay valid until rows are added, removed or renumbered, then apply diffs and use the latest observation, or diff: false for the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; checked?: boolean; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; tabs only: timeoutMs waits for the target (5 s), checked sets a checkbox, radio or switch, clicking only when it differs; apps only: action. Tab verify adds diagnostics without extra reads. App verify: true reads the window list before and after the input, beside a read of the acted element when a unique label with text or selection names it; with no new window it relists up to 3 more times, 100 ms apart (4 for one that opens or closes a window). Element changes are evidence only; a window proven opened or closed confirms. A suspected_noop right after a whole observe gets one more window read whose changed rows confirm it (never a close); that read replaces earlier numbers
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: as on click
@@ -92,7 +92,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // Decided steps in one app window: start them together and await once to send one GOAT-side group,
 // each member an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result;
-// with strict input guards on, later group members are not run after a failed step, so read every result: only one saying nothingSent went unsent.
+// with strict input guards on, later group members are not run after a failed step, so read every result: only a step whose own result says nothingSent went unsent.
 // Bind a window an input opened (a chat, a document) from otherWindows to read it: screen.app({ bundle_id, window_id }).
 // A large window keeps its toolbar and visible items first; omitted names what was left out and the next part,
 // which app.observe({ after: n }) reads from the same read. app.observe({ query: { role?, name?, text?, id? } })
@@ -111,7 +111,7 @@ const SCREEN_APP = `  // Native apps and browser dialogs only; web pages in any 
   // windows or processes are ambiguous; for a minimized or hidden window, pass the window_id screen.discover() lists with its title instead of opening a new one.
   // A closed app is launched in the background and its first window bound in the same call; a running
   // one is never relaunched, so with no window yet it throws: call app() again once one shows. The window is sought
-  // for 5 s (a last check may take 2 s more); none throws, the app still running. Several
+  // for 5 s (a last check may take 2 s more); no window then throws, the app still running. Several
   // installed copies: a running one wins, else /Applications. A name shared by apps with different ids is ambiguous.
   // path: a launch_path list_apps lists (macOS) picks the copy to launch.
   // A string is the app's name, or its bundle id when no app has that name. bundleId and windowId are aliases.
@@ -120,7 +120,7 @@ const SCREEN_APP = `  // Native apps and browser dialogs only; web pages in any 
 
 const FOOTER = `// Batch decided steps in one cell and observe once at the end. A failed cell still returns its
 // receipts; an uncaught host failure is reported as that call's receipt, and a cell that fails in its own
-// code also returns value.partial: each call's return before the failure. Every outcome, result or error, carries windowsOpened (plus windowsOpenedTruncated, windowsOpenedUnverified): windows listed as newly opened for the apps the cell used.`;
+// code also returns value.partial: each call's return before the failure. Every cell outcome, result or error, carries windowsOpened (plus windowsOpenedTruncated, windowsOpenedUnverified): windows listed as newly opened for the apps the cell used.`;
 
 /** The bundle for the surfaces a turn has now; an absent surface is named as unavailable. */
 export const screenTargetApi = (surfaces: {
