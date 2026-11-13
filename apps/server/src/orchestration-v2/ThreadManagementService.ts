@@ -1,3 +1,4 @@
+import { deliveryForDispatch, readRestartReceipt } from "./restartedDelivery.ts";
 import * as ThreadSettlementAfterRun from "./ThreadSettlementAfterRun.ts";
 import type {
   OrchestrationV2SearchThreadInput,
@@ -1153,14 +1154,12 @@ const make = Effect.gen(function* () {
           messageId: input.messageId,
         });
       }
-      const delivery: ThreadManagementSendResult["delivery"] =
-        turnItem === null || turnItem.inputIntent === "queued_turn"
-          ? "queued"
-          : turnItem.inputIntent === "turn_start"
-            ? "started"
-            : dispatchType === "restart_active"
-              ? "restarted"
-              : "steered";
+      const delivery = deliveryForDispatch(
+        dispatch,
+        run.id,
+        turnItem?.inputIntent ?? null,
+        dispatchType === "restart_active",
+      );
       return { dispatch, projection, message, run, turnItem, delivery };
     });
 
@@ -1563,6 +1562,9 @@ const make = Effect.gen(function* () {
     }
 
     if (target.messages.some((message) => message.id === input.messageId)) {
+      if (yield* readRestartReceipt(receipts, input, ThreadManagementProjectionLoadError)) {
+        return yield* dispatchAndRead(input, input.commandId, { type: "start_immediately" });
+      }
       const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
       return yield* readDelivery(
         input,
