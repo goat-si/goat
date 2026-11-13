@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { MCP_CLIENT_SUBJECT } from "./auth/mcpClientSubject.ts";
 import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
+import { withPersonConsent } from "./hub/disposable/disposableSwitch.ts";
 const isSettingsError = Schema.is(ServerSettingsError);
 export class AgentWorkspaceTerminalPolicyThreadLookup extends Context.Service<
   AgentWorkspaceTerminalPolicyThreadLookup,
@@ -203,56 +204,59 @@ export const agentWorkspaceTerminalSettingsMethods = (
           : new ServerSettingsError({ settingsPath, operation: "normalize", cause }),
       ),
     );
-    return transact(
-      (current) =>
-        Effect.gen(function* () {
-          yield* rejectReserved(patch, settingsPath);
-          if (
-            Object.hasOwn(patch, "agentTerminalBinding") ||
-            Object.hasOwn(patch, "agentTerminalClientBindings")
-          ) {
-            return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
-          }
-          yield* authorize;
-          let next = applyServerSettingsPatch(current, patch);
-          const protectedChange =
-            agentTerminalBinding !== undefined || policyChanged(current, next);
-          if (
-            protectedChange &&
-            (patch.providerInstances !== undefined ||
-              Object.hasOwn(patch, "providers") ||
-              patch.usageLimitSources !== undefined)
-          ) {
-            return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
-          }
-          if (agentTerminalBinding !== undefined) {
-            const bindings = { ...current.agentTerminalClientBindings };
-            if (agentTerminalBinding.threadId === null) {
-              delete bindings[agentTerminalBinding.sessionId];
-            } else {
-              const crypto = yield* Effect.serviceOption(Crypto.Crypto);
-              if (Option.isNone(crypto)) {
-                return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
-              }
-              const generation = yield* crypto.value
-                .randomUUIDv4()
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ServerSettingsError({ settingsPath, operation: "normalize", cause }),
-                  ),
-                );
-              bindings[agentTerminalBinding.sessionId] = {
-                threadId: agentTerminalBinding.threadId,
-                generation,
-              };
+    // The write runs after this path verified a person, so it may change the disposable switch.
+    return withPersonConsent(
+      transact(
+        (current) =>
+          Effect.gen(function* () {
+            yield* rejectReserved(patch, settingsPath);
+            if (
+              Object.hasOwn(patch, "agentTerminalBinding") ||
+              Object.hasOwn(patch, "agentTerminalClientBindings")
+            ) {
+              return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
             }
-            next = { ...next, agentTerminalClientBindings: bindings };
-          }
-          return yield* stamp(current, next);
-        }),
-      Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
-      authorize,
+            yield* authorize;
+            let next = applyServerSettingsPatch(current, patch);
+            const protectedChange =
+              agentTerminalBinding !== undefined || policyChanged(current, next);
+            if (
+              protectedChange &&
+              (patch.providerInstances !== undefined ||
+                Object.hasOwn(patch, "providers") ||
+                patch.usageLimitSources !== undefined)
+            ) {
+              return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
+            }
+            if (agentTerminalBinding !== undefined) {
+              const bindings = { ...current.agentTerminalClientBindings };
+              if (agentTerminalBinding.threadId === null) {
+                delete bindings[agentTerminalBinding.sessionId];
+              } else {
+                const crypto = yield* Effect.serviceOption(Crypto.Crypto);
+                if (Option.isNone(crypto)) {
+                  return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
+                }
+                const generation = yield* crypto.value
+                  .randomUUIDv4()
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ServerSettingsError({ settingsPath, operation: "normalize", cause }),
+                    ),
+                  );
+                bindings[agentTerminalBinding.sessionId] = {
+                  threadId: agentTerminalBinding.threadId,
+                  generation,
+                };
+              }
+              next = { ...next, agentTerminalClientBindings: bindings };
+            }
+            return yield* stamp(current, next);
+          }),
+        Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
+        authorize,
+      ),
     );
   },
 });

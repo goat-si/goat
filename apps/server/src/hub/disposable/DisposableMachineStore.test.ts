@@ -10,7 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../../persistence/Migrations.ts";
 import * as Settings from "../../serverSettings.ts";
 import * as Store from "./DisposableMachineStore.ts";
-import { disposableSwitch } from "./disposableSwitch.ts";
+import { disposableSwitch, withPersonConsent } from "./disposableSwitch.ts";
 
 const T0 = "1970-01-01T00:00:00.000Z";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -89,7 +89,7 @@ it.effect("a forward commit runs only under the switch's grant and the record's 
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
       const forward = (fence: number, state: string) =>
         store.commitForward({ attachId: "a1", fence }, () => advance("a1", state));
@@ -104,13 +104,19 @@ it.effect("a forward commit runs only under the switch's grant and the record's 
           reason: "not_found",
         },
       );
-      yield* settings.updateSettings({ hub: { attachDisposableMachines: { cap: 2 } } });
+      yield* withPersonConsent(
+        settings.updateSettings({ hub: { attachDisposableMachines: { cap: 2 } } }),
+      );
       expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "grant_changed" });
       // Off, then on again with the same values, is still a new consent.
-      yield* settings.updateSettings({ hub: { attachDisposableMachines: { cap: 10 } } });
-      yield* settings.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } });
+      yield* withPersonConsent(
+        settings.updateSettings({ hub: { attachDisposableMachines: { cap: 10 } } }),
+      );
+      yield* withPersonConsent(
+        settings.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } }),
+      );
       expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "switch_off" });
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "grant_changed" });
       yield* insert("a2", yield* currentGrant);
       yield* TestClock.adjust(31 * DAY_MS);
@@ -128,17 +134,17 @@ it.effect("a forward commit queued behind a settings change sees that change", (
     Effect.gen(function* () {
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();
-      const change = yield* settings
-        .updateSettings(
+      const change = yield* withPersonConsent(
+        settings.updateSettings(
           { hub: { attachDisposableMachines: { enabled: false } } },
           Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        )
-        .pipe(Effect.forkChild);
+        ),
+      ).pipe(Effect.forkChild);
       yield* Deferred.await(held);
       const observed = Settings.ServerSettingsService.of({
         ...settings,
@@ -168,7 +174,7 @@ it.effect("a switch-off during a forward commit lets that commit finish and refu
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       const grant = yield* currentGrant;
       yield* insert("a1", grant);
       const inside = yield* Deferred.make<void>();
@@ -186,7 +192,9 @@ it.effect("a switch-off during a forward commit lets that commit finish and refu
       yield* Deferred.await(inside);
       const change = yield* Deferred.succeed(queued, undefined).pipe(
         Effect.andThen(
-          settings.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } }),
+          withPersonConsent(
+            settings.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } }),
+          ),
         ),
         Effect.forkChild,
       );
@@ -233,11 +241,13 @@ it.effect("a forward commit that waits for the database past the switch's expiry
       yield* runMigrations({ toMigrationInclusive: 145 });
       const sql = yield* SqlClient.SqlClient;
       const settings = yield* Settings.ServerSettingsService;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       // An expiry inside the commit's bound, so the wait outlasts the switch and not the bound.
-      yield* settings.updateSettings({
-        hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
-      });
+      yield* withPersonConsent(
+        settings.updateSettings({
+          hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
+        }),
+      );
       yield* insert("a1", yield* currentGrant);
       const inTransaction = yield* Deferred.make<void>();
       const releaseTransaction = yield* Deferred.make<void>();
@@ -279,7 +289,7 @@ it.effect("two steps that read the same fence: the first commits, the second is 
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
       const step = (state: string) =>
         store.commitForward({ attachId: "a1", fence: 0 }, () => advance("a1", state));
@@ -296,7 +306,7 @@ it.effect("a write that stalls gives up the settings lock at the bound and chang
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
       const inside = yield* Deferred.make<void>();
       const commit = yield* store
@@ -312,7 +322,9 @@ it.effect("a write that stalls gives up the settings lock at the bound and chang
       expect(yield* Fiber.join(commit)).toBeInstanceOf(Store.DisposableStoreError);
       expect(yield* stateOf("a1")).toBe("invited");
       // Settings writers are not left waiting.
-      yield* settings.updateSettings({ hub: { attachDisposableMachines: { cap: 3 } } });
+      yield* withPersonConsent(
+        settings.updateSettings({ hub: { attachDisposableMachines: { cap: 3 } } }),
+      );
     }),
   ),
 );
@@ -323,7 +335,7 @@ it.effect("a write's own failure reaches the caller as itself, never as unreadab
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
+      yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
       yield* insert("a2", "g", { mint_id: "m-1" });
       const sql = yield* SqlClient.SqlClient;
@@ -357,10 +369,12 @@ it.effect("a write admitted before the switch expires but finishing after it is 
       yield* runMigrations({ toMigrationInclusive: 145 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
-      yield* settings.updateSettings(switchOn);
-      yield* settings.updateSettings({
-        hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
-      });
+      yield* withPersonConsent(settings.updateSettings(switchOn));
+      yield* withPersonConsent(
+        settings.updateSettings({
+          hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
+        }),
+      );
       yield* insert("a1", yield* currentGrant);
       const inside = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
