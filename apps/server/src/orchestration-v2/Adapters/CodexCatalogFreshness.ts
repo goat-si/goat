@@ -115,6 +115,18 @@ export const makeCodexCatalogFreshness = <E>(input: {
     if (entry === undefined || baseline === undefined) return false;
     return baseline === "unknown" || baseline.get(model) !== entry;
   };
+  /** One background lookup at a time; placement never waits on the process or the file. */
+  const inBackground = Effect.fn("CodexCatalogFreshness.inBackground")(function* <E2>(
+    effect: Effect.Effect<void, E2>,
+  ) {
+    if (refreshing) return;
+    refreshing = true;
+    yield* effect.pipe(
+      Effect.ignoreCause,
+      Effect.ensuring(Effect.sync(() => (refreshing = false))),
+      Effect.forkDetach,
+    );
+  });
 
   return Effect.fn("CodexCatalogFreshness.outdated")(function* (
     model: string,
@@ -122,7 +134,14 @@ export const makeCodexCatalogFreshness = <E>(input: {
   ) {
     if (options?.cachedOnly === true) {
       // Placement holds dispatch: one bounded stat, and the read and parse run in the background.
-      const known = Option.getOrUndefined(catalogPath);
+      if (Option.isNone(catalogPath)) {
+        yield* inBackground(
+          resolvePath.pipe(Effect.flatMap((path) => (path ? refresh(path) : Effect.void))),
+        );
+        // A process that failed to say where its catalog is may hold a stale one.
+        return configFailedAtMs !== undefined;
+      }
+      const known = catalogPath.value;
       if (known === undefined) return false;
       const seen = yield* input.fileSystem.stat(known).pipe(
         Effect.map(describe),
@@ -132,13 +151,7 @@ export const makeCodexCatalogFreshness = <E>(input: {
       );
       // Unconfirmed counts as changed: the file did not answer, or GOAT has no read to compare.
       const changed = seen === undefined || seen.identity !== current?.identity;
-      if (changed && !refreshing) {
-        refreshing = true;
-        yield* refresh(known).pipe(
-          Effect.ensuring(Effect.sync(() => (refreshing = false))),
-          Effect.forkDetach,
-        );
-      }
+      if (changed) yield* inBackground(refresh(known));
       // Until a background read confirms the file, a changed one counts as changing this model.
       return changed || judge(model);
     }

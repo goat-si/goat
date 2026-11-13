@@ -503,3 +503,29 @@ it.effect("placement treats a catalog GOAT could never read as changed", () =>
     assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "placement isolates a new thread while the process has not said where its catalog is",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known)]),
+        listServed: Effect.succeed([known]),
+        startedAtMs: 2_000,
+        catalog: {
+          cwd: "/",
+          home: undefined,
+          fileSystem: fs,
+          // The busy process does not answer config/read during this retry window.
+          readConfig: Effect.fail("busy"),
+        },
+      });
+      assert.strictEqual(yield* modelStatus(known), "ready");
+      yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+      assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
