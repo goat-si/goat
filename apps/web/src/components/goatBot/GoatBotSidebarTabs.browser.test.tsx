@@ -24,6 +24,7 @@ const bots = vi.hoisted(() => ({
   memberShell: null as object | null,
   error: null as string | null,
   eligible: false,
+  rosterKnown: true,
 }));
 const channels = vi.hoisted(() => ({
   homeCurrentOpenableWorkByEnvironment: () => "home-work",
@@ -104,7 +105,7 @@ vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: (atom: unknown) =>
     atom === "home-work"
-      ? { byBot: [{ eligible: bots.eligible }] }
+      ? { rosterKnown: bots.rosterKnown, byBot: [{ eligible: bots.eligible }] }
       : atom === "current-work"
         ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
         : true,
@@ -221,6 +222,7 @@ function setup() {
   bots.memberShell = null;
   bots.error = null;
   bots.eligible = false;
+  bots.rosterKnown = true;
   actions.create.mockReset();
   navigation.pathname = "/";
   navigation.environmentId = "";
@@ -489,4 +491,17 @@ it("removes legacy child rows when eligible and restores them when eligibility i
   await expect
     .element(screen.getByRole("button", { name: "Actions for Review work" }))
     .toBeVisible();
+});
+
+it("keeps legacy child rows while the member roster is unknown, even with every listed bot eligible", async () => {
+  setup();
+  bots.eligible = true;
+  bots.rosterKnown = false;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to inspect the sidebar without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  bots.rosterKnown = true;
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await vi.waitFor(() => expect(screen.getByText("Review work").query()).toBeNull());
 });

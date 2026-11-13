@@ -207,6 +207,31 @@ it("does not move focus after it leaves the Back location and falls back to the 
   }
 });
 
+it("does not take focus that moved to the page after Back left it on an element", async () => {
+  setup([], [], [runningTask]);
+  const focusFrom = document.createElement("button");
+  document.body.append(focusFrom);
+  using _scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  try {
+    focusFrom.focus();
+    focusFrom.blur();
+    expect(document.activeElement).toBe(document.body);
+    await using screen = await render(
+      <GoatBotWorkPanel
+        onOpenFile={() => {}}
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        homeReturn={{ taskId: ChannelTaskId.make("task-a"), focusFrom }}
+      />,
+    );
+    const row = screen.getByRole("link", { name: /^Stop the port 3774 server/ });
+    await expect.element(row).toBeVisible();
+    expect(document.activeElement).toBe(document.body);
+  } finally {
+    focusFrom.remove();
+  }
+});
+
 it("focuses the Work heading if the returned task no longer exists", async () => {
   setup([], [], []);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();

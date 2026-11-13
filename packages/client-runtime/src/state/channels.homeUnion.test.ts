@@ -5,6 +5,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
+import * as Cause from "effect/Cause";
+import { homeWorkGoverns } from "../goatBot/homeCurrentOpenableWork.ts";
 import { createChannelEnvironmentAtoms } from "./channels.ts";
 
 const env = EnvironmentId.make("source");
@@ -124,6 +126,22 @@ it("unions main and active members only when both member capabilities exist", ()
   registry.dispose();
   vi.useRealTimers();
 });
+it("governs lists only once the member roster has been read", () => {
+  vi.useFakeTimers({ now });
+  state.completed = false;
+  const { registry, union } = setup();
+  expect(homeWorkGoverns(registry.get(union))).toBe(true);
+  for (const roster of [AsyncResult.initial(true), AsyncResult.failure(Cause.fail("offline"))]) {
+    registry.set(bots, roster as never);
+    expect(registry.get(union).byBot.map((bot) => bot.botId)).toEqual(["main"]);
+    expect(homeWorkGoverns(registry.get(union))).toBe(false);
+  }
+  registry.set(bots, AsyncResult.success({ bots: [] }) as never);
+  expect(homeWorkGoverns(registry.get(union))).toBe(true);
+  registry.dispose();
+  vi.useRealTimers();
+});
+
 it("retires links and requests a fresh list when retention ends", () => {
   vi.useFakeTimers({ now });
   state.completed = true;

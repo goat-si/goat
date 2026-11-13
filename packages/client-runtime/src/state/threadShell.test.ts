@@ -477,10 +477,12 @@ it("switches each environment between Home links and legacy listed work", () => 
   const main = ThreadId.make("current");
   const legacy = ThreadId.make("legacy");
   const current = Atom.make({
+    rosterKnown: true,
     byBot: [{ botId: "main" as never, eligible: true, list: "ready" as const }],
     links: [{ taskId: "task" as never, environmentId, threadId: main, kind: "coding" as const }],
   });
   const old = Atom.make({
+    rosterKnown: true,
     byBot: [{ botId: "main" as never, eligible: false, list: "ready" as const }],
     links: [],
   });
@@ -509,6 +511,7 @@ it("switches each environment between Home links and legacy listed work", () => 
   expect(hidden().has(`${environmentId}:${main}`)).toBe(true);
   expect(hidden().has(`${remoteEnvironmentId}:${legacy}`)).toBe(true);
   harness.registry.set(current, {
+    rosterKnown: true,
     byBot: [{ botId: "main" as never, eligible: true, list: "ready" }],
     links: [],
   });

@@ -287,6 +287,7 @@ describe("Home and Threads two-way visibility", () => {
       isOpenable: (id) => !fixture.offline || id !== remote,
     });
     const union = {
+      rosterKnown: true,
       byBot: [{ botId: BotId.make("main"), eligible: value.eligible, list: value.list }],
       links: value.links,
     };

@@ -76,7 +76,7 @@ vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: (atom: unknown) =>
     atom === "home-work"
-      ? { byBot: [{ eligible: false }] }
+      ? { rosterKnown: true, byBot: [{ eligible: false }] }
       : atom === "current-work"
         ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
         : true,
