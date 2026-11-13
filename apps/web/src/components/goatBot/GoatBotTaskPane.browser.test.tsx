@@ -983,6 +983,7 @@ it("forgets the old lookup view when the task leaves and re-enters the list", as
     unread: false,
     mainMessagesSinceQuiet: 0,
   });
+  if (oldRow.kind !== "task") throw new Error("Expected a task row");
   let finish!: (value: unknown) => void;
   const pending = new Promise((resolve) => {
     finish = resolve;

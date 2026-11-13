@@ -30,11 +30,9 @@ vi.mock("~/state/entities", async (original) => {
   return {
     ...actual,
     useServerConfigs: () => {
-      const configs = actual.useServerConfigs();
-      return new Map([
-        ...configs,
-        ["env-1", { environment: { capabilities: { goatBotTaskLookupSearch: true } } }],
-      ]);
+      const configs = new Map<string, unknown>(actual.useServerConfigs());
+      configs.set("env-1", { environment: { capabilities: { goatBotTaskLookupSearch: true } } });
+      return configs;
     },
   };
 });
