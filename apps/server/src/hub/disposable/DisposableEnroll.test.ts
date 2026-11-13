@@ -590,3 +590,24 @@ it.effect("a stop that lost its record to another step writes no audit row", () 
     }),
   ),
 );
+
+it.effect("a 404 from a Home that does not serve the journal is not read as never journalled", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.adds.push("not_journalled");
+      yield* enroll;
+      yield* enroll;
+      yield* enroll; // sent once
+      host.control.journalRouteMissing = true;
+      yield* enroll;
+      yield* enroll;
+      expect(linkAdds(host.control.calls)).toHaveLength(1);
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "attaching",
+        message: expect.stringContaining("could not be read"),
+      });
+    }),
+  ),
+);

@@ -270,18 +270,26 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     return pen.hostKey === route.hostKey ? ("same" as const) : ("changed" as const);
   });
 
-  /** What OpenCodex's journal says of the operation; never sends anything. */
-  const readBack = (row: Row, operationId: string) =>
-    Effect.map(
-      host.ocx(
-        ["link", "operations", "--operation-id", operationId, "--json"],
-        LINK_READ_TIMEOUT_MS,
-      ),
-      (answer): LinkOutcome =>
-        answer === undefined
-          ? { kind: "unreadable" }
-          : readOperation(answer, { operationId, alias: `pen-${row.node_id}` }),
+  /**
+   * What OpenCodex's journal says of the operation; never sends anything. ocx exits 4 for any 404,
+   * so "not found" counts only when the same Home serves its journal list.
+   */
+  const readBack = Effect.fn("DisposableEnroll.readBack")(function* (
+    row: Row,
+    operationId: string,
+  ) {
+    const answer = yield* host.ocx(
+      ["link", "operations", "--operation-id", operationId, "--json"],
+      LINK_READ_TIMEOUT_MS,
     );
+    const outcome: LinkOutcome =
+      answer === undefined
+        ? { kind: "unreadable" }
+        : readOperation(answer, { operationId, alias: `pen-${row.node_id}` });
+    if (outcome.kind !== "not_found") return outcome;
+    const served = yield* host.ocx(["link", "operations", "--json"], LINK_READ_TIMEOUT_MS);
+    return served?.code === 0 ? outcome : ({ kind: "unreadable" } as const);
+  });
 
   /**
    * Stores what the journal said. "resend" only for an id OpenCodex never journalled, read within
