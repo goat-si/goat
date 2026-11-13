@@ -33,7 +33,8 @@ export function HubDeviceRoutes({
   const [answer, setAnswer] = useState<HubDeviceRoutesResult | null>(null);
   const [draft, setDraft] = useState("");
 
-  const settle = (result: Awaited<ReturnType<typeof list>>) => {
+  /** keepAnswer: a read-back after a change updates the list and leaves the change's notice. */
+  const settle = (result: Awaited<ReturnType<typeof list>>, keepAnswer = false) => {
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
       setAnswer({
@@ -43,7 +44,7 @@ export function HubDeviceRoutes({
       });
       return;
     }
-    setAnswer(result.value);
+    if (!keepAnswer) setAnswer(result.value);
     if (result.value.pin !== undefined && result.value.routes !== undefined)
       setRoutes({ pin: result.value.pin, routes: result.value.routes });
   };
@@ -62,7 +63,7 @@ export function HubDeviceRoutes({
       result.value.state === "ok" &&
       result.value.routes === undefined
     )
-      settle(await list({ environmentId, input: { deviceAlias: alias } }));
+      settle(await list({ environmentId, input: { deviceAlias: alias } }), true);
     setBusy(false);
   };
   const move = (from: number, to: number) => {
