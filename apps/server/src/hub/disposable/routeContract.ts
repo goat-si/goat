@@ -13,24 +13,28 @@ export interface DisposableRoute {
   readonly knownHostsFile: string;
 }
 
-// ssh splits UserKnownHostsFile on spaces and expands % tokens in it.
-const FILE = /^\/[^\s"'%]+$/u;
+// ssh splits UserKnownHostsFile on spaces and expands % tokens and ${VAR} in it.
+const FILE = /^\/[^\s"'%$]+$/u;
 const ED25519_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/u;
 
 /**
- * The options every SSH command GOAT runs for a disposable machine carries. Command-line options
- * win over every ssh_config, so a later config edit cannot move the route, reuse another
- * connection, or accept another key. Undefined when a value could not be passed unchanged.
+ * The arguments every SSH command GOAT runs for a disposable machine starts with. `-F none` reads
+ * no ssh_config, so no config can add forwards, environment, identities or credential delegation,
+ * which accumulate instead of yielding to the command line; the options below then name the route.
+ * Undefined when a value could not be passed unchanged.
  */
-export const disposableSshOptions = (route: DisposableRoute) => {
+const sharedOptions = (route: DisposableRoute) => {
   if (
     !isPenRunCommand(route.proxyCommand, route) ||
     !isRouteUser(route.user) ||
     !FILE.test(route.knownHostsFile)
   )
     return undefined;
-  return [
+  const options = [
     "BatchMode=yes",
+    "ConnectTimeout=10",
+    "ServerAliveInterval=15",
+    "ServerAliveCountMax=3",
     "ControlMaster=no",
     "ControlPath=none",
     "KnownHostsCommand=none",
@@ -51,8 +55,31 @@ export const disposableSshOptions = (route: DisposableRoute) => {
     `ProxyCommand=${route.proxyCommand}`,
     "ForwardAgent=no",
     "ForwardX11=no",
+    "ForwardX11Trusted=no",
+    "GSSAPIAuthentication=no",
+    "GSSAPIDelegateCredentials=no",
+    "AddKeysToAgent=no",
+    "SendEnv=-*",
+    "RemoteCommand=none",
+    "RequestTTY=no",
+    "EscapeChar=none",
+    "Tunnel=no",
+    "PermitRemoteOpen=none",
     "PermitLocalCommand=no",
-  ].flatMap((option) => ["-o", option]);
+  ];
+  return ["-F", "none", ...options.flatMap((option) => ["-o", option])];
+};
+
+/** For a command run on the machine: no forward at all, the command line's included. */
+export const disposableSshExecOptions = (route: DisposableRoute) => {
+  const shared = sharedOptions(route);
+  return shared && [...shared, "-o", "ClearAllForwardings=yes"];
+};
+
+/** For a tunnel: only the forwards the caller passes after these, and none that fail silently. */
+export const disposableSshTunnelOptions = (route: DisposableRoute) => {
+  const shared = sharedOptions(route);
+  return shared && [...shared, "-o", "ExitOnForwardFailure=yes"];
 };
 
 /** The one line of a disposable machine's private known_hosts, or undefined for any other key. */
