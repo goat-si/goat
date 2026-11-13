@@ -36,7 +36,9 @@ export type AddScript =
   | "not_journalled"
   | { readonly failedClean: string }
   | "residual"
-  | "unknown";
+  | "unknown"
+  /** The Home stopped mid-operation: the entry stays open until the same id is repeated. */
+  | "open";
 
 /** Holds a call until released; `arrived` completes once `want` calls wait. */
 export interface Hold {
@@ -102,7 +104,11 @@ export const fakeEnrollHost = () => {
     const alias = args[2] ?? "";
     const operationId = args[args.indexOf("--operation-id") + 1] ?? "";
     const known = journal.get(operationId);
-    if (known !== undefined) return output(known.state === "committed" ? 0 : 1);
+    if (known !== undefined) {
+      // A repeat recovers a dead open entry by its reserved ids (link-operation.ts recoverEnroll).
+      if (known.state === "open") known.state = "unknown";
+      return output(known.state === "committed" ? 0 : 1);
+    }
     const script = control.adds.shift() ?? "commit";
     if (script === "not_journalled") return output(1);
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
@@ -113,7 +119,7 @@ export const fakeEnrollHost = () => {
       operation.code = script.failedClean;
       return output(1);
     }
-    if (script === "residual" || script === "unknown") {
+    if (script === "residual" || script === "unknown" || script === "open") {
       operation.state = script;
       return output(1);
     }

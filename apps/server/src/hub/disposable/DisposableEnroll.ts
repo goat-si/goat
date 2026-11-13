@@ -23,6 +23,7 @@ import {
   LINK_CONTRACTS,
   LINK_IDENTITY_CONTRACT,
   LINK_SENDS,
+  STALE_OPEN_MS,
   type LinkOutcome,
   linkAddArgs,
   linkIdentityArgs,
@@ -294,12 +295,23 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       case "unsettled":
         yield* stop(row, as(outcome.state), "link_" + outcome.state, { state: "unknown" });
         return "done" as const;
-      case "open":
-      case "unreadable": {
-        const shown = outcome.kind === "open" ? "open" : "journal_unreadable";
-        if (link.outcome !== shown) yield* note(row, as(shown));
-        return "done" as const;
+      case "open": {
+        const nowMs = yield* Clock.currentTimeMillis;
+        if (link.openSinceMs === undefined) {
+          yield* note(row, { ...enroll, link: { ...link, outcome: "open", openSinceMs: nowMs } });
+          return "done" as const;
+        }
+        if (sent || nowMs - link.openSinceMs < STALE_OPEN_MS) return "done" as const;
+        // Nothing runs it any more; only a repeat of the same id lets OpenCodex settle it.
+        if ((link.sends ?? 1) >= LINK_SENDS) {
+          yield* stop(row, as("open"), "link_stuck_open", { state: "unknown" });
+          return "done" as const;
+        }
+        return "resend" as const;
       }
+      case "unreadable":
+        if (link.outcome !== "journal_unreadable") yield* note(row, as("journal_unreadable"));
+        return "done" as const;
       case "not_found": {
         const age = (yield* Clock.currentTimeMillis) - link.intentAtMs;
         // After 2 hours the journal may have dropped a settled entry, so the id says nothing.
@@ -375,7 +387,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       if (ended !== undefined) return yield* exclusive(pause(row, ended));
       const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
       // The 2-hour window counts from the id's first store, whatever was resent since.
-      const resent = { ...enroll, link: { ...link, sends: (link.sends ?? 1) + 1 } };
+      const { openSinceMs: _seen, ...rest } = link;
+      const resent = { ...enroll, link: { ...rest, sends: (link.sends ?? 1) + 1 } };
       if ((yield* forward(row, current, resent, {})) !== "committed") return;
       const again = yield* read(row.attach_id);
       if (again !== undefined && due(again)) yield* dispatch(again, resent, route, stored);

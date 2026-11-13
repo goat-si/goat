@@ -19,6 +19,8 @@ const Enroll = Schema.Struct({
       intentAtMs: Schema.Number,
       /** How many times the current id was sent; OpenCodex never journalled the earlier ones. */
       sends: Schema.optionalKey(Schema.Number),
+      /** When GOAT first read the entry as open. */
+      openSinceMs: Schema.optionalKey(Schema.Number),
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),
@@ -57,6 +59,11 @@ export const LINK_CONTRACTS = ["link.route/1", "link.operation/1", "link.recover
  */
 export const LINK_IDENTITY_CONTRACT = "link.route/2";
 export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file", identityFile];
+/**
+ * An entry open longer than this has no ocx left running it: ocx gives up at 360 s and an alias-lock
+ * waiter at 120 s. OpenCodex recovers a dead open entry only when the same id is repeated.
+ */
+export const STALE_OPEN_MS = 10 * 60 * 1000;
 /** OpenCodex replays an operation id's recorded answer for this long (link operation journal). */
 export const OPERATION_REPLAY_MS = 2 * 60 * 60 * 1000;
 /** Link operations an attach may start before it stops for a person. */
@@ -214,6 +221,8 @@ const STOPS: Record<string, string> = {
     "The machine has a full OpenCodex install; disposable machines take only the lightweight Child.",
   require_ephemeral_unsupported: "OpenCodex cannot plant its lightweight Child on this machine.",
   link_attempts_used: "Three link attempts failed.",
+  link_stuck_open:
+    "OpenCodex left the link operation open and did not settle it when GOAT repeated it.",
   link_not_started:
     "OpenCodex refused the link three times before recording it: the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
   operation_lost:

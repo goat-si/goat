@@ -420,3 +420,30 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "an operation a Home restart left open is repeated under its id once it outlives ocx, and settles",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        yield* enroll;
+        yield* enroll;
+        yield* enroll; // the add left its entry open
+        yield* enroll;
+        expect(linkAdds(host.control.calls)).toHaveLength(1);
+        expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+        // Past ocx's own deadline and the alias-lock wait, nothing can still be running it.
+        yield* TestClock.adjust(10 * 60 * 1000);
+        yield* enroll; // first sight of the stale entry after the wait
+        yield* enroll;
+        expect(linkAdds(host.control.calls).map((args) => args[8])).toEqual([
+          attachId + ".link.1",
+          attachId + ".link.1",
+        ]);
+        expect(yield* listed(attachId)).toMatchObject({ state: "unknown" });
+      }),
+    ),
+);
