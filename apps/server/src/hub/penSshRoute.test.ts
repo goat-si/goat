@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  isPinnedPenRoute,
   penExactCommands,
   penExactRoute,
   penHostOption,
@@ -49,7 +50,7 @@ describe("Pen's exact per-node route", () => {
       exact.replace(" 22", " 2222"),
       exact.replace("pipe", "pipe --home /tmp"),
       "env LD_PRELOAD='/tmp/x.so' " + exact,
-      exact.replace("/pen'", "/open'"),
+      exact.replace("'/home/u/.local/bin/pen'", "'pen'"),
     ])
       expect(penExactRoute(settings(command), node), command).toBeUndefined();
     expect(penExactRoute(settings(exact, { proxyjump: "jump" }), node)).toBeUndefined();
@@ -84,6 +85,19 @@ describe("Pen's exact per-node route", () => {
     expect(penHostOption(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz", "User")).toBeUndefined();
     expect(penHostOption(config, "pen-missing", "User")).toBeUndefined();
   });
+  it("accepts any confirmed binary name, and runs only a route that names its Pen home", () => {
+    const renamed = exact.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
+    expect(penExactRoute(settings(renamed), node)).toBe(renamed);
+    expect(isPinnedPenRoute(renamed, node)).toBe(false);
+    expect(isPinnedPenRoute("env PEN_HOME='/home/u/.pen' " + renamed, node)).toBe(true);
+    expect(
+      isPinnedPenRoute("env PEN_HOME='/home/u/.pen' " + renamed, {
+        ...node,
+        nodeId: "b".repeat(26),
+      }),
+    ).toBe(false);
+  });
+
   it("names the commands the confirmed Pen writes, as ssh -G prints them", () => {
     const pen = { executablePath: "/opt/it's/pen", stateDir: "/home/u/.pen" };
     const tail = " pipe --node " + NODE + " --noise " + NOISE + " 22";

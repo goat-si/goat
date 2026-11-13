@@ -704,7 +704,8 @@ it.effect("Pen's exact block for a node is a route only with the Noise key GOAT 
     expect(yield* ocx.penExactRoute(node, pen)).toEqual({
       kind: "route",
       alias: EXACT_ALIAS,
-      proxyCommand: EXACT_PROXY,
+      // Pen wrote the bare form; the route GOAT runs names the confirmed home.
+      proxyCommand: "env PEN_HOME='" + pen.stateDir + "' " + EXACT_PROXY,
       user: "runner",
       hostKey: "ssh-ed25519 " + ED_KEY,
       fingerprint: "SHA256:nz9cVTpQx8PimslFh9CITEcWGb7QKBXpUlHyEaSApSw",
@@ -784,5 +785,17 @@ it.effect("an exact route run by any pen or Pen home but the confirmed one is re
       stateDir: confirmed.pen.stateDir,
     });
     expect(route).toMatchObject({ kind: "route", proxyCommand: named });
+    // A confirmed Pen installed under another name is still that Pen.
+    const renamed = EXACT_PROXY.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
+    const renamedPen = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, renamed),
+      renamed,
+    );
+    expect(
+      yield* renamedPen.ocx.penExactRoute(renamedPen.node, {
+        ...renamedPen.pen,
+        executablePath: "/opt/bin/pen-v1",
+      }),
+    ).toMatchObject({ kind: "route" });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

@@ -827,7 +827,8 @@ const make = Effect.gen(function* () {
       return {
         kind: "route",
         alias,
-        proxyCommand,
+        // Named with the confirmed home even when Pen wrote the bare form.
+        proxyCommand: trusted[0] ?? proxyCommand,
         user,
         hostKey,
         fingerprint: `SHA256:${digest.digest("base64").replace(/=+$/u, "")}`,

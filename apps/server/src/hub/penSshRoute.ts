@@ -30,6 +30,8 @@ const unset = (value: string | undefined) =>
 const QUOTED = "'(?:[^']|'\\\\'')*'";
 const PEN_BINARY = `(?:env PEN_HOME=${QUOTED} )?'(?:[^']|'\\\\'')*/pen' pipe`;
 const PEN_PIPE = new RegExp(`^${PEN_BINARY} %n 22$`, "u");
+// An exact block's binary is whatever the confirmed Pen is, so its name is not checked here.
+const ABSOLUTE = "'/(?:[^']|'\\\\'')*'";
 
 /** A Pen member addressed by node id, with the Noise key GOAT recorded for it. */
 export interface PenNode {
@@ -41,15 +43,15 @@ const NODE_ID = /^[a-z2-7]{26}$/u;
 const NOISE_PUB = /^[A-Za-z0-9_-]{43}$/u;
 
 /**
- * The ProxyCommand of Pen's exact block for `node` ("pipe --node <id> --noise <key> 22"), when
- * the alias resolves to it with no jump chain. Pen writes no exact block for an id another member
- * uses as its name, so that alias carries the name block's "pipe %n 22" and is refused here.
+ * The ProxyCommand of Pen's exact block for `node` ("<binary> pipe --node <id> --noise <key> 22")
+ * with no jump chain; penExactCommands decides which binary and Pen home. An id another member
+ * uses as its name gets only the name block's "pipe %n 22", which is refused here.
  */
 export const penExactRoute = (settings: ReadonlyMap<string, string>, node: PenNode) => {
   if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return undefined;
   const command = settings.get("proxycommand") ?? "";
   const exact = new RegExp(
-    `^${PEN_BINARY} --node ${node.nodeId} --noise ${node.noisePub} 22$`,
+    `^(?:env PEN_HOME=${ABSOLUTE} )?${ABSOLUTE} pipe --node ${node.nodeId} --noise ${node.noisePub} 22$`,
     "u",
   );
   return unset(settings.get("proxyjump")) && exact.test(command) ? command : undefined;
@@ -69,8 +71,17 @@ export interface PenInstall {
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /**
+ * A route GOAT runs names the Pen home itself, so a PEN_HOME the server inherited cannot pick
+ * another Pen view: env PEN_HOME='<home>' '<binary>' pipe --node <id> --noise <key> 22.
+ */
+export const isPinnedPenRoute = (command: string, node: PenNode) =>
+  command.startsWith("env PEN_HOME=") &&
+  penExactRoute(new Map([["proxycommand", command]]), node) === command;
+
+/**
  * The ProxyCommands `pen ssh-config` writes for `node` when it is the confirmed Pen, as ssh -G
- * prints them: with PEN_HOME when it was set, and without it only for Pen's default ~/.pen.
+ * prints them: with PEN_HOME when it was set, and without it only for Pen's default ~/.pen. The
+ * first is the one GOAT runs.
  */
 export const penExactCommands = (node: PenNode, pen: PenInstall, defaultStateDir: string) => {
   if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return [];
