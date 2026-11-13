@@ -48,10 +48,9 @@ export const inspectPenExactAlias = Effect.fn("ssh/penAlias.inspectPenExactAlias
       runPreflightProcess(cmd, args).pipe(
         Effect.timeout("10 seconds"),
         Effect.mapError(() => error(`${cmd} did not answer`)),
-        Effect.flatMap((result) =>
-          Buffer.byteLength(result.stdout) >= 64 * 1024
-            ? Effect.fail(error("Command output exceeded limit"))
-            : Effect.succeed(result),
+        Effect.filterOrFail(
+          (result) => Buffer.byteLength(result.stdout) < 64 * 1024,
+          () => error(`${cmd} printed more than GOAT reads`),
         ),
       );
     const resolved = yield* run(input.sshCommand ?? "ssh", ["-G", alias]);

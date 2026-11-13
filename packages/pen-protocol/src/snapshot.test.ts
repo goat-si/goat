@@ -1,9 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - a duplex stands in for Pen's control socket and a temp dir for its state.
 import * as NodeStream from "node:stream";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import type * as NodeNet from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   PEN_SNAPSHOT_LINE_CAP,
   parsePenSnapshot,
