@@ -11,7 +11,7 @@ import { Pressable, Text, View } from "react-native";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
 import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
-import type { MobileTaskLookup } from "./useMobileBotTaskLookup";
+import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { lookedUpTitle } from "./lookedUpTitle";
 
 /**
@@ -21,8 +21,11 @@ import { lookedUpTitle } from "./lookedUpTitle";
  */
 export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
-  /** The by-id read for a task the current list does not hold. */
-  readonly lookup: MobileTaskLookup;
+  /** The by-id read for a task the current list does not hold, and the task's actions. */
+  readonly screen: Pick<
+    ReturnType<typeof useMobileTaskScreen>,
+    "lookup" | "canUpdate" | "update" | "retried"
+  >;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
   readonly botName: string;
@@ -35,15 +38,14 @@ export function MobileTaskHeader(props: {
   readonly failed: boolean;
   readonly childError: boolean;
   readonly onRetryRead: () => void;
-  readonly onUpdate: (input: ChannelUpdateTaskViewInput) => void;
-  readonly onRetried: () => void;
   readonly onOpenThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
   readonly onOpenHome: () => void;
   readonly taskCard?: ReactNode;
   /** The conversation's card, drawn without the status it may no longer hold for older work. */
   readonly card: GoatBotTaskCard | null;
 }) {
-  const { lookup } = props;
+  const { lookup, canUpdate, retried } = props.screen;
+  const onUpdate = (input: ChannelUpdateTaskViewInput) => void props.screen.update(input);
   const found =
     props.task === undefined && (lookup.state === "known" || lookup.state === "unavailable");
   const task = props.task ?? (lookup.state === "known" ? lookup.task : undefined);
@@ -141,10 +143,11 @@ export function MobileTaskHeader(props: {
           task={task}
           environmentId={props.environmentId}
           enabled={props.enabled}
+          canUpdate={canUpdate}
           canRetry={props.canRetry}
           childError={props.childError}
-          onUpdate={props.onUpdate}
-          onRetried={props.onRetried}
+          onUpdate={onUpdate}
+          onRetried={retried}
           onOpenThread={props.onOpenThread}
         />
       ) : null}
@@ -155,7 +158,7 @@ export function MobileTaskHeader(props: {
           environmentId={props.environmentId}
           enabled={props.enabled}
           canRetry={props.canRetry}
-          onRetried={props.onRetried}
+          onRetried={retried}
           onOpenThread={props.onOpenThread}
         />
       ) : null}

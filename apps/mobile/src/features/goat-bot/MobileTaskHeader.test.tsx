@@ -64,7 +64,7 @@ async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = 
     root.render(
       <MobileTaskHeader
         task={undefined}
-        lookup={lookup}
+        screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
         botName="GOAT Bot"
         environmentId={"env" as never}
@@ -75,8 +75,6 @@ async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = 
         failed={false}
         childError={false}
         onRetryRead={() => {}}
-        onUpdate={() => {}}
-        onRetried={() => {}}
         onOpenThread={() => {}}
         onOpenHome={openHome}
         card={card as never}

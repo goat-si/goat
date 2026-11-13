@@ -116,7 +116,6 @@ it("decides the view and whether a read starts from one set of facts", () => {
     refreshing: false,
     holdsTask: false,
     held: false,
-    failed: false,
     stale: false,
     inFlight: false,
   };
@@ -137,8 +136,8 @@ it("decides the view and whether a read starts from one set of facts", () => {
     view: "answer",
     read: false,
   });
-  expect(decide({ failed: true })).toEqual({ view: "failed", read: false });
-  expect(decide({ failed: true, inFlight: true })).toEqual({ view: "loading", read: false });
+  // A held failure is an answer: no read by itself, and Try again or a stale mark reads again.
+  expect(decide({ held: true, inFlight: true })).toEqual({ view: "answer", read: false });
 });
 
 it("asks nothing before a list settles, when it holds the task, without the lookup, or without permission", async () => {

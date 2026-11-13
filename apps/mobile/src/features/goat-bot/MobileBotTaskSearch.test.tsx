@@ -129,7 +129,7 @@ it("sends nothing for a blank query or one longer than the server takes", async 
   }
 });
 
-it("an empty page that can continue offers Load more; only the end of the walk says nothing matched", async () => {
+it("says no task matches only when the search is complete; an incomplete one shows only its notices", async () => {
   vi.useFakeTimers();
   try {
     await setup();
@@ -145,9 +145,20 @@ it("an empty page that can continue offers Load more; only the end of the walk s
       cursor: "c1",
       limit: 20,
     });
+    // The walk ended, but a page could not be checked: it is not a complete "no".
     await net.calls[1]?.answer({ tasks: [] });
-    expect(text()).toContain("No matching tasks.");
+    expect(text()).not.toContain("No matching tasks.");
+    expect(text()).toContain("Some results could not be checked.");
     expect(button("Load more")).toBeUndefined();
+    await type("notes");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await net.calls[2]?.answer({ tasks: [], endedEarly: true });
+    expect(text()).not.toContain("No matching tasks.");
+    expect(text()).toContain("Search ended early.");
+    await type("plans");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await net.calls[3]?.answer({ tasks: [] });
+    expect(text()).toContain("No matching tasks.");
   } finally {
     vi.useRealTimers();
   }

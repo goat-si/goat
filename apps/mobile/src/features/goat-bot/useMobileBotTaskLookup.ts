@@ -40,10 +40,8 @@ export type TaskLookupFacts = {
   readonly refreshing: boolean;
   /** The last successful current list holds the task. */
   readonly holdsTask: boolean;
-  /** The saved answer is this task's. */
+  /** The saved answer is this task's; a failed read is an answer too. */
   readonly held: boolean;
-  /** This task's last read failed and nothing has answered since. */
-  readonly failed: boolean;
   /** An action on this task completed after its last read started. */
   readonly stale: boolean;
   /** A read for this task is running. */
@@ -54,34 +52,30 @@ export type TaskLookupFacts = {
  * What the task screen shows, and whether a read starts by itself. Nothing else starts a read
  * except Try again; so a task change during a refresh waits for it, an action's reread waits for
  * its refresh to settle (success or failure), and a refresh that returns the task reads nothing.
+ * A held answer, a failure included, is read again only once an action made it stale.
  */
 export function taskLookupDecision(facts: TaskLookupFacts): {
-  readonly view: "off" | "row" | "denied" | "answer" | "failed" | "loading";
+  readonly view: "off" | "row" | "denied" | "answer" | "loading";
   readonly read: boolean;
 } {
   if (!facts.able || !facts.established) return { view: "off", read: false };
   if (facts.holdsTask) return { view: "row", read: false };
   if (!facts.permitted) return { view: "denied", read: false };
-  // A failed read waits for Try again, as an answer waits for an action to make it stale.
-  const read =
-    !facts.refreshing && !facts.inFlight && (facts.stale || (!facts.held && !facts.failed));
-  if (facts.held) return { view: "answer", read };
-  if (facts.failed && !facts.inFlight) return { view: "failed", read };
-  return { view: "loading", read };
+  const read = !facts.refreshing && !facts.inFlight && (facts.stale || !facts.held);
+  return { view: facts.held ? "answer" : "loading", read };
 }
 
-type Saved = {
-  readonly key: string;
-  readonly value?: BotWorkResult;
-  readonly missing?: boolean;
-  readonly denied?: boolean;
-};
+/** The last answer for one task: what it read, or why it could not. */
+type Saved =
+  | { readonly key: string; readonly value: BotWorkResult }
+  | { readonly key: string; readonly error: "missing" | "denied" | "failed" };
 
-/** A refusal by the server's access check, at the transport or by the channel gateway. */
-function refused(error: unknown) {
-  if (typeof error !== "object" || error === null) return false;
-  if ("_tag" in error && error._tag === "EnvironmentAuthorizationError") return true;
-  return "reason" in error && error.reason === "forbidden";
+/** not_found, a refusal by the server's access check, or any other failure. */
+function failureKind(error: unknown): "missing" | "denied" | "failed" {
+  if (typeof error !== "object" || error === null) return "failed";
+  if ("reason" in error && error.reason === "not_found") return "missing";
+  if ("_tag" in error && error._tag === "EnvironmentAuthorizationError") return "denied";
+  return "reason" in error && error.reason === "forbidden" ? "denied" : "failed";
 }
 
 const lookupKey = (
@@ -116,7 +110,6 @@ export function useMobileBotTaskLookup(input: {
   );
   const key = lookupKey(environmentId, botId, taskId);
   const [saved, setSaved] = useState<Saved | null>(null);
-  const [failedKey, setFailedKey] = useState<string | null>(null);
   const [staleKey, setStaleKey] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState<{ key: string; generation: number } | null>(null);
   // The read in flight, for the answer's check and for a second press before the screen renders.
@@ -131,7 +124,6 @@ export function useMobileBotTaskLookup(input: {
     refreshing: input.refreshing,
     holdsTask: input.holdsTask,
     held: saved?.key === key,
-    failed: failedKey === key,
     stale: staleKey === key,
     inFlight: inFlight?.key === key,
   });
@@ -152,24 +144,12 @@ export function useMobileBotTaskLookup(input: {
       if (running.current?.generation !== sent.generation) return;
       running.current = null;
       setInFlight(null);
-      if (result._tag === "Success") {
-        setFailedKey(null);
-        setSaved({ key: sentKey, value: result.value });
-        return;
-      }
-      const error = squashAtomCommandFailure(result);
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "reason" in error &&
-        error.reason === "not_found"
-      ) {
-        setFailedKey(null);
-        setSaved({ key: sentKey, missing: true });
-      } else if (refused(error)) {
-        setFailedKey(null);
-        setSaved({ key: sentKey, denied: true });
-      } else setFailedKey(sentKey);
+      // A failure replaces the answer, so an action's failed reread never leaves the old state.
+      setSaved(
+        result._tag === "Success"
+          ? { key: sentKey, value: result.value }
+          : { key: sentKey, error: failureKind(squashAtomCommandFailure(result)) },
+      );
     });
   };
   // A read and its answer belong to one unbroken period in which this task is the screen's and may
@@ -183,7 +163,6 @@ export function useMobileBotTaskLookup(input: {
       if (running.current?.key === key) running.current = null;
       setInFlight((current) => (current?.key === key ? null : current));
       setSaved((current) => (current?.key === key ? null : current));
-      setFailedKey((current) => (current === key ? null : current));
     };
   }, [eligible, key]);
   const readShown = useEffectEvent(read);
@@ -201,21 +180,24 @@ export function useMobileBotTaskLookup(input: {
         return { state: "denied" };
       case "loading":
         return { state: "loading" };
-      case "failed":
-        // Called through this wrapper, so a press event never reaches the read.
-        return {
-          state: "failed",
-          retry: () => {
-            if (environmentId !== null && taskId !== null) read(environmentId, botId, taskId);
-          },
-        };
       case "answer":
         break;
     }
-    if (saved === null || saved.missing) return { state: "missing" };
-    if (saved.denied) return { state: "denied" };
+    const inFlightNow = inFlight?.key === key;
+    if (saved === null || environmentId === null) return { state: "loading" };
+    if ("error" in saved) {
+      if (saved.error === "missing") return { state: "missing" };
+      if (saved.error === "denied") return { state: "denied" };
+      if (inFlightNow) return { state: "loading" };
+      // Called through this wrapper, so a press event never reaches the read.
+      return {
+        state: "failed",
+        retry: () => {
+          if (taskId !== null) read(environmentId, botId, taskId);
+        },
+      };
+    }
     const result = saved.value;
-    if (result === undefined || environmentId === null) return { state: "missing" };
     if (result.task.state === "unavailable")
       return { state: "unavailable", task: result.task, result };
     const work = groupBotWork(
