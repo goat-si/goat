@@ -425,7 +425,7 @@ it("a launch the current list stops listing is not kept as a stale in-progress r
   await using screen = await render(<History list={current([old], [launch])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("remote remote-2")).toBeVisible();
-  await screen.rerender(<History list={current([{ ...old, unread: true }])} />);
-  await expect.element(screen.getByText(/Old task Unpinned Unread/)).toBeVisible();
+  await screen.rerender(<History list={current([old])} />);
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   expect(screen.getByText("remote remote-2").query()).toBeNull();
 });
