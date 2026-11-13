@@ -96,6 +96,13 @@ it("invokes Pen route open and close with the pin only", async () => {
   ]);
 });
 
+it("invokes Pen removal with the pin", async () => {
+  const pin = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "a".repeat(43) };
+  ipc.invoke.mockResolvedValue({ status: "cancelled" });
+  await ipc.bridge?.revokePenMember?.(pin);
+  expect(ipc.invoke).toHaveBeenCalledWith(IpcChannels.REVOKE_PEN_MEMBER_CHANNEL, pin);
+});
+
 describe("SSH preparation progress in preload", () => {
   it("isolates simultaneous requests and never sends their callbacks over IPC", async () => {
     const pending: Array<{ requestId: string; finish: (value: unknown) => void }> = [];

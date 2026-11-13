@@ -25,6 +25,7 @@ export type EnvironmentConnectionPhase =
 
 export interface EnvironmentConnectionPresentation {
   readonly phase: EnvironmentConnectionPhase;
+  readonly penHold?: "offline" | "waiting";
   readonly failureOrigin?: ConnectionFailureOrigin;
   readonly sshPreparation?: ConnectionSshPreparation;
   readonly sshRuntimeReady?: ConnectionSshRuntimeReady;

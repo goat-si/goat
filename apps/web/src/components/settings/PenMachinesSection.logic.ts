@@ -34,7 +34,9 @@ export function penMemberText(member: PenMemberStatus): string {
     case "connecting":
       return "Connecting…";
     case "offline":
-      return "Offline";
+      return "Offline in Pen. Threads are as this computer last saw them.";
+    case "waiting":
+      return "Not open. This computer keeps 16 Pen machines open at a time.";
     case "not-set-up":
       return "Pen member, GOAT not set up. Set up installs GOAT there.";
     case "needs-update":
@@ -85,6 +87,7 @@ export function penLiveStatus(
   connection:
     | {
         readonly phase: string;
+        readonly penHold?: "offline" | "waiting";
         readonly unreachable?: boolean;
         readonly failure?: { readonly kind: "blocked" | "retrying"; readonly detail: string };
       }
@@ -92,6 +95,7 @@ export function penLiveStatus(
 ): PenMemberStatus {
   if (connection === undefined || (member.state !== "connected" && member.state !== "connecting"))
     return member;
+  if (connection.penHold !== undefined) return { ...member, state: connection.penHold };
   if (connection.phase === "connected") return { ...member, state: "connected" };
   if (connection.unreachable === true) return { ...member, state: "offline" };
   return connection.failure?.kind === "blocked"

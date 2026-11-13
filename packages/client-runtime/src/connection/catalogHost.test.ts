@@ -136,6 +136,7 @@ function run(
       removeRoute: unused,
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
+      setPenLive: () => Effect.void,
       retryNow: unused,
       reconnect: unused,
       setEnabled: unused,

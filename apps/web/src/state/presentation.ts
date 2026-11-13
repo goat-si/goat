@@ -3,7 +3,7 @@ import type {
   EnvironmentConnectionPhase,
   EnvironmentPresentation,
 } from "@goat/client-runtime/connection";
-import { connectionRouteId, connectionRoutes } from "@goat/client-runtime/connection";
+import { connectionRouteId, connectionRoutes, PenLiveSet } from "@goat/client-runtime/connection";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
@@ -12,6 +12,10 @@ import {
 import type { EnvironmentId } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { connectionAtomRuntime } from "../connection/runtime";
 
 import { environmentCatalog } from "../connection/catalog";
 import { serverEnvironment } from "./server";
@@ -57,11 +61,23 @@ const sshRuntimeStatusAtom = Atom.family((environmentId: EnvironmentId) =>
   }),
 );
 
+const penHoldsAtom = connectionAtomRuntime.atom(
+  Stream.unwrap(
+    PenLiveSet.PenLiveSet.pipe(Effect.map((service) => SubscriptionRef.changes(service.held))),
+  ),
+);
+const penHoldAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) =>
+    Option.getOrUndefined(AsyncResult.value(get(penHoldsAtom)))?.get(environmentId),
+  ),
+);
+
 export const environmentPresentations = createEnvironmentPresentationAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   stateAtom: environmentCatalog.stateAtom,
   serverConfigValueAtom: serverEnvironment.configValueAtom,
   sshRuntimeStatusAtom,
+  penHoldAtom,
 });
 
 export const environmentSummaries = createEnvironmentSummaryAtoms({

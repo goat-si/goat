@@ -6,13 +6,15 @@ import { SshConnectionTarget } from "./model.ts";
 import { penRouteConnectionId } from "./routes.ts";
 import { reconcilePenRoutes } from "./penDiscovery.ts";
 
+const layer = discoveryLayer.pipe(Layer.provide(liveSetLayer));
+
 const mesh = "a".repeat(26);
 const otherMesh = "b".repeat(26);
 const node = (letter: string) => letter.repeat(26);
 const member = (letter: string): DesktopPenMember => ({
   nodeId: node(letter),
   name: letter,
-  online: false,
+  online: true,
   noisePub: letter,
   route: {
     kind: "trusted",
@@ -83,7 +85,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { PenDiscovery, layer } from "./penDiscovery.ts";
+import { layer as discoveryLayer, PenDiscovery } from "./penDiscovery.ts";
+import { layer as liveSetLayer } from "./penLiveSet.ts";
 import { PenMembership } from "./penMembership.ts";
 import { ConnectionOnboarding, type SshConnectionInput } from "./onboarding.ts";
 import { EnvironmentRegistry } from "./registry.ts";
@@ -173,7 +176,7 @@ it.effect("attempts once, retries, checks the current revision, and explicitly s
       });
       expect(calls[2]?.installation).toBeUndefined();
       yield* discovery.pass({ ...ready, members: [{ ...machine, online: true }] });
-      expect(calls).toHaveLength(4);
+      expect(calls).toHaveLength(3);
     }).pipe(Effect.provide(layer.pipe(Layer.provide(dependencies))));
   });
   return program;
@@ -202,6 +205,7 @@ const fakeRegistry = Effect.fn(function* (
     removeRoute,
     reorderRoutes: unused,
     removeRelayEnvironments: unused,
+    setPenLive: () => Effect.void,
     retryNow: unused,
     reconnect: unused,
     setEnabled: unused,
@@ -399,9 +403,11 @@ it.effect("an offline to online hint allows another attempt", () =>
     });
     yield* Effect.gen(function* () {
       const discovery = yield* PenDiscovery;
-      yield* discovery.pass(readyState());
+      yield* discovery.pass(readyState([{ ...member("c"), online: false }]));
+      expect(calls).toBe(0);
+      expect((yield* SubscriptionRef.get(discovery.statuses))[0]?.state).toBe("offline");
       yield* discovery.pass(readyState([{ ...member("c"), online: true }]));
-      expect(calls).toBe(2);
+      expect(calls).toBe(1);
     }).pipe(Effect.provide(h.layer));
   }),
 );

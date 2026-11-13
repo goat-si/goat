@@ -11,6 +11,7 @@ import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 import { ConnectionOnboarding } from "./onboarding.ts";
 import { PenMembership, trustedPenMember } from "./penMembership.ts";
+import { PenLiveSet } from "./penLiveSet.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 import { connectionRoutes, penRouteOwner, sshTargetKey } from "./routes.ts";
 
@@ -19,6 +20,7 @@ export type PenMemberState =
   | "yours"
   | "connecting"
   | "offline"
+  | "waiting"
   | "not-set-up"
   | "needs-update"
   | "key-rejected"
@@ -87,6 +89,7 @@ export class PenDiscovery extends Context.Service<
   {
     readonly statuses: SubscriptionRef.SubscriptionRef<ReadonlyArray<PenMemberStatus>>;
     readonly availability: SubscriptionRef.SubscriptionRef<"pending" | PenMembersInput["kind"]>;
+    readonly connect: (nodeId: string) => Effect.Effect<void>;
     readonly retry: (nodeId: string) => Effect.Effect<void>;
     readonly setUp: (
       nodeId: string,
@@ -102,6 +105,7 @@ const make = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
   const onboarding = yield* ConnectionOnboarding;
   const membership = yield* PenMembership;
+  const liveSet = yield* PenLiveSet;
   const statuses = yield* SubscriptionRef.make<ReadonlyArray<PenMemberStatus>>([]);
   const availability = yield* SubscriptionRef.make<"pending" | PenMembersInput["kind"]>("pending");
   const attempts = new Map<
@@ -142,15 +146,33 @@ const make = Effect.gen(function* () {
         reason: "configuration",
         detail: "This Pen member is not trusted.",
       });
-    const id = yield* onboarding.registerSsh({
-      target: member.route.target,
-      label: member.name,
-      keyOnly: false,
-      pen: { meshId: state.meshId, nodeId },
-      confirm: confirm(state.meshId, member),
-    });
+    const admitted = yield* liveSet.admitOnboarding(nodeId, { force: true });
+    if (!admitted)
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "This Pen member is already being set up.",
+      });
+    const id = yield* onboarding
+      .registerSsh({
+        target: member.route.target,
+        label: member.name,
+        keyOnly: false,
+        pen: { meshId: state.meshId, nodeId },
+        confirm: confirm(state.meshId, member),
+      })
+      .pipe(Effect.ensuring(liveSet.releaseOnboarding(nodeId)));
+    yield* liveSet.open(id);
     yield* rerun;
     return id;
+  });
+  const forced = new Set<string>();
+  const connect = Effect.fn("PenDiscovery.connect")(function* (nodeId: string) {
+    const row = (yield* SubscriptionRef.get(statuses)).find((item) => item.nodeId === nodeId);
+    if (row?.environmentId !== undefined) return yield* liveSet.open(row.environmentId);
+    if (row?.state !== "waiting") return;
+    // The next pass takes a slot for it from the machine opened longest ago.
+    forced.add(nodeId);
+    yield* retry(nodeId);
   });
   const pass = Effect.fn("PenDiscovery.pass")(function* (state: PenMembersInput) {
     yield* SubscriptionRef.set(availability, state.kind);
@@ -210,11 +232,34 @@ const make = Effect.gen(function* () {
       (member) =>
         Effect.gen(function* () {
           if (member.route.kind !== "trusted") return;
+          if (!member.online) {
+            attempts.delete(attemptKey(member));
+            yield* SubscriptionRef.update(statuses, (current) =>
+              current.map((row) =>
+                row.nodeId === member.nodeId
+                  ? { nodeId: member.nodeId, name: member.name, state: "offline" }
+                  : row,
+              ),
+            );
+            return;
+          }
           const key = attemptKey(member);
           const previous = attempts.get(key);
           if (previous?.noise === member.noisePub && !(member.online && !previous.online)) {
             if (!member.online && previous.online)
               attempts.set(key, { ...previous, online: false });
+            return;
+          }
+          const wasForced = forced.delete(member.nodeId);
+          const admitted = yield* liveSet.admitOnboarding(member.nodeId, { force: wasForced });
+          if (!admitted) {
+            yield* SubscriptionRef.update(statuses, (current) =>
+              current.map((row) =>
+                row.nodeId === member.nodeId
+                  ? { nodeId: member.nodeId, name: member.name, state: "waiting" }
+                  : row,
+              ),
+            );
             return;
           }
           attempts.set(key, {
@@ -230,15 +275,18 @@ const make = Effect.gen(function* () {
             ),
           );
           const outcome = yield* Effect.result(
-            onboarding.registerSsh({
-              target: member.route.target,
-              keyOnly: true,
-              installation: "existing-only",
-              label: member.name,
-              pen: { meshId: state.meshId, nodeId: member.nodeId },
-              confirm: confirm(state.meshId, member),
-            }),
+            onboarding
+              .registerSsh({
+                target: member.route.target,
+                keyOnly: true,
+                installation: "existing-only",
+                label: member.name,
+                pen: { meshId: state.meshId, nodeId: member.nodeId },
+                confirm: confirm(state.meshId, member),
+              })
+              .pipe(Effect.ensuring(liveSet.releaseOnboarding(member.nodeId))),
           );
+          if (wasForced && outcome._tag === "Success") yield* liveSet.open(outcome.success);
           let status: PenMemberStatus;
           if (outcome._tag === "Success")
             status = {
@@ -282,7 +330,7 @@ const make = Effect.gen(function* () {
       { concurrency: 2, discard: true },
     );
   });
-  return { statuses, availability, retry, setUp, pass };
+  return { statuses, availability, retry, connect, setUp, pass };
 });
 export const layer = Layer.effect(PenDiscovery, make);
 export const watchPenDiscovery = Effect.gen(function* () {
