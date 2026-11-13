@@ -62,6 +62,18 @@ function entry(host: string | null, opencodex?: OpenCodexInventorySnapshot): Hos
 }
 
 describe("hubSnapshot", () => {
+  it("does not label an unread or linked inventory standalone, but labels a confirmed none result", () => {
+    const project = (remote: OpenCodexInventorySnapshot) =>
+      hubSnapshot([
+        { key: "home", label: "home", entry: entry(null, inventory("home")) },
+        { key: "remote", label: "remote", entry: entry("remote", remote) },
+      ])?.devices.find((device) => device.alias === "remote")?.transport;
+    const unread = { ...inventory("none"), slow: true as const, notReadYet: true as const };
+    expect(project(unread)).not.toBe("standalone");
+    expect(project(inventory("none"))).toBe("standalone");
+    expect(project(inventory("none", { slow: true }))).toBe("standalone");
+    expect(project(inventory("child"))).not.toBe("standalone");
+  });
   it("is null when no host is an OpenCodex Home", () => {
     expect(hubSnapshot([{ key: "a", label: "a", entry: entry(null, inventory("child")) }])).toBe(
       null,

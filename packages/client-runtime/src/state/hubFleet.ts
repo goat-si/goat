@@ -15,7 +15,7 @@ import { hubLinkFacts, hubLinkWarningLabel, type HubLinkView } from "./hubLinkTr
  * device reads the same in both places and on mobile.
  */
 
-export type HubTransport = "remote-link" | "hub-client" | "standalone";
+export type HubTransport = "remote-link" | "hub-client" | "standalone" | "unknown";
 export type HubLinkState = OpenCodexInventorySnapshot["link"]["links"][number]["state"];
 export type HubLinkDirection = NonNullable<
   OpenCodexInventorySnapshot["link"]["links"][number]["direction"]
@@ -63,6 +63,7 @@ export const HUB_TRANSPORT_LABEL: Record<HubTransport, string> = {
   "remote-link": "Remote Link Child",
   "hub-client": "Hub client",
   standalone: "Standalone",
+  unknown: "Unknown",
 };
 
 const opencodexOf = (entry: HostStatusEntry | null | undefined) =>
@@ -89,8 +90,13 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
         ? "remote-link"
         : remote?.hubClient?.state === "connected"
           ? "hub-client"
-          : "standalone";
-    const permission = remote === undefined ? undefined : homeLocalFallback(remote);
+          : remote?.link.role === "child"
+            ? "remote-link"
+            : remote?.notReadYet || remote?.hubClient || remote?.link.role === "home"
+              ? "unknown"
+              : "standalone";
+    const permission =
+      remote === undefined || remote.notReadYet ? undefined : homeLocalFallback(remote);
     return {
       alias,
       transport,
@@ -101,7 +107,10 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
       version: remote?.runtime.version ?? remote?.binaries[0]?.version ?? null,
       ...(remote?.slow ? { slow: true as const } : {}),
       versionVerdict:
-        remote === undefined || !remote.installed || transport === "standalone"
+        remote === undefined ||
+        !remote.installed ||
+        transport === "standalone" ||
+        transport === "unknown"
           ? null
           : openCodexPairVerdict(inventory.runtime, remote.runtime, [
               transport === "remote-link" ? "remoteLink" : "hubClient",

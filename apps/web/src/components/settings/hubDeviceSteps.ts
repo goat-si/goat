@@ -13,6 +13,7 @@ export const HUB_ACTION_LABEL: Record<HubAction, string> = {
 /** What each transport can do here. Join picks Hub client for Windows devices. */
 export const HUB_DEVICE_ACTIONS: Record<HubTransport, ReadonlyArray<HubAction>> = {
   standalone: ["join"],
+  unknown: [],
   "remote-link": ["repair", "leave"],
   "hub-client": ["repair", "leave"],
 };

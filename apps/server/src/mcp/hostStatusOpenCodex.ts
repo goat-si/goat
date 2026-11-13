@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 
-export const OPENCODEX_READ_WAIT = Duration.seconds(2);
+const OPENCODEX_READ_WAIT = Duration.seconds(2);
 export const OPENCODEX_NOT_READ: OpenCodexInventorySnapshot = {
   installed: false,
   binaries: [],
@@ -17,6 +17,7 @@ export const OPENCODEX_NOT_READ: OpenCodexInventorySnapshot = {
   runtime: { port: 10100, healthy: false, ready: false },
   link: { role: "none", available: false, links: [], childSettingsApplied: null },
   slow: true,
+  notReadYet: true,
 };
 
 type Pending = Deferred.Deferred<Option.Option<OpenCodexInventorySnapshot>>;

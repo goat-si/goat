@@ -24,6 +24,21 @@ it("older host metrics omit OpenCodex and future unknown inventory cannot break 
   ).toBeUndefined();
 });
 
+it("preserves the unread inventory marker through host telemetry", () => {
+  const inventory = {
+    installed: false,
+    binaries: [],
+    ownership: "none",
+    service: { available: false },
+    runtime: { port: 10100, healthy: false, ready: false },
+    link: { role: "none", available: false, links: [], childSettingsApplied: null },
+    slow: true,
+    notReadYet: true,
+  };
+  expect(decodeOptional({ opencodex: inventory }).opencodex?.notReadYet).toBe(true);
+  expect(decodeInventory({ ...inventory, notReadYet: undefined }).notReadYet).toBeUndefined();
+});
+
 it("inventory round-trips served metadata while dropping private CLI fields", () => {
   const raw = {
     installed: true,

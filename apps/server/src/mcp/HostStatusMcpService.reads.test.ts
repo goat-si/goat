@@ -329,10 +329,49 @@ it.effect(
       expect(first.result.hosts[0]?.metrics?.opencodex).toMatchObject({
         installed: false,
         slow: true,
+        notReadYet: true,
       });
       expect(second.hosts[0]?.metrics?.opencodex).toMatchObject({ installed: true });
       expect(second.hosts[0]?.metrics?.opencodex?.slow).toBeUndefined();
     }),
+);
+
+it.effect("an unread inventory becomes a linked answer after the pending read finishes", () =>
+  Effect.gen(function* () {
+    const started = yield* Queue.unbounded<void>();
+    const linked = {
+      ...installed,
+      link: { role: "child" as const, available: true, links: [], childSettingsApplied: true },
+    };
+    const { value } = yield* run(
+      {
+        opencodexRead: Queue.offer(started, undefined).pipe(
+          Effect.andThen(Effect.sleep("27 seconds")),
+          Effect.as(linked),
+        ),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const read = yield* Effect.forkChild(service.read(scope, { local: true }));
+          yield* Queue.take(started);
+          yield* TestClock.adjust("2 seconds");
+          const first = yield* Fiber.join(read);
+          yield* TestClock.adjust("25 seconds");
+          const next = yield* Effect.forkChild(service.read(scope, { local: true }));
+          yield* Queue.take(started);
+          yield* TestClock.adjust("2 seconds");
+          return { first, second: yield* Fiber.join(next) };
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.first.hosts[0]?.metrics?.opencodex).toMatchObject({ notReadYet: true });
+    expect(value.success.second.hosts[0]?.metrics?.opencodex).toMatchObject({
+      ...linked,
+      slow: true,
+    });
+    expect(value.success.second.hosts[0]?.metrics?.opencodex?.notReadYet).toBeUndefined();
+  }),
 );
 
 it.effect("concurrent host status reads start one OpenCodex inventory read", () =>
