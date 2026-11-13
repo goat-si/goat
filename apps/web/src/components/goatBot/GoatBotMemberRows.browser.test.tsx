@@ -36,6 +36,7 @@ const server = vi.hoisted(() => ({
     };
   },
   h2: true,
+  memberEligible: true,
   statusPending: false,
   statusAvailable: true,
   connected: true,
@@ -72,6 +73,13 @@ vi.mock("@effect/atom-react", async (original) => ({
       },
       () => server.version,
     );
+    // Home governs an environment only while it is connected, both reads are offered, and every
+    // bot on it is eligible.
+    if (atom === "home-work")
+      return {
+        rosterKnown: true,
+        byBot: [{ eligible: server.h2 && server.connected }, { eligible: server.memberEligible }],
+      };
     return atom === "current-work" ? server.work : true;
   },
 }));
@@ -80,6 +88,7 @@ vi.mock("~/state/channels", () => {
   return {
     channelEnvironment: {
       homeCurrentOpenableWorkAtom: () => "current-work",
+      homeCurrentOpenableWorkByEnvironment: () => "home-work",
       setBotHidden: command("hide"),
       deleteBot: command("delete"),
       restoreBot: command("restore"),
@@ -210,6 +219,7 @@ function setup() {
   server.tasks = {};
   server.work = { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
   server.h2 = true;
+  server.memberEligible = true;
   server.statusPending = false;
   server.statusAvailable = true;
   server.connected = true;
@@ -373,7 +383,9 @@ it("member row reports recent unread work and marks unavailable signals independ
   server.connected = false;
   server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
   await act(() => publish());
-  await expect.element(screen.getByLabelText(/unread.*waiting.*unavailable/i)).toBeVisible();
+  // Offline, Home no longer governs the environment, so the row is the older one with no mark.
+  await expect.element(screen.getByRole("link", { name: /^Research/ })).toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
 });
 
 it("keeps legacy waiting and omits new marks on an older server", async () => {
@@ -407,5 +419,31 @@ it("leaves first pending signals blank and marks failed or offline signals", asy
   server.statusPending = true;
   server.connected = false;
   await act(() => publish());
+  await expect.element(screen.getByRole("link", { name: /^Research/ })).toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+});
+
+it("a capable environment Home does not govern keeps the legacy row, and switches with governance", async () => {
+  setup();
+  server.memberEligible = false;
+  server.waitingRead = false;
+  server.waiting = { research: 2 };
+  server.work = { ...server.work, list: "failed" };
+  await using screen = await render(<Roster />, { router: false });
+  await expect
+    .element(screen.getByRole("link", { name: /^2 waiting for you\s*Research/ }))
+    .toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+  server.memberEligible = true;
+  server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
+  await act(() => publish());
   await expect.element(screen.getByLabelText(/unread and waiting unavailable/i)).toBeVisible();
+  expect(screen.getByRole("link", { name: /^2 waiting for you/ }).query()).toBeNull();
+  server.memberEligible = false;
+  server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
+  await act(() => publish());
+  await expect
+    .element(screen.getByRole("link", { name: /^2 waiting for you\s*Research/ }))
+    .toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
 });

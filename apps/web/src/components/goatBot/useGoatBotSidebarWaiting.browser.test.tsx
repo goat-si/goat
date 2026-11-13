@@ -4,6 +4,7 @@ import { act, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   h2: true,
+  governed: true,
   status: true,
   waitingRead: true,
   tracking: true,
@@ -26,25 +27,30 @@ vi.mock("./useGoatBotSession", () => ({
 const port = { getBotStatus: state.getStatus, listTasks: state.listTasks };
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () =>
-    new Map([
-      [
-        environmentId,
-        {
-          environment: {
-            capabilities: {
-              goatBotTaskThreadsPaged: state.h2,
-              goatBotTaskLookupSearch: state.h2,
-              goatBotStatus: state.status,
-              goatBotWaitingRead: state.waitingRead,
-              threadVisitedTracking: state.tracking,
+  useAtomValue: (atom: unknown) =>
+    atom === "home-work"
+      ? { rosterKnown: true, byBot: [{ eligible: true }, { eligible: state.governed }] }
+      : new Map([
+          [
+            environmentId,
+            {
+              environment: {
+                capabilities: {
+                  goatBotTaskThreadsPaged: state.h2,
+                  goatBotTaskLookupSearch: state.h2,
+                  goatBotStatus: state.status,
+                  goatBotWaitingRead: state.waitingRead,
+                  threadVisitedTracking: state.tracking,
+                },
+              },
             },
-          },
-        },
-      ],
-    ]),
+          ],
+        ]),
 }));
 vi.mock("~/state/server", () => ({ environmentServerConfigsAtom: "configs" }));
+vi.mock("~/state/channels", () => ({
+  channelEnvironment: { homeCurrentOpenableWorkByEnvironment: () => "home-work" },
+}));
 vi.mock("~/globalAgentStore", () => ({
   useGlobalAgentStore: Object.assign(
     (select: (value: object) => unknown) =>
@@ -71,6 +77,7 @@ function View() {
 }
 it("uses only successful visit-aware status for H2 and leaves older counts unchanged", async () => {
   state.h2 = true;
+  state.governed = true;
   state.status = true;
   state.waitingRead = true;
   state.tracking = true;
@@ -94,4 +101,22 @@ it("uses only successful visit-aware status for H2 and leaves older counts uncha
   state.h2 = false;
   await screen.rerender(<View />);
   await expect.element(screen.getByText("ready:1:no-action")).toBeVisible();
+});
+
+it("a capable environment that Home does not govern keeps the legacy count, and switches with governance", async () => {
+  state.h2 = true;
+  state.governed = false;
+  state.status = true;
+  state.waitingRead = false;
+  state.tracking = true;
+  state.connected = true;
+  state.getStatus.mockResolvedValue({ bot: null, waitingCount: 3 });
+  await using screen = await render(<View />);
+  await expect.element(screen.getByText("ready:3:no-action")).toBeVisible();
+  state.governed = true;
+  await screen.rerender(<View />);
+  await expect.element(screen.getByText("unavailable:none:no-action")).toBeVisible();
+  state.governed = false;
+  await screen.rerender(<View />);
+  await expect.element(screen.getByText("ready:3:no-action")).toBeVisible();
 });

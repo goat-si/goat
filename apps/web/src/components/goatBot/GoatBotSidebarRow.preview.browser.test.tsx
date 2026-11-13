@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   shellVisitedAt: "2026-10-12T12:00:00.000Z" as string | null | undefined,
   waiting: 2,
   h2: false,
+  governed: false,
   connected: true,
   sidebarCount: undefined as number | undefined,
   sidebarState: "pending" as "pending" | "ready" | "unavailable",
@@ -81,9 +82,10 @@ vi.mock("./useGoatBotWaitingCount", () => ({
   useGoatBotWaitingCount: () => state.waiting,
   useGoatBotSidebarWaiting: () => ({
     environmentId: state.botRef?.environmentId ?? null,
-    h2: state.h2,
-    count: state.sidebarCount,
-    state: state.sidebarState,
+    h2: state.governed,
+    governed: state.governed,
+    count: state.governed ? state.sidebarCount : state.waiting,
+    state: state.governed ? state.sidebarState : "ready",
   }),
   useMarkGoatBotRead: () => null,
 }));
@@ -204,6 +206,7 @@ beforeEach(() => {
   state.shellVisitedAt = "2026-10-12T12:00:00.000Z";
   state.waiting = 2;
   state.h2 = false;
+  state.governed = false;
   state.connected = true;
   state.sidebarCount = undefined;
   state.sidebarState = "pending";
@@ -354,6 +357,7 @@ it("the main row says waiting once, with the count", async () => {
 
 it("main row keeps chat unread separate and reflects current-work availability", async () => {
   state.h2 = true;
+  state.governed = true;
   state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
   state.sidebarCount = 1;
   state.sidebarState = "ready";
@@ -382,4 +386,29 @@ it("main row keeps chat unread separate and reflects current-work availability",
   state.sidebarState = "unavailable";
   await act(() => notify());
   await expect.element(screen.getByLabelText("waiting unavailable")).toBeVisible();
+});
+
+it("a capable environment Home does not govern keeps the older main row, and switches with governance", async () => {
+  state.h2 = true;
+  state.governed = false;
+  state.waiting = 2;
+  state.sidebarCount = undefined;
+  state.sidebarState = "unavailable";
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  state.work = { eligible: true, list: "failed", work: { running: [], waiting: [], finished: [] } };
+  await using screen = await render(<GoatBotSidebarRow />, { router: false });
+  await expect
+    .element(screen.getByRole("link", { name: /^2 waiting for you\s*GOAT Bot/ }))
+    .toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+  state.governed = true;
+  await act(() => notify());
+  await expect.element(screen.getByLabelText("Unread and waiting unavailable")).toBeVisible();
+  expect(screen.getByRole("link", { name: /^2 waiting for you/ }).query()).toBeNull();
+  state.governed = false;
+  await act(() => notify());
+  await expect
+    .element(screen.getByRole("link", { name: /^2 waiting for you\s*GOAT Bot/ }))
+    .toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
 });
