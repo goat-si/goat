@@ -264,7 +264,11 @@ function HubDeviceListRow({
       )}
       {device === null ? null : <HubDeviceLinkLines device={device} />}
       {device?.transport === "remote-link" ? (
-        <HubDeviceRoutes environmentId={environmentId} alias={device.alias} />
+        <HubDeviceRoutes
+          environmentId={environmentId}
+          alias={device.alias}
+          direction={device.linkDirection}
+        />
       ) : null}
       {row.missingClis === null ? null : (
         <p className="text-xs text-warning-foreground">

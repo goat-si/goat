@@ -49,8 +49,6 @@ export const LinkRowObservationFields = {
       toHomeUncounted: Schema.optional(Count),
     }),
   ),
-  /** Who opens the link's SSH: only a hub-initiated link has a route this Home chose. */
-  direction: ForwardCompatibleOptional(Schema.Literals(["hub-initiated", "client-initiated"])),
   // Kept raw: either key marks a multi-route row even when its value does not decode.
   routes: Schema.optional(Schema.Unknown),
   route: Schema.optional(Schema.Unknown),

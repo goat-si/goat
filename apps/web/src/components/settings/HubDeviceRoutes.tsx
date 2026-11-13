@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { HubLinkDirection } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId, HubDeviceRoutesChange, HubDeviceRoutesResult } from "@goat/contracts";
 import { useState } from "react";
 
@@ -13,13 +14,16 @@ import { Input } from "../ui/input";
 /**
  * The SSH routes the Home tries for one Remote Link Child, read when a person opens them. A
  * person's change runs at once; the Home stores a new route only after it proved the link's key.
+ * A link the Child opened (ocx link join) has no routes on the Home, so it offers none.
  */
 export function HubDeviceRoutes({
   environmentId,
   alias,
+  direction,
 }: {
   readonly environmentId: EnvironmentId;
   readonly alias: string;
+  readonly direction: HubLinkDirection | null;
 }) {
   const canRead = useAtomValue(serverEnvironment.listHubDeviceRoutes.permissionAtom(environmentId));
   const canChange = useAtomValue(
@@ -100,6 +104,7 @@ export function HubDeviceRoutes({
     void change({ op: "order", routes: order });
   };
 
+  if (direction !== "hub-initiated") return null;
   if (!open)
     return (
       <Button

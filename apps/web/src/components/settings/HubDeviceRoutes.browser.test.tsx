@@ -60,7 +60,11 @@ async function addStored(readBack: unknown) {
   const screen = stack.use(
     await render(
       <RegistryContext value={registry}>
-        <HubDeviceRoutes environmentId={EnvironmentId.make("hub")} alias="mini" />
+        <HubDeviceRoutes
+          environmentId={EnvironmentId.make("hub")}
+          alias="mini"
+          direction="hub-initiated"
+        />
       </RegistryContext>,
     ),
   );
@@ -120,4 +124,19 @@ it("a read-back the Home answers as failed shows its error, and no longer shows 
     .toHaveTextContent(
       "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
     );
+});
+
+it("offers no Routes for a link the Child opened, since the Home has none to change", async () => {
+  const registry = AtomRegistry.make();
+  await using screen = await render(
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="client-initiated"
+      />
+    </RegistryContext>,
+  );
+  await expect.element(screen.getByRole("button", { name: "Routes" })).not.toBeInTheDocument();
+  registry.dispose();
 });

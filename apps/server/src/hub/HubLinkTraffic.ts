@@ -43,7 +43,6 @@ export const baseLinkRow = ({
   routes: _rs,
   route: _r,
   ws: _w,
-  direction: _d,
   ...base
 }: LinkStatusRow) => base;
 

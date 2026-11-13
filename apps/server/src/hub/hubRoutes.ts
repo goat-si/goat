@@ -39,6 +39,11 @@ const REFUSAL: Readonly<Record<string, string>> = {
   route_order_mismatch: "A new order must name exactly the routes the link has.",
   route_not_found: "That route is not in the list.",
   link_not_found: "The Home has no such link.",
+  link_not_home_initiated:
+    "This Child opened its own link to the Home, so the Home has no routes for it to change.",
+  invalid_body:
+    "OpenCodex refused the change as malformed, such as a position past the end of the list.",
+  invalid_link_id: "OpenCodex refused the link id as malformed.",
   link_changed: "The link changed while the edit ran. Read the routes and try again.",
   pin_changed: "The link's pinned key changed while the edit ran. Read the routes and try again.",
   pin_mismatch: "The Home's known key for this link does not match its pin, so nothing changed.",

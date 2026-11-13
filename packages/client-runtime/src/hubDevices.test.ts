@@ -60,6 +60,7 @@ function device(alias: string, transport: HubDevice["transport"] = "remote-link"
     traffic: null,
     route: null,
     linkTransport: null,
+    linkDirection: null,
   };
 }
 

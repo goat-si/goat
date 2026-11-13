@@ -147,3 +147,26 @@ it.effect(
       );
     }),
 );
+
+it.effect("a link the Child opened, and a position past the end, are refused in plain words", () =>
+  Effect.gen(function* () {
+    const answers: Array<OcxOutput> = [
+      { code: 5, stdout: "", phase: "link_not_home_initiated" },
+      { code: 2, stdout: "", phase: "invalid_body" },
+    ];
+    const hub = yield* setup({
+      linked: ["mini"],
+      routes: () => answers.shift() ?? routesOf(["mini"]),
+    });
+    const joined = yield* hub.membership.routes(scope, { deviceAlias: "mini" });
+    expect(joined).toMatchObject({ state: "failed", code: "link_not_home_initiated" });
+    expect(joined.message).toBe(
+      "This Child opened its own link to the Home, so the Home has no routes for it to change.",
+    );
+    const past = yield* hub.membership.updateRoutes(scope, add);
+    expect(past).toMatchObject({ state: "failed", code: "invalid_body" });
+    expect(past.message).toBe(
+      "OpenCodex refused the change as malformed, such as a position past the end of the list.",
+    );
+  }),
+);

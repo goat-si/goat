@@ -717,6 +717,7 @@ it.effect(
       expect(result.link.links[0]).toEqual({
         id: "lnk_a",
         alias: "mac-ts",
+        direction: "hub-initiated",
         tunnelPort: 54001,
         state: "connected",
         route: { name: "pen-mac", via: "relay", since: Date.parse("2026-11-13T00:00:00.000Z") },
@@ -750,6 +751,7 @@ it.effect(
       // An older Home reports no counters: its one-route link uses its alias, and nothing is measured.
       expect(result.link.links[1]).toEqual({
         ...olderHomeRow,
+        direction: "hub-initiated",
         route: { name: "pen-old", via: "relay" },
       });
       expect(result.link.relayWarning).toBeUndefined();

@@ -23,7 +23,14 @@ export function fleetSnapshot(
     link: {
       role: child ? "child" : "home",
       available: true,
-      links: child ? [] : fleet.home.link.links.map((link) => ({ ...link, state: "connected" })),
+      // Every link in the fleet fixture is one the Home opened.
+      links: child
+        ? []
+        : fleet.home.link.links.map((link) => ({
+            ...link,
+            direction: "hub-initiated" as const,
+            state: "connected" as const,
+          })),
       childSettingsApplied: fixture.childSettingsApplied,
     },
     parityEvidence: {
