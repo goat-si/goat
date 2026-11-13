@@ -91,14 +91,29 @@ const tighten = (walk: Walk, path: string, seen: { readonly dev: number; readonl
     const handle = await NodeFSP.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     try {
       const now = await handle.stat();
-      if (!now.isDirectory() || now.dev !== seen.dev || now.ino !== seen.ino) return false;
-      if (now.uid !== walk.uid) return false;
-      await handle.chmod(now.mode & 0o7755);
-      return true;
+      if (!now.isDirectory() || now.dev !== seen.dev || now.ino !== seen.ino) return undefined;
+      if (now.uid !== walk.uid) return undefined;
+      const to = now.mode & 0o7755;
+      await handle.chmod(to);
+      return { from: now.mode & 0o7777, to };
     } finally {
       await handle.close();
     }
-  }).pipe(Effect.orElseSucceed(() => false));
+  }).pipe(
+    Effect.tap((changed) =>
+      changed === undefined
+        ? Effect.void
+        : Effect.logInfo("GOAT removed group and other write from its own folder").pipe(
+            Effect.annotateLogs({
+              path,
+              from: changed.from.toString(8),
+              to: changed.to.toString(8),
+            }),
+          ),
+    ),
+    Effect.map((changed) => changed !== undefined),
+    Effect.orElseSucceed(() => false),
+  );
 
 /** A directory's verdict: undefined when safe or tightened by GOAT, else why it fails. */
 const judge = Effect.fn("keyPath.judge")(function* (
