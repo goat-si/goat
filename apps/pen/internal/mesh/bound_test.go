@@ -829,3 +829,55 @@ func TestABoundEntryInTheEarlierFileFormStillLoads(t *testing.T) {
 		t.Fatalf("loaded %+v (found %v); want the live bound invite with its secret", x, ok)
 	}
 }
+
+// A bound invite's cancel signal belongs to that invite alone: a cancel closes exactly its channel, a later invite made
+// with the same mintId after an ack has its own, and a burn closes none.
+func TestACancelSignalsOnlyItsOwnInvite(t *testing.T) {
+	f, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	j := detID(3)
+	closed := func(ch chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	first, second, burned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	x, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), second); !errors.Is(err, ErrMintUsed) {
+		t.Fatalf("a second create with the same mintId: %v", err)
+	}
+	iv.Cancel("", "m", at(now))
+	if !closed(first) || closed(second) {
+		t.Fatalf("after the cancel: first closed %v, second closed %v; want only the first", closed(first), closed(second))
+	}
+	if _, err := iv.Ack(x.ID, "", at(now)); err != nil {
+		t.Fatal(err)
+	}
+	y, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed(second) {
+		t.Fatal("the reused mintId's invite is signalled before any cancel")
+	}
+	z, err := iv.CreateBoundNotify(subjectOf(j, "j"), "b", now.Add(time.Minute), at(now), burned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serveErr, joinErr := serveOne(f, s, iv, z.ID, now, j, "j"); serveErr != nil || joinErr != nil {
+		t.Fatalf("join: %v, %v", serveErr, joinErr)
+	}
+	if closed(burned) || closed(second) {
+		t.Fatal("a burn signalled a cancel")
+	}
+	iv.Cancel(y.ID, "", at(now))
+	if !closed(second) {
+		t.Fatal("the reused mintId's invite was not signalled by its own cancel")
+	}
+}

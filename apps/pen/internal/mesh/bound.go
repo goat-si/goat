@@ -80,6 +80,12 @@ var (
 // that makes it; under the book's lock, where clock is read, it is refused when an entry or a fence already carries
 // that mintID or expiresAt has passed.
 func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt time.Time, clock func() time.Time) (Invite, error) {
+	return iv.CreateBoundNotify(sub, mintID, expiresAt, clock, nil)
+}
+
+// CreateBoundNotify is CreateBound that, when cancelled is not nil, closes it if this invite is cancelled. The channel
+// is attached in the same hold of the lock that makes the invite, so no cancel can come before it.
+func (iv *Invites) CreateBoundNotify(sub Subject, mintID string, expiresAt time.Time, clock func() time.Time, cancelled chan struct{}) (Invite, error) {
 	if err := sub.Valid(); err != nil {
 		return Invite{}, err
 	}
@@ -114,6 +120,9 @@ func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt time.Time, 
 	byID[x.ID] = x
 	if err := iv.commitLocked(now, byID, maps.Clone(iv.fences)); err != nil {
 		return Invite{}, err
+	}
+	if cancelled != nil {
+		iv.cancelled[x.ID] = cancelled
 	}
 	return x, nil
 }

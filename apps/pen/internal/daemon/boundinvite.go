@@ -101,13 +101,10 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			}
 			reply(InviteCancelReply{T: "invite-ack", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		default:
-			state, id, err := d.inviteBook().CancelID(ref.InviteID, ref.MintID, d.now)
+			state, err := d.inviteBook().Cancel(ref.InviteID, ref.MintID, d.now)
 			if err != nil {
 				fail(err)
 				return
-			}
-			if state == mesh.InviteCancelled {
-				d.endWait(id, ref.MintID)
 			}
 			reply(InviteCancelReply{T: "invite-cancel", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		}
@@ -124,23 +121,11 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		fail(err)
 		return
 	}
-	var wait chan *mesh.Member
-	if req.Wait && req.MintID != "" {
-		// Registered before the invite exists: a cancel by mintId (the only name anyone has for it before the answer)
-		// reaches this wait whenever it comes.
-		wait = make(chan *mesh.Member, 1)
-		d.mu.Lock()
-		d.inviteWait[mintKey(req.MintID)] = wait
-		d.mu.Unlock()
-		defer func() {
-			d.mu.Lock()
-			if d.inviteWait[mintKey(req.MintID)] == wait {
-				delete(d.inviteWait, mintKey(req.MintID))
-			}
-			d.mu.Unlock()
-		}()
+	var cancelled chan struct{}
+	if req.Wait {
+		cancelled = make(chan struct{})
 	}
-	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, expiresAt, d.now)
+	inv, err := d.inviteBook().CreateBoundNotify(*req.Subject, req.MintID, expiresAt, d.now, cancelled)
 	if err != nil {
 		fail(err)
 		return
@@ -154,7 +139,7 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		reply(r)
 		return
 	}
-	d.awaitJoin(ctx, c, r, inv.ID, req.MintID, wait, reply)
+	d.awaitJoin(ctx, c, r, inv.ID, cancelled, reply)
 }
 
 // maxBoundExpiry bounds how far ahead a caller's expiresAt may be.
@@ -186,25 +171,6 @@ func boundExpiry(req boundInviteRequest, has map[string]bool, now time.Time) (ti
 		ttl = 10 * time.Minute
 	}
 	return now.Add(ttl), nil
-}
-
-// mintKey is the inviteWait key of a minted wait before its invite exists.
-func mintKey(mint string) string { return "mint:" + mint }
-
-// endWait tells a caller waiting on the cancelled invite (wait:true), registered under its id or still under its
-// mintId, that it was cancelled. The send never blocks: the channel holds one outcome, and a second is dropped.
-func (d *Daemon) endWait(id, mint string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, k := range []string{id, mintKey(mint)} {
-		if ch := d.inviteWait[k]; ch != nil && k != "" && k != mintKey("") {
-			select {
-			case ch <- nil:
-			default:
-			}
-			delete(d.inviteWait, k)
-		}
-	}
 }
 
 // presentMembers names the members of a bound-invite line and refuses one that is null, which would decode like an

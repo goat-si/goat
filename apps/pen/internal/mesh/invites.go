@@ -96,13 +96,16 @@ type Invites struct {
 	// byID holds live invites and bound terminal entries; fences holds cancels by mintId that no invite answered.
 	byID   map[string]Invite
 	fences map[string]Invite
+	// cancelled holds, in memory only, the channel a live bound invite's maker waits on: closed when that invite is
+	// cancelled, dropped when it ends otherwise. Made and closed under mu with the invite itself.
+	cancelled map[string]chan struct{}
 	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
 	retired bool
 }
 
 // LoadInvites reads offers.json (st may be nil for in-memory use).
 func LoadInvites(st *state.Store) (*Invites, error) {
-	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}}
+	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}, cancelled: map[string]chan struct{}{}}
 	if st == nil {
 		return iv, nil
 	}
@@ -153,6 +156,11 @@ func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) e
 		}
 	}
 	iv.byID, iv.fences = byID, fences
+	for id := range iv.cancelled {
+		if x, ok := byID[id]; !ok || x.State != "" {
+			delete(iv.cancelled, id)
+		}
+	}
 	return nil
 }
 
@@ -262,13 +270,6 @@ func terminal(x Invite, state string, now time.Time, nonce string) Invite {
 // names nothing yet is fenced: it answers cancelled and a later create with that mintID is refused. clock is read
 // under the book's lock.
 func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, error) {
-	state, _, err := iv.CancelID(id, mintID, clock)
-	return state, err
-}
-
-// CancelID is Cancel that also answers the id of the invite it named, resolved under the same hold of the book's lock
-// (empty for a fence or an absent id), so the caller acts on exactly that invite.
-func (iv *Invites) CancelID(id, mintID string, clock func() time.Time) (state, inviteID string, err error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	now := clock()
@@ -276,25 +277,29 @@ func (iv *Invites) CancelID(id, mintID string, clock func() time.Time) (state, i
 	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
 	switch {
 	case !ok && mintID == "":
-		return InviteAbsent, "", nil
+		return InviteAbsent, nil
 	case !ok:
 		if len(iv.fences)+iv.boundLocked() >= maxBoundAndFences {
-			return "", "", errors.New("too many bound invites and cancels kept; acknowledge settled ones first")
+			return "", errors.New("too many bound invites and cancels kept; acknowledge settled ones first")
 		}
 		fences[mintID] = Invite{MintID: mintID, State: InviteCancelled, At: now.UnixMilli()}
 	case x.State != "":
-		return x.State, x.ID, nil
+		return x.State, nil
 	case expired(x, now):
-		return InviteExpired, x.ID, iv.saveLocked(now)
+		return InviteExpired, iv.saveLocked(now)
 	case x.Subject == nil:
 		delete(byID, x.ID)
 	default:
 		byID[x.ID] = terminal(x, InviteCancelled, now, "")
 	}
+	ch := iv.cancelled[x.ID]
 	if err := iv.commitLocked(now, byID, fences); err != nil {
-		return "", "", err
+		return "", err
 	}
-	return InviteCancelled, x.ID, nil
+	if ch != nil {
+		close(ch)
+	}
+	return InviteCancelled, nil
 }
 
 // findLocked finds the entry named by id, or by mintID among the invites and then the fences.

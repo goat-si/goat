@@ -448,29 +448,20 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, "", nil, reply)
+	d.awaitJoin(ctx, c, r, id, nil, reply)
 }
 
-// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. A minted
-// invite's wait was registered under its mintId before the invite existed (wait, mint); here it moves to the invite
-// id in one hold of d.mu, so exactly one key names the channel at any time.
-func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id, mint string, wait chan *mesh.Member, reply func(any)) {
-	if wait == nil {
-		wait = make(chan *mesh.Member, 1)
-	}
+// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
+// the bound invite's cancel signal, attached when the invite was made (nil for an ordinary invite). Admission needs no
+// such care: nobody holds the token before r is answered, after the waiter is registered.
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
+	wait := make(chan *mesh.Member, 1)
 	d.mu.Lock()
-	if mint == "" || d.inviteWait[mintKey(mint)] == wait {
-		d.inviteWait[id] = wait
-	}
-	if mint != "" {
-		delete(d.inviteWait, mintKey(mint))
-	}
+	d.inviteWait[id] = wait
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
-		if d.inviteWait[id] == wait {
-			delete(d.inviteWait, id)
-		}
+		delete(d.inviteWait, id)
 		d.mu.Unlock()
 	}()
 	reply(r)
@@ -479,11 +470,9 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id, m
 	defer t.Stop()
 	select {
 	case m := <-wait:
-		if m == nil {
-			reply(map[string]any{"t": "cancelled"})
-		} else {
-			reply(map[string]any{"t": "admitted", "member": *m})
-		}
+		reply(map[string]any{"t": "admitted", "member": *m})
+	case <-cancelled:
+		reply(map[string]any{"t": "cancelled"})
 	case <-t.C:
 		reply(map[string]any{"t": "expired"})
 	case <-gone:

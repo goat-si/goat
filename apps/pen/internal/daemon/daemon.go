@@ -149,7 +149,7 @@ type Daemon struct {
 	versions map[string]string
 	// acct are the running kind 0x04 sessions, oldest first.
 	acct []*acctSlot
-	// inviteWait holds the callers waiting on an invite: an admitted member, or nil when the invite was cancelled.
+	// inviteWait holds the callers waiting on an invite's admission.
 	inviteWait map[string]chan *mesh.Member
 	// boundCreated, when set, runs after a bound invite is made and before its waiter is registered (tests).
 	boundCreated func(id string)
