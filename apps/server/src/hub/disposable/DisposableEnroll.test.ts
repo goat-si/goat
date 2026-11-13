@@ -1,12 +1,19 @@
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { penNodeId } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import { attach, key, listed, rows, switchTo, world } from "./DisposableAttach.testkit.ts";
-import { MACHINE_KEY_FILE, MACHINE_KEY_LINE, penRouteOf } from "./DisposableEnroll.testkit.ts";
+import {
+  MACHINE_KEY_FILE,
+  MACHINE_KEY_LINE,
+  makeHold,
+  penRouteOf,
+} from "./DisposableEnroll.testkit.ts";
 import { LINK_CONTRACTS, LINK_IDENTITY_CONTRACT } from "./enrollModel.ts";
 import { HOME_ATTACH_CONTRACTS } from "./features.ts";
 
@@ -315,6 +322,77 @@ it.effect("an unreadable settings read pauses nothing and moves nothing on", () 
       home.settingsUnreadable = false;
       expect(yield* listed(attachId)).toMatchObject({ state: "admitted" });
       expect(host.control.knownHosts.size).toBe(0);
+    }),
+  ),
+);
+
+it.effect("authority withdrawn while a stored id is read back stops the resend before ocx", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.adds.push("not_journalled");
+      yield* enroll;
+      yield* enroll;
+      yield* enroll; // sent, never journalled
+      const hold = yield* makeHold();
+      host.control.holdOperations = hold;
+      const pass = yield* Effect.forkChild(enroll);
+      yield* Deferred.await(hold.arrived);
+      yield* switchTo({ enabled: false });
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(pass);
+      expect(linkAdds(host.control.calls)).toHaveLength(1);
+      expect(yield* listed(attachId)).toMatchObject({ state: "paused" });
+    }),
+  ),
+);
+
+it.effect("a machine removed from Pen while its route is read is not moved on afterwards", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      const hold = yield* makeHold();
+      host.control.holdRoute = hold;
+      const pass = yield* Effect.forkChild(enroll);
+      yield* Deferred.await(hold.arrived);
+      pen.members.delete(key(1));
+      expect(yield* listed(attachId)).toMatchObject({ state: "failed", penMember: false });
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(pass);
+      host.control.holdRoute = undefined;
+      yield* enroll;
+      yield* enroll;
+      expect(yield* listed(attachId)).toMatchObject({ state: "failed", penMember: false });
+      expect(linkAdds(host.control.calls)).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("two machines whose routes complete together cannot both take one SSH host key", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const first = yield* joined(pen, host, 1);
+      const second = yield* joined(pen, host, 2);
+      host.control.routes.set(
+        second.nodeId,
+        penRouteOf({ nodeId: second.nodeId, noisePub: key(102) }, "ssh-ed25519 " + "1".repeat(68)),
+      );
+      // Both have checked for a shared pin when they write their known_hosts.
+      const hold = yield* makeHold(2);
+      host.control.holdKnownHosts = hold;
+      const pass = yield* Effect.forkChild(enroll);
+      yield* Deferred.await(hold.arrived);
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(pass);
+      const pinned = (yield* rows).filter((row) => row.sshd_pin !== null);
+      expect(pinned).toHaveLength(1);
+      const states = [yield* listed(first.attachId), yield* listed(second.attachId)].map(
+        (machine) => machine?.class,
+      );
+      expect(states.toSorted()).toEqual(["conflict", "disposable"]);
     }),
   ),
 );

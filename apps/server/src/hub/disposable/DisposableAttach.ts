@@ -191,11 +191,8 @@ export const make = Effect.gen(function* () {
 
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
   const enrollment = yield* makeEnroll(exclusive);
-  /** The public line a machine must trust; attach makes the key before its first record. */
-  const knownKey = machineKey.identity.pipe(
-    Effect.map((identity) => identity.publicLine),
-    Effect.orElseSucceed(() => undefined),
-  );
+  /** The public line a machine must trust; attach makes the key, a read never does. */
+  const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
   /**
    * Admits the next mint (design section 2, Effect admission): the provisioner's grant is checked
@@ -514,7 +511,9 @@ export const make = Effect.gen(function* () {
       const missing = (view: ReadonlySet<string> | undefined) =>
         view !== undefined && !view.has(row.expected_sign_pub);
       if (missing(yield* members) && missing(yield* pen.members)) {
+        // The fence moves with the removal, so an enrollment step in flight commits nothing after it.
         row = yield* save(row, effects, {
+          fence: row.fence + 1,
           pen_removed_at: yield* nowIso,
           ...(row.final_at === null ? { state: "failed" } : {}),
         });

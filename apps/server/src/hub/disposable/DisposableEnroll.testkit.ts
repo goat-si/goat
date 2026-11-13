@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -9,8 +10,10 @@ import type { DisposableRoute } from "./routeContract.ts";
 
 export const MACHINE_KEY_FILE = "/srv/goat/disposable/machine_ed25519";
 export const MACHINE_KEY_LINE = "ssh-ed25519 " + "A".repeat(68) + " goat-disposable";
+const IDENTITY = { privateKeyFile: MACHINE_KEY_FILE, publicLine: MACHINE_KEY_LINE };
 export const fakeMachineKey = MachineKey.of({
-  identity: Effect.succeed({ privateKeyFile: MACHINE_KEY_FILE, publicLine: MACHINE_KEY_LINE }),
+  identity: Effect.succeed(IDENTITY),
+  known: Effect.succeed(IDENTITY),
 });
 
 export const penRouteOf = (node: PenNode, hostKey = "ssh-ed25519 " + "K".repeat(68)) =>
@@ -34,6 +37,28 @@ export type AddScript =
   | { readonly failedClean: string }
   | "residual"
   | "unknown";
+
+/** Holds a call until released; `arrived` completes once `want` calls wait. */
+export interface Hold {
+  readonly want: number;
+  readonly arrived: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+  count: number;
+}
+export const makeHold = (want = 1) =>
+  Effect.map(
+    Effect.all([Deferred.make<void>(), Deferred.make<void>()]),
+    ([arrived, release]): Hold => ({ want, arrived, release, count: 0 }),
+  );
+const pass = (hold: Hold | undefined) =>
+  hold === undefined
+    ? Effect.void
+    : Effect.suspend(() => {
+        hold.count += 1;
+        return (
+          hold.count >= hold.want ? Deferred.succeed(hold.arrived, undefined) : Effect.void
+        ).pipe(Effect.andThen(Deferred.await(hold.release)));
+      });
 
 interface Operation {
   readonly operationId: string;
@@ -60,6 +85,11 @@ export const fakeEnrollHost = () => {
     adds: [] as Array<AddScript>,
     calls: [] as Array<ReadonlyArray<string>>,
     statusUnreadable: false,
+    /** Hold Pen's route read, the reach, or the journal read until a test releases them. */
+    holdRoute: undefined as Hold | undefined,
+    holdReach: undefined as Hold | undefined,
+    holdKnownHosts: undefined as Hold | undefined,
+    holdOperations: undefined as Hold | undefined,
     journal,
     links,
     /** The Home pruned this settled entry, as it may after 2 hours. */
@@ -101,48 +131,63 @@ export const fakeEnrollHost = () => {
     return output(script === "commit" ? 0 : 1, json({ linkId, alias }));
   };
   const service = EnrollHost.of({
-    route: (node) => Effect.sync(() => control.routes.get(node.nodeId)),
+    route: (node) =>
+      pass(control.holdRoute).pipe(
+        Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
+      ),
     knownHosts: (attachId, line) =>
-      Effect.suspend(() => {
-        const known = control.knownHosts.get(attachId);
-        if (known !== undefined && known !== line)
-          return Effect.fail(new KnownHostsError({ reason: "changed" }));
-        control.knownHosts.set(attachId, line);
-        return Effect.succeed("/srv/goat/disposable/known_hosts/" + attachId);
-      }),
+      Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            const known = control.knownHosts.get(attachId);
+            if (known !== undefined && known !== line)
+              return Effect.fail(new KnownHostsError({ reason: "changed" }));
+            control.knownHosts.set(attachId, line);
+            return Effect.succeed("/srv/goat/disposable/known_hosts/" + attachId);
+          }),
+        ),
+      ),
     reach: (route) =>
-      Effect.sync(() => {
-        control.reached.push(route);
-        return !control.unreachable.has(route.nodeId);
-      }),
+      pass(control.holdReach).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            control.reached.push(route);
+            return !control.unreachable.has(route.nodeId);
+          }),
+        ),
+      ),
     ocx: (args) =>
-      Effect.sync(() => {
-        control.calls.push(args);
-        if (args[0] === "link" && args[1] === "add") return add(args);
-        if (args[0] === "link" && args[1] === "operations") {
-          const operation = journal.get(args[3] ?? "");
-          if (operation === undefined) return output(4);
-          return output(
-            0,
-            json({
-              operationId: operation.operationId,
-              kind: "enroll",
-              alias: operation.alias,
-              state: operation.state,
-              reserved: { linkId: operation.linkId, apiKeyId: "k", tunnelPort: 7000 },
-              effects: [],
-              ...(operation.code === undefined
-                ? {}
-                : { error: { code: operation.code, status: 409 } }),
-            }),
-          );
-        }
-        if (args[0] === "link" && args[1] === "status")
-          return control.statusUnreadable
-            ? output(1)
-            : output(0, json({ role: "home", links: [...links.values()] }));
-        return output(2);
-      }),
+      (args[1] === "operations" ? pass(control.holdOperations) : Effect.void).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            control.calls.push(args);
+            if (args[0] === "link" && args[1] === "add") return add(args);
+            if (args[0] === "link" && args[1] === "operations") {
+              const operation = journal.get(args[3] ?? "");
+              if (operation === undefined) return output(4);
+              return output(
+                0,
+                json({
+                  operationId: operation.operationId,
+                  kind: "enroll",
+                  alias: operation.alias,
+                  state: operation.state,
+                  reserved: { linkId: operation.linkId, apiKeyId: "k", tunnelPort: 7000 },
+                  effects: [],
+                  ...(operation.code === undefined
+                    ? {}
+                    : { error: { code: operation.code, status: 409 } }),
+                }),
+              );
+            }
+            if (args[0] === "link" && args[1] === "status")
+              return control.statusUnreadable
+                ? output(1)
+                : output(0, json({ role: "home", links: [...links.values()] }));
+            return output(2);
+          }),
+        ),
+      ),
   });
   return { service, control };
 };

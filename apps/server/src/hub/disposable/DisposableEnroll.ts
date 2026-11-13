@@ -42,8 +42,9 @@ const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Sch
 const WAITING_ROUTE = new Set(["no_exact_block", "no_user", "no_key"]);
 
 class ForwardRefused extends Data.TaggedError("ForwardRefused")<{
-  readonly reason: "provisioner_refused" | "delegation_lost";
+  readonly reason: "provisioner_refused" | "delegation_lost" | "not_due" | "sshd_pin_shared";
 }> {}
+const DUE_STATES = new Set(["admitted", "attaching"]);
 
 /**
  * Design section 2, steps 3 to 5: route, reach with the hub key, link as an exclusive ephemeral Child.
@@ -99,15 +100,36 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     Effect.flatMap(note(row, { ...enroll, stop: code }, { state: "paused", ...columns }), () =>
       audit(row.attach_id, "hub.machine_enroll", "stopped:" + code),
     );
+  /** Lost authority stops the record before any further effect; a person resumes it. */
+  const pause = Effect.fn("DisposableEnroll.pause")(function* (row: Row, reason: string) {
+    const paused = yield* sql`UPDATE disposable_machines SET state = 'paused',
+          state_since = ${yield* nowIso} WHERE attach_id = ${row.attach_id}
+          AND fence = ${row.fence} AND state != 'paused' RETURNING attach_id`;
+    if (paused.length === 1) yield* audit(row.attach_id, "hub.machine_enroll", "paused:" + reason);
+  });
+  /** Whether the record is an admitted attach still moving on: no conflict, stop or final state. */
+  const due = (row: Row) =>
+    row.final_at === null &&
+    row.pen_admitted_at !== null &&
+    row.pen_removed_at === null &&
+    DUE_STATES.has(row.state) &&
+    conflictCount(row.conflicts_json) === 0;
   const conflict = (row: Row, enroll: Enroll, code: string) =>
     stop(row, enroll, code, { conflicts_json: encodeConflicts([code]) });
 
   /**
    * A forward commit (design section 2, Ordering and fences): under the settings write lock, only
-   * while the switch holds the record's grant, the provisioner is still named and the goatclaw
-   * policy its grant came from is unchanged; advances the fence. A refusal pauses the record.
+   * while the switch holds the record's grant, the provisioner is still named, the goatclaw policy
+   * its grant came from is unchanged and the record is still due; advances the fence. Lost
+   * authority pauses the record. A pin is checked unique in the same transaction that stores it.
    */
-  const forward = (row: Row, before: ServerSettings, enroll: Enroll, columns: Columns) =>
+  const forward = (
+    row: Row,
+    before: ServerSettings,
+    enroll: Enroll,
+    columns: Columns,
+    pin?: string,
+  ) =>
     exclusive(
       Effect.gen(function* () {
         const committed = yield* store
@@ -117,6 +139,17 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
                 return yield* new ForwardRefused({ reason: "provisioner_refused" });
               if (!samePolicy(current, before))
                 return yield* new ForwardRefused({ reason: "delegation_lost" });
+              const [latest] = yield* sql<Row>`SELECT * FROM disposable_machines
+                WHERE attach_id = ${row.attach_id}`;
+              if (latest === undefined || !due(latest))
+                return yield* new ForwardRefused({ reason: "not_due" });
+              if (pin !== undefined) {
+                const [shared] = yield* sql<{ readonly attach_id: string }>`SELECT attach_id
+                  FROM disposable_machines WHERE final_at IS NULL AND sshd_pin = ${pin}
+                    AND attach_id != ${row.attach_id} LIMIT 1`;
+                if (shared !== undefined)
+                  return yield* new ForwardRefused({ reason: "sshd_pin_shared" });
+              }
               const now = yield* nowIso;
               const state = typeof columns.state === "string" ? columns.state : row.state;
               yield* sql`UPDATE disposable_machines SET ${sql.update({
@@ -133,14 +166,16 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
                 Effect.succeed({ committed: false, reason: refused.reason } as const),
             }),
           );
-        if (committed.committed) return true;
-        // A moved fence means another step owns the record; anything else ended the authority.
-        if (committed.reason !== "fence_moved" && committed.reason !== "not_found") {
-          yield* sql`UPDATE disposable_machines SET state = 'paused', state_since = ${yield* nowIso}
-            WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} AND state != 'paused'`;
-          yield* audit(row.attach_id, "hub.machine_enroll", "paused:" + committed.reason);
-        }
-        return false;
+        if (committed.committed) return "committed" as const;
+        if (committed.reason === "sshd_pin_shared") return "sshd_pin_shared" as const;
+        // Another step owns the record, or it is no longer due; anything else ended the authority.
+        if (
+          committed.reason !== "fence_moved" &&
+          committed.reason !== "not_found" &&
+          committed.reason !== "not_due"
+        )
+          yield* pause(row, committed.reason);
+        return "refused" as const;
       }),
     );
 
@@ -159,10 +194,6 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         yield* note(row, { ...enroll, route: { outcome: reason, at: now } });
       return;
     }
-    const [shared] = yield* sql<{ readonly attach_id: string }>`SELECT attach_id
-      FROM disposable_machines WHERE final_at IS NULL AND sshd_pin = ${pen.fingerprint}
-        AND attach_id != ${row.attach_id} LIMIT 1`;
-    if (shared !== undefined) return yield* conflict(row, enroll, "sshd_pin_shared");
     const line = disposableKnownHosts(row.node_id, pen.hostKey);
     if (line === undefined) return yield* conflict(row, enroll, "route_several_keys");
     const knownHostsFile = yield* host.knownHosts(row.attach_id, line).pipe(Effect.option);
@@ -174,7 +205,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       fingerprint: pen.fingerprint,
       knownHostsFile: knownHostsFile.value,
     };
-    yield* forward(
+    const stored = yield* forward(
       row,
       before,
       { ...enroll, route: { outcome: "ok", at: now } },
@@ -184,7 +215,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         state: "attaching",
         step: "reach",
       },
+      pen.fingerprint,
     );
+    if (stored === "sshd_pin_shared") yield* conflict(row, enroll, "sshd_pin_shared");
   });
 
   const reachStep = Effect.fn("DisposableEnroll.reach")(function* (
@@ -328,16 +361,30 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     if (stored !== null) {
       // A stored id is read back first; it is sent again only when OpenCodex never journalled it.
       const settled = yield* record(row, enroll, yield* readBack(row, stored), false);
-      if (settled === "resend") yield* dispatch(row, enroll, route, stored);
+      if (settled !== "resend") return;
+      // A resend is a new effect: admitted again, with the authority as it is now.
+      const current = yield* settingsNow;
+      if (current === undefined) return;
+      const ended = yield* authorityEnded(row, current);
+      if (ended !== undefined) return yield* exclusive(pause(row, ended));
+      const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
+      const resent = {
+        ...enroll,
+        link: { ...link, intentAtMs: yield* Clock.currentTimeMillis, outcome: "resent" },
+      };
+      if ((yield* forward(row, current, resent, {})) !== "committed") return;
+      const again = yield* read(row.attach_id);
+      if (again !== undefined && due(again)) yield* dispatch(again, resent, route, stored);
       return;
     }
     // Effect admission: the operation id is stored under the settings lock before ocx starts.
     const attempt = (enroll.link?.attempt ?? 0) + 1;
     const operationId = linkOperationId(row.attach_id, attempt);
     const admitted = { ...enroll, link: { attempt, intentAtMs: yield* Clock.currentTimeMillis } };
-    if (!(yield* forward(row, before, admitted, { link_operation_id: operationId }))) return;
+    if ((yield* forward(row, before, admitted, { link_operation_id: operationId })) !== "committed")
+      return;
     const fresh = yield* read(row.attach_id);
-    if (fresh !== undefined) yield* dispatch(fresh, admitted, route, operationId);
+    if (fresh !== undefined && due(fresh)) yield* dispatch(fresh, admitted, route, operationId);
   });
 
   const verifyStep = Effect.fn("DisposableEnroll.verify")(function* (
@@ -360,7 +407,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     if (verdict !== "verified") return yield* conflict(row, enroll, "link_" + verdict);
     const linked =
       enroll.link === undefined ? enroll : { ...enroll, link: { ...enroll.link, outcome: "ok" } };
-    if (yield* forward(row, before, linked, { state: "linked", step: "linked" }))
+    if ((yield* forward(row, before, linked, { state: "linked", step: "linked" })) === "committed")
       yield* audit(row.attach_id, "hub.machine_link", "linked");
   });
 
@@ -371,32 +418,13 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const before = yield* settingsNow;
     if (before === undefined) return;
     const ended = yield* authorityEnded(row, before);
-    if (ended !== undefined) {
-      yield* exclusive(
-        Effect.gen(function* () {
-          const paused = yield* sql`UPDATE disposable_machines SET state = 'paused',
-              state_since = ${yield* nowIso} WHERE attach_id = ${row.attach_id}
-              AND fence = ${row.fence} AND state != 'paused' RETURNING attach_id`;
-          if (paused.length === 1)
-            yield* audit(row.attach_id, "hub.machine_enroll", "paused:" + ended);
-        }),
-      );
-      return;
-    }
+    if (ended !== undefined) return yield* exclusive(pause(row, ended));
     const route = decodeRoute(row.route_json);
     if (route === undefined) return yield* routeStep(row, before, enroll);
     if (enroll.reach?.outcome !== "ok") return yield* reachStep(row, before, enroll, route);
     if (row.link_id === null) return yield* linkStep(row, before, enroll, route);
     return yield* verifyStep(row, before, enroll, route, row.link_id);
   });
-
-  /** Whether the record is an admitted attach still moving on: no conflict, stop or final state. */
-  const due = (row: Row) =>
-    row.final_at === null &&
-    row.pen_admitted_at !== null &&
-    row.pen_removed_at === null &&
-    (row.state === "admitted" || row.state === "attaching") &&
-    conflictCount(row.conflicts_json) === 0;
 
   /** One step for one record, if it is due; its failures are the caller's pass to log. */
   const advance = Effect.fn("DisposableEnroll.advance")(function* (attachId: string) {
