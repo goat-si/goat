@@ -111,11 +111,13 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
 	jst := shortDir(t)
 	jid := identity(t, jst, rs.URL, "j")
 	var r InviteReply
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
 		t.Fatal(err)
 	}
 	if r.MintID != "m1" || r.ID == "" {
@@ -142,7 +144,7 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	if c := cancelOp(`{"op":"invite.cancel","mintId":"m2"}`); c.State != "cancelled" {
 		t.Fatalf("cancel of an unmade mint: %+v", c)
 	}
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m2","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err == nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m2","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err == nil {
 		t.Fatalf("the fenced mint made an invite: %+v", r)
 	}
 	if c := cancelOp(`{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA"}`); c.State != "absent" {
@@ -248,10 +250,12 @@ func TestInviteRefOpsRefuseALineCarryingBothReferences(t *testing.T) {
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
 	jid := newIdentity(t)
 	var r InviteReply
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
 		t.Fatal(err)
 	}
 	for _, op := range []string{"invite.cancel", "invite.status", "invite.ack"} {
