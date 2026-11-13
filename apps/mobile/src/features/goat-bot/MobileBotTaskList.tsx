@@ -1,4 +1,5 @@
 import {
+  COLLAPSED_FINISHED,
   presentTaskStatus,
   type BotHomeWork,
   type GoatBotTaskCard,
@@ -16,7 +17,6 @@ import { Alert, Pressable, Text, View } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
-import { COLLAPSED_FINISHED } from "./mobileBotWorkShared";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;

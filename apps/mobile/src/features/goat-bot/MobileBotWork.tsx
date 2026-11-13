@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  accessDenied,
   botHomeWork,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
@@ -7,6 +8,7 @@ import {
   isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
+  workRowCollapsed,
   type GoatBotAccent,
   type GoatBotTaskCard,
   type GoatBotWaitingTurn,
@@ -54,7 +56,6 @@ import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { MobileTaskRetry } from "./MobileTaskRetry";
-import { accessDenied, workRowCollapsed } from "./mobileBotWorkShared";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
