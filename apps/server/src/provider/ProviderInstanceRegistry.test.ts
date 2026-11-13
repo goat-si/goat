@@ -453,19 +453,22 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     () =>
       Effect.gen(function* () {
         if (yield* HostProcess.isWindows) return;
-        const fixtures = yield* makeTildeProviderFixtures();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const testHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-host-" });
+        const fixtures = yield* makeTildeProviderFixtures().pipe(
+          Effect.provideService(HostProcess.HomeDirectory, testHome),
+        );
         const path = yield* Path.Path;
-        const homePath = yield* HostProcess.HomeDirectory;
-        const folder = path.dirname(path.join(homePath, fixtures.claudeBinaryPath.slice(2)));
+        const folder = path.dirname(path.join(testHome, fixtures.claudeBinaryPath.slice(2)));
         // The fixture runs on node; keep it reachable without the fixture folder.
         const before = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
-        const original = process.env.PATH;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            process.env.PATH = original;
-          }),
-        );
-        process.env.PATH = before;
+        const host = { HOME: testHome, PATH: before };
+        const hostileLog = path.join(testHome, "hostile.log");
+        vi.stubEnv("GOAT_CLAUDE_REQUIRED_CWD", testHome);
+        vi.stubEnv("GOAT_CLAUDE_PROBE_LOG", hostileLog);
+        vi.stubEnv("GOAT_CLAUDE_LOGIN_MARKER", path.join(testHome, "missing"));
+        vi.stubEnv("GOAT_CLAUDE_USAGE_FAILS_UNTIL", path.join(testHome, "missing"));
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
         const config = makeClaudeConfig({
           enabled: true,
           binaryPath: "claude",
@@ -488,18 +491,22 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
               config,
             },
           },
-        });
+        }).pipe(
+          Effect.provideService(HostProcess.HomeDirectory, testHome),
+          Effect.provideService(HostProcess.Environment, host),
+        );
         const inherited = yield* registry.getInstance(inheritedId);
         const pinned = yield* registry.getInstance(pinnedId);
         expect(yield* inherited!.snapshot.refresh).toMatchObject({ installed: false });
 
-        process.env.PATH = `${folder}:${before}`;
+        host.PATH = `${folder}:${before}`;
         expect(yield* inherited!.snapshot.refresh).toMatchObject({
           installed: true,
           version: "2.1.219",
         });
-        process.env.PATH = before;
+        host.PATH = before;
         expect(yield* pinned!.snapshot.refresh).toMatchObject({ installed: true });
+        expect(yield* fileSystem.exists(hostileLog)).toBe(false);
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

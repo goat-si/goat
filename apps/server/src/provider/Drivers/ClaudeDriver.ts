@@ -119,7 +119,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       .current(DRIVER_KIND)
       .pipe(Effect.map(resolveClaudeModelCatalog));
     // Run again at each check: the desktop updates the host PATH once the login shell answers.
-    const currentProcessEnv = mergeClaudeProcessEnvironment(config, environment, process.env).pipe(
+    const hostEnvironment = yield* HostProcess.Environment;
+    const currentProcessEnv = mergeClaudeProcessEnvironment(
+      config,
+      environment,
+      hostEnvironment,
+    ).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
