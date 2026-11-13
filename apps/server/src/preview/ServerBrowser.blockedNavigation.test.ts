@@ -31,7 +31,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
-import { SessionControl } from "./SessionControl.ts";
+import { cutBlockedUrlObserved, popupAdmissionObserved } from "./SessionControl.testkit.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -166,6 +166,7 @@ const fixture = Effect.gen(function* () {
   const allowed = `http://127.0.0.1:${port}`;
   const blocked = `http://localhost:${port}`;
   const service = yield* ServerBrowser.ServerBrowser;
+  const manager = yield* Manager.PreviewManager;
   const broker = yield* Broker.PreviewAutomationBroker;
   const settings = yield* ServerSettings.ServerSettingsService;
   const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
@@ -187,6 +188,7 @@ const fixture = Effect.gen(function* () {
   ) => broker.invoke({ scope, tabId: id, operation, input });
   return {
     service,
+    manager,
     broker,
     page,
     tabId,
@@ -476,15 +478,7 @@ it.effect("a slow blocked popup fences active context tabs before the response a
         quality: 70,
       });
       yield* viewer.input({ type: "takeControl" });
-      const observed = yield* Deferred.make<void>();
-      const cut = SessionControl.prototype.cutBlockedUrl;
-      const spy = vi.spyOn(SessionControl.prototype, "cutBlockedUrl").mockImplementation(function (
-        this: SessionControl,
-      ) {
-        cut.call(this);
-        Deferred.doneUnsafe(observed, Effect.void);
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const observed = yield* cutBlockedUrlObserved;
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
       ).pipe(Effect.forkChild);
@@ -509,11 +503,18 @@ it.effect("a blocked popup at the tab limit still fences its opener", () =>
           input: { reuseExistingTab: false, show: false },
         });
       }
+      const fenced = yield* cutBlockedUrlObserved;
+      const admission = yield* popupAdmissionObserved(f.manager);
       const popupReady = f.page.waitForEvent("popup");
       yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
       const popup = yield* Effect.promise(() => popupReady);
-      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+      // The press needs the opener's fence; Playwright's close event for the refused popup can be late.
+      yield* Effect.raceFirst(
+        Deferred.await(fenced),
+        popup.isClosed() ? Effect.void : Effect.promise(() => popup.waitForEvent("close")),
+      );
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
+      expect(yield* Deferred.await(admission)).toBe("refused");
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -681,14 +682,15 @@ it.effect("recordingStop can finish an active recording after a tab is fenced", 
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
-      expect((yield* f.call(f.tabId, "recordingStart", {}).pipe(Effect.result))._tag).toBe(
-        "Success",
-      );
+      // The whole result, so a failure names its error.
+      expect(yield* f.call(f.tabId, "recordingStart", {}).pipe(Effect.result)).toMatchObject({
+        _tag: "Success",
+      });
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
-      expect((yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result))._tag).toBe(
-        "Success",
-      );
+      expect(yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result)).toMatchObject({
+        _tag: "Success",
+      });
     }),
   ).pipe(Effect.provide(layer)),
 );

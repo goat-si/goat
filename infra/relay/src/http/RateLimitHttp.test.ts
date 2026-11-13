@@ -1,4 +1,3 @@
-// @effect-diagnostics anyUnknownInErrorContext:off -- Alchemy owns the isolated local Worker lifecycle/error union.
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -13,13 +12,8 @@ import {
 } from "@goat/contracts/relay";
 import { RelayRateLimitExceededError } from "@goat/contracts/relayErrors";
 import * as RelayJwt from "@goat/shared/relayJwt";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Test from "alchemy/Test/Vitest";
-import { resolveDev } from "alchemy/Test/Core";
-import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -29,7 +23,6 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { vi } from "vite-plus/test";
 import { DEFAULT_LIMITS, HOURLY_OPERATIONS } from "../accounts/AccountLimits.ts";
 import { makeWorkerRateLimits, type RelayRateLimits } from "../accounts/RelayRateLimits.ts";
-import * as Fixture from "../accounts/test/PolicyWorkerFixture.ts";
 import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
 import { RelayDb } from "../db.ts";
 import { EndpointIdentity } from "../environments/EndpointIdentity.ts";
@@ -42,20 +35,10 @@ import { ClientKeys } from "../auth/ClientKeys.ts";
 import { AgentActivityRows } from "../agentActivity/AgentActivityRows.ts";
 import * as Api from "./Api.ts";
 import { dpopKey, httpServices, issuer, signingKey, signJwt } from "./RateLimitHttp.testkit.ts";
-import { policyWorkerHttpClient } from "../accounts/test/PolicyWorkerClient.testkit.ts";
 
 vi.mock("@clerk/backend", () => ({ verifyToken: vi.fn(), createClerkClient: vi.fn() }));
 
-if (!resolveDev({ dev: true }))
-  throw new Error("HTTP rate tests require local provider mode; cloud fallback is forbidden");
 const decodeRateLimitError = Schema.decodeUnknownEffect(RelayRateLimitExceededError);
-
-const { test } = Test.make({
-  providers: Cloudflare.providers(),
-  dev: true,
-  sidecar: true,
-  stage: "wp3-http-rate-fixture",
-});
 
 const assertHttpBudgetsDeny = (rates: RelayRateLimits["Service"]) =>
   Effect.gen(function* () {
@@ -515,63 +498,4 @@ it.live(
       }).pipe(Effect.provide(NodeCrypto.layer));
       yield* assertHttpBudgetsDeny(rates);
     }),
-);
-
-// quarantine: #2348 Worker-backed test timed out under CI load; measured Worker readiness grew from 3.7 s to 24 s; no deterministic remedy was established by this investigation.
-test.provider.skip("HTTP budgets deny Connect writes and disabled mobile scopes", (stack) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const root = yield* fs.makeTempDirectoryScoped({ prefix: "relay-http-rates-" });
-    const context = { dotAlchemy: root, dev: true, adopt: false };
-    yield* Effect.gen(function* () {
-      const url = yield* stack.deploy(
-        Effect.map(Fixture.PolicyWorker, (worker) => worker.url).pipe(
-          Effect.provide(Fixture.layer),
-        ),
-      );
-      if (url === undefined) throw new Error("Local Worker fixture did not return a URL");
-      const hostname = new URL(url).hostname;
-      expect(
-        hostname === "127.0.0.1" ||
-          hostname === "localhost" ||
-          hostname.endsWith(".localhost") ||
-          hostname === "[::1]",
-      ).toBe(true);
-      const http = yield* policyWorkerHttpClient;
-      const read = (path: string, key: string, operation?: string) => {
-        const request = new URL(path, url);
-        request.searchParams.set("account", key);
-        if (operation) request.searchParams.set("operation", operation);
-        return http.get(request.href).pipe(Effect.flatMap((response) => response.json));
-      };
-      const rates = yield* makeWorkerRateLimits({
-        stage: "http-fixture",
-        hourly: (key, operation) =>
-          read("/rate", key, operation).pipe(
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(
-                Schema.Struct({
-                  allowed: Schema.Boolean,
-                  retryAfterSeconds: Schema.Number,
-                }),
-              ),
-            ),
-          ),
-        mobile: (key) =>
-          read("/mobile-rate", key).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ success: Schema.Boolean }))),
-          ),
-        publish: (key) =>
-          read("/publish-rate", key).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ success: Schema.Boolean }))),
-          ),
-      }).pipe(Effect.provide(NodeCrypto.layer));
-      yield* assertHttpBudgetsDeny(rates);
-    }).pipe(
-      Effect.provideService(AlchemyContext, context),
-      Effect.ensuring(
-        stack.destroy().pipe(Effect.provideService(AlchemyContext, context), Effect.orDie),
-      ),
-    );
-  }),
 );

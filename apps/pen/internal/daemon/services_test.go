@@ -688,19 +688,17 @@ func TestSnapshotWatchSendsCompleteLinesWhoseGenerationRisesByOnePerChange(t *te
 	rs := relaytest.New()
 	defer rs.Close()
 	a := founder(t, ctx, rs, "a", nil)
-	_, next1 := snapWatch(t, a)
-	first := next1()
-	// The relay can count the node online before the daemon marks its uplink up (relay/uplink.go:194), a change
-	// that raises the generation; the second watcher attaches after it.
-	for len(first.Relays) != 1 || first.Relays[0].Uplink != "up" {
-		s := next1()
-		if s.Gen != first.Gen+1 {
-			t.Fatalf("generation went %d -> %d", first.Gen, s.Gen)
-		}
-		first = s
-	}
-	_, next2 := snapWatch(t, a)
-	if second := next2(); second.Gen != first.Gen {
+	// A relay state change publishes a line of its own: the daemon can record its uplink as up after founder
+	// returns, or drop and reconnect it. Holding relaysMu keeps those changes out of the two attaches.
+	next1, first, next2, second := func() (func() snapLine, snapLine, func() snapLine, snapLine) {
+		a.d.relaysMu.Lock()
+		defer a.d.relaysMu.Unlock()
+		_, next1 := snapWatch(t, a)
+		first := next1()
+		_, next2 := snapWatch(t, a)
+		return next1, first, next2, next2()
+	}()
+	if second.Gen != first.Gen {
 		t.Fatalf("a new watcher raised the generation: %d then %d", first.Gen, second.Gen)
 	}
 	if first.T != "snapshot" || first.Mesh != a.ls(t).MeshID || first.Self != a.d.NodeID() || len(first.Members) != 1 {

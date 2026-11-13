@@ -1,4 +1,5 @@
-import { assert, it, describe } from "@effect/vitest";
+import * as NodeSqlite from "node:sqlite";
+import { assert, it, describe, vi } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -96,6 +97,34 @@ const check = Effect.gen(function* () {
   );
 });
 
+// StatementSync.stat (Node 26) is not in @types/node 24.
+const vmStep = (statement: NodeSqlite.StatementSync) =>
+  (statement as unknown as { stat(counter: "vmStep"): number }).stat("vmStep");
+// SQLite's VM steps measure the SQL work receive does, however busy the runner is.
+const countVmSteps = <E, R>(effect: Effect.Effect<void, E, R>) =>
+  Effect.suspend(() => {
+    let steps = 0;
+    const counted = (method: "all" | "run") => {
+      const original = NodeSqlite.StatementSync.prototype[method];
+      return vi.spyOn(NodeSqlite.StatementSync.prototype, method).mockImplementation(function (
+        this: NodeSqlite.StatementSync,
+        ...args: Array<unknown>
+      ) {
+        const before = vmStep(this);
+        try {
+          return Reflect.apply(original, this, args);
+        } finally {
+          steps += vmStep(this) - before;
+        }
+      });
+    };
+    return Effect.acquireUseRelease(
+      Effect.sync(() => [counted("all"), counted("run")]),
+      () => Effect.map(effect, () => steps),
+      (spies) => Effect.sync(() => spies.forEach((spy) => spy.mockRestore())),
+    );
+  });
+
 describe.runIf(process.env.GOAT_MEMORY_GROWTH === "1")("service receive scaling", () => {
   // oxlint-disable-next-line goat/no-test-timeout-or-unreasoned-skip -- Opt-in GOAT_MEMORY_GROWTH benchmark measures thousands of SQLite receives and full chain growth.
   it.effect.each([
@@ -107,33 +136,35 @@ describe.runIf(process.env.GOAT_MEMORY_GROWTH === "1")("service receive scaling"
       Effect.gen(function* () {
         const samples: number[] = [];
         for (const count of fixture.counts) {
-          const ms = yield* Effect.gen(function* () {
+          const vmSteps = yield* Effect.gen(function* () {
             const storage = yield* Store.MemoryStore;
             assert.strictEqual((yield* storage.usage(space, { kind: "user" })).spaceItems, 0);
-            // oxlint-disable-next-line goat/no-wall-clock-in-tests -- GOAT_MEMORY_GROWTH gates this throughput benchmark; real elapsed time is the quantity being measured.
-            const start = performance.now();
-            for (let n = 0; n < count; n++) yield* receive(operation(n, fixture.chain), n);
-            // oxlint-disable-next-line goat/no-wall-clock-in-tests -- GOAT_MEMORY_GROWTH gates this throughput benchmark; preserve the measured scaling ratio.
-            const elapsed = performance.now() - start;
+            const steps = yield* countVmSteps(
+              Effect.gen(function* () {
+                for (let n = 0; n < count; n++) yield* receive(operation(n, fixture.chain), n);
+              }),
+            );
             yield* check;
             const usage = yield* storage.usage(space, { kind: "user" });
             assert.strictEqual(usage.spaceItems, fixture.chain ? 1 : count);
             assert.strictEqual(usage.logRows, count);
-            return elapsed;
+            return steps;
           }).pipe(Effect.provide(live));
-          samples.push(ms);
+          samples.push(vmSteps);
           yield* Console.log(
-            "RECEIVE_SAMPLE " + JSON.stringify({ chain: fixture.chain, count, ms }),
+            "RECEIVE_SAMPLE " +
+              JSON.stringify({ chain: fixture.chain, count, vmSteps, perMemory: vmSteps / count }),
           );
         }
-        const ratio = samples[1]! / samples[0]!;
-        yield* Console.log(
-          "RECEIVE_RATIO " +
-            JSON.stringify(fixture.chain ? { chain: ratio } : { independent: ratio }),
-        );
-        // Large samples absorb startup/JIT noise; optional scheduled benchmark, no millisecond deadline.
+        // Fit steps(n) = a·n + c·n² to both samples; a receive that spends k steps per stored row gives c = k/2.
+        const [small, large] = fixture.counts as [number, number];
+        const perStored =
+          (samples[1]! * small - samples[0]! * large) / (small * large * (large - small));
+        yield* Console.log("RECEIVE_GROWTH " + JSON.stringify({ chain: fixture.chain, perStored }));
+        // Receive already walks the space's events for forget-fragment links (store/ImportLineage.ts), c ≈ 3; any other
+        // scan of every stored row costs at least a step per row and adds 0.5 or more. This guards SQL work only.
         if (!fixture.chain && process.env.GOAT_RECEIVE_BASELINE !== "1")
-          assert.isBelow(ratio, 3.25);
+          assert.isBelow(perStored, 3.5);
       }).pipe(Effect.provideService(Console.Console, console)),
     { timeout: 1500000 },
   );
