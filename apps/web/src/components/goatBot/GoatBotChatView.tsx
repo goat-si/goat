@@ -188,12 +188,34 @@ export function GoatBotChatView({
     setPanelOpen(true);
   }
   const source = useGoatBotSource(projectionRef, member?.botId ?? "main", visibleTurnItems);
-  const [lastSourceIdentity, setLastSourceIdentity] = useState<string | null>(source.identity);
-  if (source.identity !== null && source.identity !== lastSourceIdentity)
-    setLastSourceIdentity(source.identity);
+  const sourceBotId = member?.botId ?? "main";
+  const [lastSource, setLastSource] = useState<{
+    identity: string;
+    botId: string;
+    environmentId: EnvironmentId;
+  } | null>(() =>
+    source.identity !== null && projectionRef != null
+      ? {
+          identity: source.identity,
+          botId: sourceBotId,
+          environmentId: projectionRef.environmentId,
+        }
+      : null,
+  );
+  if (source.identity !== null && projectionRef != null && source.identity !== lastSource?.identity)
+    setLastSource({
+      identity: source.identity,
+      botId: sourceBotId,
+      environmentId: projectionRef.environmentId,
+    });
   const timelineIdentity =
     source.identity ??
-    (projectionRef === null && rows.length > 0 ? lastSourceIdentity : null) ??
+    (projectionRef === null &&
+    rows.length > 0 &&
+    lastSource?.botId === sourceBotId &&
+    (environmentId === null || lastSource.environmentId === environmentId)
+      ? lastSource.identity
+      : null) ??
     botIdentity;
   const [local, setLocal] = useState<{
     identity: string;
