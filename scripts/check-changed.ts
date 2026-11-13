@@ -23,12 +23,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
-import {
-  agentSurfaceCheckSteps,
-  isChangedCode,
-  lintChangedArgs,
-  vitePlusCommand,
-} from "./check-changed-command.ts";
+import { agentSurfaceCheckSteps } from "./agent-surface/auditInputs.ts";
+import { isChangedCode, lintChangedArgs, vitePlusCommand } from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
 import { splitTests } from "./lib/split-tests.ts";
 

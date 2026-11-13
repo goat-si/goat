@@ -114,7 +114,7 @@ export function useRunStopAndStartHold(ref: ScopedThreadRef | null, environmentI
           kind: "held",
           label: hold.title,
           accessibilityLabel: `${hold.title}. ${hold.description}`,
-          // A turn from before the restart stops with its own run; only an unowned one stops here.
+          // A turn an earlier run started stops with its own run; only an unowned one stops here.
           onPress: () => {
             const turnId = hold.nativeTurnId;
             return ref !== null && canStop && hold.reason === "unowned_turn" && turnId

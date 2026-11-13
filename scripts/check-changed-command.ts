@@ -25,18 +25,3 @@ export function lintChangedArgs(files: ReadonlyArray<string>): Array<string> {
 export function isChangedCode(file: string): boolean {
   return /\.(?:[cm]?[jt]sx?|astro)$/.test(file);
 }
-
-// CI's check job runs these on every pull request. The audit cites files and symbols across the
-// repository, so any code change can make docs/internals/agent-surface-audit.md stale.
-export function agentSurfaceCheckSteps(
-  files: ReadonlyArray<string>,
-): Array<{ name: string; args: Array<string> }> {
-  if (
-    !files.some((file) => isChangedCode(file) || file === "docs/internals/agent-surface-audit.md")
-  )
-    return [];
-  return [
-    { name: "agent surface audit", args: ["run", "agent-surface:check"] },
-    { name: "agent context budget", args: ["run", "agent-surface:context-budget-check"] },
-  ];
-}

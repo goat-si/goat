@@ -196,19 +196,15 @@ export const make = Effect.gen(function* () {
       ],
       { concurrency: "unbounded" },
     );
-    if (seen !== undefined && Option.isSome(early)) {
+    // An early read from a head or base that has since moved is thrown away, failure included.
+    if (seen !== undefined && Option.isSome(early) && sameBasis(seen, pullRequest)) {
       const guess = early.value;
+      if (Result.isSuccess(guess)) return [pullRequest, guess.success] as const;
       // A refused or rate-limited account fails the fresh read too; asking again spends quota.
-      if (
-        Result.isFailure(guess) &&
-        (guess.failure.reason === "rate-limited" || guess.failure.reason === "unauthenticated")
-      )
+      if (guess.failure.reason === "rate-limited" || guess.failure.reason === "unauthenticated")
         return yield* guess.failure;
-      // A guess that fails, say for a head since force-pushed away or a dropped request, is only
-      // a missed head start, so the read is made again from the fresh pull request.
-      if (Result.isSuccess(guess) && sameBasis(seen, pullRequest))
-        return [pullRequest, guess.success] as const;
     }
+    // Any other failed guess, such as a dropped request, is only a missed head start.
     return [pullRequest, yield* dependents(pullRequest)] as const;
   });
 

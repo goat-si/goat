@@ -24,6 +24,13 @@ type ThreadListStatusInput = Pick<
   readonly latestRunStartHeld?: boolean | undefined;
 };
 
+/** A run Codex start admission holds behind another Codex turn on its thread: it waits, not works. */
+export function isRunStartHeld(
+  thread: Pick<ThreadListStatusInput, "runtime" | "latestRunStartHeld">,
+): boolean {
+  return thread.runtime?.status === "starting" && thread.latestRunStartHeld === true;
+}
+
 export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadListStatus {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return "approval";
@@ -38,7 +45,7 @@ export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadLi
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
     return "waiting";
   }
-  if (thread.runtime?.status === "starting" && thread.latestRunStartHeld === true) return "waiting";
+  if (isRunStartHeld(thread)) return "waiting";
   if (
     thread.runtime !== null &&
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)

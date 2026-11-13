@@ -56,7 +56,7 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 			return nil, errNotAdmitted
 		}
 		inv, ok := d.inviteBook().Lookup(p.Invite, d.now())
-		if !ok {
+		if !ok || !inv.Subject.AdmitsNoise(remote) {
 			return nil, errNotAdmitted
 		}
 		return session.JoinPSK(inv.Secret, d.nodeID, d.id.NoisePub)
@@ -236,7 +236,10 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	d.opt.Logf("admitted %s (%s)", member.Name, member.NodeID)
 	d.mu.Lock()
 	if ch := d.inviteWait[inviteID]; ch != nil {
-		ch <- *member
+		select {
+		case ch <- member:
+		default:
+		}
 		delete(d.inviteWait, inviteID)
 	}
 	d.mu.Unlock()

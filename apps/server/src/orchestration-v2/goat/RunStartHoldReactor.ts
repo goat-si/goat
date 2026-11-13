@@ -87,7 +87,8 @@ export const make = Effect.gen(function* () {
   const update = Effect.fn("RunStartHoldReactor.update")(
     function* (run: OrchestrationV2Run, holds: ReadonlyMap<ThreadId, ThreadHold>) {
       let hold = heldBy(run, holds);
-      // A fenced turn a run recorded is that run's turn from before the restart, not an unowned one.
+      // A fenced turn a run recorded is that run's own turn, left by a restart or a dropped
+      // connection, not an unowned one.
       if (hold?.reason === "unowned_turn" && hold.nativeTurnId !== undefined) {
         const { providerTurns } = yield* orchestrator.getThreadRecords(run.threadId, [
           "providerTurns",

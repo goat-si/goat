@@ -187,7 +187,7 @@ func TestAListDropClosesTheProgramsConnectionForThatKey(t *testing.T) {
 func TestNoQueuedHolderLineIsWrittenAfterReplaced(t *testing.T) {
 	near, far := net.Pipe()
 	defer far.Close()
-	q := newHolderQueue(near)
+	q := newHolderQueue(near, nil) // a pipe cannot half-close, so nothing is drained
 	reached, release := make(chan struct{}), make(chan struct{})
 	q.whileWriting = func() {
 		close(reached)

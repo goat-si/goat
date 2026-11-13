@@ -195,6 +195,8 @@ function resolveAgentActivityPublishingStartupState(input: {
 const RELAY_AGENT_ACTIVITY_DETAIL_MAX_LENGTH = 160;
 const REDACTED_RELAY_AGENT_FAILURE_DETAIL = "The agent run failed.";
 const RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+// The relay's per-thread bound, as in SubagentWaits; an evicted thread republishes once on its next event.
+const MAX_PUBLISHED_THREADS = 2048;
 
 function sanitizeRelayAgentActivityState(
   state: RelayAgentActivityState | null,
@@ -376,8 +378,13 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
     .map((thread) => thread.id);
 }
 
-/** @public */
-export const make = Effect.gen(function* () {
+/** @public `publishedStateByThread` lets a test watch which threads the relay remembers. */
+export const makeWith = Effect.fn("AgentAwarenessRelay.make")(function* (
+  options: {
+    readonly publishedStateByThread?: Ref.Ref<Map<ThreadId, string>>;
+    readonly maxPublishedThreads?: number;
+  } = {},
+) {
   if (!isGoatConnectEnabled()) {
     return AgentAwarenessRelay.of({
       publishThread: () => Effect.void,
@@ -396,7 +403,9 @@ export const make = Effect.gen(function* () {
   const cloudLinkKeyPair = yield* EnvironmentSigningKey.load(secrets);
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const catchUpRequests = yield* Queue.dropping<void>(1);
-  const publishedStateByThreadRef = yield* Ref.make(new Map<ThreadId, string>());
+  const publishedStateByThreadRef =
+    options.publishedStateByThread ?? (yield* Ref.make(new Map<ThreadId, string>()));
+  const maxPublishedThreads = options.maxPublishedThreads ?? MAX_PUBLISHED_THREADS;
   const subagentWaits = makeSubagentWaits(threads);
   let enqueueParent: (id: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
@@ -455,6 +464,25 @@ export const make = Effect.gen(function* () {
   const cancelPublishRetries = Effect.suspend(() =>
     Effect.forEach([...publishRetries.keys()], cancelPublishRetry, { discard: true }),
   );
+  // Map order is publish order. Eviction skips threads with work in flight (a confirmation inside
+  // its window, which a held completion rides on, or a scheduled retry); those end within the
+  // window or the retry ladder, so any excess they keep is evicted at a later publish.
+  const recordPublished = Effect.fnUntraced(function* (threadId: ThreadId, identity: string) {
+    const nowMs = (yield* DateTime.now).epochMilliseconds;
+    yield* Ref.update(publishedStateByThreadRef, (publishedStates) => {
+      const next = new Map(publishedStates);
+      next.delete(threadId);
+      next.set(threadId, identity);
+      for (const id of next.keys()) {
+        if (next.size <= maxPublishedThreads) break;
+        const pending =
+          (publishConfirmDeadlines.get(id) ?? 0) > nowMs ||
+          publishRetries.get(id)?.timer !== undefined;
+        if (id !== threadId && !pending) next.delete(id);
+      }
+      return next;
+    });
+  });
   let schedulePublishRetry: (threadId: ThreadId) => Effect.Effect<void> = () => Effect.void;
   const resetPublishedConnection = Effect.gen(function* () {
     publishedRelayConfig = undefined;
@@ -666,9 +694,7 @@ export const make = Effect.gen(function* () {
         }).pipe(withRelayClientTracing);
         heldCompletions.delete(threadId);
         publishConfirmDeadlines.set(threadId, nowMs + 5_000);
-        yield* Ref.update(publishedStateByThreadRef, (publishedStates) =>
-          new Map(publishedStates).set(threadId, agentAwarenessPublishIdentity(completion)),
-        );
+        yield* recordPublished(threadId, agentAwarenessPublishIdentity(completion));
         yield* schedulePublishConfirm(threadId);
         return;
       }
@@ -697,9 +723,7 @@ export const make = Effect.gen(function* () {
     }).pipe(withRelayClientTracing);
     publishConfirmDeadlines.delete(threadId);
     heldCompletions.delete(threadId);
-    yield* Ref.update(publishedStateByThreadRef, (publishedStates) =>
-      new Map(publishedStates).set(threadId, publishIdentity),
-    );
+    yield* recordPublished(threadId, publishIdentity);
   });
 
   const processThreadPublish = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -922,5 +946,8 @@ export const make = Effect.gen(function* () {
     start,
   });
 });
+
+/** @public */
+export const make = makeWith();
 
 export const layer = Layer.effect(AgentAwarenessRelay, make);

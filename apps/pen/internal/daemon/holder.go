@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"context"
+	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 // holderQueueCap bounds the lines waiting for a registration's holder: an honest holder has at most one answer and two
@@ -27,6 +30,8 @@ type holderEntry struct {
 // dropped, and the holder's connection is closed, which ends the registration.
 type holderQueue struct {
 	conn net.Conn
+	// drain discards and closes the connection after its half-close (discardAndClose), off the caller's path.
+	drain func(net.Conn)
 	// wmu holds one write at a time, so failWith's line never splits another; broken (guarded by wmu) is set once a
 	// write failed, possibly part way through a line, after which nothing more is written.
 	wmu    sync.Mutex
@@ -43,8 +48,8 @@ type holderQueue struct {
 	once         sync.Once
 }
 
-func newHolderQueue(c net.Conn) *holderQueue {
-	return &holderQueue{conn: c, wake: make(chan struct{}, 1), dead: make(chan struct{})}
+func newHolderQueue(c net.Conn, drain func(net.Conn)) *holderQueue {
+	return &holderQueue{conn: c, drain: drain, wake: make(chan struct{}, 1), dead: make(chan struct{})}
 }
 
 // reserve appends an entry whose line is set later by fill; ok is false once the queue failed or is full (and then the
@@ -160,7 +165,7 @@ func (q *holderQueue) fail() {
 }
 
 // failWith makes the queue terminal, writes last (when not nil) after any write in progress and without waiting on
-// unready entries, then closes the holder's connection. Each write is bounded by the control write deadline. After a
+// unready entries, then ends the holder's connection. Each write is bounded by the control write deadline. After a
 // failed write it writes nothing, so a partial line is never followed by another.
 func (q *holderQueue) failWith(last []byte) {
 	q.once.Do(func() {
@@ -172,13 +177,31 @@ func (q *holderQueue) failWith(last []byte) {
 		q.entries = nil
 		q.mu.Unlock()
 		close(q.dead)
-		// The connection closes while write ownership is still held, so no queued write can start between the last
-		// line and the close.
+		// Write ownership is held until the write side is shut (half-closed or closed), so no queued write can
+		// start after the last line.
 		q.wmu.Lock()
 		if last != nil && !q.broken {
 			q.conn.Write(last)
 		}
+		// A close with input unread resets the connection, and on Windows the reset can discard lines the holder has
+		// not read yet: half-close and discard what the holder still sends, off this path, before closing. The
+		// connection keeps its control slot until that close, so controlConnCap also bounds the drains.
+		if cw, ok := q.conn.(interface{ CloseWrite() error }); ok && cw.CloseWrite() == nil {
+			q.wmu.Unlock()
+			q.drain(q.conn)
+			return
+		}
 		q.conn.Close()
 		q.wmu.Unlock()
 	})
+}
+
+// discardAndClose reads c until the holder closes its side, holderDrainTime passes, holderDrainCap bytes came or stop
+// ends, then closes c.
+func discardAndClose(stop context.Context, c net.Conn) {
+	defer c.Close()
+	defer context.AfterFunc(stop, func() { c.Close() })()
+	if c.SetReadDeadline(time.Now().Add(holderDrainTime)) == nil {
+		io.Copy(io.Discard, io.LimitReader(c, holderDrainCap))
+	}
 }

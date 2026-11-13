@@ -20,6 +20,8 @@ const preloadState = `({
 })`;
 app.setPath("userData", NodePath.join(directory, "userdata"));
 app.setPath("sessionData", NodePath.join(directory, "session"));
+// The provider page is a second origin, localhost; send it to the IPv4 listener, never ::1.
+app.commandLine.appendSwitch("host-resolver-rules", "MAP localhost 127.0.0.1");
 app.on("window-all-closed", () => {});
 const preloadExecutions = new Set();
 const preloadErrors = [];
@@ -72,7 +74,7 @@ const run = async () => {
         }
       });
     });
-    server.listen(0, "::");
+    server.listen(0, "127.0.0.1");
     await NodeEvents.once(server, "listening");
     const port = server.address().port;
     origin = `http://127.0.0.1:${port}`;

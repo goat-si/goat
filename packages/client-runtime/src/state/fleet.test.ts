@@ -105,6 +105,12 @@ describe("classifyFleetThread", () => {
       classifyFleetThread(shell(local, "parent", { status: "idle", subagentRequest: "approval" })),
     ).toBe("attention");
   });
+
+  it("does not count a run held behind another Codex turn as running", () => {
+    const held = { ...shell(local, "held", { status: "starting" }), latestRunStartHeld: true };
+    expect(classifyFleetThread(held)).toBeNull();
+    expect(summarizeFleet([held], [env(local, "Mac")])).toMatchObject({ running: 0, attention: 0 });
+  });
 });
 
 describe("createFleetSummaryAtom", () => {
