@@ -54,6 +54,13 @@ const BORROWED = `<style>.hint::before { content: "Hint" }</style>
 <div role="button" tabindex="0">Card <div role="textbox" contenteditable="true" class="hint">draft note</div></div>
 <a href="#">Card <input type="range" min="0" max="10" value="7" aria-valuetext="draft note"></a>
 <div style="cursor:pointer" aria-labelledby="s">Card <input id="s" type="range" min="0" max="10" value="7" aria-valuetext="draft note"></div>
+<button>Card <div role="progressbar" aria-valuenow="7" aria-valuetext="draft note"></div></button>
+<a href="#">Card <div role="meter" aria-valuenow="7" aria-valuetext="draft note"></div></a>
+<div role="button" tabindex="0">Card <div role="scrollbar" aria-controls="pane" aria-valuenow="7" aria-valuetext="draft note"></div></div>
+<div id="pane"></div>
+<button><span aria-hidden="true">Card</span><input class="hint" value="draft note"></button>
+<a href="#"><span aria-hidden="true">Card</span><input class="hint" value="draft"><input class="hint" value="note"></a>
+<button><span aria-hidden="true">Card</span><input value="draft&#1;note"></button>
 <button aria-label="Pay now">Card <input value="4111111111111111"></button>
 <ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>`;
 
@@ -168,12 +175,12 @@ it("a button, link or labelled box is never named after what a field or editor u
       const names = interactiveElements
         .filter((element) => ["button", "link", "generic"].includes(element.role ?? ""))
         .map((element) => element.name);
-      expect(names).toEqual([...Array.from({ length: 22 }, () => "Card"), "Pay now"]);
+      expect(names).toEqual([...Array.from({ length: 28 }, () => "Card"), "Pay now"]);
     }
     const lines = String(narrow.accessibilityTree)
       .split("\n")
       .filter((line) => /^- (?:button|link|generic) /.test(line));
-    expect(lines).toHaveLength(23);
+    expect(lines).toHaveLength(29);
     for (const line of lines)
       expect(line).toMatch(/^- (?:button|link|generic) "(?:Card|Pay now)" \[ref=/);
   }));
