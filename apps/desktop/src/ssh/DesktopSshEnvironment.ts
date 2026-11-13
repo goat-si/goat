@@ -113,7 +113,7 @@ export interface DesktopSshEnvironmentLayerOptions {
 }
 
 /** Hygiene only: the member's server refuses the session as soon as this desktop leaves Pen. */
-export const PEN_MEMBER_SESSION_TTL = "24h";
+const PEN_MEMBER_SESSION_TTL = "24h";
 
 function discoverDesktopSshHostsEffect(input?: { readonly homeDir?: string }) {
   return discoverSshHosts(input ?? {});

@@ -5,7 +5,7 @@ import type { PenRouteRefusal } from "@goat/contracts";
 const INSTALL_SSH_CONFIG =
   "Run `pen ssh-config --install` on this computer so GOAT can reach your Pen machines.";
 
-export function penRefusalText(reason: PenRouteRefusal): string {
+function penRefusalText(reason: PenRouteRefusal): string {
   switch (reason) {
     case "not-in-pen-config":
       return "Pen has not written an ssh host for this machine yet.";

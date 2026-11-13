@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 
 /** More members than this is treated as no list at all, never as a shortened one. */
-export const PEN_MEMBER_CAP = 1024;
+const PEN_MEMBER_CAP = 1024;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 60_000;
 
