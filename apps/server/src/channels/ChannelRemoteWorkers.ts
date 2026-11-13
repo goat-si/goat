@@ -2539,17 +2539,12 @@ const make = Effect.gen(function* () {
       // Each refusal holds only while the task still runs this attempt; a moved one is left to the
       // next pass, which drops it. Whether an earlier try reached the host stays unknown.
       const refuse = (text: string) =>
-        refuseForward(
-          ledger,
-          stored,
-          text,
-          owner,
-          pending.sequence,
-          [ids.messageId],
-          (latest) =>
+        refuseForward(ledger, stored, text, owner, pending.sequence, [ids.messageId], (latest) =>
+          Effect.succeed(
             latest.task.generation === stored.task.generation &&
-            latest.task.worker?.threadId === worker.threadId &&
-            latest.task.worker.host === worker.host,
+              latest.task.worker?.threadId === worker.threadId &&
+              latest.task.worker.host === worker.host,
+          ),
         );
       const refuseSender = (refused: SenderRefused) =>
         refuse(REMOTE_COPY.senderChanged(refused.name, state.host));

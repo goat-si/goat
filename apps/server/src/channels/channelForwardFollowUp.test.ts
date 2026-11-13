@@ -146,6 +146,37 @@ it.effect(
   },
 );
 
+it.effect(
+  "regression: a follow-up whose run appears after the deadline read is not refused, and its run is bound",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      let shows = false;
+      const { task, ledger, forward } = yield* acceptedFollowUp(harness, () => shows);
+      // The run appears once the deadline refusal takes its lock, after the pass read the thread.
+      const lockable = ledger as { underWorkerLock: typeof ledger.underWorkerLock };
+      const lock = lockable.underWorkerLock;
+      lockable.underWorkerLock = (owner, body) =>
+        Effect.suspend(() => {
+          shows = true;
+          return lock(owner, body);
+        });
+      yield* TestClock.adjust(Duration.millis(ACCEPTED_RUN_WAIT_MS));
+      yield* forward;
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      assert.deepStrictEqual((yield* onlyTask).openQuestions, []);
+      assert.isTrue(shows);
+      yield* forward;
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      const bound = (yield* ledger.getTask(task.taskId))!;
+      assert.strictEqual(bound.task.worker?.runId, ghostRun);
+      assert.isUndefined(bound.pendingAnswerMessageId);
+      assert.deepStrictEqual(bound.task.openQuestions, []);
+      assert.lengthOf(harness.world.sends, 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
 it.effect("authority: a follow-up whose accepted run shows within the bound counts as sent", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {

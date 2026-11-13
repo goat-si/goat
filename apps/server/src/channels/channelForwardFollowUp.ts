@@ -102,6 +102,22 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       // ends the wait rather than extending it.
       const age = DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(event.occurredAt);
       const waiting = age >= 0 && age < ACCEPTED_RUN_WAIT_MS;
+      const readAccepted = threads.getThreadRecords(worker.threadId, ["messages", "runs"]).pipe(
+        Effect.option,
+        Effect.map(
+          Option.map((records) => {
+            const message = records.messages.find((candidate) => own.includes(candidate.id));
+            const run = records.runs.find(
+              (candidate) =>
+                own.includes(candidate.userMessageId) ||
+                (message !== undefined && candidate.id === message.runId),
+            );
+            return { message, run };
+          }),
+        ),
+      );
+      // Read again under the refusal's write lock: a run that appeared since keeps the follow-up,
+      // and the next pass binds it.
       const giveUp = refuseForward(
         ledger,
         stored,
@@ -109,16 +125,15 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
         owner,
         pending.sequence,
         own,
+        () =>
+          readAccepted.pipe(
+            Effect.map((again) => Option.isNone(again) || again.value.run === undefined),
+          ),
       );
-      const projection = yield* threads
-        .getThreadRecords(worker.threadId, ["messages", "runs"])
-        .pipe(Effect.option);
+      const projection = yield* readAccepted;
       if (Option.isNone(projection)) return waiting ? undefined : yield* giveUp;
-      const message = projection.value.messages.find((candidate) => own.includes(candidate.id));
-      acceptedRun = projection.value.runs.find(
-        (run) =>
-          own.includes(run.userMessageId) || (message !== undefined && run.id === message.runId),
-      );
+      const message = projection.value.message;
+      acceptedRun = projection.value.run;
       if (message !== undefined && acceptedRun === undefined)
         return waiting ? undefined : yield* giveUp;
       if (acceptedRun === undefined && authority._tag === "sender_changed") {
