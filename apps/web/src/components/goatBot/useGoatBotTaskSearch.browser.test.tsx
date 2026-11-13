@@ -262,3 +262,40 @@ it("ignores a late answer after the palette closes", async () => {
   expect(screen.getByRole("button", { name: "Retry task search" }).query()).toBeNull();
   expect(errors).not.toHaveBeenCalled();
 });
+
+it("does not redisplay an old page when returning to an earlier query", async () => {
+  setup();
+  let finish!: (answer: unknown) => void;
+  state.read.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      tasks: [{ taskId: "old", title: "Old A", createdAt: "2026-11-07T00:00:00.000Z" }],
+      nextCursor: "old-cursor",
+    },
+  });
+  state.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const profiles = [bots[0]!];
+  await using screen = await render(<Search query="" profiles={profiles} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="a" profiles={profiles} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await expect.element(screen.getByRole("button", { name: "Old A" })).toBeVisible();
+  await screen.rerender(<Search query="ab" profiles={profiles} />);
+  await screen.rerender(<Search query="a" profiles={profiles} />);
+  expect(screen.getByRole("button", { name: "Old A" }).query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Load more" }).query()).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await act(() =>
+    finish({
+      _tag: "Success",
+      value: {
+        tasks: [{ taskId: "fresh", title: "Fresh A", createdAt: "2026-11-07T00:00:00.000Z" }],
+      },
+    }),
+  );
+  await expect.element(screen.getByRole("button", { name: "Fresh A" })).toBeVisible();
+});

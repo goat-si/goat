@@ -60,6 +60,12 @@ export function useGoatBotTaskSearch(
     !text.startsWith(">");
   const key = JSON.stringify([environmentId, botKey, text]);
   const [search, setSearch] = useState<Search>({ key: "", pages: {} });
+  const activeKey = valid ? key : "";
+  const [previousKey, setPreviousKey] = useState(activeKey);
+  if (previousKey !== activeKey) {
+    setPreviousKey(activeKey);
+    setSearch({ key: "", pages: {} });
+  }
   const sequence = useRef(0);
   const inFlight = useRef(new Set<string>());
   const request = useStableCallback(
@@ -129,10 +135,7 @@ export function useGoatBotTaskSearch(
       sequence.current++;
     };
   }, [valid, key, start]);
-  if (!valid) {
-    if (search.key !== "") setSearch({ key: "", pages: {} });
-    return { groups: [], status: "" };
-  }
+  if (!valid) return { groups: [], status: "" };
   if (search.key !== key) return { groups: [], status: "Searching tasks…" };
   const statuses: string[] = [];
   const groups = usable.flatMap((bot): CommandPaletteGroup[] => {
