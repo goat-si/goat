@@ -638,6 +638,37 @@ it("failing-first: sending after jumping keeps the sent row visible", async () =
   );
 });
 
+it("failing-first: a send waits for a late folded question before anchoring", async () => {
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  const pending = [{ key: "late", text: "Keep", questionRowId: null }];
+  const view = (shown: ReadonlyArray<GoatBotRow>, submissions: typeof pending) => (
+    <GoatBotTimeline rows={shown} onRetry={() => {}} {...{ submissions }} />
+  );
+  await using screen = await render(view(rows, []), { container: host, router: false }); // No navigation links in these rows.
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(view(rows, pending));
+  expect(element.scrollTop).toBe(0);
+  const answered = {
+    ...question,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerSending: true,
+    answerInputRowId: "pending:late",
+  };
+  await screen.rerender(view([...rows.slice(0, 10), answered, ...rows.slice(10)], pending));
+  const anchor = screen.container.querySelector<HTMLElement>('[data-bot-row="question"]')!;
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  expect(distanceFromBottom(element)).toBeGreaterThan(48);
+});
+
 const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>
   shown.map(
     (row) =>
