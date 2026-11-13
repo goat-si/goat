@@ -94,7 +94,7 @@ type heldBatch struct {
 	since   clockReading
 }
 
-// maxHeld bounds the batches held at once. A batch is dropped a bucket after it began and reports come every
+// maxHeld bounds the batches held at once. A batch is dropped keepFor after it began and reports come every
 // trafficEvery, so the cap is reached only if ticks come faster.
 const maxHeld = int(traffic.Span/trafficEvery) + 2
 
