@@ -84,8 +84,8 @@ export function makePenGateway(deps: Dependencies) {
         .catch(() => endRoute(route));
   });
   const wake = (route: Route) => {
-    if (!route.closed && route.active < 16 && route.dialing.size < 6 && children < 128)
-      route.waiting.shift()?.resolve();
+    // A woken waiter checks its own limit again; a mint is not bound by the live-forward one.
+    if (!route.closed && route.dialing.size < 6 && children < 128) route.waiting.shift()?.resolve();
   };
   const trackSocket = (route: Route, socket: NodeStream.Duplex) => {
     route.sockets.set(socket, (route.sockets.get(socket) ?? 0) + 1);
@@ -98,12 +98,14 @@ export function makePenGateway(deps: Dependencies) {
   // A session mint is not held behind live forwards: sixteen open sockets must not starve it.
   const saturated = (route: Route, mint: boolean) =>
     (!mint && route.active >= 16) || route.dialing.size >= 6 || children >= 128;
-  const untilAborted = <A>(promise: Promise<A>, signal: AbortSignal) =>
+  const untilAborted = <A>(start: () => Promise<A>, signal: AbortSignal) =>
     new Promise<A>((resolve, reject) => {
       const abort = () => reject(new Error("closed"));
       if (signal.aborted) return abort();
       signal.addEventListener("abort", abort, { once: true });
-      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+      start()
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", abort));
     });
   const dial = async (route: Route, signal?: AbortSignal, mint = false) => {
     while (!route.closed && saturated(route, mint)) {
@@ -190,6 +192,7 @@ export function makePenGateway(deps: Dependencies) {
       deadline.signal.addEventListener("abort", expire, { once: true });
       try {
         pipe = await dial(route, deadline.signal, true);
+        if (deadline.signal.aborted) throw new Error("closed");
         const session = await mintPenSession(pipe);
         if (route.closed || deadline.signal.aborted) throw new Error("closed");
         route.token = session;
@@ -248,7 +251,7 @@ export function makePenGateway(deps: Dependencies) {
       }
       const session = isPublicPenDescriptor(req.method ?? "", decision.path)
         ? undefined
-        : await untilAborted(token(route), controller.signal);
+        : await untilAborted(() => token(route), controller.signal);
       if (res.destroyed) return;
       const pipe = await dial(route, controller.signal);
       if (res.destroyed) {
@@ -393,7 +396,7 @@ export function makePenGateway(deps: Dependencies) {
     try {
       if ((await deps.membership.requireMember(route.pin)) !== "member")
         return refuse(503, decision.responseHeaders);
-      const session = await untilAborted(token(route), controller.signal);
+      const session = await untilAborted(() => token(route), controller.signal);
       pipe = await dial(route, controller.signal);
       // Until the socket owns the pipe, a client that leaves must not leave its child behind.
       const dialed = pipe;
@@ -500,6 +503,9 @@ export function makePenGateway(deps: Dependencies) {
       });
       instance.on("timeout", (socket) => socket.destroy());
       instance.on("upgrade", (request, socket, initial) => {
+        // Node takes its own idle timer off a socket it hands over; the handshake keeps one.
+        if ("setTimeout" in socket && typeof socket.setTimeout === "function")
+          socket.setTimeout(120000, () => socket.destroy());
         void handleUpgrade(request, socket, initial).catch(() => socket.destroy());
       });
       instance.on("clientError", (_error, socket) => {
