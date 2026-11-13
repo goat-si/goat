@@ -1,4 +1,4 @@
-import type { HubMachineAttachInput } from "@goat/contracts";
+import { type HubMachineAttachInput, ServerSettingsError } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -207,12 +207,12 @@ export interface Grant {
 export const world = <A, E>(
   body: (
     pen: ReturnType<typeof fakePen>,
-    home: { contracts: Set<string> },
+    home: { contracts: Set<string>; settingsUnreadable: boolean },
     grant: Grant,
   ) => Effect.Effect<A, E, World>,
 ) => {
   const pen = fakePen();
-  const home = { contracts: new Set<string>(HOME_ATTACH_CONTRACTS) };
+  const home = { contracts: new Set<string>(HOME_ATTACH_CONTRACTS), settingsUnreadable: false };
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 146 });
@@ -247,6 +247,22 @@ export const world = <A, E>(
             return grant.value;
           }),
       }),
+    ),
+    // A settings read fails while home.settingsUnreadable is set.
+    Effect.provideServiceEffect(
+      Settings.ServerSettingsService,
+      Effect.map(Settings.ServerSettingsService, (inner) =>
+        Settings.ServerSettingsService.of({
+          ...inner,
+          getSettings: Effect.suspend(() =>
+            home.settingsUnreadable
+              ? Effect.fail(
+                  new ServerSettingsError({ settingsPath: "<memory>", operation: "read-file" }),
+                )
+              : inner.getSettings,
+          ),
+        }),
+      ),
     ),
     Effect.provide(
       Layer.merge(

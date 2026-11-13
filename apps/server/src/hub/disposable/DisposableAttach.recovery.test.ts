@@ -290,3 +290,16 @@ it.effect("a reissue that finds the invite burned mints nothing, and its key rep
     }),
   ),
 );
+
+it.effect("a settings read that fails withdraws nothing; the invite stays live", () =>
+  world((pen, home) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      home.settingsUnreadable = true;
+      yield* reconcile;
+      home.settingsUnreadable = false;
+      expect(pen.book.get(first.attachId + ".1")?.state).toBe("live");
+      expect((yield* listed(first.attachId))?.state).toBe("invited");
+    }),
+  ),
+);

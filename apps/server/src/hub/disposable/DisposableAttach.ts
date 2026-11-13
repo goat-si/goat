@@ -639,8 +639,9 @@ export const make = Effect.gen(function* () {
       }
     }
     if (openEffects(effects).length > 0) {
-      const current = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-      const ended = yield* authorityEnded(row, current);
+      // Unreadable settings prove nothing ended: withdrawing then would cancel every open invite.
+      const current = yield* settingsNow;
+      const ended = current === undefined ? undefined : yield* authorityEnded(row, current);
       if (ended !== undefined && openEffects(effects).some((effect) => effect.withdrawn !== true)) {
         effects = effects.map((effect) =>
           effect.settled === undefined ? { ...effect, withdrawn: true } : effect,
