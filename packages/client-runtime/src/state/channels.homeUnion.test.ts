@@ -64,6 +64,7 @@ const state = vi.hoisted(() => ({
   reads: 0,
   byBot: {} as Record<string, number>,
   completed: false,
+  failing: {} as Record<string, boolean>,
 }));
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ initialConfigValueAtom: () => config }),
@@ -76,6 +77,7 @@ vi.mock("./commandPermissions.ts", () => ({
 }));
 vi.mock("./runtime.ts", async () => {
   const { Atom: A, AsyncResult: R } = await import("effect/reactivity");
+  const { fail } = await import("effect/Cause");
   return {
     createEnvironmentRpcCommand: () => ({}),
     createEnvironmentRpcSubscriptionAtomFamily: () => () => A.make(null),
@@ -93,6 +95,7 @@ vi.mock("./runtime.ts", async () => {
           state.reads++;
           const id = target.input.botId ?? "main";
           state.byBot[id] = (state.byBot[id] ?? 0) + 1;
+          if (state.failing[id]) return R.failure(fail("offline"));
           return R.success({
             rows: [row(target.input.botId ?? "main", state.completed)],
             mainMessageCount: 0,
@@ -254,6 +257,132 @@ it("releases member timers on deletion and all timers on disconnect", () => {
   registry.get(union);
   vi.advanceTimersByTime(0);
   expect(timers.count()).toBe(0);
+  registry.dispose();
+  timers.restore();
+  vi.useRealTimers();
+});
+
+const failedListSetup = () => {
+  state.completed = false;
+  state.byBot = {};
+  state.failing = {};
+  const registry = AtomRegistry.make();
+  const atoms = createChannelEnvironmentAtoms(
+    Atom.runtime(Layer.succeed(EnvironmentRegistry, {} as EnvironmentRegistry["Service"])),
+  );
+  registry.set(config, {
+    environment: { environmentId: env, capabilities },
+  } as unknown as ServerConfig);
+  registry.set(connection, AsyncResult.success([{ phase: "connected" }, Option.some({})] as never));
+  registry.set(
+    bots,
+    AsyncResult.success({
+      bots: [{ botId: BotId.make("member"), role: "member", state: "active" }],
+    }) as never,
+  );
+  const listed = atoms.listedBotWork({
+    environmentIdsAtom: Atom.make([env]),
+    signal: () => Atom.make(""),
+  });
+  return { registry, atoms, listed };
+};
+const listedThreads = (
+  registry: AtomRegistry.AtomRegistry,
+  listed: Atom.Atom<ReadonlyArray<{ threadId: string }>>,
+) =>
+  registry
+    .get(listed)
+    .map((ref) => ref.threadId)
+    .toSorted();
+
+it("a failed bot list re-reads itself and its work is hidden again, without any other bot's timer", () => {
+  vi.useFakeTimers({ now });
+  const { registry, listed } = failedListSetup();
+  state.failing = { main: true };
+  const stop = registry.mount(listed);
+  expect(listedThreads(registry, listed)).toEqual(["member"]);
+  const memberReads = state.byBot.member;
+  state.failing = {};
+  vi.advanceTimersByTime(60_000);
+  expect(listedThreads(registry, listed)).toEqual(["main", "member"]);
+  expect(state.byBot.member).toBe(memberReads);
+  stop();
+  registry.dispose();
+  vi.useRealTimers();
+});
+
+it("a bot list that keeps failing stops re-reading after the retry window", () => {
+  vi.useFakeTimers({ now });
+  const { registry, listed } = failedListSetup();
+  state.failing = { main: true };
+  const stop = registry.mount(listed);
+  registry.get(listed);
+  const first = state.byBot.main ?? 0;
+  vi.advanceTimersByTime(20 * 60_000);
+  registry.get(listed);
+  const retries = (state.byBot.main ?? 0) - first;
+  expect(retries).toBe(10);
+  vi.advanceTimersByTime(60 * 60_000);
+  registry.get(listed);
+  expect((state.byBot.main ?? 0) - first).toBe(retries);
+  stop();
+  registry.dispose();
+  vi.useRealTimers();
+});
+
+it("a failed governed list hides nothing and recovers the same way", () => {
+  vi.useFakeTimers({ now });
+  const { registry, atoms } = failedListSetup();
+  state.failing = { main: true };
+  const perBot = atoms.homeCurrentOpenableWorkAtom([env, BotId.make("main")]);
+  const stop = registry.mount(perBot);
+  expect(registry.get(perBot)).toMatchObject({ list: "failed", links: [] });
+  state.failing = {};
+  vi.advanceTimersByTime(60_000);
+  expect(registry.get(perBot).list).toBe("ready");
+  expect(registry.get(perBot).links.map((link) => link.threadId)).toEqual(["main"]);
+  stop();
+  registry.dispose();
+  vi.useRealTimers();
+});
+
+it("a failed list on a disconnected environment arms no retry", () => {
+  vi.useFakeTimers({ now });
+  const timers = watchRetentionTimers();
+  const { registry, listed } = failedListSetup();
+  registry.set(
+    connection,
+    AsyncResult.success([{ phase: "disconnected" }, Option.none()] as never),
+  );
+  state.failing = { main: true };
+  const stop = registry.mount(listed);
+  registry.get(listed);
+  expect(timers.count()).toBe(0);
+  stop();
+  registry.dispose();
+  timers.restore();
+  vi.useRealTimers();
+});
+
+it("the last unsubscribe clears the timer without disposing the registry", () => {
+  vi.useFakeTimers({ now });
+  const timers = watchRetentionTimers();
+  const { registry, atoms, listed } = failedListSetup();
+  state.completed = true;
+  registry.set(bots, AsyncResult.success({ bots: [] }) as never);
+  const union = atoms.homeCurrentOpenableWorkByEnvironment(env);
+  const perBot = atoms.homeCurrentOpenableWorkAtom([env, BotId.make("main")]);
+  const stops = [registry.mount(perBot), registry.mount(union), registry.mount(listed)];
+  registry.get(perBot);
+  registry.get(union);
+  registry.get(listed);
+  expect(timers.count()).toBe(1);
+  for (const stop of stops) stop();
+  vi.advanceTimersByTime(0);
+  expect(timers.count()).toBe(0);
+  const reads = state.reads;
+  vi.advanceTimersByTime(3_600_000);
+  expect(state.reads).toBe(reads);
   registry.dispose();
   timers.restore();
   vi.useRealTimers();
