@@ -1,9 +1,10 @@
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { HubLinkDirection } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId, HubDeviceRoutesChange, HubDeviceRoutesResult } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { Atom } from "effect/reactivity";
+import { useContext, useState } from "react";
 
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -11,6 +12,20 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+
+interface WaitingChange {
+  readonly change: HubDeviceRoutesChange;
+  readonly decisionId: string;
+}
+
+/**
+ * A change from a session without settings:write waits for an inbox decision. Kept alive so it
+ * can be continued after a visit to Settings → Decision inbox, keyed by environment and device.
+ */
+const waitingRoutesAtom = Atom.make<Readonly<Record<string, WaitingChange>>>({}).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("hub-device-routes-waiting"),
+);
 
 /**
  * The SSH routes the Home tries for one Remote Link Child, read when a person opens them. A
@@ -32,7 +47,15 @@ export function HubDeviceRoutes({
   );
   const list = useAtomCommand(serverEnvironment.listHubDeviceRoutes, { reportFailure: false });
   const update = useAtomCommand(serverEnvironment.updateHubDeviceRoutes, { reportFailure: false });
-  const [open, setOpen] = useState(false);
+  const registry = useContext(RegistryContext);
+  const waitingKey = `${environmentId}\u0000${alias}`;
+  const waiting = useAtomValue(waitingRoutesAtom)[waitingKey] ?? null;
+  const setWaiting = (next: WaitingChange | null) => {
+    const { [waitingKey]: _previous, ...rest } = registry.get(waitingRoutesAtom);
+    registry.set(waitingRoutesAtom, next === null ? rest : { ...rest, [waitingKey]: next });
+  };
+  // Back from the decision inbox, a waiting change opens the panel so it can be continued.
+  const [open, setOpen] = useState(waiting !== null);
   const [busy, setBusy] = useState(false);
   const [routes, setRoutes] = useState<{
     pin: string;
@@ -43,11 +66,6 @@ export function HubDeviceRoutes({
   // A read-back after a change fails on its own, beside the change's answer.
   const [readError, setReadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  // A session without settings:write gets an inbox decision; Continue runs this change with it.
-  const [waiting, setWaiting] = useState<{
-    change: HubDeviceRoutesChange;
-    decisionId: string;
-  } | null>(null);
   // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
   const editable = canChange && routes?.exclusive !== true;
 
@@ -90,7 +108,6 @@ export function HubDeviceRoutes({
   const change = async (next: HubDeviceRoutesChange, decisionId?: string) => {
     setBusy(true);
     setReadError(null);
-    setWaiting(null);
     const result = await update({
       environmentId,
       input: {
@@ -100,12 +117,14 @@ export function HubDeviceRoutes({
       },
     });
     settle(result);
-    if (
-      result._tag === "Success" &&
-      result.value.state === "needs_human" &&
-      result.value.decisionId !== undefined
-    )
-      setWaiting({ change: next, decisionId: result.value.decisionId });
+    // A failed call (such as a decision not answered yet) or a fixed refusal leaves the approval
+    // unspent, so a waiting change stays continuable; any other answer settles it.
+    if (result._tag === "Success") {
+      const value = result.value;
+      if (value.state === "needs_human" && value.decisionId !== undefined)
+        setWaiting({ change: next, decisionId: value.decisionId });
+      else if (!(value.state === "failed" && value.code !== undefined)) setWaiting(null);
+    }
     // A stored change that the Home could not apply yet still lists, so read it back.
     if (
       result._tag === "Success" &&
