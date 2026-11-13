@@ -28,10 +28,9 @@ const CANCELLED = Symbol("history press cancelled");
 type Walk = typeof EMPTY_WALK;
 
 /**
- * A bot's older work behind Home's Show more, held in Home's own state for one scope: the
- * environment, the bot and one opening of the sheet, so reopening Home starts a new walk. Pages
- * only add tasks; the current list writes through into tasks the walk holds. A press that loses its
- * computer or its scope applies nothing, even if the computer comes back before it settles.
+ * A bot's older work behind Home's Show more, in Home's own state. Each change of scope starts a
+ * walk with a new identity, even back to a scope seen before. Pages only add tasks; the current list
+ * writes through. A press that loses its computer, its walk or its Home applies nothing.
  */
 export function useMobileBotWorkHistory(input: {
   readonly environmentId: EnvironmentId | null;
@@ -46,8 +45,9 @@ export function useMobileBotWorkHistory(input: {
 }) {
   const { environmentId, botId, enabled, scope } = input;
   const current = input.current ?? NO_LIST;
-  const [held, setHeld] = useState({ scope, walk: EMPTY_WALK, written: UNWRITTEN });
-  if (held.scope !== scope) setHeld({ scope, walk: EMPTY_WALK, written: UNWRITTEN });
+  const [held, setHeld] = useState({ scope, id: 0, walk: EMPTY_WALK, written: UNWRITTEN });
+  if (held.scope !== scope)
+    setHeld((state) => ({ scope, id: state.id + 1, walk: EMPTY_WALK, written: UNWRITTEN }));
   const walk = held.scope === scope ? held.walk : EMPTY_WALK;
   // Each time the computer goes offline the epoch moves, which ends any press started before it.
   const [connection, setConnection] = useState({ enabled, epoch: 0 });
@@ -57,10 +57,15 @@ export function useMobileBotWorkHistory(input: {
     if (!enabled && held.walk.loading)
       setHeld((state) => ({ ...state, walk: { ...state.walk, loading: false } }));
   }
-  const live = useRef({ scope, epoch: connection.epoch });
-  // oxlint-disable-next-line goat/react-effect-budget -- A running press checks the scope and connection it started with against the latest ones between its requests.
+  type Press = { readonly id: number; readonly epoch: number };
+  // Null once Home unmounts, which ends any press as going offline does.
+  const live = useRef<Press | null>({ id: held.id, epoch: connection.epoch });
+  // oxlint-disable-next-line goat/react-effect-budget -- A running press checks the walk and connection it started with against the latest ones between its requests.
   useEffect(() => {
-    live.current = { scope, epoch: connection.epoch };
+    live.current = { id: held.id, epoch: connection.epoch };
+    return () => {
+      live.current = null;
+    };
   });
   // A server that answered a page walks history; offline its capabilities may not be known.
   const capabilities = walk.started
@@ -74,29 +79,35 @@ export function useMobileBotWorkHistory(input: {
     loaded: input.loaded && enabled,
   });
   if (held.scope === scope && view.reported !== held.written) {
+    const id = held.id;
     setHeld((state) =>
-      state.scope === scope
+      state.id === id
         ? { ...state, written: view.reported, walk: writeThrough(state.walk, current) }
         : state,
     );
   }
-  // The press in flight; one that lost its scope or connection no longer blocks a new one.
-  const running = useRef<{ scope: string; epoch: number } | null>(null);
-  const update = (target: string, change: (walk: Walk) => Walk) =>
-    setHeld((state) => (state.scope === target ? { ...state, walk: change(state.walk) } : state));
+  // The press in flight; one that lost its walk or connection no longer blocks a new one.
+  const running = useRef<Press | null>(null);
+  const update = (target: number, change: (walk: Walk) => Walk) =>
+    setHeld((state) => (state.id === target ? { ...state, walk: change(state.walk) } : state));
   // An acknowledgement settles into the walk it was sent from, never a later one.
-  function markRead(sentScope: string, taskId: ChannelTaskId, through: string) {
+  function markRead(sentWalk: string, taskId: ChannelTaskId, through: string) {
     if (!Number.isFinite(Date.parse(through))) return;
-    update(sentScope, (state) => markWalkRead(state, taskId, through));
+    update(Number(sentWalk), (state) => markWalkRead(state, taskId, through));
   }
   async function loadMore() {
-    const same = (other: { scope: string; epoch: number } | null) =>
-      other !== null && other.scope === live.current.scope && other.epoch === live.current.epoch;
+    const same = (other: Press | null) =>
+      other !== null &&
+      live.current !== null &&
+      other.id === live.current.id &&
+      other.epoch === live.current.epoch;
     if (!view.hasMore || same(running.current) || environmentId === null) return;
-    const press = { scope, epoch: connection.epoch };
-    running.current = press;
+    const press = { id: held.id, epoch: connection.epoch };
     const valid = () => same(press);
-    update(press.scope, (state) => ({ ...state, loading: true, failed: false }));
+    // A press from a render before Home's walk or connection changed sends nothing.
+    if (!valid()) return;
+    running.current = press;
+    update(press.id, (state) => ({ ...state, loading: true, failed: false }));
     const outcome = await readPress({
       environmentId,
       botId,
@@ -106,9 +117,9 @@ export function useMobileBotWorkHistory(input: {
       valid,
     });
     if (outcome.kind === "applied")
-      update(press.scope, (state) => applyHistoryPress(state, outcome.result));
-    else if (running.current === press)
-      update(press.scope, (state) => ({
+      update(press.id, (state) => applyHistoryPress(state, outcome.result));
+    else if (running.current === press && live.current !== null)
+      update(press.id, (state) => ({
         ...state,
         loading: false,
         failed: state.failed || outcome.kind === "failed",
@@ -116,6 +127,8 @@ export function useMobileBotWorkHistory(input: {
     if (running.current === press) running.current = null;
   }
   return {
+    /** The walk's identity, for an acknowledgement to name the walk it was sent from. */
+    walk: String(held.id),
     supported: view.supported,
     markRead,
     currentTaskIds: view.currentTaskIds,

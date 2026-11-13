@@ -55,6 +55,7 @@ import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
 import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 import { useMobileHistoryAnnouncements } from "./useMobileHistoryAnnouncements";
+import { useAfterSheetGone } from "./useAfterSheetGone";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
@@ -188,12 +189,7 @@ export function MobileBotWork(props: {
   const homeRows = props.taskId ? rows : history.rows;
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
-  // Where a row of the Home over an older task leads, taken once that sheet has slid away on iOS.
-  const olderNext = useRef<(() => void) | null>(null);
-  const afterOlderHome = (go: () => void) => {
-    if (Platform.OS === "android") go();
-    else olderNext.current = go;
-  };
+  const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android");
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
   const childTaskId = props.taskId ?? peekTaskId;
@@ -408,7 +404,7 @@ export function MobileBotWork(props: {
     seen: (props.seen ?? props.visible) && enabled && canUpdate,
     task: task?.row ?? null,
     peek: open ? (peekEntry?.row ?? null) : null,
-    scope: historyScope,
+    scope: history.walk,
     // An older task's read-through goes into the walk it was sent from; the list rereads its own.
     onAcknowledged: (taskId, through, scope) => {
       history.markRead(scope, taskId, through);
@@ -818,7 +814,6 @@ export function MobileBotWork(props: {
         <MobileTaskHeader
           task={task}
           title={props.taskTitle ?? props.taskCardInfo?.title ?? null}
-          cardStatus={props.taskCardInfo?.statusLabel ?? null}
           botName={botName}
           environmentId={environmentId ?? null}
           enabled={enabled}
@@ -873,14 +868,12 @@ export function MobileBotWork(props: {
           }}
           onDismissed={() => {
             setOlderHome(null);
-            const go = olderNext.current;
-            olderNext.current = null;
-            go?.();
+            afterOlderHome.gone();
           }}
           onOpenTask={(id, title) => {
-            if (id !== props.taskId) afterOlderHome(() => props.onOpenTask(id, title));
+            if (id !== props.taskId) afterOlderHome.hold(() => props.onOpenTask(id, title));
           }}
-          onOpenThread={(thread) => afterOlderHome(() => props.onOpenThread(thread))}
+          onOpenThread={(thread) => afterOlderHome.hold(() => props.onOpenThread(thread))}
         />
       ) : null}
       <Modal

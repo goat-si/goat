@@ -494,8 +494,18 @@ it("distinguishes task thread loading, missing, offline, and retry states", asyn
   expect(container.textContent).toContain("offline");
 });
 
-it("shows task details in the header when a card is available", async () => {
+it("shows task details in the header when a card is available for a listed task", async () => {
   reset();
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId: "task", title: "Review", status: "running", updatedAt: at },
+    view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
   await render(ChannelTaskId.make("task"));
   expect(container.textContent).not.toContain("Task summary");
   await render(ChannelTaskId.make("task"), <span>Task summary</span>);

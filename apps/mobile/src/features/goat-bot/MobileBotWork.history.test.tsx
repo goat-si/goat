@@ -608,6 +608,18 @@ it("keeps older rows offline with nothing to open, and offers no Show more", asy
   expect(state.pages).toHaveLength(1);
 });
 
+it("offline, keeps the local toggle for collapsed finished rows and reads no history from it", async () => {
+  state.rows = [1, 2, 3, 4, 5, 6, 7].map((n) => older(`f${n}`, `Finished ${n}`));
+  await open();
+  state.connected = false;
+  await open();
+  expect(button("Finished 7")).toBeUndefined();
+  await press("Show more");
+  expect(button("Finished 7")?.hasAttribute("disabled")).toBe(true);
+  expect(button("Show less")).toBeDefined();
+  expect(state.pages).toHaveLength(0);
+});
+
 it("says once when older work may be missing, and once when older work could not load", async () => {
   await open();
   await showOlder(fiveOlder(), { nextCursor: "c1", partial: true });
@@ -641,13 +653,14 @@ async function openOlderTask(
   taskId = "o1",
   taskTitle = "Old report",
   card?: { taskCard: ReactNode; taskCardInfo: GoatBotTaskCard },
+  visible = true,
 ) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   root ??= createRoot(container);
   await act(async () =>
     root?.render(
       <WorkWithChip
-        visible
+        visible={visible}
         seen
         taskId={ChannelTaskId.make(taskId)}
         taskTitle={taskTitle}
@@ -724,6 +737,57 @@ it("from Home over an older task, the same task only closes Home and another tas
   expect(state.openTask).toHaveBeenCalledWith("o2", "Old two");
   expect(state.openTask).toHaveBeenCalledTimes(1);
   expect(button("Sheet gone")).toBeUndefined();
+});
+
+it("drops the task Home over an older task was opening when that screen loses focus as the sheet slides away", async () => {
+  await openOlderTask();
+  await press("Open Home");
+  await showOlder();
+  await press("Actions for Old two");
+  await act(async () => choices()[1]?.onPress());
+  await openOlderTask("o1", "Old report", undefined, false);
+  await press("Sheet gone");
+  expect(state.openTask).not.toHaveBeenCalled();
+  expect(home()).toBeNull();
+});
+
+const runningCard = (): { taskCard: ReactNode; taskCardInfo: GoatBotTaskCard } => ({
+  taskCard: <span>Running card</span>,
+  taskCardInfo: {
+    key: "o1",
+    revision: 1,
+    updatedAt: at,
+    title: "Old report",
+    statusLabel: "Running",
+    tone: "active",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: {
+      kind: "thread",
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("w-1"),
+      host: "mac-mini",
+    },
+  },
+});
+
+it("states no status from the chat card while the task list is loading", async () => {
+  state.taskPending = true;
+  await openOlderTask("o1", "Old report", runningCard());
+  expect(container.textContent).toContain("Loading task");
+  expect(container.textContent).not.toContain("Running");
+  expect(container.textContent).toContain("Connect mac-mini to open");
+});
+
+it("states no status from the chat card after the task list failed to load", async () => {
+  state.taskPending = true;
+  state.taskError = "down";
+  await openOlderTask("o1", "Old report", runningCard());
+  expect(container.textContent).toContain("Couldn't load task");
+  expect(container.textContent).not.toContain("Running");
+  expect(container.textContent).toContain("Connect mac-mini to open");
 });
 
 it("on Android, Home over an older task draws no chat chip and opens another task as it closes", async () => {

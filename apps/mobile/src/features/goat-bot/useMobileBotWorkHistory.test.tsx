@@ -10,6 +10,8 @@ const net = vi.hoisted(() => ({
     cursor: string | undefined;
     answer: (value: ChannelListBotThreadsResult) => Promise<void>;
     fail: () => Promise<void>;
+    /** Answers without flushing React, so a render can land in the same batch. */
+    settle: (value: ChannelListBotThreadsResult) => void;
   }>,
 }));
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
@@ -26,6 +28,7 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
           cursor: value.input.history?.cursor,
           answer: (result) => act(async () => resolve({ _tag: "Success", value: result })),
           fail: () => act(async () => resolve({ _tag: "Failure", cause: "down" })),
+          settle: (result) => resolve({ _tag: "Success", value: result }),
         });
       }),
   };
@@ -179,12 +182,12 @@ it("moves an older task's read-through only forward", async () => {
           { kind: "task" }
         >)
       : null;
-  await act(async () => view().markRead("env:bot:1", "a" as never, at(5)));
+  await act(async () => view().markRead(view().walk, "a" as never, at(5)));
   expect(readThrough()?.view.readThrough).toBe(at(5));
   expect(readThrough()?.unread).toBe(false);
-  await act(async () => view().markRead("env:bot:1", "a" as never, at(2)));
+  await act(async () => view().markRead(view().walk, "a" as never, at(2)));
   expect(readThrough()?.view.readThrough).toBe(at(5));
-  await act(async () => view().markRead("env:bot:1", "a" as never, "not a time"));
+  await act(async () => view().markRead(view().walk, "a" as never, "not a time"));
   expect(readThrough()?.view.readThrough).toBe(at(5));
 });
 
@@ -260,6 +263,7 @@ it("frees Show more on reconnect while the press that lost its computer is still
 it("drops a late page and a late read mark that belong to an earlier opening of Home", async () => {
   setup();
   await show();
+  const first = view().walk;
   await press();
   await show({ scope: "env:bot:2" });
   await net.calls[0]?.answer(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
@@ -271,10 +275,108 @@ it("drops a late page and a late read mark that belong to an earlier opening of 
       "c1",
     ),
   );
-  await act(async () => view().markRead("env:bot:1", "a" as never, at(5)));
+  await act(async () => view().markRead(first, "a" as never, at(5)));
   const a = view().rows.find((row) => row.kind === "task" && row.task.taskId === "a") as Extract<
     BotThreadRow,
     { kind: "task" }
   >;
   expect(a.unread).toBe(true);
+});
+
+it("going back to the first computer starts a new walk: the first visit's late page and read mark land nowhere", async () => {
+  setup();
+  await show({ scope: "A" });
+  const first = view().walk;
+  await press();
+  await show({ scope: "B" });
+  await show({ scope: "A" });
+  await net.calls[0]?.answer(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
+  expect(titles()).toEqual(["now"]);
+  expect(view().loading).toBe(false);
+  await press();
+  expect(net.calls).toHaveLength(2);
+  expect(net.calls[1]?.cursor).toBeUndefined();
+  await net.calls[1]?.answer(
+    page([task("a", { unread: true, activity: 5 }), task("b"), task("c"), task("d"), task("e")]),
+  );
+  await act(async () => view().markRead(first, "a" as never, at(5)));
+  const a = view().rows.find((row) => row.kind === "task" && row.task.taskId === "a") as Extract<
+    BotThreadRow,
+    { kind: "task" }
+  >;
+  expect(a.unread).toBe(true);
+});
+
+it("stops a press when Home unmounts, while its first page or a later page is pending", async () => {
+  setup();
+  await show();
+  await press();
+  await act(async () => root?.unmount());
+  root = null;
+  await net.calls[0]?.answer(page([task("a")], "c1"));
+  expect(net.calls).toHaveLength(1);
+  setup();
+  await show();
+  await press();
+  await net.calls[0]?.answer(page([task("a")], "c1"));
+  expect(net.calls).toHaveLength(2);
+  const before = view();
+  await act(async () => root?.unmount());
+  root = null;
+  await net.calls[1]?.answer(page([task("b")], "c2"));
+  expect(net.calls).toHaveLength(2);
+  expect(seen.current).toBe(before);
+});
+
+it("cancels a press at each step: before its first request, between requests, and after the last answer", async () => {
+  setup();
+  await show();
+  const stale = view().loadMore;
+  await show({ enabled: false });
+  await show({ enabled: true });
+  await act(async () => void stale());
+  expect(net.calls).toHaveLength(0);
+  await press();
+  await show({ enabled: false });
+  await net.calls[0]?.answer(page([task("a")], "c1"));
+  expect(net.calls).toHaveLength(1);
+  await show({ enabled: true });
+  await press();
+  await net.calls[1]?.answer(page([task("a")], "c1"));
+  await show({ enabled: false });
+  await net.calls[2]?.answer(page([task("b")]));
+  await show({ enabled: true });
+  expect(titles()).toEqual(["now"]);
+  expect(view().failed).toBe(false);
+});
+
+it("drops a page whose walk changes after its last check, in the same batch as the answer", async () => {
+  setup();
+  await show({ scope: "A" });
+  await press();
+  await act(async () => {
+    net.calls[0]?.settle(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
+    root?.render(<Probe {...base} scope="B" />);
+  });
+  expect(titles()).toEqual(["now"]);
+  expect(view().loading).toBe(false);
+});
+
+it("a late mark for earlier activity reads the task through that activity only", async () => {
+  setup();
+  await show();
+  await press();
+  await net.calls[0]?.answer(
+    page([task("a", { unread: true, activity: 5 }), task("b"), task("c"), task("d"), task("e")]),
+  );
+  const a = () =>
+    view().rows.find((row) => row.kind === "task" && row.task.taskId === "a") as Extract<
+      BotThreadRow,
+      { kind: "task" }
+    >;
+  await act(async () => view().markRead(view().walk, "a" as never, at(3)));
+  expect(a().view.readThrough).toBe(at(3));
+  expect(a().unread).toBe(true);
+  await act(async () => view().markRead(view().walk, "a" as never, at(5)));
+  expect(a().unread).toBe(false);
 });

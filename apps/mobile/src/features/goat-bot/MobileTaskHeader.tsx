@@ -19,7 +19,6 @@ export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
-  readonly cardStatus: string | null;
   readonly botName: string;
   readonly environmentId: EnvironmentId | null;
   readonly enabled: boolean;
@@ -44,16 +43,14 @@ export function MobileTaskHeader(props: {
       <Text className="font-semibold text-foreground">
         {task?.row.task.title ?? props.title ?? "Task thread"}
       </Text>
-      {props.older ? null : (
+      {task ? (
         <Text className="text-foreground-muted">
-          {task
-            ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label
-            : props.cardStatus}
-          {task && taskAttemptLabel(task.row.task.generation)
+          {presentTaskStatus(task.row.task.status, task.row.view.doneAt).label}
+          {taskAttemptLabel(task.row.task.generation)
             ? ` · ${taskAttemptLabel(task.row.task.generation)}`
             : null}
         </Text>
-      )}
+      ) : null}
       {!props.enabled ? (
         <Text className="text-foreground-muted">
           Task is unavailable while {props.botName} is offline or unsupported.
@@ -99,7 +96,8 @@ export function MobileTaskHeader(props: {
           onOpenThread={props.onOpenThread}
         />
       ) : null}
-      {!props.older ? (
+      {/* Without a current task, its status is unknown here: the chat card is drawn without it. */}
+      {task ? (
         props.taskCard
       ) : props.card ? (
         <GoatBotTaskRow
