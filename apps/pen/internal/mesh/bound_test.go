@@ -892,7 +892,8 @@ func TestLoadingRewritesABoundEntryInTheEarlierFileForm(t *testing.T) {
 	if err := st.WriteJSON("offers.json", old, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadInvites(st); err != nil {
+	iv, err := LoadInvites(st)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var dev []devInvite
@@ -901,5 +902,15 @@ func TestLoadingRewritesABoundEntryInTheEarlierFileForm(t *testing.T) {
 	}
 	if len(dev[0].Secret) != 0 || dev[0].ExpiresAt != 0 {
 		t.Fatalf("after loading, dev's struct still reads %+v; want no secret and no expiry", dev[0])
+	}
+	// This node still has the invite, before and after reading the rewritten file again.
+	again, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, book := range []*Invites{iv, again} {
+		if x, ok := book.Lookup("AAAAAAAAAAAAAAAA", now); !ok || len(x.Secret) != 32 || x.ExpiresAt != now.Add(time.Minute).UnixMilli() {
+			t.Fatalf("lookup %+v (found %v); want the live invite with its 32-byte secret and expiry", x, ok)
+		}
 	}
 }
