@@ -92,9 +92,11 @@ it.effect(
     world((pen) =>
       Effect.gen(function* () {
         pen.control.loseMint = true;
+        pen.control.loseCancel = true;
         expect(yield* reason(attach(1))).toBe("unknown_outcome");
         expect(yield* reason(attach(2))).toBe("unknown_outcome");
         pen.control.loseMint = false;
+        pen.control.loseCancel = false;
         yield* reconcile;
         pen.book.clear();
         const [, second] = yield* rows;

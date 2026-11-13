@@ -144,13 +144,31 @@ it.effect(
     ),
 );
 
-it.effect("a lost mint answer holds the slot until Pen settles the mint id", () =>
+// The token never left GOAT, so cancelling by mintId at once makes the outcome certain.
+it.effect("a lost mint answer is cancelled by its mintId at once, freeing the slot", () =>
   world((pen) =>
     Effect.gen(function* () {
       yield* switchTo({ cap: 1 });
       pen.control.loseMint = true;
+      const lost = yield* attach(1);
+      pen.control.loseMint = false;
+      expect(lost).toMatchObject({ state: "failed" });
+      expect(lost).not.toHaveProperty("invite");
+      expect([...pen.book.values()].map((entry) => entry.state)).toEqual(["cancelled"]);
+      expect((yield* attach(2)).state).toBe("invited");
+    }),
+  ),
+);
+
+it.effect("a lost mint answer whose cancel is lost too holds the slot until Pen settles it", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      yield* switchTo({ cap: 1 });
+      pen.control.loseMint = true;
+      pen.control.loseCancel = true;
       expect(yield* reason(attach(1))).toBe("unknown_outcome");
       pen.control.loseMint = false;
+      pen.control.loseCancel = false;
       expect(yield* reason(attach(2))).toBe("cap_reached");
       // Pen made the invite; it expires without a join, so the slot is freed.
       yield* TestClock.adjust(INVITE_MS + 1);
@@ -164,7 +182,9 @@ it.effect("a mint Pen never saw is final only after its absolute expiry", () =>
   world((pen) =>
     Effect.gen(function* () {
       pen.control.loseMint = true;
+      pen.control.loseCancel = true;
       yield* reason(attach(1));
+      pen.control.loseCancel = false;
       pen.book.clear();
       yield* reconcile;
       expect(yield* rows).toMatchObject([{ state: "unknown" }]);

@@ -71,6 +71,8 @@ export const fakePen = () => {
     statusGate: undefined as Deferred.Deferred<void> | undefined,
     statusStarted: undefined as Deferred.Deferred<void> | undefined,
     loseMint: false,
+    /** The cancel's answer is lost before Pen applies it. */
+    loseCancel: false,
     tokensSeen: [] as Array<string>,
     acked: [] as Array<string>,
     /** Mints whose admit Pen holds in memory only, so status answers burned-unsaved. */
@@ -121,6 +123,7 @@ export const fakePen = () => {
       }),
     cancel: (ref) =>
       Effect.gen(function* () {
+        if (control.loseCancel) return yield* new PenInviteUnknown({ reason: "answer lost" });
         const entry = refOf(ref);
         if (entry === undefined) {
           if (!("mintId" in ref)) return "absent" as const;

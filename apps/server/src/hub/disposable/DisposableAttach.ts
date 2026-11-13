@@ -419,7 +419,18 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.result);
     if (minted._tag === "Failure") {
-      yield* save(row, replace(effects, { ...intent, state: "unknown" }));
+      // The token never left GOAT, so a cancel by mintId makes the outcome certain: it cancels the
+      // invite, or leaves a fence that refuses a late create (Pen CONTRACT "Bound invites").
+      const lost: AttachEffect = { ...intent, state: "unknown" };
+      const cancelled = yield* pen.cancel({ mintId: intent.id }).pipe(Effect.option);
+      const settled = yield* save(
+        row,
+        replace(effects, cancelled._tag === "Some" ? afterCancel(lost, cancelled.value) : lost),
+      );
+      if (settled.state === "failed") {
+        yield* audit(row.attach_id, "hub.machine_mint", "lost_answer_cancelled");
+        return status(settled);
+      }
       yield* audit(row.attach_id, "hub.machine_mint", "unknown");
       return yield* fail(
         "unknown_outcome",
