@@ -57,12 +57,15 @@ function History({
       >
         Pin first
       </button>
+      <button onClick={() => history.markRead(taskId, "2026-11-13T01:00:00Z")}>Read valid</button>
+      <button onClick={() => history.markRead(taskId, "invalid")}>Read invalid</button>
       {history.incomplete && <p>Older work may be missing</p>}
       {history.rows
         .filter((item) => item.kind === "task")
         .map((item) => (
           <p key={item.task.taskId}>
             {item.task.title} {item.view.pinnedAt ? "Pinned" : "Unpinned"}
+            {item.view.readThrough && <span>Read through {item.view.readThrough}</span>}
           </p>
         ))}
     </>
@@ -191,4 +194,51 @@ it("does not let an unchanged current list undo a newer view update", async () =
   await userEvent.click(screen.getByRole("button", { name: "Pin old" }));
   await screen.rerender(<History list={current([])} />);
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
+});
+
+it("ignores an invalid acknowledgement timestamp", async () => {
+  setup();
+  mock.read.mockResolvedValueOnce(page([old], {}));
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await userEvent.click(screen.getByRole("button", { name: "Read valid" }));
+  await userEvent.click(screen.getByRole("button", { name: "Read invalid" }));
+  await expect.element(screen.getByText("Read through 2026-11-13T01:00:00Z")).toBeVisible();
+});
+
+it("does not warn when exactly 500 history tasks complete the walk", async () => {
+  setup();
+  const rows = Array.from({ length: 500 }, (_, index) => {
+    const id = ChannelTaskId.make(`complete-${index}`);
+    return {
+      ...old,
+      task: { ...old.task, taskId: id, title: `Task ${id}` },
+      view: { ...old.view, taskId: id },
+    };
+  });
+  mock.read.mockResolvedValueOnce(page(rows, {}));
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("Task complete-499 Unpinned")).toBeVisible();
+  expect(screen.getByText("Older work may be missing").query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Read history" }).query()).toBeNull();
+});
+
+it("reopens the first bot's walk after switching away while a page is pending", async () => {
+  setup();
+  let finish: (value: ReturnType<typeof page>) => void = () => {};
+  mock.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  mock.read.mockResolvedValueOnce(page([old], {}));
+  await using screen = await render(<History list={current([])} botId={BotId.make("first")} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await screen.rerender(<History list={current([])} botId={BotId.make("second")} />);
+  await screen.rerender(<History list={current([])} botId={BotId.make("first")} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
+  await act(() => finish(page([], {})));
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
 });

@@ -117,8 +117,9 @@ export function useBotWorkHistory(
       return { ...state, entries };
     });
   }
-  const markRead = (taskId: ChannelTaskId, through: string) =>
-    applyView(taskId, { readThrough: through });
+  const markRead = (taskId: ChannelTaskId, through: string) => {
+    if (Number.isFinite(Date.parse(through))) applyView(taskId, { readThrough: through });
+  };
   async function loadMore() {
     const token = identity.current;
     if (!hasMore || token === null || token.key !== key || active.current === token) return;
@@ -166,7 +167,7 @@ export function useBotWorkHistory(
           endedEarly = endedEarly || page.history?.endedEarly === true;
           cursor = page.history?.nextCursor;
         }
-        if (entries.length >= 500) capped = true;
+        if (entries.length >= 500 && cursor !== undefined) capped = true;
         return {
           ...state,
           entries,
