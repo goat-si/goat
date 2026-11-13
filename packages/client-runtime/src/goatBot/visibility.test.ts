@@ -308,6 +308,7 @@ function remoteItem(
     readonly threadId?: string | null;
     readonly environmentId?: EnvironmentId | null;
     readonly workKind?: "coding" | "chore" | null;
+    readonly state?: BotRemoteWork["state"];
   } = {},
 ): BotRemoteWork {
   return {
@@ -315,7 +316,7 @@ function remoteItem(
     taskId: "channel-task:a" as never,
     callerThreadId: ThreadId.make(WORKER),
     host: "box",
-    state: "bound",
+    state: options.state ?? "bound",
     lastActivityAt: NOW,
     ...(options.threadId === null
       ? {}
@@ -445,7 +446,28 @@ describe("resolveRemoteBotWork", () => {
       remoteItem({ environmentId: null }),
       remoteItem({ threadId: null }),
     ]) {
-      expect(resolveRemoteBotWork(item, openable)).toEqual({ kind: "unavailable", host: "box" });
+      expect(resolveRemoteBotWork(item, openable)).toEqual({
+        kind: "unavailable",
+        host: "box",
+        label: "Unavailable",
+      });
+    }
+  });
+
+  it("says how a launch that lost its host or was dismissed ended, and never opens it", () => {
+    const openable = () => true;
+    for (const [state, label] of [
+      ["failed", "Failed"],
+      ["cancelled", "Cancelled"],
+      ["released", "Not started"],
+      ["completed", "Finished"],
+    ] as const) {
+      const item = remoteItem({ state, environmentId: null, threadId: null });
+      expect(resolveRemoteBotWork(item, openable)).toEqual({
+        kind: "unavailable",
+        host: "box",
+        label,
+      });
     }
   });
 });

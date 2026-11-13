@@ -112,3 +112,35 @@ it("draws an emoji avatar in place of the face, keeps its state, and leaves the 
   expect(header?.querySelector("[data-face]")).toBeNull();
   await vi.waitFor(() => expect(movingEyes("list")).toBe(1));
 });
+
+it("separates an accent from its status ring and outlines the waiting dot on the surface", async () => {
+  const accent = { background: "#2F6FED", foreground: "#FFFFFF" } as const;
+  // The avatars do not use a router.
+  await using screen = await render(
+    <>
+      <div data-avatar="accent">
+        <GoatBotAvatar state="failed" emoji="R" accent={accent} surface="popover" />
+      </div>
+      <div data-avatar="neutral">
+        <GoatBotAvatar state="failed" />
+      </div>
+      <div data-avatar="waiting">
+        <GoatBotAvatar state="waiting" emoji="R" accent={accent} surface="popover" />
+      </div>
+    </>,
+    { router: false },
+  );
+  const colored = screen.container.querySelector('[data-avatar="accent"] [role="img"]');
+  const fill = colored?.querySelector<HTMLElement>("[data-goat-avatar-fill]");
+  expect(colored?.classList.contains("border-destructive")).toBe(true);
+  expect(colored?.classList.contains("bg-popover")).toBe(true);
+  expect(fill?.classList.contains("inset-px")).toBe(true);
+  expect(
+    screen.container.querySelector('[data-avatar="neutral"] [data-goat-avatar-fill]'),
+  ).toBeNull();
+  const dot = screen.container.querySelector<HTMLElement>(
+    '[data-avatar="waiting"] [data-goat-waiting-dot]',
+  );
+  expect(dot?.classList.contains("border-popover")).toBe(true);
+  expect(Number.parseFloat(dot?.style.borderWidth ?? "0")).toBeGreaterThan(0);
+});

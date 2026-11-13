@@ -1,4 +1,9 @@
-import { EnvironmentId, ThreadId, type BotProfile } from "@goat/contracts";
+import {
+  EnvironmentAuthorizationError,
+  EnvironmentId,
+  ThreadId,
+  type BotProfile,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -12,10 +17,11 @@ const mocks = vi.hoisted(() => ({
   routinesError: null as string | null,
   routinesLoaded: true,
   rows: [] as unknown[],
-  threads: { loaded: true, failed: false },
+  threads: { loaded: true, failed: false, failure: null as unknown },
   refreshThreads: vi.fn(),
   refreshRoutines: vi.fn(),
   setEnabled: vi.fn(),
+  updateTaskView: vi.fn(),
   turnsWaiting: [] as string[],
 }));
 vi.mock("~/state/environments", () => ({
@@ -35,6 +41,7 @@ vi.mock("./useBotRoster", () => ({
     supported: true,
     loaded: mocks.threads.loaded,
     failed: mocks.threads.failed,
+    failure: mocks.threads.failure,
     turnsWaiting: mocks.turnsWaiting,
     refresh: mocks.refreshThreads,
   }),
@@ -51,20 +58,31 @@ vi.mock("~/state/query", () => ({
     refresh: mocks.refreshRoutines,
   }),
 }));
-vi.mock("~/state/server", () => ({
-  serverEnvironment: {
-    scheduledTasksLive: () => null,
-    upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
-    setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
-    runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
-  },
-}));
+vi.mock("~/state/server", async (original) => {
+  const real = await original<typeof import("~/state/server")>();
+  return {
+    ...real,
+    serverEnvironment: {
+      ...real.serverEnvironment,
+      scheduledTasksLive: () => null,
+      upsertScheduledTask: { permissionAtom: () => Atom.make(false), execute: vi.fn() },
+      setScheduledTaskEnabled: { permissionAtom: () => Atom.make(true), execute: mocks.setEnabled },
+      runScheduledTaskNow: { permissionAtom: () => Atom.make(true), execute: vi.fn() },
+    },
+  };
+});
 vi.mock("./GoatBotStatusCard", () => ({ GoatBotStatusCard: () => null }));
 vi.mock("./GoatBotTimeline", async () => ({
   GoatBotActivityContext: (await import("react")).createContext(null),
   GoatBotTimeline: () => <p>Task conversation</p>,
 }));
-vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
+vi.mock("./GoatBotAvatar", () => ({
+  GoatBotAvatar: () => null,
+  GoatBotMainAvatar: () => <span data-goat-main-avatar />,
+  GoatBotSessionAvatar: () => <span data-goat-session-avatar />,
+}));
+vi.mock("./useGoatBotMemberStatus", () => ({ useGoatBotMemberWaitingCount: () => 0 }));
+vi.mock("./GoatBotSuggested", () => ({ GoatBotSuggested: () => null }));
 vi.mock("./GoatBotComputer", () => ({ GoatBotComputer: () => <p>Machine list</p> }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: { execute: typeof mocks.setEnabled }) => command.execute,
@@ -76,6 +94,13 @@ vi.mock("~/state/channels", () => ({
     listBotArtifacts: () => null,
     readBotArtifact: { execute: vi.fn() },
     listTasks: () => null,
+    updateTaskView: {
+      permissionAtom: () => Atom.make(true),
+      execute: mocks.updateTaskView,
+    },
+    listChildWork: () => null,
+    remoteWorkOpenable: () => Atom.make(false),
+    slackSettings: () => null,
   },
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
@@ -87,12 +112,14 @@ function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = 
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
-  mocks.threads = { loaded: true, failed: false };
+  mocks.threads = { loaded: true, failed: false, failure: null };
   mocks.routinesError = null;
   mocks.routinesLoaded = true;
   mocks.refreshThreads.mockReset();
   mocks.refreshRoutines.mockReset();
   mocks.setEnabled.mockReset();
+  mocks.updateTaskView.mockReset();
+  mocks.updateTaskView.mockResolvedValue({ _tag: "Success" });
 }
 
 const at = "2026-11-09T00:00:00.000Z";
@@ -118,6 +145,86 @@ const digest = {
   lastRunError: null,
 };
 
+const routine = (index: number) => ({
+  ...digest,
+  id: `routine-${index}`,
+  title: `Routine ${index}`,
+  threadId: "bot",
+});
+
+it("closes the pinned panel from its own Close button", async () => {
+  setup([]);
+  const onClose = vi.fn();
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+      onClose={onClose}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("keeps Home scrolled where it was through Show more and a peek", async () => {
+  const tasks = Array.from({ length: 7 }, (_, index) => ({
+    ...runningTask,
+    task: {
+      ...runningTask.task,
+      taskId: `task-${index}`,
+      title: `Done ${index}`,
+      status: "completed",
+    },
+  }));
+  setup([], [], tasks);
+  // A short window, so Home really overflows and keeps a scroll position to restore.
+  await using screen = await render(
+    <div className="flex h-64">
+      <GoatBotWorkPanel
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        onOpenFile={() => {}}
+        peekRows={() => []}
+      />
+    </div>,
+  );
+  const home = screen.getByRole("tabpanel").element();
+  expect(home.scrollHeight).toBeGreaterThan(home.clientHeight);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Done 6")).toBeVisible();
+  home.scrollTop = 12;
+  home.dispatchEvent(new Event("scroll", { bubbles: true }));
+  // A plain click: the browser's own actionability would scroll the row in first and record that.
+  const row = screen.getByRole("button", { name: /^Done 6/ }).element();
+  if (!(row instanceof HTMLButtonElement)) throw new Error("Expected a task button");
+  row.click();
+  await expect
+    .element(screen.getByRole("button", { name: /Back to Home from Done 6/ }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: /Back to Home from Done 6/ }));
+  // The expanded tail is still there, and Home comes back to the row the peek was opened from.
+  await expect.element(screen.getByRole("button", { name: /^Done 6/ })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: /^Done 6/ })).toHaveFocus();
+  const back = screen.getByRole("tabpanel").element();
+  expect(back.scrollTop).toBe(12);
+});
+
+it("opens the routine a chip names even when it sits behind Show more", async () => {
+  setup([routine(1), routine(2), routine(3), routine(4), routine(5), routine(6), routine(7)]);
+  const landing = { routineId: "routine-7", seq: 1, from: null };
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+      routineLanding={landing}
+    />,
+  );
+  await expect.element(screen.getByText("Routine 7")).toBeVisible();
+  await expect.element(screen.getByRole("link", { name: /Routine 7/ })).toHaveFocus();
+});
+
 it.each(["main", "member"] as const)(
   "offers profile editing in the panel for an authorized %s bot",
   async (role) => {
@@ -134,6 +241,7 @@ it.each(["main", "member"] as const)(
         environmentId={bot.environmentId}
         threadId={ThreadId.make("bot")}
         onOpenFile={() => {}}
+        onClose={() => {}}
       />
     );
     await using screen = await render(
@@ -143,6 +251,9 @@ it.each(["main", "member"] as const)(
         <GoatBotMemberContext value={bot}>{panel}</GoatBotMemberContext>
       ),
     );
+    const edit = screen.getByRole("button", { name: "Edit bot" }).element();
+    const close = screen.getByRole("button", { name: "Close" }).element();
+    expect(edit.parentElement).toBe(close.parentElement);
     await userEvent.click(screen.getByRole("button", { name: "Edit bot" }));
     await expect.element(screen.getByRole("dialog", { name: "" })).toBeVisible();
   },
@@ -208,7 +319,7 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
       peekRows={() => []}
     />,
   );
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   const back = screen.getByRole("button", { name: /Back to Home from Stop the port 3774 server/ });
   await expect.element(back).toHaveFocus();
   await expect
@@ -218,7 +329,7 @@ it("peeks at a task in the panel with one link to its thread, and Back returns t
   await expect.element(screen.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
   await userEvent.click(back);
   await expect
-    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .element(screen.getByRole("button", { name: /^Stop the port 3774 server/ }))
     .toHaveFocus();
   // The return applies once: coming back to Home from Library leaves focus on the tab.
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
@@ -237,7 +348,7 @@ it("a task peek holds back a New bot open until Back, since it has no URL of its
     />,
   );
   expect(navigationBlocked()).toBe(false);
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   const back = screen.getByRole("button", { name: /Back to Home from Stop the port 3774 server/ });
   await expect.element(back).toBeVisible();
   expect(navigationBlocked()).toBe(true);
@@ -255,11 +366,11 @@ it("steps back from a peek to its row with Escape", async () => {
       onOpenFile={() => {}}
     />,
   );
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   await expect
-    .element(screen.getByRole("button", { name: /Stop the port 3774 server/ }))
+    .element(screen.getByRole("button", { name: /^Stop the port 3774 server/ }))
     .toHaveFocus();
 });
 
@@ -273,7 +384,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
       peekRows={() => []}
     />,
   );
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   setup([]);
   await screen.rerender(
     <GoatBotWorkPanel
@@ -314,7 +425,7 @@ it("leaves focus in the composer when a peeked task leaves the list", async () =
     </>
   );
   await using screen = await render(panel());
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   const composer = screen.getByRole("textbox", { name: "Message GOAT Bot" });
   await userEvent.click(composer);
   await userEvent.keyboard("still typing");
@@ -339,7 +450,7 @@ it("leaves focus where it was when a peeked task leaves the list after a click o
     </>
   );
   await using screen = await render(panel());
-  await userEvent.click(screen.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port 3774 server/ }));
   await expect.element(screen.getByRole("button", { name: /Back to Home from/ })).toHaveFocus();
   // Text takes no focus, so the click leaves it on the page body, outside the peek.
   await userEvent.click(screen.getByText("Here is what I found"));
@@ -353,7 +464,7 @@ it("leaves focus where it was when a peeked task leaves the list after a click o
 
 it("says the task list is loading, not empty, before the first read answers", async () => {
   setup([]);
-  mocks.threads = { loaded: false, failed: false };
+  mocks.threads = { loaded: false, failed: false, failure: undefined };
   await using screen = await render(
     <GoatBotWorkPanel
       onOpenFile={() => {}}
@@ -367,7 +478,7 @@ it("says the task list is loading, not empty, before the first read answers", as
 
 it("a failed task read offers a retry and keeps the tasks it already knew", async () => {
   setup([], [], [runningTask]);
-  mocks.threads = { loaded: false, failed: true };
+  mocks.threads = { loaded: false, failed: true, failure: undefined };
   await using screen = await render(
     <GoatBotWorkPanel
       onOpenFile={() => {}}
@@ -385,7 +496,7 @@ it("a failed task read offers a retry and keeps the tasks it already knew", asyn
 
 it("a failed first task read never claims there are no tasks", async () => {
   setup([]);
-  mocks.threads = { loaded: false, failed: true };
+  mocks.threads = { loaded: false, failed: true, failure: undefined };
   await using screen = await render(
     <GoatBotWorkPanel
       onOpenFile={() => {}}
@@ -548,4 +659,45 @@ it("opens the worker and the chores that thread lists leave to the bot from its 
   const links = screen.getByRole("link", { name: "Open work thread" });
   await expect.element(links.nth(0)).toHaveAttribute("href", "/env/channel-worker%3Aa");
   await expect.element(links.nth(1)).toHaveAttribute("href", "/env/channel-child-work%3Achore");
+});
+
+it("shows a denied task read from the roster without retry", async () => {
+  setup([]);
+  mocks.threads = {
+    loaded: false,
+    failed: true,
+    failure: new EnvironmentAuthorizationError({
+      message: "denied",
+      requiredScope: "orchestration:read",
+    }),
+  };
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+    />,
+  );
+  await expect.element(screen.getByText("This device can't read GOAT Bot's work.")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+});
+
+it("anchors Back to chat outside the Home header for the sheet and peek", async () => {
+  setup([], [], [runningTask]);
+  await using screen = await render(
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+      onShowChat={() => {}}
+      peekRows={() => []}
+    />,
+  );
+  const back = screen.getByRole("button", { name: "Back to chat" }).element();
+  expect(back.closest("header")).toBeNull();
+  expect(getComputedStyle(back).position).toBe("absolute");
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
+  expect(
+    getComputedStyle(screen.getByRole("button", { name: "Back to chat" }).element()).position,
+  ).toBe("absolute");
 });

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GoatBotFaceState } from "./face.ts";
-import { goatBotHeadArt } from "./faceHead.ts";
+import {
+  GOAT_BOT_HEAD_SLEEP_MARK_PATH,
+  GOAT_BOT_HEAD_STROKE_WIDTH,
+  goatBotHeadArt,
+} from "./faceHead.ts";
+import {
+  closest,
+  rightEarAndHorn,
+  strokeOutline,
+  WEB_AVATAR_SIZES,
+} from "./faceGeometry.testkit.ts";
 
 const STATES: ReadonlyArray<GoatBotFaceState> = [
   "idle",
@@ -144,5 +154,25 @@ describe("goatBotHeadArt: each face state maps to its own eyes", () => {
     for (const line of strokes("sleeping")) expect(extent(line.points).height).toBe(0);
     for (const state of STATES)
       expect(goatBotHeadArt(state).sleepMark, state).toBe(state === "sleeping");
+  });
+});
+
+describe("goatBotHeadArt: the sleep mark stays in the avatar and clear of the head", () => {
+  const mark = strokeOutline(GOAT_BOT_HEAD_SLEEP_MARK_PATH, GOAT_BOT_HEAD_STROKE_WIDTH);
+
+  it.each(WEB_AVATAR_SIZES)(
+    "draws its whole stroke inside the $circle px circle",
+    ({ circle, head }) => {
+      // The circle's radius in the head's 20-unit art box, around the box's centre (12, 12).
+      const radius = (10 * circle) / head;
+      const farthest = Math.max(...mark.map((point) => Math.hypot(point.x - 12, point.y - 12)));
+      expect(radius - farthest).toBeGreaterThan(0.2);
+    },
+  );
+
+  it("keeps its stroke off the right horn and the right ear", () => {
+    const { ear, horn } = rightEarAndHorn();
+    expect(closest(mark, horn)).toBeGreaterThan(0.4);
+    expect(closest(mark, ear)).toBeGreaterThan(0.4);
   });
 });
