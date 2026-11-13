@@ -268,6 +268,13 @@ alias. The Pen-native path stays closed (next section).
 - **Ownership is the optional `pen` binding, never the alias or `kind`.** A hub row a person added
   for the same alias is never touched, and an older client must still decode the node list, so the
   binding rides as an optional key on `addedBy` (kind stays `import`) and on the route.
+- **A Windows desktop does not follow Pen yet, for two reasons.** Pen's control socket is AF_UNIX
+  on every platform and Node on Windows opens only named pipes, so the snapshot watch
+  (`packages/pen-protocol/src/snapshot.ts`) never connects there. And the exact-route check
+  (`packages/ssh/src/penRoute.ts`) accepts only the POSIX ProxyCommand, while pen writes a
+  CreateProcess-quoted one on Windows. The first needs a transport from pen itself, such as a
+  command that streams snapshots; the second needs what Win32-OpenSSH's `ssh -G` prints, measured
+  on the Windows CI job, not guessed.
 - **The desktop dials a Pen-only machine only while the registry's gate lets it.** An environment
   whose every route is a managed Pen route connects only while its id is in the registry's live
   set (`packages/client-runtime/src/connection/penLiveSet.ts`): the member is online in the latest
