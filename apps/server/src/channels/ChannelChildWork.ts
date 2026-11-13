@@ -64,7 +64,7 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
 /** Child-work rows one reconcile pass reads while repairing settled remote launches. */
 export const REMOTE_THREAD_REPAIR_PAGE = 200;
 /** How long a stopped repair waits before one more walk: a lost launch's dispatch can gain its thread later. */
-export const REMOTE_THREAD_REPAIR_REARM_MS = 10 * 60_000;
+const REMOTE_THREAD_REPAIR_REARM_MS = 10 * 60_000;
 
 const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
   surface === "delegate_local" || surface === "delegate_remote"
