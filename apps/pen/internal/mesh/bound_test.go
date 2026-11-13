@@ -436,7 +436,6 @@ func TestABoundTransitionThatCannotBeSavedChangesNothing(t *testing.T) {
 	}
 }
 
-
 // A burn whose admit could not be written to mesh.json reports burned-unsaved: the admit lives in memory only, and a
 // restart before a later save would lose it.
 func TestABurnWhoseAdmitIsNotSavedReportsBurnedUnsaved(t *testing.T) {
