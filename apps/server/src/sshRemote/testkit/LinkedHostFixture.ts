@@ -131,7 +131,8 @@ export const withLinkedHost = <A, E, R>(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
             Layer.provide(ServerSettings.layerTest()),
-            Layer.provide(Layer.succeed(LinkedHosts.LinkedHosts, links)),
+            // Merged, so a body that reads linked hosts itself sees this same link.
+            Layer.provideMerge(Layer.succeed(LinkedHosts.LinkedHosts, links)),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(NodeServices.layer),

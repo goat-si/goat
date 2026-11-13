@@ -2,11 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import { GoatclawFleetPolicy, type GoatclawSettings } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { withLinkedHost } from "../sshRemote/testkit/LinkedHostFixture.ts";
 import * as FleetSync from "./FleetSync.ts";
 
 type Machine = Effect.Success<ReturnType<typeof machine>>;
@@ -27,6 +30,7 @@ const machine = (
     Effect.provide(
       Layer.mergeAll(
         ServerSettingsService.layerTest({ goatclaw }),
+        Layer.mock(LinkedHosts.LinkedHosts)({ find: () => Effect.succeedNone }),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)(
           reach === undefined
             ? { connectedHosts: Effect.succeed([]) }
@@ -45,7 +49,131 @@ const connectedTo = (remote: Machine) => (call: SshRemoteDispatch.SshHostToolCal
     return { policy: yield* remote.sync.receive(policy).pipe(Effect.orDie) };
   });
 
+/** Fleet sync over the real linked dispatch; the host echoes the policy it was sent. */
+const syncOverLink = (access: LinkedHosts.LinkedHost["access"]) =>
+  withLinkedHost(
+    (request) =>
+      request.method === "tools/call"
+        ? { result: { structuredContent: request.args } }
+        : { result: {} },
+    Effect.gen(function* () {
+      const sync = yield* FleetSync.make;
+      return yield* sync.ensure("box");
+    }).pipe(Effect.provide(ServerSettingsService.layerTest({ goatclaw: { enabled: true } }))),
+    undefined,
+    access,
+  );
+
+const credential = (token: string): Option.Option<LinkedHosts.LinkedHostCredential> =>
+  Option.some({
+    host: {
+      name: "box",
+      baseUrl: "https://box.example.ts.net",
+      environmentId: "env-box",
+      label: "Build box",
+      serverVersion: "0.1.9",
+      access: "full-access",
+      linkedAt: "2026-11-01T00:00:00.000Z",
+      expiresAt: "2026-12-01T00:00:00.000Z",
+    },
+    token,
+  });
+
+/**
+ * Runs one sync whose dispatch evaluates the ceiling three times, as the SSH route does
+ * (routing, session, tools/call), and swaps the link to `next` just before evaluation `at`.
+ * Returns every ceiling handed out and the outcome fleet sync recorded.
+ */
+const ceilingsAcrossChange = (
+  initial: Option.Option<LinkedHosts.LinkedHostCredential>,
+  at: number,
+  next: Option.Option<LinkedHosts.LinkedHostCredential>,
+) =>
+  Effect.gen(function* () {
+    let current = initial;
+    const granted: Array<string> = [];
+    const reach = yield* Effect.gen(function* () {
+      const sync = yield* FleetSync.make;
+      return yield* sync.ensure("box");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettingsService.layerTest({ goatclaw: { enabled: true } }),
+          Layer.mock(LinkedHosts.LinkedHosts)({ find: () => Effect.sync(() => current) }),
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            connectedHosts: Effect.succeed(["box"]),
+            callHostTool: (_call, authorize) =>
+              Effect.gen(function* () {
+                for (const evaluation of [0, 1, 2]) {
+                  if (evaluation === at) current = next;
+                  granted.push(yield* authorize);
+                }
+                return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "box did not answer.",
+                });
+              }),
+          }),
+        ),
+      ),
+    );
+    return { granted, message: reach.sync.message };
+  });
+
 describe("GoatclawFleetSync", () => {
+  it.effect("regression #3087: applies goatclaw policy to a host linked with full access", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* syncOverLink("full-access");
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { sync: { state: "applied" }, enforcesCeilings: true },
+      });
+      expect(record.filter((entry) => entry.method === "tools/call")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("sends no goatclaw policy through a read-only link", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* syncOverLink("read-only");
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { sync: { state: "pending", message: expect.stringContaining("read-only") } },
+      });
+      expect(record.filter((entry) => entry.method === "tools/call")).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "invariant: a ceiling raised for a link is refused once that link changes, on any evaluation",
+    () =>
+      Effect.gen(function* () {
+        const changed = "The link to box changed during the goatclaw sync; nothing was sent.";
+        // Removed or replaced before the first evaluation, before the linked route's recheck,
+        // or before the SSH route's last recheck.
+        expect(yield* ceilingsAcrossChange(credential("a"), 0, Option.none())).toEqual({
+          granted: [],
+          message: changed,
+        });
+        expect(yield* ceilingsAcrossChange(credential("a"), 0, credential("b"))).toEqual({
+          granted: [],
+          message: changed,
+        });
+        expect(yield* ceilingsAcrossChange(credential("a"), 1, Option.none())).toEqual({
+          granted: ["full-access"],
+          message: changed,
+        });
+        expect(yield* ceilingsAcrossChange(credential("a"), 2, credential("b"))).toEqual({
+          granted: ["full-access", "full-access"],
+          message: changed,
+        });
+        // A link that appears after the sync looked never raises it.
+        expect(yield* ceilingsAcrossChange(Option.none(), 0, credential("a"))).toEqual({
+          granted: ["approval-required", "approval-required", "approval-required"],
+          message: "box did not answer.",
+        });
+      }),
+  );
+
   it.effect("applies goatclaw switched on here to a connected host", () =>
     Effect.gen(function* () {
       const remote = yield* machine({});
