@@ -21,6 +21,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import { SpawnExecutableResolution, type SpawnExecutableResolver } from "@goat/shared/shell";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { ClaudeCloudDriver } from "./ClaudeCloudDriver.ts";
 import { BUNDLED_MODEL_MANIFEST } from "../ModelManifest.ts";
@@ -43,6 +44,8 @@ const settings: ServerSettings = {
 const harness = Effect.fnUntraced(function* (
   currentSettings = settings,
   hostEnvironment: NodeJS.ProcessEnv = { HOME: "/fixture/home" },
+  platform: NodeJS.Platform = "linux",
+  resolveExecutable?: SpawnExecutableResolver,
 ) {
   const commands: ChildProcess.StandardCommand[] = [];
   let ptySpawns = 0;
@@ -117,7 +120,10 @@ const harness = Effect.fnUntraced(function* (
         },
       }),
     ),
-    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Platform, platform),
+    resolveExecutable === undefined
+      ? (effect) => effect
+      : Effect.provideService(SpawnExecutableResolution, resolveExecutable),
     Effect.provideService(HostProcess.HomeDirectory, "/fixture/home"),
     Effect.provideService(HostProcess.Environment, hostEnvironment),
     Effect.provide(
@@ -202,4 +208,35 @@ it.effect("a login started inside a Claude Code session does not join that sessi
       expect(auth?.options.env?.PROFILE_MARKER).toBe("work-profile");
     }),
   ),
+);
+
+it.effect(
+  "regression #2959: a Windows binary that resolves to no file is refused before any Claude process or PTY",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const bare = {
+          ...settings,
+          providerInstances: {
+            [SIBLING]: {
+              ...settings.providerInstances[SIBLING]!,
+              config: { binaryPath: "claude" },
+            },
+          },
+        };
+        const h = yield* harness(
+          bare,
+          { HOME: "/fixture/home", Path: "C:\\Tools;C:\\Windows\\System32" },
+          "win32",
+          () => undefined,
+        );
+        const snapshot = yield* h.instance.snapshot.refresh;
+        expect(snapshot.status).toBe("error");
+        expect(snapshot.message).toContain("Claude CLI not found");
+        expect(snapshot.message).toContain("claude");
+        expect(snapshot.message).toContain("C:\\Tools; C:\\Windows\\System32");
+        expect(h.commands).toEqual([]);
+        expect(h.ptySpawns()).toBe(0);
+      }),
+    ),
 );
