@@ -4,6 +4,15 @@ import { Platform, Text, View, type PressableProps } from "react-native";
 
 import { Menu } from "../../components/ui/Menu";
 
+type LongPressable = ReactElement<Pick<PressableProps, "onLongPress">>;
+
+function WithLongPress(props: {
+  readonly children: LongPressable;
+  readonly onLongPress: () => void;
+}) {
+  return cloneElement(props.children, { onLongPress: props.onLongPress });
+}
+
 /**
  * A Work row's actions with every choice. Android uses the native menu view (the anchored menu
  * draws behind the Home modal); it takes every touch of what it wraps and opens on touch only, so
@@ -14,7 +23,7 @@ export function MobileBotRowMenu(props: {
   readonly title: string;
   readonly actions: readonly MenuAction[];
   readonly onSelect: (id: string) => void;
-  readonly row?: ReactElement<Pick<PressableProps, "onLongPress">>;
+  readonly row?: LongPressable;
 }) {
   const menuRef = useRef<MenuComponentRef>(null);
   const android = Platform.OS === "android";
@@ -60,8 +69,7 @@ export function MobileBotRowMenu(props: {
   );
   if (!props.row) return button;
   const row = android ? (
-    /* oxlint-disable-next-line react/refs -- The ref is read when the long press runs. */
-    cloneElement(props.row, { onLongPress: () => menuRef.current?.show() })
+    <WithLongPress onLongPress={() => menuRef.current?.show()}>{props.row}</WithLongPress>
   ) : (
     <Menu
       title={props.title}

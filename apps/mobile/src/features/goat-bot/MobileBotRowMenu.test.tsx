@@ -65,7 +65,7 @@ const actions = [
   { id: "read", title: "Mark read" },
 ];
 
-async function show(os: "ios" | "android", row?: ReactElement) {
+async function show(os: "ios" | "android", row?: ReactElement<{ onLongPress?: () => void }>) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   native.platform.OS = os;
   native.menus = [];
