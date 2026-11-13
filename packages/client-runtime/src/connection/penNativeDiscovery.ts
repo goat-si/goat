@@ -105,9 +105,11 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           );
           const latest = yield* SubscriptionRef.get(membership.latest);
           if (Option.isNone(latest) || !penPinIsCurrent(latest.value, pin)) return;
-          verified.add(pinKey(pin));
           if (known !== undefined) {
-            if (known.target.environmentId === descriptor.environmentId) return;
+            if (known.target.environmentId === descriptor.environmentId) {
+              verified.add(pinKey(pin));
+              return;
+            }
             yield* registry.removeRoute(known.target.environmentId, connectionId);
           }
           const target = new PenConnectionTarget({
@@ -126,6 +128,7 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
               }),
             }),
           );
+          verified.add(pinKey(pin));
         }).pipe(
           Effect.catch((error) =>
             Effect.logDebug("Pen native route discovery failed", {
