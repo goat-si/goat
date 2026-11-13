@@ -7,3 +7,4 @@ export {
   type CheckInRoutineSource,
 } from "./checkInPreset.ts";
 export { formatTimeUntil, scheduleLabel, WEEKDAY_LABELS } from "./scheduleLabel.ts";
+export { scheduleTimeZoneLabel } from "../scheduledTaskTimeZone.ts";

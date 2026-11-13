@@ -1,3 +1,5 @@
+import type { ScheduledTask } from "@goat/contracts";
+import { scheduleTimeZoneLabel } from "@goat/client-runtime/scheduledTasks";
 import { presentMemoryRunAccess } from "@goat/client-runtime/memory-presentation";
 
 export function scheduledMemoryAccess(input: Parameters<typeof presentMemoryRunAccess>[0]) {
@@ -71,4 +73,41 @@ export function formatNextScheduledTaskRun(nextRunAt: string, now: number): stri
     ...(next.getFullYear() !== current.getFullYear() ? { year: "numeric" as const } : {}),
   });
   return `Next run ${date} at ${time}`;
+}
+
+export const DAYS = [
+  { index: 1, label: "Mon" },
+  { index: 2, label: "Tue" },
+  { index: 3, label: "Wed" },
+  { index: 4, label: "Thu" },
+  { index: 5, label: "Fri" },
+  { index: 6, label: "Sat" },
+  { index: 0, label: "Sun" },
+] as const;
+
+export function describeSchedule(task: ScheduledTask, timeZone?: string): string {
+  if (task.schedule.type === "webhook") return "On webhook";
+  if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
+  const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
+  const zone = scheduleTimeZoneLabel(timeZone, task.nextRunAt);
+  return `${days} at ${formatTime(task.schedule.timeOfDay)}${zone === undefined ? "" : ` ${zone}`}`;
+}
+
+export function formatTime(value: string): string {
+  const [hours, minutes] = value.split(":").map(Number);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return value;
+  const time = new Date();
+  time.setHours(hours ?? 9, minutes ?? 0, 0, 0);
+  return time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+export function repeatLabel(weekdays: ReadonlyArray<number>): string {
+  const days = new Set(weekdays);
+  if (days.size === 7) return "Every day";
+  if (days.size === 5 && [1, 2, 3, 4, 5].every((day) => days.has(day))) return "Weekdays";
+  return (
+    DAYS.filter((day) => days.has(day.index))
+      .map((day) => day.label)
+      .join(", ") || "Choose days"
+  );
 }
