@@ -903,6 +903,11 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   is none. A live invite is refused. After an ack the node no longer knows the mintId, so a caller acknowledges a
   fence only once that mint's expiresAt has passed, when the expiry alone refuses a late create.
 - At most 256 bound entries are kept, and 512 counting fences; past either a create is refused, and past 512 a fence.
+- The answer of the control op `status` gains a last member `features`, an array of strings naming what the node supports
+  of this section: `invite.subject/1` (a subject on `invite`), `invite.cancel/1` (`invite.cancel`), `invite.mint/1` (`mintId` with an
+  absolute `expiresAt`) and `invite.status/1` (`invite.status`, kept terminal entries and `invite.ack`). The rest of the answer
+  is unchanged, and the answers that embed the same status object (`relays`, `login-bind`) do not carry it. An older node's
+  answer has no such member; a caller checks the features it needs before each mint and cancel.
 - `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
   `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
   `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to. A
@@ -1024,7 +1029,7 @@ v1.2 member-only reader refuses both valid new forms.
   keys before it joins; bound invites carry a caller's mintId and are kept as `burned` or `cancelled` entries, and control op
   `invite.cancel` cancels one by id or mintId, or fences a mintId before its create. A mint carries an absolute `expiresAt`,
   an expired bound invite stays as an `expired` entry, `invite.status` reads an entry and the admit its nonce produced,
-  and `invite.ack` forgets a settled one.
+  and `invite.ack` forgets a settled one. The `status` answer lists these as `features`.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.

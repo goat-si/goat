@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -265,5 +266,40 @@ func TestInviteRefOpsRefuseALineCarryingBothReferences(t *testing.T) {
 	}
 	if s := statusOp(t, a.st, `"mintId":"fresh"`); s.State != "absent" {
 		t.Fatalf("a refused cancel left a fence: %+v", s)
+	}
+}
+
+// The status answer names the bound-invite features as its last member, and is otherwise exactly the answer an older
+// node gives, so a caller can check support before it mints and older readers see nothing new but one member.
+func TestStatusNamesTheBoundInviteFeatures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "status"}); err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil {
+		t.Fatal(err)
+	}
+	const suffix = `,"features":["invite.subject/1","invite.cancel/1","invite.mint/1","invite.status/1"]}`
+	var s Status
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Features = nil
+	old, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := string(old[:len(old)-1]) + suffix; string(raw) != want {
+		t.Fatalf("status answered\n%s\nwant\n%s", raw, want)
 	}
 }

@@ -239,7 +239,9 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 	switch req.Op {
 	case "status":
-		return d.status(), nil
+		s := d.status()
+		s.Features = Features
+		return s, nil
 	case "ls":
 		return d.ls(), nil
 	case "invite":
@@ -346,6 +348,9 @@ type Status struct {
 	MeshID      string       `json:"meshId"`
 	Members     int          `json:"members"`
 	PID         int          `json:"pid"`
+	// Features lists what this node supports beyond its version's base (contract "Bound invites"); only the status op
+	// carries it, so the relays and login-bind answers keep their shape.
+	Features []string `json:"features,omitempty"`
 }
 
 func (d *Daemon) status() Status {
