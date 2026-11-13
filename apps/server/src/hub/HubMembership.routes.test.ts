@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { OcxOutput } from "./HubOcx.ts";
-import { scope, setup } from "./HubMembership.testkit.ts";
+import { scope, setup, threadScope } from "./HubMembership.testkit.ts";
 
 const LINK = "lnk_0123456789abcdef";
 const decodeResult = Schema.decodeUnknownSync(HubDeviceRoutesUpdateResult);
@@ -49,7 +49,7 @@ it.effect(
 );
 
 it.effect(
-  "another profile asks a person first; the approval binds the link and this exact change, and is spent once",
+  "another profile asks a person first; the approval binds the link and this exact change, and once spent cannot run it again",
   () =>
     Effect.gen(function* () {
       const hub = yield* setup({ profile: "hub-admin", linked: ["mini"], routes: routesHome() });
@@ -78,6 +78,11 @@ it.effect(
       expect((yield* hub.consumed).map(({ approval_id }) => approval_id)).toEqual([
         asked.decisionId,
       ]);
+      const again = yield* Effect.flip(
+        hub.membership.updateRoutes(scope, { ...add, decisionId: asked.decisionId! }),
+      );
+      expect(again.code).toBeDefined();
+      expect(routesCalls(hub.calls)).toHaveLength(1);
     }),
 );
 
@@ -239,5 +244,71 @@ it.effect(
         expect(refused.code).toBe("invalid_request");
       }
       expect(routesCalls(hub.calls)).toHaveLength(3);
+    }),
+);
+const approvedChange = Effect.fn("routesTest.approvedChange")(function* (
+  routes: (args: ReadonlyArray<string>) => OcxOutput,
+) {
+  const hub = yield* setup({ profile: "hub-admin", linked: ["mini"], routes });
+  const asked = yield* hub.membership.updateRoutes(scope, add);
+  yield* hub.approve(asked.decisionId!);
+  return { hub, decisionId: asked.decisionId! };
+});
+
+it.effect(
+  "a fixed refusal leaves the approval unspent, so the same approved change runs once its cause is fixed",
+  () =>
+    Effect.gen(function* () {
+      const home = routesHome();
+      let refuse = true;
+      const { hub, decisionId } = yield* approvedChange((args) =>
+        refuse ? { code: 5, stdout: "", phase: "route_unproven", cause: "transient" } : home(args),
+      );
+      const refused = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+      expect(refused).toMatchObject({ state: "failed", code: "route_unproven" });
+      expect(yield* hub.consumed).toEqual([]);
+      refuse = false;
+      const changed = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+      expect(changed.routes).toEqual(["pen-mini", "mini"]);
+      expect((yield* hub.consumed).map(({ approval_id }) => approval_id)).toEqual([decisionId]);
+    }),
+);
+
+it.effect("a change the Home stored but could not apply yet spends its approval", () =>
+  Effect.gen(function* () {
+    const { hub, decisionId } = yield* approvedChange(() => ({
+      code: 1,
+      stdout: "",
+      phase: "routes_stored_reload_failed",
+    }));
+    const stored = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+    expect(stored).toMatchObject({ state: "ok", code: "routes_stored_reload_failed" });
+    expect((yield* hub.consumed).map(({ approval_id }) => approval_id)).toEqual([decisionId]);
+  }),
+);
+
+it.effect(
+  "a thread's change asks through a handoff whose id is the decision, and continues with it",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ profile: "hub-admin", linked: ["mini"], routes: routesHome() });
+      const asked = yield* hub.membership.updateRoutes(threadScope, add);
+      expect(asked).toMatchObject({
+        state: "needs_human",
+        kind: "needs_human",
+        handoff: { kind: "approval", state: "pending", targetPath: "hub.device_routes_update" },
+        next: { after: "approval", call: "goat_hub_device_routes_update" },
+      });
+      expect((asked as { handoff: { handoffId: string } }).handoff.handoffId).toBe(
+        asked.decisionId,
+      );
+      expect(hub.handoffReason(asked.decisionId!)).toContain("add pen-mini at position 0");
+      expect(routesCalls(hub.calls)).toEqual([]);
+      yield* hub.answer(asked.decisionId!);
+      const changed = yield* hub.membership.updateRoutes(threadScope, {
+        ...add,
+        decisionId: asked.decisionId!,
+      });
+      expect(changed.routes).toEqual(["pen-mini", "mini"]);
     }),
 );
