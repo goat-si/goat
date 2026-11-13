@@ -148,6 +148,6 @@ it.each(["failed", "cancelled", "released"] as const)(
           ? "Cancelled"
           : "Not started",
     );
-    expect(screen.container.querySelector("a")).toBeNull();
+    await expect.element(screen.getByRole("link")).not.toBeInTheDocument();
   },
 );

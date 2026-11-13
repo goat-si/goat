@@ -118,10 +118,12 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
+import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
+  resetTaskReadAcknowledgementsForTests();
   mocks.canEdit = false;
   mocks.historySupported = false;
   mocks.revision = 0;
@@ -803,12 +805,7 @@ function historyPage(rows: unknown[], history?: Record<string, unknown>) {
 }
 
 function showMore(screen: Awaited<ReturnType<typeof render>>) {
-  const button = [...screen.container.querySelectorAll("button")].find(
-    (item) => item.textContent?.trim() === "Show more",
-  );
-  expect(button, "Work offers history paging").toBeDefined();
-  if (!button) throw new Error("Work offers history paging");
-  return button;
+  return screen.getByRole("button", { name: "Show more", exact: true });
 }
 
 it("walks through an empty history page, and stops only without a cursor", async () => {
@@ -826,11 +823,7 @@ it("walks through an empty history page, and stops only without a cursor", async
   await expect.element(screen.getByText("Older task")).toBeVisible();
   expect(mocks.readHistory).toHaveBeenCalledTimes(2);
   expect(mocks.readHistory.mock.calls[1]?.[0].input.history.cursor).toBe("after-empty");
-  expect(
-    [...screen.container.querySelectorAll("button")].some(
-      (item) => item.textContent?.trim() === "Show more",
-    ),
-  ).toBe(false);
+  await expect.element(showMore(screen)).not.toBeInTheDocument();
 });
 
 it("bounds empty history requests per press and lets the person continue", async () => {
@@ -856,11 +849,7 @@ it("falls back to current work when the server omits the history marker", async 
   expect(mocks.readHistory).toHaveBeenCalledTimes(1);
   await expect.element(screen.getByText("Stop the port 3774 server")).toBeVisible();
   expect(screen.container.textContent?.toLowerCase()).not.toContain("all work loaded");
-  expect(
-    [...screen.container.querySelectorAll("button")].some(
-      (item) => item.textContent?.trim() === "Show more",
-    ),
-  ).toBe(false);
+  await expect.element(showMore(screen)).not.toBeInTheDocument();
 });
 
 it.each(["partial", "endedEarly"])("warns when history has %s", async (flag) => {
@@ -885,14 +874,8 @@ it("keeps a paged-in task in the peek and exposes its work threads", async () =>
   await using screen = await render(historyPanel());
   await userEvent.click(showMore(screen));
   await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
-  const row = screen
-    .getByRole("button", { name: /^Older task/ })
-    .element()
-    .closest(".border-t");
-  const expand = row?.querySelector<HTMLButtonElement>('button[aria-label="Show work"]');
-  expect(expand).not.toBeNull();
-  if (!expand) throw new Error("Missing Show work");
-  await userEvent.click(expand);
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Show work" }));
   await expect.element(screen.getByRole("link", { name: "Open work thread" })).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: /^Older task/ }));
   await expect

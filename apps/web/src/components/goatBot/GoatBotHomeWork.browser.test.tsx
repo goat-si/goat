@@ -249,9 +249,7 @@ it("the row's chevron opens the task, and Show work and Hide work live in its me
   const rows = setup([taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z")]);
   const onOpenTask = vi.fn();
   await using screen = await render(view(rows, { onOpenTask }));
-  const chevron = screen.container.querySelector("[data-work-chevron]");
-  expect(chevron).not.toBeNull();
-  await userEvent.click(chevron as Element);
+  await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
   expect(onOpenTask).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Show work" }).query()).toBeNull();
   const actionsButton = screen.getByRole("button", { name: "Actions for Stop the port" });
