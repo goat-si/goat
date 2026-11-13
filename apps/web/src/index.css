@@ -1602,6 +1602,7 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --secondary-label: var(--app-theme-secondary-label);
   --icon-muted: var(--app-theme-icon-muted);
   --accent: var(--app-theme-accent-surface);
+  /* Opaque for the built-in themes only; an imported theme may keep alpha here. */
   --accent-opaque: var(--accent);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --message-surface: var(--app-theme-message-surface);
@@ -1819,6 +1820,7 @@ html[data-theme-id] [data-app-sidebar] {
   --card: var(--app-theme-surface);
   --card-foreground: var(--app-theme-text);
   --accent: var(--app-theme-accent-surface);
+  /* Opaque for the built-in themes only; an imported theme may keep alpha here. */
   --accent-opaque: var(--accent);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --muted: var(--app-theme-muted);
