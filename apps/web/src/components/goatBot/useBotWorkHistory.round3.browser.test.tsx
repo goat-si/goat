@@ -1,4 +1,5 @@
 import {
+  BotId,
   ChannelTaskId,
   EnvironmentId,
   type ChannelListBotThreadsResult,
@@ -31,8 +32,16 @@ const page = (rows: readonly unknown[], history: Record<string, unknown>) => ({
   value: { rows, mainMessageCount: 0, history },
 });
 const current = (rows: unknown[]) => ({ rows, mainMessageCount: 0 }) as ChannelListBotThreadsResult;
-function History({ list, revision = 0 }: { list: ChannelListBotThreadsResult; revision?: number }) {
-  const history = useBotWorkHistory(env, null, capabilities, list, revision, true);
+function History({
+  list,
+  revision = 0,
+  botId = null,
+}: {
+  list: ChannelListBotThreadsResult;
+  revision?: number;
+  botId?: BotId | null;
+}) {
+  const history = useBotWorkHistory(env, botId, capabilities, list, revision, true);
   return (
     <>
       {history.hasMore && <button onClick={history.loadMore}>Read history</button>}
@@ -54,6 +63,52 @@ function History({ list, revision = 0 }: { list: ChannelListBotThreadsResult; re
     </>
   );
 }
+
+it("keeps the walk and its pending page when the current list refreshes", async () => {
+  setup();
+  let finish: (value: ReturnType<typeof page>) => void = () => {};
+  mock.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await screen.rerender(<History list={current([])} revision={1} />);
+  await act(() => finish(page([old], {})));
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
+  expect(mock.read).toHaveBeenCalledTimes(1);
+});
+
+it("remembers unsupported history across current-list refreshes", async () => {
+  setup();
+  mock.read.mockResolvedValueOnce({ _tag: "Success", value: { rows: [], mainMessageCount: 0 } });
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect
+    .element(screen.getByRole("button", { name: "Read history" }))
+    .not.toBeInTheDocument();
+  await screen.rerender(<History list={current([])} revision={1} />);
+  await expect
+    .element(screen.getByRole("button", { name: "Read history" }))
+    .not.toBeInTheDocument();
+});
+
+it("drops a pending page for the previous bot", async () => {
+  setup();
+  let finish: (value: ReturnType<typeof page>) => void = () => {};
+  mock.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await using screen = await render(<History list={current([])} botId={BotId.make("first")} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await screen.rerender(<History list={current([])} botId={BotId.make("second")} />);
+  await act(() => finish(page([old], {})));
+  await screen.rerender(<History list={current([])} botId={BotId.make("first")} />);
+  await expect.element(screen.getByText("Old task Unpinned")).not.toBeInTheDocument();
+});
 function setup() {
   resetHistoryTasksForTests();
   mock.read.mockReset();
