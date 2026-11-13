@@ -51,8 +51,12 @@ export function useMobileBotWorkHistory(input: {
   const walk = held.scope === scope ? held.walk : EMPTY_WALK;
   // Each time the computer goes offline the epoch moves, which ends any press started before it.
   const [connection, setConnection] = useState({ enabled, epoch: 0 });
-  if (connection.enabled !== enabled)
+  if (connection.enabled !== enabled) {
     setConnection({ enabled, epoch: enabled ? connection.epoch : connection.epoch + 1 });
+    // The press that lost its computer stops counting as busy, so a reconnect can press again.
+    if (!enabled && held.walk.loading)
+      setHeld((state) => ({ ...state, walk: { ...state.walk, loading: false } }));
+  }
   const live = useRef({ scope, epoch: connection.epoch });
   // oxlint-disable-next-line goat/react-effect-budget -- A running press checks the scope and connection it started with against the latest ones between its requests.
   useEffect(() => {
@@ -103,7 +107,7 @@ export function useMobileBotWorkHistory(input: {
     });
     if (outcome.kind === "applied")
       update(press.scope, (state) => applyHistoryPress(state, outcome.result));
-    else
+    else if (running.current === press)
       update(press.scope, (state) => ({
         ...state,
         loading: false,

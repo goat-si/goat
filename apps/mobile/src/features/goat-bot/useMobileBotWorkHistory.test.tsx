@@ -239,6 +239,24 @@ it("applies nothing from a press that lost its computer, even once it reconnects
   expect(view().failed).toBe(false);
 });
 
+it("frees Show more on reconnect while the press that lost its computer is still unanswered", async () => {
+  setup();
+  await show();
+  await press();
+  await show({ enabled: false });
+  await show({ enabled: true });
+  expect(view().loading).toBe(false);
+  await press();
+  expect(net.calls).toHaveLength(2);
+  expect(net.calls[1]?.cursor).toBeUndefined();
+  await net.calls[0]?.answer(page([task("x")]));
+  expect(view().loading).toBe(true);
+  expect(titles()).toEqual(["now"]);
+  await net.calls[1]?.answer(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
+  expect(view().loading).toBe(false);
+  expect(titles()).toEqual(["now", "a", "b", "c", "d", "e"]);
+});
+
 it("drops a late page and a late read mark that belong to an earlier opening of Home", async () => {
   setup();
   await show();

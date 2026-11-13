@@ -130,7 +130,7 @@ export function MobileBotWork(props: {
   /** Task cards in the conversation; the Tasks tab lists the ones the server no longer does. */
   readonly chatTasks?: ReadonlyArray<GoatBotTaskCard>;
   /** The transcript's card for the task this screen shows, for a task the server no longer lists. */
-  readonly taskCardInfo?: Pick<GoatBotTaskCard, "title" | "statusLabel"> | null;
+  readonly taskCardInfo?: GoatBotTaskCard | null;
   /** Changes when the bot answers or a task moves on, which may have changed the notes. */
   readonly notesRefreshKey?: string | undefined;
   /** Changes with every task record in the bot's conversation, including tasks past the list. */
@@ -188,6 +188,12 @@ export function MobileBotWork(props: {
   const homeRows = props.taskId ? rows : history.rows;
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
+  // Where a row of the Home over an older task leads, taken once that sheet has slid away on iOS.
+  const olderNext = useRef<(() => void) | null>(null);
+  const afterOlderHome = (go: () => void) => {
+    if (Platform.OS === "android") go();
+    else olderNext.current = go;
+  };
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
   const childTaskId = props.taskId ?? peekTaskId;
@@ -827,6 +833,7 @@ export function MobileBotWork(props: {
           onOpenThread={props.onOpenThread}
           onOpenHome={() => setOlderHome("open")}
           taskCard={props.taskCard}
+          card={props.taskCardInfo ?? null}
         />
       ) : props.sheetOnly ? null : Platform.OS === "android" ? (
         // Android hides the native header, so the chip that opens the home sits above the chat.
@@ -864,10 +871,16 @@ export function MobileBotWork(props: {
           onOpenChange={(next) => {
             if (!next) setOlderHome(Platform.OS === "android" ? null : "closing");
           }}
-          onDismissed={() => setOlderHome(null)}
-          onOpenTask={(id, title) => {
-            if (id !== props.taskId) props.onOpenTask(id, title);
+          onDismissed={() => {
+            setOlderHome(null);
+            const go = olderNext.current;
+            olderNext.current = null;
+            go?.();
           }}
+          onOpenTask={(id, title) => {
+            if (id !== props.taskId) afterOlderHome(() => props.onOpenTask(id, title));
+          }}
+          onOpenThread={(thread) => afterOlderHome(() => props.onOpenThread(thread))}
         />
       ) : null}
       <Modal

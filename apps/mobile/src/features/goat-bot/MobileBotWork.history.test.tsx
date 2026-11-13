@@ -2,7 +2,8 @@ import { useState } from "react";
 import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -53,12 +54,17 @@ vi.mock("react-native", () => ({
     );
   },
   // Android's system back and an iOS swipe-down both reach the sheet as onRequestClose.
-  Modal: (props: Props & { visible: boolean; onRequestClose?: () => void }) =>
+  // A closed sheet with a dismissal callback offers it, as iOS reports the end of the slide-away.
+  Modal: (
+    props: Props & { visible: boolean; onRequestClose?: () => void; onDismiss?: () => void },
+  ) =>
     props.visible ? (
       <div>
         <button aria-label="System back" onClick={props.onRequestClose} />
         {props.children}
       </div>
+    ) : props.onDismiss ? (
+      <button aria-label="Sheet gone" onClick={props.onDismiss} />
     ) : null,
   Alert: { alert: nativeAlert },
   AccessibilityInfo: { announceForAccessibility: (text: string) => state.announced.push(text) },
@@ -304,7 +310,10 @@ vi.mock("../../state/use-thread-detail", () => ({
 }));
 vi.mock("../settings/appearance/useScaledTextRole", () => ({ useScaledTextRole: () => ({}) }));
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
-vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
+vi.mock("../../state/use-remote-environment-registry", () => ({
+  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
+}));
+vi.mock("./GoatBotLinkedText", () => ({ GoatBotLinkedText: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => <p>status card</p> }));
 vi.mock("./MobileBotComputer", () => ({
@@ -628,7 +637,11 @@ it("says when some of an older task's threads are only in Threads", async () => 
   expect(home()?.textContent).toContain("Some threads are listed in Threads.");
 });
 
-async function openOlderTask(taskId = "o1", taskTitle = "Old report") {
+async function openOlderTask(
+  taskId = "o1",
+  taskTitle = "Old report",
+  card?: { taskCard: ReactNode; taskCardInfo: GoatBotTaskCard },
+) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   root ??= createRoot(container);
   await act(async () =>
@@ -638,6 +651,8 @@ async function openOlderTask(taskId = "o1", taskTitle = "Old report") {
         seen
         taskId={ChannelTaskId.make(taskId)}
         taskTitle={taskTitle}
+        taskCard={card?.taskCard}
+        taskCardInfo={card?.taskCardInfo}
         onOpenTask={state.openTask}
         onOpenThread={state.openThread}
         onDraft={state.draft}
@@ -664,7 +679,32 @@ it("an older task's screen explains where its actions are, and Open Home opens H
   expect(container.textContent).toContain("Status and actions for older work");
 });
 
-it("from Home over an older task, the same task only closes Home and another task opens", async () => {
+it("an older task's screen keeps its card's way to the work, without the status it states", async () => {
+  const taskCardInfo: GoatBotTaskCard = {
+    key: "o1",
+    revision: 1,
+    updatedAt: at,
+    title: "Old report",
+    statusLabel: "Running",
+    tone: "active",
+    sourceLabel: null,
+    summary: null,
+    attentionLabel: null,
+    pullRequests: [],
+    target: {
+      kind: "thread",
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("w-1"),
+      host: "mac-mini",
+    },
+  };
+  await openOlderTask("o1", "Old report", { taskCard: <span>Running card</span>, taskCardInfo });
+  expect(container.textContent).toContain("Status and actions for older work");
+  expect(container.textContent).not.toContain("Running");
+  expect(container.textContent).toContain("Connect mac-mini to open");
+});
+
+it("from Home over an older task, the same task only closes Home and another task opens once Home has gone", async () => {
   await openOlderTask();
   await press("Open Home");
   await showOlder();
@@ -672,19 +712,31 @@ it("from Home over an older task, the same task only closes Home and another tas
   await act(async () => choices()[1]?.onPress());
   expect(state.openTask).not.toHaveBeenCalled();
   expect(home()).toBeNull();
+  await press("Sheet gone");
+  expect(state.openTask).not.toHaveBeenCalled();
   await press("Open Home");
   await showOlder();
   await press("Actions for Old two");
   await act(async () => choices()[1]?.onPress());
+  expect(home()).toBeNull();
+  expect(state.openTask).not.toHaveBeenCalled();
+  await press("Sheet gone");
   expect(state.openTask).toHaveBeenCalledWith("o2", "Old two");
+  expect(state.openTask).toHaveBeenCalledTimes(1);
+  expect(button("Sheet gone")).toBeUndefined();
 });
 
-it("draws no chat chip for Home over an older task on Android", async () => {
+it("on Android, Home over an older task draws no chat chip and opens another task as it closes", async () => {
   nativePlatform.OS = "android";
   try {
     await openOlderTask();
     await press("Open Home");
     expect(button("GOAT Bot")).toBeUndefined();
+    await showOlder();
+    await press("Actions for Old two");
+    await act(async () => choices()[1]?.onPress());
+    expect(home()).toBeNull();
+    expect(state.openTask).toHaveBeenCalledWith("o2", "Old two");
   } finally {
     nativePlatform.OS = "ios";
   }

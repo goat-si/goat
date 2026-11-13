@@ -511,8 +511,20 @@ it("names a task the server no longer lists from its conversation card, as older
       <WorkWithChip
         visible
         taskId={ChannelTaskId.make("task-old")}
-        taskCardInfo={{ title: "Summarize the README", statusLabel: "Needs your input" }}
-        taskCard={<span>Connect mac-mini to open</span>}
+        taskCardInfo={{
+          key: "task-old",
+          revision: 1,
+          updatedAt: "2026-11-11T02:00:00.000Z",
+          title: "Summarize the README",
+          statusLabel: "Needs your input",
+          tone: "attention",
+          sourceLabel: null,
+          summary: null,
+          attentionLabel: null,
+          pullRequests: [],
+          target: { kind: "none", label: "No thread" },
+        }}
+        taskCard={<span>Needs your input</span>}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
@@ -522,7 +534,7 @@ it("names a task the server no longer lists from its conversation card, as older
   expect(container.textContent).toContain(
     "Status and actions for older work are in GOAT Bot's Home.",
   );
-  expect(container.textContent).toContain("Connect mac-mini to open");
+  expect(container.textContent).not.toContain("Needs your input");
   expect(container.textContent).not.toContain("Task not found");
 });
 

@@ -2,11 +2,13 @@ import {
   presentTaskStatus,
   taskAttemptLabel,
   type BotWorkTask,
+  type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import type { ChannelUpdateTaskViewInput, EnvironmentId, ThreadId } from "@goat/contracts";
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
+import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
 
 /**
@@ -33,6 +35,8 @@ export function MobileTaskHeader(props: {
   readonly onOpenThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
   readonly onOpenHome: () => void;
   readonly taskCard?: ReactNode;
+  /** The conversation's card, drawn without the status it may no longer hold for older work. */
+  readonly card: GoatBotTaskCard | null;
 }) {
   const { task } = props;
   return (
@@ -95,7 +99,16 @@ export function MobileTaskHeader(props: {
           onOpenThread={props.onOpenThread}
         />
       ) : null}
-      {props.taskCard}
+      {!props.older ? (
+        props.taskCard
+      ) : props.card ? (
+        <GoatBotTaskRow
+          card={props.card}
+          statusHidden
+          disabled={!props.enabled}
+          onSelectThread={props.onOpenThread}
+        />
+      ) : null}
     </View>
   );
 }
