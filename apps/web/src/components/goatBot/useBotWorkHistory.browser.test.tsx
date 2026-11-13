@@ -49,6 +49,9 @@ function History({
       <button onClick={() => history.markRead(taskId, "2026-11-13T01:00:00Z")}>Read valid</button>
       <button onClick={() => history.markRead(taskId, "invalid")}>Read invalid</button>
       {history.incomplete && <p>Older work may be missing</p>}
+      {history.remoteWork.map((item) => (
+        <span key={item.childWorkId}>remote {item.childWorkId}</span>
+      ))}
       {history.rows
         .filter((item) => item.kind === "task")
         .map((item) => (
@@ -142,7 +145,7 @@ it("a page that arrives after Pin, still saying unpinned, does not change the pi
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
 });
 
-it("caps a crossing page and warns while keeping the earlier work", async () => {
+it("a press that crosses 500 older tasks is applied whole, then the walk stops with the notice", async () => {
   setup();
   for (let batch = 0; batch < 10; batch++) {
     const count = batch === 9 ? 49 : 50;
@@ -172,7 +175,7 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
   await expect.element(screen.getByText("Task item-0 Unpinned")).toBeVisible();
   await expect.element(screen.getByText("Task item-499 Unpinned")).toBeVisible();
-  await expect.element(screen.getByText("Task item-500 Unpinned")).not.toBeInTheDocument();
+  await expect.element(screen.getByText("Task item-504 Unpinned")).toBeVisible();
   expect(mock.read).toHaveBeenCalledTimes(11);
   await expect
     .element(screen.getByRole("button", { name: "Read history" }))
@@ -294,9 +297,9 @@ it("tasks the current list holds do not count toward the 500 older tasks", async
   await using screen = await render(<History list={current(listed)} />);
   for (let press = 0; press < 11; press++)
     await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await expect.element(screen.getByText("Task older-499 Unpinned")).toBeVisible();
-  expect(screen.getByText("Task older-500 Unpinned").query()).toBeNull();
+  await expect.element(screen.getByText("Task older-500 Unpinned")).toBeVisible();
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Read history" }).query()).toBeNull();
 });
 
 it("exactly 500 older tasks beside current ones complete the walk without a warning", async () => {
@@ -325,4 +328,84 @@ it("marking an older task read through one activity leaves newer activity unread
   await userEvent.click(screen.getByRole("button", { name: "Read valid" }));
   await expect.element(screen.getByText("Read through 2026-11-13T01:00:00Z")).toBeVisible();
   await expect.element(screen.getByText(/Old task Unpinned Unread/)).toBeVisible();
+});
+
+const olderTask = (id: string) => ({
+  ...old,
+  task: { ...old.task, taskId: ChannelTaskId.make(id), title: `Task ${id}` },
+  view: { ...old.view, taskId: ChannelTaskId.make(id) },
+});
+
+function holdNextRead() {
+  let finish: (value: ReturnType<typeof page>) => void = () => {};
+  mock.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  return (value: ReturnType<typeof page>) => act(() => finish(value));
+}
+
+it("a held task entering the current list during a read: the whole page is applied and the limit follows the new count", async () => {
+  setup();
+  const held = Array.from({ length: 499 }, (_, index) => olderTask(`held-${index}`));
+  mock.read.mockResolvedValueOnce(page(held, { nextCursor: "c1" }));
+  const land = holdNextRead();
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("Task held-498 Unpinned")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await screen.rerender(<History list={current([olderTask("held-0")])} />);
+  const fresh = Array.from({ length: 5 }, (_, index) => olderTask(`new-${index}`));
+  await land(page(fresh, { nextCursor: "c2" }));
+  for (const index of [0, 1, 2, 3, 4])
+    await expect.element(screen.getByText(`Task new-${index} Unpinned`)).toBeVisible();
+  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Read history" }).query()).toBeNull();
+});
+
+it("a current task leaving during a read drops nothing, and the notice follows the count", async () => {
+  setup();
+  const leaving = olderTask("leaving");
+  const held = Array.from({ length: 496 }, (_, index) => olderTask(`held-${index}`));
+  mock.read.mockResolvedValueOnce(page([leaving, ...held], { nextCursor: "c1" }));
+  const land = holdNextRead();
+  await using screen = await render(<History list={current([leaving])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("Task held-495 Unpinned")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await screen.rerender(<History list={current([])} />);
+  const fresh = Array.from({ length: 5 }, (_, index) => olderTask(`new-${index}`));
+  await land(page(fresh, { nextCursor: "c2" }));
+  for (const index of [0, 1, 2, 3, 4])
+    await expect.element(screen.getByText(`Task new-${index} Unpinned`)).toBeVisible();
+  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Read history" }).query()).toBeNull();
+});
+
+it("a remote launch only history lists stays with the task through Pin and Unpin, listed once", async () => {
+  setup();
+  const launch = {
+    childWorkId: "remote-1",
+    taskId,
+    callerThreadId: "bot",
+    host: "macbook",
+    state: "completed",
+    lastActivityAt: "2026-11-13T00:00:00Z",
+    threadId: "remote-thread",
+    environmentId: "remote-env",
+  };
+  mock.read.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { rows: [old], remoteWork: [launch], mainMessageCount: 0, history: {} },
+  });
+  await using screen = await render(<History list={current([])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("remote remote-1")).toBeVisible();
+  await screen.rerender(<History list={current([pinnedOld])} />);
+  await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
+  expect(screen.getByText("remote remote-1").all()).toHaveLength(1);
+  await screen.rerender(<History list={current([])} />);
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
+  await expect.element(screen.getByText("remote remote-1")).toBeVisible();
 });

@@ -188,10 +188,14 @@ export function GoatBotHomeWork({
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {/* Mounted with Home's history, so a new notice is announced once. */}
+      {/* One region per notice, mounted with Home's history, so one never repeats the other. */}
       {history && (
         <div role="status" className="px-3 text-xs text-muted-foreground">
           {history.incomplete && <p className="py-2">Older work may be missing</p>}
+        </div>
+      )}
+      {history && (
+        <div role="status" className="px-3 text-xs text-muted-foreground">
           {history.failed && <p className="py-2">Couldn't load older work.</p>}
         </div>
       )}

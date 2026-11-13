@@ -31,7 +31,6 @@ const EMPTY_WALK = {
   started: false,
   partial: false,
   endedEarly: false,
-  capped: false,
   unsupported: false,
   loading: false,
   failed: false,
@@ -39,31 +38,39 @@ const EMPTY_WALK = {
 const time = (value: string | null) => (value === null ? NaN : Date.parse(value));
 const taskRows = (rows: readonly BotThreadRow[]) =>
   new Map(rows.flatMap((row) => (row.kind === "task" ? [[row.task.taskId, row] as const] : [])));
+// The current list's items win by key; the entry's history-only items, such as released remote
+// launches that only history lists, are kept.
+const union = <T>(mine: readonly T[], theirs: readonly T[], key: (item: T) => string) => {
+  const keys = new Set(theirs.map(key));
+  return [...theirs, ...mine.filter((item) => !keys.has(key(item)))];
+};
 
-// The server's current list is the authority for any task it holds: its row replaces the walk's
-// entry, so the entry keeps the last reported state after the task leaves that list. The pin is
+// The server's current list is the authority for any task it holds: its task row replaces the
+// entry's, so the entry keeps the last reported state after the task leaves that list. The pin is
 // not carried: the server lists every pinned task, so one that left the list was unpinned, apart
 // from pinned tasks its 100-row cut still drops.
 function writeThrough(walk: typeof EMPTY_WALK, current: ChannelListBotThreadsResult) {
   const listed = taskRows(current.rows);
   if (!walk.entries.some((entry) => listed.has(entry.task.task.taskId))) return walk;
-  const entry = (row: TaskRow): Entry => {
-    const task = { ...row, view: { ...row.view, pinnedAt: null } };
-    return {
-      task,
-      rows: [
-        task,
-        ...current.rows.filter((row) => row.kind === "coding" && row.taskId === task.task.taskId),
-      ],
-      remoteWork: (current.remoteWork ?? []).filter((item) => item.taskId === task.task.taskId),
-      truncated: false,
-    };
-  };
   return {
     ...walk,
     entries: walk.entries.map((item) => {
       const row = listed.get(item.task.task.taskId);
-      return row ? { ...entry(row), truncated: item.truncated } : item;
+      if (!row) return item;
+      const id = row.task.taskId;
+      const task = { ...row, view: { ...row.view, pinnedAt: null } };
+      const coding = (rows: readonly BotThreadRow[]) =>
+        rows.filter((other) => other.kind === "coding" && other.taskId === id);
+      return {
+        ...item,
+        task,
+        rows: [task, ...union(coding(item.rows), coding(current.rows), botThreadKey)],
+        remoteWork: union(
+          item.remoteWork,
+          (current.remoteWork ?? []).filter((other) => other.taskId === id),
+          (other) => other.childWorkId,
+        ),
+      };
     }),
   };
 }
@@ -86,8 +93,13 @@ export function useBotWorkHistory(
   const listed = taskRows(current.rows);
   // What the current list says about tasks the walk holds; a change writes it through once.
   const held = walk.entries.flatMap((entry) => listed.get(entry.task.task.taskId) ?? []);
-  const reported = JSON.stringify(held.map((row) => [row.task, row.view, row.unread]));
-  const [written, setWritten] = useState("[]");
+  const heldIds = new Set(held.map((row) => row.task.taskId));
+  const reported = JSON.stringify([
+    held.map((row) => [row.task, row.view, row.unread]),
+    current.rows.filter((row) => row.kind === "coding" && heldIds.has(row.taskId)),
+    (current.remoteWork ?? []).filter((item) => heldIds.has(item.taskId)),
+  ]);
+  const [written, setWritten] = useState("[[],[],[]]");
   if (reported !== written) {
     setWritten(reported);
     setWalk((state) => writeThrough(state, current));
@@ -104,8 +116,11 @@ export function useBotWorkHistory(
     },
   };
   const merged = mergeBotThreadHistory(current, supported ? [history] : []);
-  const hasMore =
-    loaded && supported && !walk.capped && (!walk.started || walk.cursor !== undefined);
+  // Only older tasks count: the walk stops reading once it holds 500 of them, and a task that
+  // returns to the current list lets it continue.
+  const older = walk.entries.filter((entry) => !listed.has(entry.task.task.taskId)).length;
+  const full = older >= HISTORY_LIMIT;
+  const hasMore = loaded && supported && !full && (!walk.started || walk.cursor !== undefined);
   // Opening an older row's peek acknowledges it; its read-through only moves forward.
   function markRead(taskId: ChannelTaskId, through: string) {
     if (!Number.isFinite(time(through))) return;
@@ -149,25 +164,16 @@ export function useBotWorkHistory(
         if (!result.supported) return { ...state, unsupported: true, loading: false };
         const entries = [...state.entries];
         const ids = new Set(entries.map((entry) => entry.task.task.taskId));
-        // Only older tasks count toward the limit; current ones stay so they can leave that list.
-        let older = entries.filter((entry) => !listed.has(entry.task.task.taskId)).length;
-        let { partial, endedEarly, cursor, capped } = state;
+        let { partial, endedEarly, cursor } = state;
         for (const { result: page } of result.pages) {
           for (const row of page.rows) {
             if (row.kind !== "task" || ids.has(row.task.taskId)) continue;
-            const now = listed.get(row.task.taskId);
-            if (now === undefined && older >= HISTORY_LIMIT) {
-              capped = true;
-              continue;
-            }
             const id = row.task.taskId;
             ids.add(id);
-            if (now === undefined) older += 1;
-            const task = now ? { ...now, view: { ...now.view, pinnedAt: null } } : row;
             entries.push({
-              task,
+              task: row,
               rows: [
-                task,
+                row,
                 ...page.rows.filter((item) => item.kind === "coding" && item.taskId === id),
               ],
               remoteWork: (page.remoteWork ?? []).filter((item) => item.taskId === id),
@@ -178,14 +184,12 @@ export function useBotWorkHistory(
           endedEarly = endedEarly || page.history?.endedEarly === true;
           cursor = page.history?.nextCursor;
         }
-        if (older >= HISTORY_LIMIT && cursor !== undefined) capped = true;
         return {
           ...state,
           entries,
           partial,
           endedEarly,
           cursor,
-          capped,
           started: true,
           loading: false,
         };
@@ -203,7 +207,8 @@ export function useBotWorkHistory(
     rows: useMerged ? merged.rows : current.rows,
     remoteWork: useMerged ? merged.remoteWork : (current.remoteWork ?? []),
     launchesTruncated: useMerged ? merged.launchesTruncated : new Set<ChannelTaskId>(),
-    incomplete: supported && (walk.partial || walk.endedEarly || walk.capped),
+    incomplete:
+      supported && (walk.partial || walk.endedEarly || (full && walk.cursor !== undefined)),
     hasMore,
     loading: walk.loading,
     failed: walk.failed,

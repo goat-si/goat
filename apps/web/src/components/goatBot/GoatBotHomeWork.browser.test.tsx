@@ -315,7 +315,7 @@ it("a failed older-work read is announced in the status region", async () => {
   await using screen = await render(
     view(rows, { history: history({ supported: true, hasMore: true }) }),
   );
-  await expect.element(screen.getByRole("status")).toBeInTheDocument();
+  expect(screen.getByRole("status").all()).toHaveLength(2);
   await screen.rerender(
     view(rows, { history: history({ supported: true, hasMore: true, failed: true }) }),
   );
