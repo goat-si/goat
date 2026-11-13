@@ -2106,7 +2106,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
     ) {
       event?.preventDefault();
-      return;
+      return false;
     }
     const waitNotice = composerSendWaitNotice({
       compressingImage: !!activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0,
@@ -2115,9 +2115,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (waitNotice) {
       event?.preventDefault();
       toastManager.add({ type: "info", ...waitNotice });
-      return;
+      return false;
     }
-    if (sendAfterUploads.intercept(event, fromQueue)) return;
+    if (sendAfterUploads.intercept(event, fromQueue)) return false;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
@@ -2139,11 +2139,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     });
     setComposerSubmissionError(submission.validationMessage);
-    if (!submission.didDispatch) return;
+    if (!submission.didDispatch) return false;
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
       blurMobileComposerAfterSend();
     }
+    return true;
   };
   const submitComposerStable = useStableCallback(submitComposer);
   useQueuedSendDelivery(sendAfterUploads, () =>
@@ -2163,7 +2164,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const handleSubmitMessageStable = useStableCallback(handleSubmitMessage);
   const submitCitationAndSend = () => {
-    submitComposer(
+    return submitComposer(
       undefined,
       resolveComposerDispatchMode({
         running: phase === "running",
