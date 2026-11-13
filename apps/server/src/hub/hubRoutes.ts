@@ -302,12 +302,25 @@ export const makeRoutes = (deps: RoutesDeps) => {
             };
       }
       yield* deps.audit(caller, alias, "started", input.decisionId);
-      const answer = routesAnswer(
-        alias,
-        link.linkId,
-        yield* deps.ocx.home(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS),
-        true,
+      // Once ocx may have reached the Home, an error or an interruption leaves the edit unknown.
+      const ran = yield* deps.ocx.home(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS).pipe(
+        Effect.map((output) => ({ output })),
+        Effect.catchTags({
+          HubOcxError: (error) =>
+            error.reason === "ocx_missing" ? Effect.fail(error) : Effect.succeed({ output: null }),
+        }),
+        Effect.onInterrupt(() => deps.used(caller, input.decisionId).pipe(Effect.ignore)),
       );
+      const answer: HubDeviceRoutesResult =
+        ran.output === null
+          ? {
+              deviceAlias: alias,
+              linkId: link.linkId,
+              state: "failed",
+              message:
+                "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
+            }
+          : routesAnswer(alias, link.linkId, ran.output, true);
       // Only a fixed refusal proves nothing changed; any other outcome spends the approval.
       const refused =
         answer.state === "unsupported" || (answer.state === "failed" && answer.code !== undefined);

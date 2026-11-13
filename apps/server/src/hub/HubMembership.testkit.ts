@@ -135,6 +135,8 @@ export interface Fixture {
   readonly revokeFails?: boolean;
   /** Home `ocx link routes` answers; absent answers as an OpenCodex without the command. */
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
+  /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
+  readonly routesRun?: (args: ReadonlyArray<string>) => Effect.Effect<OcxOutput, HubOcxError>;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -174,7 +176,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
     if (group === "link" && command === "routes")
-      return Effect.succeed(fixture.routes?.(args) ?? { code: 2, stdout: "" });
+      return (
+        fixture.routesRun?.(args) ??
+        Effect.succeed(fixture.routes?.(args) ?? { code: 2, stdout: "" })
+      );
     if (command === "add") {
       if (fixture.addThrows === true)
         return Effect.fail(

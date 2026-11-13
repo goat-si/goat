@@ -1,9 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { HubDeviceRoutesUpdateResult } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 
-import type { OcxOutput } from "./HubOcx.ts";
+import { HubOcxError, type OcxOutput } from "./HubOcx.ts";
 import { scope, setup, threadScope } from "./HubMembership.testkit.ts";
 
 const LINK = "lnk_0123456789abcdef";
@@ -248,8 +250,16 @@ it.effect(
 );
 const approvedChange = Effect.fn("routesTest.approvedChange")(function* (
   routes: (args: ReadonlyArray<string>) => OcxOutput,
+  run?: (args: ReadonlyArray<string>) => Effect.Effect<OcxOutput, HubOcxError> | undefined,
 ) {
-  const hub = yield* setup({ profile: "hub-admin", linked: ["mini"], routes });
+  const hub = yield* setup({
+    profile: "hub-admin",
+    linked: ["mini"],
+    routes,
+    ...(run === undefined
+      ? {}
+      : { routesRun: (args) => run(args) ?? Effect.succeed(routes(args)) }),
+  });
   const asked = yield* hub.membership.updateRoutes(scope, add);
   yield* hub.approve(asked.decisionId!);
   return { hub, decisionId: asked.decisionId! };
@@ -310,5 +320,61 @@ it.effect(
         decisionId: asked.decisionId!,
       });
       expect(changed.routes).toEqual(["pen-mini", "mini"]);
+    }),
+);
+it.effect(
+  "an approved change whose ocx stopped after it started, or was interrupted, spends the approval; ocx missing before it ran keeps it",
+  () =>
+    Effect.gen(function* () {
+      const lost = yield* approvedChange(routesHome(), (args) =>
+        args[2] === "add"
+          ? Effect.fail(
+              new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+            )
+          : undefined,
+      );
+      const stopped = yield* lost.hub.membership.updateRoutes(scope, {
+        ...add,
+        decisionId: lost.decisionId,
+      });
+      expect(stopped.state).toBe("failed");
+      expect(stopped.message).toBe(
+        "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
+      );
+      expect((yield* lost.hub.consumed).map(({ approval_id }) => approval_id)).toEqual([
+        lost.decisionId,
+      ]);
+
+      const started = yield* Deferred.make<void>();
+      const hung = yield* approvedChange(routesHome(), (args) =>
+        args[2] === "add"
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+          : undefined,
+      );
+      const fiber = yield* hung.hub.membership
+        .updateRoutes(scope, { ...add, decisionId: hung.decisionId })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      expect((yield* hung.hub.consumed).map(({ approval_id }) => approval_id)).toEqual([
+        hung.decisionId,
+      ]);
+
+      const missing = yield* approvedChange(routesHome(), (args) =>
+        args[2] === "add"
+          ? Effect.fail(
+              new HubOcxError({
+                reason: "ocx_missing",
+                message: "OpenCodex is not installed on this hub.",
+              }),
+            )
+          : undefined,
+      );
+      const refused = yield* missing.hub.membership.updateRoutes(scope, {
+        ...add,
+        decisionId: missing.decisionId,
+      });
+      expect(refused.state).toBe("failed");
+      expect(yield* missing.hub.consumed).toEqual([]);
     }),
 );
