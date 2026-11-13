@@ -968,3 +968,27 @@ it.effect(
       expect(result.link.links[0]?.route).toBeUndefined();
     }),
 );
+
+it.effect("a malformed traffic block reads as not measured and never hides its link row", () =>
+  Effect.gen(function* () {
+    const linkTraffic = yield* HubLinkTraffic.make(Effect.succeed(new Set(["pen-mac"]))).pipe(
+      Effect.provide(Settings.ServerSettingsService.layerTest()),
+    );
+    const row = {
+      ...trafficRow(0),
+      traffic: { epoch: "not hex", generation: -1, toHomeBytes: "x" },
+    };
+    const { inventory } = yield* setup({
+      fixture: fleet.home,
+      link: { role: "home", links: [row] },
+      linkTraffic,
+    });
+    const result = yield* inventory.read;
+    expect(result.link.links).toHaveLength(1);
+    expect(result.link.links[0]).toMatchObject({
+      id: "lnk_a",
+      route: { name: "pen-mac", via: "relay" },
+    });
+    expect(result.link.links[0]?.traffic).toBeUndefined();
+  }),
+);
