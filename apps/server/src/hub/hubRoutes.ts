@@ -257,11 +257,23 @@ export const makeRoutes = (deps: RoutesDeps) => {
           code: link.code,
           message: link.failed,
         } satisfies HubDeviceRoutesResult;
-      return routesAnswer(
-        alias,
-        link.linkId,
-        yield* deps.ocx.home(routesArgs(link.linkId), ROUTES_TIMEOUT_MS),
+      // The status read succeeded: a failure of the routes read is not the status read's.
+      const output = yield* deps.ocx.home(routesArgs(link.linkId), ROUTES_TIMEOUT_MS).pipe(
+        Effect.catchTags({
+          HubOcxError: (error) =>
+            error.reason === "unreachable"
+              ? Effect.succeed({ failedRead: error.message })
+              : Effect.fail(error),
+        }),
       );
+      if ("failedRead" in output)
+        return {
+          deviceAlias: alias,
+          linkId: link.linkId,
+          state: "failed",
+          message: output.failedRead,
+        } satisfies HubDeviceRoutesResult;
+      return routesAnswer(alias, link.linkId, output);
     }).pipe(Effect.catchTags({ HubOcxError: unreachable(alias) }));
   });
 

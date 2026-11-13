@@ -422,3 +422,20 @@ it.effect(
       }
     }),
 );
+it.effect(
+  "a routes read that fails after the link status was read does not blame the status read",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        linked: ["mini"],
+        routesRun: () =>
+          Effect.fail(
+            new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+          ),
+      });
+      const listed = yield* hub.membership.routes(scope, { deviceAlias: "mini" });
+      expect(listed.state).toBe("failed");
+      expect(listed.code).toBeUndefined();
+      expect(listed.message).toBe("ocx could not be run here.");
+    }),
+);
