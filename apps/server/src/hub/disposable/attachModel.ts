@@ -211,6 +211,7 @@ export const stateMessage = (
   state: string,
   name: string,
   removedFromPen: boolean,
+  admitted: boolean,
 ): { readonly message: string; readonly nextAction: string | null } => {
   if (state === "failed" && removedFromPen)
     return {
@@ -236,11 +237,20 @@ export const stateMessage = (
         nextAction: "Refresh the machine list later; GOAT asks Pen again each time.",
       };
     case "paused":
-      return {
-        message: name + " joined Pen after the consent for its attach changed.",
-        nextAction:
-          "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
-      };
+      // Paused covers both a join after the attach lost its authority and a withdrawal in flight.
+      return admitted
+        ? {
+            message:
+              name +
+              " joined Pen after its attach lost its authority: the consent changed or ended, or the provisioner's grant did.",
+            nextAction:
+              "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
+          }
+        : {
+            message:
+              "GOAT is withdrawing this invite because its attach lost its authority; Pen has not confirmed the cancel yet.",
+            nextAction: "Refresh the machine list later; GOAT asks Pen again each time.",
+          };
     case "failed":
       return {
         message: "The invite ended without admitting the machine.",

@@ -396,3 +396,17 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a withdrawal Pen has not confirmed reads as pending, never as a join", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.loseCancel = true;
+      yield* switchTo({ enabled: false });
+      yield* reconcile;
+      const machine = yield* listed(first.attachId);
+      expect(machine?.state).toBe("paused");
+      expect(machine?.message).not.toContain("joined");
+    }),
+  ),
+);

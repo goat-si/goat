@@ -114,7 +114,12 @@ export const status = (
   row: Row,
   invite?: { readonly token: string; readonly expiresAt: string },
 ): HubMachineStatus => {
-  const { message, nextAction } = stateMessage(row.state, row.name, row.pen_removed_at !== null);
+  const { message, nextAction } = stateMessage(
+    row.state,
+    row.name,
+    row.pen_removed_at !== null,
+    row.pen_admitted_at !== null,
+  );
   const provisioner = provisionerOf(row);
   return {
     attachId: row.attach_id,

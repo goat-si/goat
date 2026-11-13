@@ -121,7 +121,7 @@ export const hubEntries = {
     toolkit: "hostStatus",
     summary: "List this hub's disposable machines with their attach state.",
     description:
-      "List disposable machine records, or one by attachId, with state, step, class and whether the key is still a Pen member. Reading also settles invites from what Pen recorded.",
+      "List disposable machine records, or one by attachId, with state, step, class and whether the key is still a Pen member. Reading asks Pen to settle open invites and waits up to 3 seconds; a slower answer shows on a later read.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
