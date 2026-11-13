@@ -53,6 +53,8 @@ export const extraWaits = (
     /** Once every condition held: takes the download, so the next wait gets the next one. */
     finish: () => {
       if (found === undefined) return {};
+      // A screen-code wait whose tab changed under it fails here, before taking anything.
+      downloads?.confirm?.();
       if (downloads?.claims) found.claim();
       const { fileName, path, sizeBytes, url, completedAt } = found.file;
       return { download: { fileName, path, sizeBytes, url, completedAt } };

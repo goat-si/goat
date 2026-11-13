@@ -1,6 +1,7 @@
 import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { DownloadJournal } from "./downloadJournal.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
@@ -30,4 +31,32 @@ it("a URL glob wait on a URL that already matches holds at once, beside other co
     await expect(
       ServerBrowserPage.waitFor(page, { urlGlob: "https://app.test/*", text: "app" }),
     ).resolves.toEqual({});
+  }));
+
+it("a download wait whose last check fails leaves the download for the next wait", () =>
+  fixture(async (page) => {
+    const journal = new DownloadJournal();
+    const file = {
+      fileName: "report.csv",
+      path: "/artifacts/report.csv",
+      sizeBytes: 3,
+      url: "https://app.test/report.csv",
+      completedAt: "2026-11-13T00:00:00.000Z",
+    };
+    journal.started().saved(file);
+    const downloads = { journal, since: 0, kept: () => true, claims: true };
+    const moved = () => {
+      throw new Error("the tab moved to another page during the wait");
+    };
+    await expect(
+      ServerBrowserPage.waitFor(page, { download: true }, undefined, {
+        ...downloads,
+        confirm: moved,
+      }),
+    ).rejects.toThrow("the tab moved");
+    await expect(
+      ServerBrowserPage.waitFor(page, { download: true }, undefined, downloads),
+    ).resolves.toEqual({
+      download: file,
+    });
   }));

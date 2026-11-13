@@ -142,7 +142,8 @@ export const downloadsOf = (tab: DownloadsTab, observing = false) => {
     claims: !observing,
   };
 };
-export type DownloadWait = ReturnType<typeof downloadsOf>;
+/** confirm: the caller's last check before a wait takes its download; a throw leaves it there. */
+export type DownloadWait = ReturnType<typeof downloadsOf> & { readonly confirm?: () => void };
 
 /**
  * Journals one download around the tab's own save: the entry settles with the record that save

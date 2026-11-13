@@ -2119,12 +2119,10 @@ const make = Effect.gen(function* () {
           ),
         );
       case "waitFor":
-        return ServerBrowserPage.waitFor(
-          tab.page,
-          waitInput(request, deadlineMs),
-          signal,
-          downloadsOf(tab, observe),
-        ).then(ServerBrowserScreen.recheck(tab, request));
+        return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal, {
+          ...downloadsOf(tab, observe),
+          confirm: () => ServerBrowserScreen.assertScreenExpectation(tab, request),
+        }).then(ServerBrowserScreen.recheck(tab, request));
       case "recordingStart": {
         const recording = await startRecording(tab, actionGate().channel, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
