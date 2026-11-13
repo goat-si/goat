@@ -147,7 +147,8 @@ Once `pen ssh-config --install` has run on a computer, the GOAT desktop app ther
 other machine in the mesh that already runs GOAT, in the sidebar and in **Settings → Connections →
 Pen machines**, with its threads, follow-ups, stop and approvals. This works the same on every
 member: there is no machine you have to open first. A machine that joins appears on its own, and a
-machine that leaves or is revoked disappears together with the sign-in GOAT held for it.
+machine that leaves or is revoked disappears together with the sign-in GOAT held for it. Fleet marks
+such a machine **via Pen**.
 
 - GOAT only attaches to a GOAT that is already on the machine. It never installs or updates GOAT
   there by itself. A member without GOAT reads **Pen member, GOAT not set up**; choose **Set up**
