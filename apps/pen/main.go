@@ -35,6 +35,7 @@ const usage = `usage: pen <command> [flags]
   deny <id>|'<fingerprint>'               refuse a pending request for 24 hours
   account [unbind]                        show or remove the mesh's Google account binding
   ls [--json] [--watch [--until-revoked <member>]]   list members
+  ls --watch --snapshot [--until-stdin-closes]       print the member list with keys on every change
   revoke <member> [--compromised]         remove a member
   leave                                   remove this node and delete its keys
   pipe <node> <port>                      connect stdin/stdout to a member's local port

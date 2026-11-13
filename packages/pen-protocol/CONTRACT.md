@@ -662,6 +662,12 @@ that falls 16 lines behind, or whose socket does not take a line within 5 s, is 
 once, and a ninth is refused. A gap in G or a closed watch means the list is stale: drop it and watch again. Nothing
 may authorize from this list. The `watch` op keeps its v1.1 lines.
 
+`pen ls --watch --snapshot` is this op for a program that cannot open the control socket (Node on Windows has no
+AF_UNIX): it sends the op and copies each line the node answers to stdout unchanged, a refusal line included, and
+is one of the 8 watchers. It exits 1 when the node closes the watch or a line is longer than 1 MiB. It reads its
+standard input only with `--until-stdin-closes`, and then also exits, with 0, when that input ends: a program that
+starts it holds the other end, so the watcher slot is freed when that program is gone.
+
 ### SSH config for exact routes
 
 `pen ssh-config` writes a `Host pen-<nodeId>` block for every member whose node id no member uses as a name
@@ -1081,3 +1087,5 @@ v1.2 member-only reader refuses both valid new forms.
   on the Go relay and one row per node id on the Worker. No wire change.
 - v1.3 (2026-11-14): node side only, no wire change: `pen revoke --node <nodeId> --noise <noisePub>` names the machine
   to revoke by node id and Noise key together ("Revocation and leave").
+- v1.3 (2026-11-14): node side only, no wire change: `pen ls --watch --snapshot [--until-stdin-closes]` prints the
+  `watch.snapshot` lines ("Snapshot watch").
