@@ -307,12 +307,15 @@ vi.mock("../../components/ui/Button", () => ({
     <button onClick={props.onPress}>{props.label}</button>
   ),
 }));
-// Read acknowledgements go to state.run so a test sees what the server would receive; every other
-// command runs as before.
+// Read acknowledgements and pin changes go to state.run so a test sees what the server would
+// receive; every other command runs as before.
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
   const runAtomCommand = ((...args: Parameters<typeof real.runAtomCommand>) =>
-    (args[2] as { input?: { readThrough?: string } } | undefined)?.input?.readThrough !== undefined
+    ["readThrough", "pinned"].some(
+      (key) =>
+        (args[2] as { input?: Record<string, unknown> } | undefined)?.input?.[key] !== undefined,
+    )
       ? state.run(...(args as unknown as []))
       : real.runAtomCommand(...args)) as typeof real.runAtomCommand;
   return { ...real, runAtomCommand };
@@ -452,6 +455,55 @@ it("says an expanded task has no other work only after a complete read found non
   await open();
   await toggleWork("Fix the build");
   expect(home()?.textContent).toContain("No other work.");
+});
+
+it("does not call a task's work empty when the read left that task out", async () => {
+  state.rows = [task("t1", "Fix the build")];
+  // The server omits a task it no longer owns instead of sending an empty group.
+  state.groups = [{ taskId: "t2", truncated: false, children: [] }];
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).not.toContain("No other work.");
+});
+
+it("keeps an offline task screen's actions and links listed but inert, until it reconnects", async () => {
+  setupReads();
+  state.rows = [task("t1", "Fix the build", "worker")];
+  state.remoteWork = [
+    {
+      childWorkId: "r1",
+      taskId: "t1",
+      callerThreadId: "bot",
+      host: "mini",
+      state: "running",
+      lastActivityAt: at,
+      environmentId: "remote",
+      threadId: "remote-thread",
+    },
+  ];
+  const pins = () =>
+    state.run.mock.calls.filter(
+      (call) =>
+        (call as unknown as [unknown, unknown, { input: { pinned?: boolean } }])[2]?.input
+          ?.pinned !== undefined,
+    ).length;
+  await open("t1");
+  state.connected = false;
+  await open("t1");
+  for (const label of ["Pin", "Mark done", "Open work thread", "Open work thread on mini"]) {
+    const control = button(label);
+    expect(control?.hasAttribute("disabled"), label).toBe(true);
+    expect(control?.getAttribute("aria-disabled"), label).toBe("true");
+    await act(async () => control?.click());
+  }
+  expect(state.openThread).not.toHaveBeenCalled();
+  expect(pins()).toBe(0);
+  state.connected = true;
+  await open("t1");
+  await press("Pin");
+  expect(pins()).toBe(1);
+  await press("Open work thread");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "worker" });
 });
 
 it("does not call a task's work empty when this server cannot read sub-work", async () => {

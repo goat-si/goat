@@ -5,7 +5,6 @@ import {
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
-  isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
   workRowCollapsed,
@@ -54,9 +53,8 @@ import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
-import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
-import { MobileTaskRetry } from "./MobileTaskRetry";
+import { MobileTaskActions } from "./MobileTaskActions";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
@@ -589,7 +587,8 @@ export function MobileBotWork(props: {
                     supported: enabled && capabilities?.goatBotChildWork === true,
                     error: expandedChildren.error,
                     pending: expandedChildren.isPending,
-                    hasData: expandedChildren.data !== null,
+                    groupLoaded:
+                      expandedChildren.data?.groups.some((group) => group.taskId === id) === true,
                     openThread: (thread) => {
                       closeSheet();
                       props.onOpenThread(thread);
@@ -804,64 +803,16 @@ export function MobileBotWork(props: {
             <Text className="text-foreground-muted">Task not found.</Text>
           ) : null}
           {task ? (
-            <View className="flex-row flex-wrap gap-3">
-              {environmentId &&
-              capabilities?.goatBotTaskRetry === true &&
-              isRetryableTaskStatus(task.row.task.status) ? (
-                <MobileTaskRetry
-                  environmentId={environmentId}
-                  taskId={task.row.task.taskId}
-                  onStarted={threads.refresh}
-                />
-              ) : null}
-              <Pressable
-                accessibilityRole="button"
-                className="min-h-[44px] justify-center"
-                onPress={() =>
-                  void update({ taskId: task.row.task.taskId, pinned: !task.row.view.pinnedAt })
-                }
-              >
-                <Text className="text-foreground">{task.row.view.pinnedAt ? "Unpin" : "Pin"}</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                className="min-h-[44px] justify-center"
-                onPress={() =>
-                  void update({ taskId: task.row.task.taskId, done: !task.row.view.doneAt })
-                }
-              >
-                <Text className="text-foreground">
-                  {task.row.view.doneAt ? "Reopen" : "Mark done"}
-                </Text>
-              </Pressable>
-              {task.threads.map((thread) => (
-                <Pressable
-                  key={`${thread.environmentId}:${thread.threadId}`}
-                  accessibilityRole="button"
-                  className="min-h-[44px] justify-center"
-                  onPress={() =>
-                    props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
-                  }
-                >
-                  <Text className="text-foreground underline">Open work thread</Text>
-                </Pressable>
-              ))}
-              {task.remote.map((item) => (
-                <MobileBotRemoteWork
-                  key={item.childWorkId}
-                  item={item}
-                  onOpenThread={props.onOpenThread}
-                />
-              ))}
-              {task.subagents.map((agent) => (
-                <Text key={agent.childWorkId} className="text-foreground-muted">
-                  {agent.host ?? agent.destinationHint ?? "Subagent"} · {agent.label}
-                </Text>
-              ))}
-              {children.error ? (
-                <Text className="text-danger-foreground">Couldn't load subagents.</Text>
-              ) : null}
-            </View>
+            <MobileTaskActions
+              task={task}
+              environmentId={environmentId ?? null}
+              enabled={enabled}
+              canRetry={capabilities?.goatBotTaskRetry === true}
+              childError={children.error !== null}
+              onUpdate={(input) => void update(input)}
+              onRetried={threads.refresh}
+              onOpenThread={props.onOpenThread}
+            />
           ) : null}
           {props.taskCard}
         </View>
