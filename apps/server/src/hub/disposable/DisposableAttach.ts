@@ -159,7 +159,9 @@ export const make = Effect.gen(function* () {
         ...extra,
         effects_json: encodeEffects(effects),
         state,
-        ...(state === row.state ? {} : { state_since: now }),
+        ...(state === row.state
+          ? {}
+          : { state_since: typeof extra.state_since === "string" ? extra.state_since : now }),
         ...(state === "failed" && row.final_at === null ? { final_at: now } : {}),
         updated_at: now,
       })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} RETURNING attach_id`;
@@ -559,7 +561,9 @@ export const make = Effect.gen(function* () {
               step: "admitted",
               offer_nonce: admitted.nonce,
               admit_hash: admitted.admit ?? null,
+              // One time for both: the paused text compares them to tell which came first.
               pen_admitted_at: row.pen_admitted_at ?? now,
+              state_since: now,
               pen_removed_at: admitted.member === false ? now : null,
             },
       );
