@@ -5140,7 +5140,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ? yield* executeGit(
               "GitVcsDriver.switchRef.localTrackingBranch",
               input.cwd,
-              ["for-each-ref", "--format=%(refname:short)\t%(upstream:short)", "refs/heads"],
+              ["for-each-ref", "--format=%(refname:lstrip=2)\t%(upstream)", "refs/heads"],
               {
                 timeoutMs: 5_000,
                 allowNonZeroExit: true,
@@ -5148,7 +5148,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ).pipe(
               Effect.map((result) =>
                 result.exitCode === 0
-                  ? parseTrackingBranchByUpstreamRef(result.stdout, input.refName)
+                  ? parseTrackingBranchByUpstreamRef(result.stdout, `refs/remotes/${input.refName}`)
                   : null,
               ),
             )
