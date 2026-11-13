@@ -75,6 +75,36 @@ it.effect("a refused home ocx command carries OpenCodex's own message; hub invit
     expect(invite.message).toBeUndefined();
   }),
 );
+it.effect(
+  "ocx link routes refusals carry OpenCodex's fixed code and its cause word, nothing else",
+  () =>
+    Effect.gen(function* () {
+      // As OpenCodex src/cli/link-routes.ts prints them through runCliAction.
+      const unproven = "Error: Link routes request refused (409): route_unproven (hostkey)\n";
+      const stored =
+        "Error: Link routes request refused (500): routes_stored_reload_failed; the routes were stored\n";
+      const answers = [output("", unproven, 5), output("", stored, 1)];
+      const ocx = yield* hubOcx(() => answers.shift() ?? output("", "", 1));
+      const args = [
+        "link",
+        "routes",
+        "add",
+        "--link-id",
+        "lnk_0123456789abcdef",
+        "--route",
+        "x",
+        "--json",
+      ];
+      expect(yield* ocx.home(args, 1_000)).toMatchObject({
+        code: 5,
+        phase: "route_unproven",
+        cause: "hostkey",
+      });
+      const reload = yield* ocx.home(args, 1_000);
+      expect(reload).toMatchObject({ code: 1, phase: "routes_stored_reload_failed" });
+      expect(reload.cause).toBeUndefined();
+    }),
+);
 it.effect("a ps listing over 256 KiB still counts this Home's link tunnels", () =>
   Effect.gen(function* () {
     const busy = Array.from(

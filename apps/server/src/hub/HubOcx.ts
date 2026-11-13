@@ -71,6 +71,8 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** The class word OpenCodex names beside route_unproven, such as transient or hostkey. */
+  readonly cause?: string;
   /** A sentence OpenCodex is known to print for this refusal; see ocxMessage. */
   readonly message?: string;
   /** OpenCodex's management API answered 403, as `ocx link status` does on a Hub (opencodex#8184). */
@@ -229,7 +231,13 @@ export class HubOcx extends Context.Service<
 >()("goat/hub/HubOcx") {}
 
 const phaseOf = (stderr: string) =>
-  /\b((?:remote|child|home)_[a-z_]{2,60}|link_not_found)\b/u.exec(stderr)?.[1];
+  /\b((?:remote|child|home|route)_[a-z_]{2,60}|routes_stored_reload_failed|link_not_found|link_changed|link_operation_in_progress|pin_changed|pin_mismatch|trust_file_unexpected)\b/u.exec(
+    stderr,
+  )?.[1];
+const causeOf = (stderr: string) =>
+  /\broute_unproven \((transient|readiness|grant_unobserved|forward|auth|hostkey)\)/u.exec(
+    stderr,
+  )?.[1];
 /** Home commands whose refusal is worth naming; `hub invite` mints a pairing code and is never read. */
 const explained = (args: ReadonlyArray<string>) =>
   args[0] === "link" && ["add", "probe", "reconnect", "revoke"].includes(args[1] ?? "");
@@ -392,6 +400,7 @@ const make = Effect.gen(function* () {
       ),
     );
     const phase = phaseOf(output.stderr);
+    const cause = causeOf(output.stderr);
     const forbidden = /\brequest failed \(403\)/u.test(output.stderr);
     const code = output.timedOut ? 124 : (output.code ?? 1);
     const message = code !== 0 && explained(args) ? ocxMessage(output.stderr) : undefined;
@@ -399,6 +408,7 @@ const make = Effect.gen(function* () {
       code,
       stdout: output.stdoutTruncated ? "" : output.stdout,
       ...(phase === undefined ? {} : { phase }),
+      ...(cause === undefined ? {} : { cause }),
       ...(message === undefined ? {} : { message }),
       ...(forbidden ? { forbidden: true as const } : {}),
     } satisfies OcxOutput;

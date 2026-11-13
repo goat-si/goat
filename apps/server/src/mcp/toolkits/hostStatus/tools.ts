@@ -19,6 +19,10 @@ import {
   HubDeviceSetupInput,
   HubDeviceMoveInput,
   HubDeviceOperationInput,
+  HubDeviceRoutesInput,
+  HubDeviceRoutesResult,
+  HubDeviceRoutesUpdateInput,
+  HubDeviceRoutesUpdateResult,
   hubDeviceToolResult,
   OpenCodexSyncReport,
   OrchestratorMcpFailure,
@@ -91,6 +95,28 @@ const MoveTool = Tool.make(agentSurfaceRegistry["hub.device_move"].name, {
     HubMembership.HubMembership,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_move"]));
+
+const RoutesTool = Tool.make(agentSurfaceRegistry["hub.device_routes"].name, {
+  description: agentSurfaceRegistry["hub.device_routes"].description,
+  parameters: HubDeviceRoutesInput,
+  success: HubDeviceRoutesResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [McpInvocationContext.McpInvocationContext, HubMembership.HubMembership],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_routes"]));
+
+const RoutesUpdateTool = Tool.make(agentSurfaceRegistry["hub.device_routes_update"].name, {
+  description: agentSurfaceRegistry["hub.device_routes_update"].description,
+  parameters: withClientRequestId(HubDeviceRoutesUpdateInput),
+  success: HubDeviceRoutesUpdateResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HubMembership.HubMembership,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_routes_update"]));
 
 const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].name, {
   description: agentSurfaceRegistry["hub.opencodex_sync"].description,
@@ -176,6 +202,8 @@ export const HostStatusToolkit = Toolkit.make(
   membershipTool("hub.device_leave"),
   membershipTool("hub.device_repair"),
   MoveTool,
+  RoutesTool,
+  RoutesUpdateTool,
   ChildPrepareTool,
   ChildConnectionTool,
   ChildStatusTool,
