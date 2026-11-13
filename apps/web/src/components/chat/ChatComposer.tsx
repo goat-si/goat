@@ -210,7 +210,8 @@ import {
   ComposerQueuedAttachmentRow,
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
-import { ComposerPrimaryActions, composerRoundActionClassName } from "./ComposerPrimaryActions";
+import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { CollapsedComposerPrimaryAction } from "./CollapsedComposerStopAction";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerVoiceRecorderBar } from "./ComposerVoiceRecorderBar";
 import { readDraftSnapshot, useChatComposerVoiceController } from "./useComposerVoiceController";
@@ -249,7 +250,6 @@ import {
   suppressActiveComposerScrollGesture,
 } from "./composerScrollGesture";
 import { observeResize } from "~/lib/observeResize";
-import { ArrowUpIcon } from "~/components/solar";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ComposerAttachAction } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -260,7 +260,7 @@ import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 const COMPOSER_SCROLL_COLLAPSE_THRESHOLD_PX = 24;
 const COMPOSER_SCROLL_GESTURE_RESET_MS = 120;
 import { toastManager } from "../ui/toast";
-import { PlayIcon, ShieldIcon } from "~/components/solar";
+import { ShieldIcon } from "~/components/solar";
 import { proposedPlanTitle } from "@goat/shared/proposedPlanText";
 import { hasProviderSetup } from "./ProviderStatusBanner";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
@@ -3590,30 +3590,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onExpand={expandMobileComposerStable}
                 />
                 {collapsedComposerImagePreviews}
-                <button
-                  type="button"
-                  data-chat-composer-transition-actions="true"
-                  className={cn(
-                    composerRoundActionClassName,
-                    "bg-composer-send text-message-action-foreground hover:bg-message-action disabled:opacity-64",
-                  )}
+                <CollapsedComposerPrimaryAction
+                  key={`${environmentId}:${activeThreadId ?? "new"}`}
+                  canOperateThread={canOperateThread}
+                  canInterrupt={canInterrupt}
+                  runId={activeThread?.runtime?.activeRunId ?? null}
+                  hasSendableContent={composerSendState.hasSendableContent}
+                  isEditingQueuedMessage={isEditingQueuedMessage}
+                  onInterrupt={handleInterruptPrimaryActionStable}
                   disabled={collapsedComposerPrimaryActionDisabled}
-                  aria-label={collapsedComposerPrimaryActionLabel}
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={(event) => {
+                  label={collapsedComposerPrimaryActionLabel}
+                  showResume={showResumeAction}
+                  onAction={(event) => {
                     event.stopPropagation();
                     if (showResumeAction) onResume();
                     else if (props.resumeCompactionTokens !== null && !props.keepFullHistory)
                       expandMobileComposer();
                     else submitComposer();
                   }}
-                >
-                  {showResumeAction ? (
-                    <PlayIcon className="size-3.5 fill-current" aria-hidden="true" />
-                  ) : (
-                    <ArrowUpIcon className="size-4" aria-hidden="true" />
-                  )}
-                </button>
+                />
               </div>
             ) : null}
 
