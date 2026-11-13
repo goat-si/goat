@@ -233,7 +233,7 @@ export function createChannelEnvironmentAtoms<R, E>(
         get.addFinalizer(() => clearTimeout(handle));
       }
       return filtered;
-    });
+    }).pipe(Atom.withLabel(`environment-data:channel:bot-work-retained:${environmentId}`));
   });
   const retainedFor = (environmentId: EnvironmentId, input: ChannelListBotThreadsInput) =>
     retained(JSON.stringify([environmentId, input]));
@@ -265,7 +265,9 @@ export function createChannelEnvironmentAtoms<R, E>(
               .links,
         ),
       };
-    }),
+    }).pipe(
+      Atom.withLabel(`environment-data:channel:home-openable-by-environment:${environmentId}`),
+    ),
   );
   const listedBotWork = (source: {
     readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
@@ -290,7 +292,7 @@ export function createChannelEnvironmentAtoms<R, E>(
               });
         });
       }),
-    );
+    ).pipe(Atom.withLabel("environment-data:channel:goat-bot-listed-work"));
   };
   return {
     ensureBot: createEnvironmentRpcCommand(runtime, {

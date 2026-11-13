@@ -10,10 +10,16 @@ const actions = vi.hoisted(() => ({
   update: vi.fn(),
   refresh: vi.fn(),
   permit: true,
+  current: { eligible: false, list: "pending", links: [] } as {
+    eligible: boolean;
+    list: string;
+    links: unknown[];
+  },
+  children: [] as unknown[],
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => actions.permit,
+  useAtomValue: (atom: string) => (atom === "current" ? actions.current : actions.permit),
 }));
 vi.mock("~/localApi", () => {
   const api = () => ({ contextMenu: { show: actions.show } });
@@ -24,6 +30,7 @@ vi.mock("~/state/channels", () => ({
     updateTaskView: { permissionAtom: () => "permission", execute: actions.update },
     listChildWork: () => null,
     remoteWorkOpenable: () => "openable",
+    homeCurrentOpenableWorkAtom: () => "current",
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -32,7 +39,7 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("~/state/environments", () => ({ useEnvironment: () => null }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: null,
+    data: { groups: actions.children },
     error: null,
     failure: null,
     isPending: false,
@@ -66,6 +73,8 @@ function taskRow(
 
 function setup(rows: Row[] = []) {
   actions.permit = true;
+  actions.current = { eligible: false, list: "pending", links: [] };
+  actions.children = [];
   actions.show.mockReset();
   actions.show.mockResolvedValue(null);
   actions.update.mockReset();
@@ -453,4 +462,78 @@ it("does not steal focus after a person leaves Show more while history is pendin
   await act(() => finish());
   await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
   expect(document.activeElement).toBe(document.body);
+});
+
+it("uses current atom links, preserves child-only and history links, and falls back on failure", async () => {
+  const current = {
+    ...taskRow("current", "Current", "running", "2026-11-09T01:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("worker") },
+  };
+  const older = {
+    ...taskRow("older", "Older", "running", "2026-11-09T00:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("history-worker") },
+  };
+  setup();
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    links: [
+      { taskId: "current", environmentId, threadId: "worker", kind: "worker" },
+      { taskId: "current", environmentId, threadId: "coding", kind: "coding" },
+      {
+        taskId: "current",
+        environmentId: "remote",
+        threadId: "kept",
+        kind: "remote",
+        remoteChildWorkId: "kept",
+      },
+    ],
+  };
+  actions.children = [
+    {
+      taskId: "current",
+      truncated: false,
+      children: [{ surface: "thread_launch", destination: { threadId: "child-only" } }],
+    },
+  ];
+  const remote = [
+    {
+      childWorkId: "kept",
+      taskId: "current",
+      callerThreadId: "caller",
+      host: "kept-host",
+      state: "bound",
+      threadId: "kept",
+      environmentId: "remote",
+    },
+    {
+      childWorkId: "dropped",
+      taskId: "current",
+      callerThreadId: "caller",
+      host: "dropped-host",
+      state: "bound",
+      threadId: "dropped",
+      environmentId: "remote",
+    },
+  ];
+  const options = {
+    remoteWork: remote,
+    history: history({ supported: true, currentTaskIds: new Set([ChannelTaskId.make("current")]) }),
+  };
+  await using screen = await render(view([current, older], options));
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Current" }));
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older" }));
+  const hrefs = () =>
+    Array.from(screen.container.querySelectorAll("a")).map((link) => link.getAttribute("href"));
+  expect(hrefs()).toContain("/env/worker");
+  expect(hrefs()).toContain("/env/coding");
+  expect(hrefs()).toContain("/remote/kept");
+  expect(hrefs()).not.toContain("/remote/dropped");
+  expect(hrefs()).toContain("/env/child-only");
+  expect(hrefs()).toContain("/env/history-worker");
+  actions.current = { eligible: true, list: "failed", links: [] };
+  await screen.rerender(view([current, older], options));
+  expect(hrefs()).toContain("/remote/dropped");
 });

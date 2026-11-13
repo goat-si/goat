@@ -5,7 +5,9 @@ import {
   COLLAPSED_FINISHED,
   presentTaskStatus,
   type BotWorkTask,
+  type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
+import { BotId } from "@goat/contracts";
 import type {
   BotRemoteWork,
   BotThreadRow,
@@ -107,6 +109,14 @@ export function GoatBotHomeWork({
   /** The bot's older work; rows missing from currentTaskIds came from this walk. */
   readonly history?: HomeHistory | undefined;
 }) {
+  const member = useGoatBotMember();
+  const current = useAtomValue(
+    channelEnvironment.homeCurrentOpenableWorkAtom([
+      environmentId,
+      member?.botId ?? BotId.make("main"),
+    ]),
+  );
+  const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
   const work = botHomeWork(rows, [], environmentId, remoteWork);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
@@ -141,6 +151,11 @@ export function GoatBotHomeWork({
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
       older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
+      currentLinks={
+        history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)
+          ? null
+          : currentLinks
+      }
       peekable={peekable}
       focusRef={(element) => {
         if (element) rowRefs.current.set(task.row.task.taskId, element);
@@ -254,6 +269,7 @@ function WorkRow({
   focusRef,
   launchesTruncated,
   older,
+  currentLinks,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -266,6 +282,7 @@ function WorkRow({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   readonly launchesTruncated: boolean;
   readonly older: boolean;
+  readonly currentLinks: ReadonlyArray<HomeCurrentOpenableLink> | null;
 }) {
   const row = task.row;
   const title = row.task.title;
@@ -382,6 +399,7 @@ function WorkRow({
             taskId={row.task.taskId}
             rows={rows}
             remoteWork={remoteWork}
+            currentLinks={currentLinks?.filter((link) => link.taskId === row.task.taskId) ?? null}
           />
         </div>
       )}
