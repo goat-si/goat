@@ -826,6 +826,21 @@ it("walks through an empty history page, and stops only without a cursor", async
   await expect.element(showMore(screen)).not.toBeInTheDocument();
 });
 
+it("a bot with no recent tasks still says so while older work can be shown", async () => {
+  setup([]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).not.toBeInTheDocument();
+});
+
 it("bounds empty history requests per press and lets the person continue", async () => {
   setup([], [], [runningTask]);
   mocks.historySupported = true;
