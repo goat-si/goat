@@ -50,6 +50,7 @@ import { MobileBotLibrary } from "./MobileBotLibrary";
 import { MobileBotMemory } from "./MobileBotMemory";
 import type { MobileNoteWording, MobileNoteWordings } from "./mobileNoteWordings";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { useMobileHomeTaskReads } from "./useMobileAcknowledgeTaskRead";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
@@ -88,6 +89,8 @@ export function MobileBotWork(props: {
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
   readonly visible: boolean;
+  /** The screen is focused and the app active, so what it shows has been seen. */
+  readonly seen?: boolean;
   readonly onOpenTask: (id: ChannelTaskId) => void;
   /** Opens a coding thread the task started. */
   readonly onOpenThread: (thread: {
@@ -379,20 +382,13 @@ export function MobileBotWork(props: {
     }
     threads.refresh();
   };
-  const unreadAt = task?.row.unread ? task.row.lastActivityAt : null;
-  const refreshThreads = threads.refresh;
-  // oxlint-disable-next-line goat/react-effect-budget -- Mark the visible task read through its latest activity.
-  useEffect(() => {
-    if (props.visible && props.taskId && unreadAt && environmentId && enabled) {
-      void runAtomCommand(appAtomRegistry, channelEnvironment.updateTaskView, {
-        environmentId,
-        input: { taskId: props.taskId, readThrough: unreadAt },
-      }).then((result) => {
-        if (result._tag === "Success") refreshThreads();
-        else Alert.alert("Could not mark task read", "Please try again.");
-      });
-    }
-  }, [props.visible, props.taskId, unreadAt, environmentId, enabled, refreshThreads]);
+  useMobileHomeTaskReads({
+    environmentId,
+    seen: (props.seen ?? props.visible) && enabled && canUpdate,
+    task: task?.row ?? null,
+    peek: open ? (peekEntry?.row ?? null) : null,
+    onAcknowledged: threads.refresh,
+  });
   const now = useNowMinuteMs();
   const routineThreadId = member?.threadId ?? home.botRef?.threadId ?? null;
   const boundRoutines =

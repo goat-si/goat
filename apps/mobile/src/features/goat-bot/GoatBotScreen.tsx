@@ -318,6 +318,8 @@ export function GoatBotScreen(props: {
   readonly visible: boolean;
   /** False while the app is in the background, where GOAT Bot's steps are not read. */
   readonly foreground?: boolean;
+  /** Focused and the app active: what the screen shows has been seen. */
+  readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
@@ -698,6 +700,7 @@ export function GoatBotScreen(props: {
               ) : null
             }
             visible={props.visible}
+            seen={props.seen ?? props.visible}
             onOpenTask={onSelectTask}
             onOpenThread={onSelectThread}
             member={

@@ -83,6 +83,9 @@ vi.mock("react-native", () => ({
   ),
 }));
 const state = vi.hoisted(() => ({
+  // Whether the screen is focused and the app active; a task is marked read only then.
+  seen: true,
+  run: vi.fn(async () => ({ _tag: "Success" as string })),
   rows: [] as BotThreadRow[],
   remoteWork: [] as object[],
   groups: [] as object[],
@@ -278,6 +281,17 @@ vi.mock("../../components/ui/Button", () => ({
     <button onClick={props.onPress}>{props.label}</button>
   ),
 }));
+// Read acknowledgements go to state.run so a test sees what the server would receive; every other
+// command runs as before.
+vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
+  const runAtomCommand = ((...args: Parameters<typeof real.runAtomCommand>) =>
+    (args[2] as { input?: { readThrough?: string } } | undefined)?.input?.readThrough !== undefined
+      ? state.run(...(args as unknown as []))
+      : real.runAtomCommand(...args)) as typeof real.runAtomCommand;
+  return { ...real, runAtomCommand };
+});
+import { resetTaskReadAcknowledgementsForTests } from "@goat/client-runtime/goatBot";
 import { MobileBotWork } from "./MobileBotWork";
 
 // The chat's header chip opens the home; this stands in for it.
@@ -356,6 +370,7 @@ async function open(taskId?: string) {
     root?.render(
       <WorkWithChip
         visible
+        seen={state.seen}
         taskId={taskId === undefined ? undefined : ChannelTaskId.make(taskId)}
         onOpenTask={state.openTask}
         onOpenThread={state.openThread}
@@ -896,4 +911,90 @@ it("labels the static skeleton while the first work read is pending", async () =
   await open();
   expect(container.querySelectorAll('[aria-label="Loading tasks…"]')).toHaveLength(1);
   expect(home()?.textContent).not.toContain("No recent tasks");
+});
+
+const unreadTask = (taskId: string, title: string) =>
+  decode({
+    kind: "task",
+    task: { taskId, title, status: "running", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: true,
+    mainMessagesSinceQuiet: 0,
+  });
+// The read requests sent to the server, as the input each one carried.
+const reads = () =>
+  state.run.mock.calls
+    .map((call) => (call as unknown as [unknown, unknown, { input: { readThrough?: string } }])[2])
+    .filter((value) => value?.input?.readThrough !== undefined)
+    .map((value) => value.input);
+function setupReads(result: { _tag: string } = { _tag: "Success" }) {
+  resetTaskReadAcknowledgementsForTests();
+  state.run.mockReset();
+  state.run.mockResolvedValue(result);
+  state.seen = true;
+  nativeAlert.mockClear();
+}
+
+it("a peek marks its unread task read once, and again only for newer activity", async () => {
+  setupReads();
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  expect(reads()).toEqual([]);
+  await press("Check the disks");
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+  await open();
+  await press("Back to home. Check the disks");
+  await press("Check the disks");
+  expect(reads()).toHaveLength(1);
+  state.seen = true;
+});
+
+it("a peek on a phone that is not looking (backgrounded or inactive) marks nothing until it is", async () => {
+  setupReads();
+  state.seen = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toEqual([]);
+  state.seen = true;
+  await open();
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+});
+
+it("a failed peek read stays quiet and is sent again only when the task is shown again", async () => {
+  setupReads({ _tag: "Failure" });
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toHaveLength(1);
+  expect(nativeAlert).not.toHaveBeenCalledWith("Could not mark task read", expect.anything());
+  await open();
+  expect(reads()).toHaveLength(1);
+  await press("Back to home. Check the disks");
+  await press("Check the disks");
+  expect(reads()).toHaveLength(2);
+});
+
+it("marks nothing read without permission to update tasks", async () => {
+  setupReads();
+  state.canUpdate = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toEqual([]);
+});
+
+it("the task's own screen marks it read once while seen, and says so when that fails", async () => {
+  setupReads({ _tag: "Failure" });
+  state.seen = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open("t1");
+  expect(reads()).toEqual([]);
+  state.seen = true;
+  await open("t1");
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+  expect(nativeAlert).toHaveBeenCalledWith("Could not mark task read", "Please try again.");
+  await open("t1");
+  expect(reads()).toHaveLength(1);
 });
