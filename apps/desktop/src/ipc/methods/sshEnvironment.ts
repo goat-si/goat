@@ -45,6 +45,7 @@ import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
+import * as DesktopPenMembers from "../../pen/DesktopPenMembers.ts";
 
 type DesktopSshEnvironmentRequestOperation =
   | "fetch-environment-descriptor"
@@ -183,6 +184,12 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
   ) {
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
     yield* requireReadiedCloudMachine(target.alias);
+    const { penNodeId, ...ensureOptions } = options ?? {};
+    // A managed Pen route is admitted here, in main, on every ensure: never on the renderer's word.
+    if (penNodeId !== undefined)
+      yield* (yield* DesktopPenMembers.DesktopPenMembers).requireTrusted(target, penNodeId, {
+        requireReady: ensureOptions.issuePairingToken !== false,
+      });
     yield* Effect.annotateCurrentSpan({
       senderId: event?.sender.id,
       caller: caller ?? "unknown",
@@ -219,7 +226,8 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
     let answered = false;
     return yield* sshEnvironment
       .ensureEnvironment(target, {
-        ...options,
+        ...ensureOptions,
+        ...(penNodeId === undefined ? {} : { installation: "existing-only" as const }),
         onPreparationProgress: (progress) => {
           annotate({
             operationId: progress.operationId,
