@@ -68,3 +68,57 @@ it("failing-first: a choice with an attachment stays at its visible sent row", a
   );
   expect(scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight).toBeLessThanOrEqual(1);
 });
+
+it("failing-first: a new task cue focuses the transcript when the task has no focusable row", async () => {
+  const messages: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `m-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const task: GoatBotRow = {
+    kind: "task",
+    id: "new-task",
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    card: {
+      key: "task",
+      revision: 1,
+      updatedAt: "2026-10-12T09:41:00Z",
+      title: "Work",
+      statusLabel: "Running",
+      tone: "active",
+      sourceLabel: null,
+      summary: null,
+      attentionLabel: null,
+      pullRequests: [],
+      target: { kind: "none", label: "Unavailable" },
+    },
+  };
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  await using screen = await render(<GoatBotTimeline rows={messages} onRetry={() => {}} />, {
+    container: host,
+    router: false,
+  }); // The task card is mocked and has no link.
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<GoatBotTimeline rows={[...messages, task]} onRetry={() => {}} />);
+  const jump = [...screen.container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Jump to latest"),
+  );
+  expect(jump).toBeDefined();
+  await act(() => jump!.click());
+  expect(document.activeElement).toBe(scroll);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
