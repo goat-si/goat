@@ -259,7 +259,7 @@ function WorkRow({
             onClick={() => onOpenTask(row)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} />
+            <WorkRowText title={title} status={status.label} unread={row.unread} />
           </button>
         ) : (
           <Link
@@ -267,11 +267,8 @@ function WorkRow({
             search={{ task: row.task.taskId, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} />
+            <WorkRowText title={title} status={status.label} unread={row.unread} />
           </Link>
-        )}
-        {row.unread && (
-          <span role="img" aria-label="Unread" className="size-2 shrink-0 rounded-full bg-info" />
         )}
         {row.view.pinnedAt !== null && (
           <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
@@ -304,15 +301,28 @@ function WorkRow({
 }
 
 /** A row's title and status, then the chevron that says the row opens. */
-function WorkRowText({ title, status }: { readonly title: string; readonly status: string }) {
+function WorkRowText({
+  title,
+  status,
+  unread,
+}: {
+  readonly title: string;
+  readonly status: string;
+  readonly unread: boolean;
+}) {
   return (
     <>
       <span className="min-w-0 flex-1">
-        <span data-work-title className="block truncate">
-          {title}
-        </span>
+        <span className="block truncate">{title}</span>
         <span className="block truncate text-xs text-muted-foreground">{status}</span>
       </span>
+      {unread ? (
+        <>
+          <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
+          {/* The open control says it, so a person tabbing through hears it with the title. */}
+          <span className="sr-only">Unread</span>
+        </>
+      ) : null}
       <ChevronRightIcon
         data-work-chevron
         aria-hidden

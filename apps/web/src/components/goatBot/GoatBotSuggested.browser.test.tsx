@@ -65,6 +65,9 @@ it("offers one Connect Slack row while Slack is supported and no channel is conn
     "href",
     expect.stringContaining("slack-channel"),
   );
+  // The whole row is the link, so its title and description open it too.
+  const link = screen.getByRole("link", { name: "Connect Slack" });
+  await expect.element(link.getByText("Talk to this bot from Slack")).toBeVisible();
 });
 
 it("says nothing once a Slack channel is connected", async () => {

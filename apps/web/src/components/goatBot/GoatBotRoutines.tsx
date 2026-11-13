@@ -18,7 +18,6 @@ import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
-import { ChevronRightIcon } from "../solar";
 import { GoatBotCheckInForm } from "./GoatBotCheckInForm";
 import { useGoatBotName } from "./goatBotMemberContext";
 import { GoatBotPanelEmpty, GoatBotPanelFailure } from "./GoatBotPanelEmpty";
@@ -161,7 +160,7 @@ function CheckInOffer(props: {
       detail="A routine on the days and hours you choose"
       ariaLabel="Check in on me"
       onOpen={() => setOpen(true)}
-      trailing={<ChevronRightIcon aria-hidden className="size-4 text-muted-foreground" />}
+      chevron
     />
   );
 }

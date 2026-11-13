@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode } from "react";
 
 import { GroupedCard } from "../ui/grouped-card";
 import { cn } from "~/lib/utils";
+import { ChevronRightIcon } from "../solar";
 import { Skeleton } from "../ui/skeleton";
 
 /**
@@ -40,6 +41,8 @@ export function GoatBotCardRow({
   detail = null,
   trailing = null,
   onOpen,
+  link,
+  chevron = false,
   ariaLabel,
   expanded,
   focusRef,
@@ -50,6 +53,10 @@ export function GoatBotCardRow({
   readonly trailing?: ReactNode;
   /** Present makes the title row a button; absent leaves the title as text. */
   readonly onOpen?: (() => void) | undefined;
+  /** A link element that becomes the row's open control instead of a button. */
+  readonly link?: ReactElement<{ className?: string; children?: ReactNode }> | undefined;
+  /** A trailing chevron inside the open control, so the whole row opens. */
+  readonly chevron?: boolean;
   readonly ariaLabel?: string | undefined;
   readonly expanded?: boolean | undefined;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
@@ -67,8 +74,13 @@ export function GoatBotCardRow({
           <span className="block truncate text-xs text-muted-foreground">{detail}</span>
         )}
       </span>
+      {chevron ? (
+        <ChevronRightIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+      ) : null}
     </>
   );
+  const openClassName =
+    "flex min-w-0 flex-1 items-center gap-2.5 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
   return (
     <div
       className={cn(
@@ -76,7 +88,9 @@ export function GoatBotCardRow({
         "[&+&]:border-t [&+&]:border-border/50",
       )}
     >
-      {onOpen === undefined ? (
+      {link !== undefined ? (
+        cloneElement(link, { className: openClassName, children: body })
+      ) : onOpen === undefined ? (
         <div className="flex min-w-0 flex-1 items-center gap-2.5">{body}</div>
       ) : (
         <button
@@ -85,7 +99,7 @@ export function GoatBotCardRow({
           aria-label={ariaLabel}
           aria-expanded={expanded}
           onClick={onOpen}
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className={openClassName}
         >
           {body}
         </button>

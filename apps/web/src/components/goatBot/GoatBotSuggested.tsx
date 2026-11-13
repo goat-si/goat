@@ -5,7 +5,7 @@ import { persistClientSettingsPatch, useClientSettings } from "~/hooks/useSettin
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
-import { ChevronRightIcon, MessageCircleIcon } from "../solar";
+import { MessageCircleIcon } from "../solar";
 import { Button } from "../ui/button";
 import { useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardRow, GoatBotSectionCard } from "./GoatBotSectionCard";
@@ -44,16 +44,14 @@ export function GoatBotSuggested({ environmentId }: { readonly environmentId: En
         mark={<MessageCircleIcon aria-hidden className="size-4" />}
         title="Connect Slack"
         detail="Talk to this bot from Slack"
-        trailing={
+        chevron
+        link={
           <Link
             to="/settings/goat-bot"
             search={{ machine: environmentId }}
             hash="slack-channel"
             aria-label="Connect Slack"
-            className="rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          >
-            <ChevronRightIcon aria-hidden className="size-4" />
-          </Link>
+          />
         }
       />
     </GoatBotSectionCard>

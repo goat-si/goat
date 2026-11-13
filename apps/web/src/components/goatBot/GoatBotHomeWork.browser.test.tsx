@@ -94,10 +94,12 @@ function view(rows: readonly Row[], overrides: Record<string, unknown> = {}) {
   );
 }
 
-const titles = (screen: Awaited<ReturnType<typeof render>>) =>
-  [...screen.container.querySelectorAll("[data-work-title]")].map(
-    (element) => element.textContent ?? "",
-  );
+/** The order the task titles are offered in, read from the buttons that open them. */
+const titles = (screen: Awaited<ReturnType<typeof render>>, names: readonly string[]) =>
+  screen
+    .getByRole("button", { name: new RegExp(`^(${names.join("|")})`) })
+    .elements()
+    .map((element) => names.find((name) => element.textContent?.startsWith(name)));
 
 it("shows running work, then what waits on a person, then what finished, newest first", async () => {
   setup();
@@ -108,7 +110,9 @@ it("shows running work, then what waits on a person, then what finished, newest 
     taskRow("running-new", "Newer run", "running", "2026-11-09T03:00:00.000Z"),
   ];
   await using screen = await render(view(rows));
-  expect(titles(screen)).toEqual(["Newer run", "Older run", "Needs an answer", "Old finish"]);
+  const order = ["Newer run", "Older run", "Needs an answer", "Old finish"];
+  await expect.element(screen.getByRole("button", { name: /^Newer run/ })).toBeVisible();
+  expect(titles(screen, order)).toEqual(order);
 });
 
 it("moves Pin onto the row with the sidebar's input", async () => {
@@ -158,12 +162,14 @@ it("offers only Show work in the row menu when this device may not change the vi
   expect(actions.update).not.toHaveBeenCalled();
 });
 
-it("shows unread on the row", async () => {
+it("says Unread on the control that opens an unread task", async () => {
   const rows = setup([
     taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z", { unread: true }),
   ]);
   await using screen = await render(view(rows));
-  await expect.element(screen.getByRole("img", { name: "Unread" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: /^Stop the port.*Unread/ }))
+    .toBeVisible();
 });
 
 it("ends a long list with a centred Show more row that shows the rest", async () => {
