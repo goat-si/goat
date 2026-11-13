@@ -1,12 +1,8 @@
-import { useAtomValue } from "@effect/atom-react";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useEffect } from "react";
 
 import { ChevronLeftIcon } from "~/components/solar";
-import { channelEnvironment } from "~/state/channels";
-import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
@@ -14,6 +10,7 @@ import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
+import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 
 const NO_RETRY = () => {};
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
@@ -47,16 +44,8 @@ export function GoatBotWorkPeek({
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
-  const update = useAtomCommand(channelEnvironment.updateTaskView);
-  const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   // Opening a task acknowledges its activity, as its task view does.
-  // oxlint-disable-next-line goat/react-effect-budget -- Opening a task acknowledges its current activity on the server.
-  useEffect(() => {
-    if (!canUpdate || unreadThrough === null) return;
-    void update({ environmentId, input: { taskId, readThrough: unreadThrough } }).then((result) => {
-      if (result._tag === "Success") onAcknowledged?.();
-    });
-  }, [canUpdate, environmentId, taskId, unreadThrough, update, onAcknowledged]);
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough: unreadThrough, onAcknowledged });
   return (
     <section
       aria-label={title}

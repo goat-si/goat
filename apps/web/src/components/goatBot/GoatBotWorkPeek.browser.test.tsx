@@ -1,5 +1,6 @@
 import { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import { StrictMode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -22,7 +23,9 @@ vi.mock("~/state/use-atom-command", async (original) => {
   const real = await original<typeof import("~/state/use-atom-command")>();
   return {
     ...real,
-    useAtomCommand: (command: { execute: typeof actions.update }) => command.execute,
+    // A new function on every render, as the real hook returns.
+    useAtomCommand: (command: { execute: typeof actions.update }) => (value: unknown) =>
+      command.execute(value),
   };
 });
 
@@ -145,6 +148,34 @@ it("acknowledges a task's unread activity the way its task view does", async () 
     }),
   );
   expect(actions.refresh).toHaveBeenCalledOnce();
+});
+
+it("acknowledges an unread task once through rerenders and Strict Mode", async () => {
+  actions.permit = true;
+  actions.update.mockReset();
+  actions.update.mockResolvedValue({ _tag: "Success" });
+  actions.refresh.mockReset();
+  const peek = (statusLabel: string) => (
+    <StrictMode>
+      <GoatBotWorkPeek
+        taskId={ChannelTaskId.make("task-c")}
+        title="Count the stars"
+        statusLabel={statusLabel}
+        rows={rows}
+        environmentId={EnvironmentId.make("bot-home")}
+        unreadThrough="2026-11-09T00:00:00.000Z"
+        onAcknowledged={actions.refresh}
+        onBack={() => {}}
+      />
+    </StrictMode>
+  );
+  await using screen = await render(peek("Status one"));
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalled());
+  // The row is still unread until the list is read again; new renders must not send it again.
+  await screen.rerender(peek("Status two"));
+  await screen.rerender(peek("Status three"));
+  await expect.element(screen.getByText("Status three")).toBeVisible();
+  expect(actions.update).toHaveBeenCalledOnce();
 });
 
 it("leaves the server alone when this device may not change the task view", async () => {

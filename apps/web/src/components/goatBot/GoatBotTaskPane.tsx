@@ -7,7 +7,7 @@ import {
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
 import { ChannelQuestionId, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
-import { useEffect, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { cn } from "~/lib/utils";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -26,6 +26,7 @@ import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMem
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
+import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -58,13 +59,7 @@ export function GoatBotTaskPane({
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
-  // oxlint-disable-next-line goat/react-effect-budget -- Opening a task acknowledges its current activity on the server.
-  useEffect(() => {
-    if (!canUpdate || readThrough === null) return;
-    void update({ environmentId, input: { taskId, readThrough } }).then((result) => {
-      if (result._tag === "Success") refresh();
-    });
-  }, [canUpdate, environmentId, taskId, readThrough, update, refresh]);
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: refresh });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);
