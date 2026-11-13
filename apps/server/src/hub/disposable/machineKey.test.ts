@@ -90,3 +90,31 @@ it.live.skipIf(WINDOWS)(
       expect(yield* (yield* make(directory)).known).toBeUndefined();
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
+
+it.live.skipIf(WINDOWS)(
+  "a key made again while the server runs is the one shown, and a half-made key is cleared",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = path.join(yield* fs.makeTempDirectoryScoped(), "disposable");
+      const service = yield* make(directory);
+      const first = yield* service.identity;
+      yield* fs.remove(first.privateKeyFile);
+      yield* fs.remove(first.privateKeyFile + ".pub");
+      const second = yield* service.identity;
+      expect(second.publicLine).not.toBe(first.publicLine);
+      expect((yield* fs.readFileString(second.privateKeyFile + ".pub")).trim()).toBe(
+        second.publicLine,
+      );
+      // A crash left a half-made key behind; the next run's first use removes it.
+      yield* fs.writeFileString(second.privateKeyFile + ".new-left-by-a-crash", "x", {
+        mode: 0o600,
+      });
+      expect(yield* (yield* make(directory)).identity).toEqual(second);
+      expect((yield* fs.readDirectory(directory)).toSorted()).toEqual([
+        "machine_ed25519",
+        "machine_ed25519.pub",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);

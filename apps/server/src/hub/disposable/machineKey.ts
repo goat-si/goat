@@ -68,6 +68,7 @@ export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
   );
   // A key that passed its checks once is the hub's key for the life of this server.
   const verified = yield* Ref.make<string | undefined>(undefined);
+  const swept = yield* Ref.make(false);
   /** The private key must be ours alone and an ed25519 key; its public half is rebuilt from it. */
   const verify = Effect.gen(function* () {
     const cached = yield* Ref.get(verified);
@@ -83,9 +84,16 @@ export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
   });
   const create = Effect.gen(function* () {
     // An unanswerable check fails closed: a key GOAT cannot see is never replaced.
+    // A key a crash left half made is never used; the first create of each run removes it.
+    if (!(yield* Ref.getAndSet(swept, true)) && (yield* fs.exists(directory)))
+      for (const name of yield* fs.readDirectory(directory))
+        if (name.startsWith("machine_ed25519.new-"))
+          yield* Effect.ignore(fs.remove(path.join(directory, name)));
     if (!(yield* fs.exists(privateKeyFile))) {
       yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
       yield* fs.chmod(directory, 0o700);
+      // The checked line belonged to the key that is gone.
+      yield* Ref.set(verified, undefined);
       const temporary = privateKeyFile + ".new-" + NodeCrypto.randomUUID();
       yield* keygen(["-q", "-t", "ed25519", "-N", "", "-C", COMMENT, "-f", temporary]);
       yield* fs.chmod(temporary, 0o600);
