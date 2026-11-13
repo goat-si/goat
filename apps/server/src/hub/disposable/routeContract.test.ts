@@ -145,3 +145,54 @@ it.effect("refuses a route it cannot pass to ssh unchanged", () =>
     expect(disposableSshOptions({ ...route, knownHostsFile: "relative" })).toBeUndefined();
   }),
 );
+
+// ssh runs ProxyCommand through /bin/sh. A stand-in pen records what it was started with; Pen's own
+// test (apps/pen/internal/cli/pipe_test.go) shows --home wins over an inherited PEN_HOME.
+it.live(
+  "ssh starts the confirmed pen with exactly the route's arguments, whatever PEN_HOME says",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-disposable-run-" });
+      const record = dir + "/started";
+      yield* fs.writeFileString(
+        dir + "/pen",
+        '#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done > \'' + record + "'\nexit 1\n",
+      );
+      yield* fs.chmod(dir + "/pen", 0o755);
+      yield* fs.writeFileString(dir + "/config", HOSTILE);
+      const proxyCommand =
+        dir + "/pen pipe --node " + NODE + " --noise " + NOISE + " --home " + dir + "/home 22";
+      const options = disposableSshOptions({
+        nodeId: NODE,
+        noisePub: NOISE,
+        proxyCommand,
+        user: "runner",
+        knownHostsFile: dir + "/known_hosts",
+      });
+      expect(options).toBeDefined();
+      const runner = yield* ProcessRunner.ProcessRunner;
+      const ran = yield* runner.run({
+        command: "ssh",
+        args: ["-F", dir + "/config", ...(options ?? []), "pen-" + NODE, "true"],
+        env: { ...process.env, PEN_HOME: dir + "/inherited" },
+        timeout: "10 seconds",
+      });
+      // The stand-in exits before any SSH banner, so ssh fails after starting it.
+      expect(ran.code).not.toBe(0);
+      expect((yield* fs.readFileString(record)).split("\n")).toEqual([
+        "pipe",
+        "--node",
+        NODE,
+        "--noise",
+        NOISE,
+        "--home",
+        dir + "/home",
+        "22",
+        "",
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
+);
