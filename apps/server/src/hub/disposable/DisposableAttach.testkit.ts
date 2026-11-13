@@ -73,6 +73,8 @@ export const fakePen = () => {
     loseMint: false,
     tokensSeen: [] as Array<string>,
     acked: [] as Array<string>,
+    /** Mints whose admit Pen holds in memory only, so status answers burned-unsaved. */
+    unsaved: new Set<string>(),
     /** A join that used the invite; saved says whether the admit reached Pen's record set. */
     join: (mintId: string, saved: boolean) => {
       const entry = book.get(mintId);
@@ -152,14 +154,20 @@ export const fakePen = () => {
               expiresAtMs: entry.expiresAtMs,
             } satisfies PenInviteStatus;
           case "burned":
-            return {
-              ...named,
-              state: "burned",
-              nonce: entry.nonce ?? "",
-              ...(entry.admit === undefined
-                ? {}
-                : { admit: entry.admit, member: members.has(entry.signPub) }),
-            } satisfies PenInviteStatus;
+            return entry.admit !== undefined && control.unsaved.has(entry.mintId)
+              ? ({
+                  ...named,
+                  state: "burned-unsaved",
+                  nonce: entry.nonce ?? "",
+                } satisfies PenInviteStatus)
+              : ({
+                  ...named,
+                  state: "burned",
+                  nonce: entry.nonce ?? "",
+                  ...(entry.admit === undefined
+                    ? {}
+                    : { admit: entry.admit, member: members.has(entry.signPub) }),
+                } satisfies PenInviteStatus);
           default:
             return { ...named, state: entry.state } satisfies PenInviteStatus;
         }

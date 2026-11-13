@@ -187,6 +187,24 @@ it.effect("burned without a saved admit holds the slot as unknown", () =>
   ),
 );
 
+// Pen holds the admit in memory until it saves its record set; a restart then could lose it.
+it.effect("a burn whose admit Pen has not saved holds the slot until Pen saves it", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.join(first.attachId + ".1", true);
+      pen.control.unsaved.add(first.attachId + ".1");
+      yield* reconcile;
+      expect(yield* listed(first.attachId)).toMatchObject({ state: "unknown", penMember: false });
+      expect(pen.control.acked).toEqual([]);
+      pen.control.unsaved.clear();
+      yield* reconcile;
+      expect(yield* listed(first.attachId)).toMatchObject({ state: "admitted", penMember: true });
+      expect(pen.control.acked).toEqual([first.attachId + ".1"]);
+    }),
+  ),
+);
+
 it.effect("a reissue cancels the open invite and mints a new token for the same keys", () =>
   world((pen) =>
     Effect.gen(function* () {
