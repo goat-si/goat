@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -567,5 +568,39 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 	var out, errOut bytes.Buffer
 	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "before answering 1") {
 		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op named", rc, errOut.String())
+	}
+}
+
+// failingSink is a node connection whose op write or half-close fails.
+type failingSink struct{ write, closeWrite error }
+
+func (f failingSink) Write(p []byte) (int, error) {
+	if f.write != nil {
+		return 0, f.write
+	}
+	return len(p), nil
+}
+
+func (f failingSink) CloseWrite() error { return f.closeWrite }
+
+// Regression (a hang on goat-test-pen-windows): an op the child cannot write, or a half-close that fails while an op is
+// unanswered, ends the child with exit 2 and the reason; the end is never left to answers that may not come.
+func TestServiceRegisterExitsWhenItCannotForwardAnOpOrHalfClose(t *testing.T) {
+	op := `{"op":"service.clients","gen":1,"clients":[]}` + "\n"
+	for _, c := range []struct {
+		name string
+		sink failingSink
+	}{
+		{"op write", failingSink{write: errors.New("broken pipe")}},
+		{"half-close", failingSink{closeWrite: errors.New("shutdown failed")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var s serviceCount
+			var errOut bytes.Buffer
+			code, ok := forwardOps(bufio.NewReader(strings.NewReader(op)), c.sink, &s, &errOut)
+			if !ok || code != serviceFailed || errOut.Len() == 0 {
+				t.Fatalf("forwardOps ended with %d (decided %v), stderr %q; want exit 2 and the reason", code, ok, errOut.String())
+			}
+		})
 	}
 }

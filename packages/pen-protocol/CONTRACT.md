@@ -534,13 +534,15 @@ way: the local management page (dashboard) cannot register, and neither can a me
 as one line (43 characters and LF), so K never appears in an argument, the environment or a file. It prints
 `pen-service v1 registered <name> <R>` on stdout once the node answers, then holds the registration until stdin
 ends (exit 0), the node replaces it (exit 3, reason on stderr) or the node closes the connection (exit 1). Any
-other failure, before or at registration, exits 2 with the reason on stderr. From v1.3 the child forwards every
-further stdin line to the node unchanged and prints every line the node sends after `registered`, except
-`replaced`, on stdout unchanged ("Ops on the registration"). A stdin line longer than 4096 bytes with its LF is not
-forwarded: the child exits 2. Bytes after the last LF when stdin ends are dropped. A v1.2 child forwards nothing, so a
-program that sends ops through it gets no answer. When stdin ends, a v1.3 child half-closes the connection, prints
-the node's answers to the ops it forwarded, and exits 0, or 1 when the node closed the connection before answering
-every op it forwarded (a v1.2 node does).
+other failure exits 2 with the reason on stderr: one before or at registration, or from v1.3 one of the op failures
+below. From v1.3 the child forwards every further stdin line to the node unchanged and prints every line the node
+sends after `registered`, except `replaced`, on stdout unchanged ("Ops on the registration"). It exits 2 when a stdin
+line is longer than 4096 bytes with its LF (that line is not forwarded), when it cannot write an op to the node, and
+when it cannot half-close the connection while an op is unanswered. A forward that fails as the node closes the
+connection may exit 2 or 1, whichever end the child sees first. Bytes after the last LF when stdin ends are dropped.
+A v1.2 child forwards nothing, so a program that sends ops through it gets no answer. When stdin ends, a v1.3 child
+half-closes the connection, prints the node's answers to the ops it forwarded, and exits 0, or 1 when the node closed
+the connection before answering every op it forwarded (a v1.2 node does).
 
 ### Local delivery
 

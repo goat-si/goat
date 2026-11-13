@@ -161,6 +161,9 @@ type Daemon struct {
 	// svc holds the registered local services (services.go).
 	svc serviceBook
 
+	// controlSlots holds one token per open control connection (serveControl).
+	controlSlots chan struct{}
+
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.
 	sshUser string
