@@ -352,6 +352,21 @@ it("uses the title carried from a history row when the current list no longer co
 it("explains where to find actions for older work absent from the current list", async () => {
   setup();
   state.noRows = true;
+  rememberHistoryRows(EnvironmentId.make("env"), [
+    decodeBotThreadRow({
+      kind: "task",
+      task: {
+        taskId: "task-1",
+        title: "Older task",
+        status: "completed",
+        updatedAt: "2026-11-04T10:00:00.000Z",
+      },
+      view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: "2026-11-04T10:00:00.000Z",
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+  ]);
   const session = useGoatBotSession();
   const close = vi.fn();
   await using screen = await render(
