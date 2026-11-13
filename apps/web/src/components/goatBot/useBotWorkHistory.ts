@@ -162,8 +162,8 @@ export function useBotWorkHistory(
               truncated: page.history?.launchesTruncated?.includes(id) === true,
             });
           }
-          partial ||= page.history?.partial === true;
-          endedEarly ||= page.history?.endedEarly === true;
+          partial = partial || page.history?.partial === true;
+          endedEarly = endedEarly || page.history?.endedEarly === true;
           cursor = page.history?.nextCursor;
         }
         if (entries.length >= 500) capped = true;
@@ -181,9 +181,8 @@ export function useBotWorkHistory(
     } catch {
       if (identity.current === token)
         update((state) => ({ ...state, loading: false, failed: true }));
-    } finally {
-      if (active.current === token) active.current = null;
     }
+    if (active.current === token) active.current = null;
   }
   return {
     historySupported,
