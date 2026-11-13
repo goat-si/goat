@@ -156,8 +156,18 @@ such a machine **via Pen**.
 - A member whose GOAT is too old to sign this computer in asks you to update GOAT on that machine.
 - A machine you had already added yourself stays as you added it.
 - While Pen is not running on this computer, machines already listed stay listed, but nothing new
-  is added and no new sign-in is made until Pen is back. The same holds on the other side: a
-  machine accepts this computer's sign-in only while its own Pen is running and lists it.
+  is added and no new sign-in is made until Pen is back; a machine GOAT was not already connected
+  to reads **Waiting for Pen**. The same holds on the other side: a machine accepts this
+  computer's sign-in only while its own Pen is running and lists it.
+- A machine Pen reports offline reads **Offline in Pen**. GOAT does not try to reach it, shows its
+  threads as this computer last saw them, and connects by itself when Pen sees the machine again.
+- GOAT keeps 16 Pen machines open at a time. In a larger mesh the rest read **Not open**; choose
+  **Connect** on one to open it, and the machine you opened longest ago closes instead. A machine
+  you also added yourself, over Tailscale or your own SSH host, does not count and stays open.
+- **Remove from Pen...** on a machine's row removes it from the mesh, as `pen revoke` does. GOAT
+  asks you to confirm in a system dialog that names the machine. Tick **This machine was lost or
+  stolen** there to also remove every machine it admitted (`pen revoke --compromised`). If GOAT
+  says Pen on this computer is too old for this, update Pen or run `pen revoke` in a terminal.
 - Turn it off with **Show my Pen machines**. The machines you added yourself stay.
 
 The machines need the same ssh access as `ssh pen-<name>`: an sshd on the member and a key it
@@ -359,6 +369,9 @@ working on the box from GOAT does the same.
 
 - Direct connections between machines: all traffic goes through a relay.
 - Running Pen on Windows before anyone signs in: it runs as the signed-in user.
-- Managing Pen from GOAT's settings; use the `pen` command or its dashboard.
+- Seeing your Pen machines in the GOAT desktop app on Windows. A Windows machine can be a member
+  the others see; GOAT on Windows cannot read Pen's machine list yet.
+- Managing Pen from GOAT's settings, apart from removing a machine; use the `pen` command or its
+  dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
   in testing, only listed accounts can sign in; invites work for everyone.

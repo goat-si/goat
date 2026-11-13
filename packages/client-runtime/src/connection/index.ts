@@ -42,3 +42,5 @@ export * from "./hubProxyDiscovery.ts";
 export * as PenDiscovery from "./penDiscovery.ts";
 export type { PenMemberState, PenMemberStatus } from "./penDiscovery.ts";
 export * as PenMembership from "./penMembership.ts";
+
+export * as PenLiveSet from "./penLiveSet.ts";

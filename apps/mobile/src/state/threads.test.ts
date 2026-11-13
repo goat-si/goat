@@ -142,6 +142,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
     removeRoute: () => Effect.die("Unexpected removal"),
     reorderRoutes: () => Effect.die("Unexpected reorder"),
     removeRelayEnvironments: () => Effect.die("Unexpected removal"),
+    setPenLive: () => Effect.void,
     retryNow: () => Effect.void,
     reconnect: () => Effect.void,
     setEnabled: () => Effect.die("Unexpected toggle"),

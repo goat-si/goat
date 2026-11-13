@@ -76,6 +76,7 @@ function sameConnection(
 ): boolean {
   return (
     left.phase === right.phase &&
+    left.penHold === right.penHold &&
     left.error === right.error &&
     left.traceId === right.traceId &&
     left.stage === right.stage &&
@@ -123,6 +124,9 @@ export function createEnvironmentPresentationAtoms<E>(input: {
     environmentId: EnvironmentId,
   ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, E>>;
   readonly serverConfigValueAtom: (environmentId: EnvironmentId) => Atom.Atom<ServerConfig | null>;
+  readonly penHoldAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<EnvironmentConnectionPresentation["penHold"]>;
   readonly sshRuntimeStatusAtom?: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<SshHostStatus | undefined>;
@@ -139,7 +143,7 @@ export function createEnvironmentPresentationAtoms<E>(input: {
       );
       const previous = Option.getOrNull(get.self<EnvironmentPresentation | null>());
       // The supervisor never publishes this placeholder; an enabled one starts out connecting.
-      const connection: EnvironmentConnectionPresentation =
+      const baseConnection: EnvironmentConnectionPresentation =
         entry.unsupportedReason !== undefined
           ? { phase: "unsupported", error: entry.unsupportedReason, traceId: null }
           : state === AVAILABLE_CONNECTION_STATE && entry.enabled
@@ -150,6 +154,9 @@ export function createEnvironmentPresentationAtoms<E>(input: {
                   ? undefined
                   : get(input.sshRuntimeStatusAtom(environmentId)),
               );
+      const penHold =
+        input.penHoldAtom === undefined ? undefined : get(input.penHoldAtom(environmentId));
+      const connection = penHold === undefined ? baseConnection : { ...baseConnection, penHold };
       const next = {
         entry,
         connection:

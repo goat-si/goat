@@ -46,6 +46,7 @@ import {
   updateSshRuntime,
 } from "./methods/sshEnvironment.ts";
 import { getPenMembers, issuePenMemberSession } from "./methods/penMembers.ts";
+import { revokePenMember } from "./methods/penRevoke.ts";
 import { openPenRoute, closePenRoute } from "./methods/penRoute.ts";
 import {
   checkForUpdate,
@@ -151,6 +152,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(discoverSshHosts);
   yield* ipc.handle(getPenMembers);
   yield* ipc.handle(issuePenMemberSession);
+  yield* ipc.handle(revokePenMember);
   yield* ipc.handle(openPenRoute);
   yield* ipc.handle(closePenRoute);
   yield* ipc.handle(resolveSshHost);

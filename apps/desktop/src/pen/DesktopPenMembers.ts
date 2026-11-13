@@ -57,6 +57,7 @@ export type NativePenMembership = "member" | "not-member" | "unavailable";
 
 export interface DesktopPenMembersShape {
   readonly state: Effect.Effect<DesktopPenMembersState>;
+  readonly member?: (pin: NativePenPin) => Effect.Effect<string | undefined>;
   readonly requireMember?: (pin: NativePenPin) => Effect.Effect<NativePenMembership>;
   readonly subscribeMembership?: (listener: (view: PenMembershipView) => void) => () => void;
   /**
@@ -211,6 +212,22 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
         : "not-member";
     }),
   );
+  const member = Effect.fn("DesktopPenMembers.member")((pin: NativePenPin) =>
+    Effect.sync(() => {
+      const view = membership;
+      if (
+        view.kind !== "ready" ||
+        view.snapshot.mesh !== pin.meshId ||
+        view.snapshot.self === pin.nodeId ||
+        view.snapshot.revoked.some((entry) => entry.nodeId === pin.nodeId)
+      )
+        return undefined;
+      const matches = view.snapshot.members.filter((entry) => entry.nodeId === pin.nodeId);
+      return matches.length === 1 && matches[0]?.noisePub === pin.noisePub
+        ? matches[0].name
+        : undefined;
+    }),
+  );
   const subscribeMembership = (listener: (view: PenMembershipView) => void) => {
     listeners.add(listener);
     return () => void listeners.delete(listener);
@@ -220,6 +237,7 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
     state: Effect.sync(() => current),
     requireTrusted,
     requireMember,
+    member,
     subscribeMembership,
   } satisfies DesktopPenMembersShape;
 });

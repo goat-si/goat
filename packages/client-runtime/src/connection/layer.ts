@@ -11,6 +11,7 @@ import {
   watchRemovedHubProxyRoutes,
 } from "./hubProxyDiscovery.ts";
 import * as PenMembership from "./penMembership.ts";
+import * as PenLiveSet from "./penLiveSet.ts";
 import * as PenDiscovery from "./penDiscovery.ts";
 import * as PenNativeDiscovery from "./penNativeDiscovery.ts";
 import * as HubProxyAuthSource from "./hubProxyAuthSource.ts";
@@ -88,13 +89,17 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   );
   const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
   const layerOnboarding = ConnectionOnboarding.layer.pipe(Layer.provide(layerRegistry));
+  const layerLiveSet = PenLiveSet.layer.pipe(
+    Layer.provide(Layer.mergeAll(layerRegistry, layerResolver)),
+  );
   const layerConnectionServices = Layer.mergeAll(
     layerRegistry,
     RelayEnvironmentDiscovery.layer,
     layerOnboarding,
     layerResolver,
+    layerLiveSet,
     PenDiscovery.layer.pipe(
-      Layer.provide(Layer.mergeAll(layerRegistry, layerOnboarding, layerResolver)),
+      Layer.provide(Layer.mergeAll(layerRegistry, layerOnboarding, layerResolver, layerLiveSet)),
     ),
   );
   const layerConnectionStartup = Layer.effectDiscard(
@@ -105,6 +110,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       yield* registry.start;
       yield* watchRemovedHubProxyRoutes().pipe(Effect.forkScoped);
       yield* watchConnectedHubProxyDiscovery.pipe(Effect.forkScoped);
+      yield* PenLiveSet.watchPenLiveSet.pipe(Effect.forkScoped);
       yield* PenDiscovery.watchPenDiscovery.pipe(Effect.forkScoped);
       yield* PenNativeDiscovery.watchPenNativeDiscovery.pipe(Effect.forkScoped);
       yield* platformSource.registrations.pipe(

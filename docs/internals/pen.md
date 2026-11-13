@@ -268,6 +268,28 @@ alias. The Pen-native path stays closed (next section).
 - **Ownership is the optional `pen` binding, never the alias or `kind`.** A hub row a person added
   for the same alias is never touched, and an older client must still decode the node list, so the
   binding rides as an optional key on `addedBy` (kind stays `import`) and on the route.
+- **A Windows desktop does not follow Pen yet, for two reasons.** Pen's control socket is AF_UNIX
+  on every platform and Node on Windows opens only named pipes, so the snapshot watch
+  (`packages/pen-protocol/src/snapshot.ts`) never connects there. And the exact-route check
+  (`packages/ssh/src/penRoute.ts`) accepts only the POSIX ProxyCommand, while pen writes a
+  CreateProcess-quoted one on Windows. The first needs a transport from pen itself, such as a
+  command that streams snapshots; the second needs what Win32-OpenSSH's `ssh -G` prints, measured
+  on the Windows CI job, not guessed.
+- **The desktop dials a Pen-only machine only while the registry's gate lets it.** An environment
+  whose every route is a managed Pen route connects only while its id is in the registry's live
+  set (`packages/client-runtime/src/connection/penLiveSet.ts`): the member is online in the latest
+  list and within the limit of 16. The gate sits in the registry, on every path that turns a
+  supervisor on, because a supervisor is recreated whenever its entry is reinstalled and would
+  forget an intent of its own. The person's enabled switch is never written, a held machine's
+  tunnel is torn down, and an unreadable list changes nothing. The limit bounds what the desktop
+  asks to have open; teardown is not awaited, so one closing tunnel can overlap its replacement.
+  It is this desktop's budget, not a reservation at the relay.
+- **Removing a machine from GOAT names it exactly.** `pen revoke <member>` reads its argument as
+  an id and then as a name, so a machine that left between a confirmation and the command could
+  hand the revoke to another machine named like its id. Desktop main therefore calls only
+  `pen revoke --node <id> --noise <key>`, which matches one machine by both or nothing. The
+  confirmation is a native dialog raised by main with the name from main's own list: the renderer
+  can ask for the dialog, never answer it. No server, MCP or agent surface can start it.
 
 ## The Pen-native viewer (closed)
 

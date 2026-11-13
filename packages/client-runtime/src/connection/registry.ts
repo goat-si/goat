@@ -21,7 +21,6 @@ import {
   type ConnectionRoute,
   type PlatformConnectionRegistration,
   type PrimaryConnectionRegistration,
-  SshConnectionProfile,
   connectionRegistrationCatalogEntry,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -40,6 +39,8 @@ import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
+import { makeSshTeardown } from "./sshTeardown.ts";
+import { makePenGate } from "./penGate.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
 import { withRoutes } from "./registryRoutes.ts";
 import {
@@ -59,8 +60,6 @@ import {
   upsertRoute,
   type ReportedEndpoint,
 } from "./routes.ts";
-
-const isSshConnectionProfile = Schema.is(SshConnectionProfile);
 
 export class EnvironmentNotRegisteredError extends Schema.TaggedError<EnvironmentNotRegisteredError>()(
   "EnvironmentNotRegisteredError",
@@ -143,6 +142,7 @@ export class EnvironmentRegistry extends Context.Service<
       | ConnectionAttemptError
       | PlatformEnvironmentRemovalError
     >;
+    readonly setPenLive: (ids: ReadonlySet<EnvironmentId>) => Effect.Effect<void>;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
     /** Starts a new session for an enabled environment, so it reads the saved credential again. */
     readonly reconnect: (environmentId: EnvironmentId) => Effect.Effect<void>;
@@ -270,6 +270,24 @@ export const make = Effect.gen(function* () {
   const started = yield* Ref.make(false);
   const withLeaseLock = yield* makeLeaseLock;
 
+  const { forkSshDisconnect, forkSshTeardown } = makeSshTeardown({
+    ssh,
+    scope: registryScope,
+    routeWanted: (id, routeId) =>
+      SubscriptionRef.get(entries).pipe(
+        Effect.map((current) => {
+          const entry = current.get(id);
+          return (
+            entry !== undefined &&
+            entry.enabled &&
+            penGate.mayConnect(entry) &&
+            connectionRoutes(entry).some((route) => connectionRouteId(route.target) === routeId)
+          );
+        }),
+      ),
+  });
+  const penGate = makePenGate({ entries, serviceScopes, withLeaseLock, forkSshTeardown });
+
   const getEntry = Effect.fn("EnvironmentRegistry.getEntry")(function* (
     environmentId: EnvironmentId,
   ) {
@@ -305,7 +323,8 @@ export const make = Effect.gen(function* () {
           const supervisor = yield* EnvironmentSupervisor.make(entry, {
             // Seed the intent to avoid publishing a false switched-off state
             // before an enabled, compatible environment starts connecting.
-            initiallyDesired: entry.enabled && entry.unsupportedReason === undefined,
+            initiallyDesired:
+              entry.enabled && entry.unsupportedReason === undefined && penGate.mayConnect(entry),
             learnRoutes: (input) => learnRoutes({ environmentId, ...input }),
           }).pipe(
             Effect.provideService(Connectivity.Connectivity, connectivity),
@@ -822,82 +841,6 @@ export const make = Effect.gen(function* () {
     return yield* withLeaseLock(environmentId, removeLocked(environmentId));
   });
 
-  const disconnectSsh = (environmentId: EnvironmentId, profile: SshConnectionProfile) =>
-    ssh.disconnect(profile.target).pipe(
-      Effect.tapError((error) =>
-        Effect.logWarning("Could not disconnect the managed SSH environment.", {
-          environmentId,
-          error,
-        }),
-      ),
-      Effect.ignore,
-    );
-
-  /**
-   * Stops the managed SSH backends behind an entry without waiting for them.
-   * The desktop disconnect queues behind an in-flight launch and then stops the
-   * remote server over SSH, so it can take as long as the host takes to answer.
-   * Awaiting it would hold this environment's lease lock and the shared catalog
-   * command queue, freezing every environment switch until the window reloads.
-   * `startImmediately` sends the request before the caller returns, so a quick
-   * off-then-on still reaches the desktop in order; the desktop drops a
-   * disconnect that a newer reconnect overtook.
-   *
-   * One teardown per route runs at a time. Another off while it is stalled
-   * only marks it to run again, and the rerun happens only if the route is
-   * still off when the first one returns. A stuck host therefore holds one
-   * fiber and one desktop request however often the switch flips.
-   */
-  const sshTeardowns = new Map<string, { again: boolean }>();
-  const sshRouteWanted = (environmentId: EnvironmentId, routeId: string) =>
-    SubscriptionRef.get(entries).pipe(
-      Effect.map((current) => {
-        const entry = current.get(environmentId);
-        return (
-          entry !== undefined &&
-          entry.enabled &&
-          connectionRoutes(entry).some((route) => connectionRouteId(route.target) === routeId)
-        );
-      }),
-    );
-  const forkSshDisconnect = (environmentId: EnvironmentId, route: ConnectionRoute) => {
-    const profile = Option.getOrNull(route.profile);
-    if (profile === null || !isSshConnectionProfile(profile)) return Effect.void;
-    const routeId = connectionRouteId(route.target);
-    const key = `${environmentId}\u0000${routeId}`;
-    return Effect.suspend(() => {
-      const inFlight = sshTeardowns.get(key);
-      if (inFlight !== undefined) {
-        inFlight.again = true;
-        return Effect.void;
-      }
-      const teardown = { again: false };
-      sshTeardowns.set(key, teardown);
-      const run: Effect.Effect<void> = disconnectSsh(environmentId, profile).pipe(
-        Effect.andThen(
-          Effect.suspend(() => {
-            if (!teardown.again) return Effect.void;
-            teardown.again = false;
-            return sshRouteWanted(environmentId, routeId).pipe(
-              Effect.flatMap((wanted) => (wanted ? Effect.void : run)),
-            );
-          }),
-        ),
-      );
-      return run.pipe(
-        Effect.ensuring(Effect.sync(() => sshTeardowns.delete(key))),
-        Effect.forkIn(registryScope, { startImmediately: true }),
-        Effect.asVoid,
-      );
-    });
-  };
-  const forkSshTeardown = (entry: ConnectionCatalogEntry) =>
-    Effect.forEach(
-      connectionRoutes(entry),
-      (route) => forkSshDisconnect(entry.target.environmentId, route),
-      { discard: true },
-    );
-
   // Plain HTTP routes are unusable from an HTTPS page, which blocks mixed content.
   const { location }: typeof globalThis & { location?: Pick<URL, "protocol"> } = globalThis;
   const allowInsecureRoutes = typeof location === "undefined" || location.protocol !== "https:";
@@ -1051,7 +994,8 @@ export const make = Effect.gen(function* () {
         )
           return;
         yield* lease.supervisor.disconnect;
-        yield* lease.supervisor.connect;
+        const entry = (yield* SubscriptionRef.get(entries)).get(environmentId);
+        if (entry !== undefined && penGate.mayConnect(entry)) yield* lease.supervisor.connect;
       }),
     ).pipe(Effect.uninterruptible);
   });
@@ -1095,7 +1039,9 @@ export const make = Effect.gen(function* () {
           return nextEntries;
         });
         if (lease !== undefined) {
-          yield* enabled ? lease.supervisor.connect : lease.supervisor.disconnect;
+          yield* enabled && penGate.mayConnect(next)
+            ? lease.supervisor.connect
+            : lease.supervisor.disconnect;
         } else if (enabled) {
           yield* createServiceScope(next);
         }
@@ -1171,7 +1117,7 @@ export const make = Effect.gen(function* () {
             new Map(current).set(environmentId, { ...lease, entry: next }),
           );
           if (error !== null) yield* lease.supervisor.disconnect;
-          else if (next.enabled) yield* lease.supervisor.connect;
+          else if (next.enabled && penGate.mayConnect(next)) yield* lease.supervisor.connect;
         }
         yield* SubscriptionRef.update(entries, (current) =>
           new Map(current).set(environmentId, next),
@@ -1192,6 +1138,7 @@ export const make = Effect.gen(function* () {
     removeRoute,
     reorderRoutes,
     removeRelayEnvironments,
+    setPenLive: penGate.setLive,
     retryNow,
     reconnect,
     setEnabled,
