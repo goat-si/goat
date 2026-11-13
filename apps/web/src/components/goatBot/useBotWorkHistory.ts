@@ -101,8 +101,9 @@ export function useBotWorkHistory(
         retained:
           result.supported &&
           (result.pages.at(-1)?.result.history?.nextCursor !== undefined ||
-            result.pages.at(-1)?.result.history?.partial ||
-            result.pages.at(-1)?.result.history?.endedEarly)
+            [...walk.pages, ...result.pages.map((page) => page.result)].some(
+              (page) => page.history?.partial || page.history?.endedEarly,
+            ))
             ? walk.retained
             : [],
         pages: result.supported ? [...walk.pages, ...result.pages.map((page) => page.result)] : [],
