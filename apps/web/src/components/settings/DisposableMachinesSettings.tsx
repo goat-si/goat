@@ -12,6 +12,7 @@ import {
 import * as Schema from "effect/Schema";
 import { useState } from "react";
 import { randomUUID } from "~/lib/utils";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
@@ -316,6 +317,8 @@ function AttachDialog({
   const attach = useAtomCommand(serverEnvironment.hubMachinesAttach, { reportFailure: false });
   const canAttach = useAtomValue(serverEnvironment.hubMachinesAttach.permissionAtom(environmentId));
   const [invite, setInvite] = useState(initialInvite);
+  const [copyError, setCopyError] = useState(false);
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ onError: () => setCopyError(true) });
   const [name, setName] = useState("");
   const [signPub, setSignPub] = useState("");
   const [noisePub, setNoisePub] = useState("");
@@ -367,6 +370,11 @@ function AttachDialog({
               <p className="text-muted-foreground text-xs">
                 Expires {new Date(invite.expiresAt).toLocaleString()}.
               </p>
+              {copyError && (
+                <p role="alert" className="text-destructive text-xs">
+                  Could not copy. Select the token and copy it yourself.
+                </p>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -401,8 +409,13 @@ function AttachDialog({
             Close
           </Button>
           {invite ? (
-            <Button onClick={() => void navigator.clipboard.writeText(invite.token)}>
-              Copy token
+            <Button
+              onClick={() => {
+                setCopyError(false);
+                copyToClipboard(invite.token);
+              }}
+            >
+              {isCopied ? "Copied" : "Copy token"}
             </Button>
           ) : (
             <Button
