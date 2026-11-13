@@ -545,6 +545,9 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		t.Fatal(err)
 	}
 	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
+	// It learns of the half-close from the grace seam, which the child reaches once it half-closed: a read on Windows
+	// can miss the half-close itself.
+	halfClosed := halfCloseSeam(t, nil)
 	ln, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
@@ -559,7 +562,8 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		r := bufio.NewReader(c)
 		r.ReadBytes('\n')
 		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
-		io.Copy(io.Discard, r)
+		r.ReadBytes('\n')
+		<-halfClosed
 	}()
 	t.Setenv("PEN_HOME", dir)
 	key := make([]byte, 32)
@@ -606,10 +610,23 @@ func TestServiceRegisterExitsWhenItCannotForwardAnOpOrHalfClose(t *testing.T) {
 	}
 }
 
-// fakeNodeThatMissesTheEnd is a node that registers, reads one op, answers it when answer is true, reads the
-// half-close, and then keeps its side open, as a node whose read missed the half-close does on Windows. It reports the
-// half-close on halfClosed and closes only once release closes.
-func fakeNodeThatMissesTheEnd(t *testing.T, answer bool) (halfClosed <-chan struct{}) {
+// halfCloseSeam replaces the child's end grace timer with grace and returns a channel that closes when the child
+// starts that timer, which it does right after it half-closed.
+func halfCloseSeam(t *testing.T, grace <-chan time.Time) <-chan struct{} {
+	t.Helper()
+	halfClosed := make(chan struct{})
+	was := afterEndGrace
+	afterEndGrace = func() <-chan time.Time {
+		close(halfClosed)
+		return grace
+	}
+	t.Cleanup(func() { afterEndGrace = was })
+	return halfClosed
+}
+
+// fakeNodeThatMissesTheEnd is a node that registers, reads one op, answers it when answer is true, and then keeps its
+// side open, as a node whose read missed the half-close does on Windows. It closes only when the test ends.
+func fakeNodeThatMissesTheEnd(t *testing.T, answer bool) {
 	t.Helper()
 	dir, err := os.MkdirTemp(tmpRoot(), "pen")
 	if err != nil {
@@ -626,7 +643,6 @@ func fakeNodeThatMissesTheEnd(t *testing.T, answer bool) (halfClosed <-chan stru
 	}
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release); ln.Close() })
-	seen := make(chan struct{})
 	go func() {
 		c, err := ln.Accept()
 		if err != nil {
@@ -640,12 +656,9 @@ func fakeNodeThatMissesTheEnd(t *testing.T, answer bool) (halfClosed <-chan stru
 		if answer {
 			c.Write([]byte(`{"t":"clients","gen":1}` + "\n"))
 		}
-		io.Copy(io.Discard, r)
-		close(seen)
 		<-release
 	}()
 	t.Setenv("PEN_HOME", dir)
-	return seen
 }
 
 // printSignal collects what is written and closes printed once a write contains want.
@@ -681,11 +694,9 @@ func TestServiceRegisterEndsAtTheGraceWhenTheNodeMissesItsHalfClose(t *testing.T
 		{"op answered", true, 0, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			halfClosed := fakeNodeThatMissesTheEnd(t, c.answer)
+			fakeNodeThatMissesTheEnd(t, c.answer)
 			grace := make(chan time.Time)
-			was := afterEndGrace
-			afterEndGrace = func() <-chan time.Time { return grace }
-			defer func() { afterEndGrace = was }()
+			halfClosed := halfCloseSeam(t, grace)
 			key := make([]byte, 32)
 			rand.Read(key)
 			Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")

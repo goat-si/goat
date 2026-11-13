@@ -92,6 +92,7 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		return die(fmt.Errorf("unexpected answer %q", reg.T))
 	}
 	fmt.Fprintf(stdout, "pen-service v1 registered %s %s\n", name, reg.ID)
+	graceTimer := afterEndGrace
 	var s serviceCount
 	var live nodeReads
 	live.arm(cl)
@@ -104,7 +105,7 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 			return
 		}
 		select {
-		case <-afterEndGrace():
+		case <-graceTimer():
 			live.endGrace(cl)
 		case <-finished:
 		}
