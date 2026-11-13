@@ -87,21 +87,25 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-  }) => (
-    <button
-      aria-label={props.label}
-      onClick={() =>
-        nativeAlert(
-          props.title,
-          undefined,
-          props.actions.map((action) => ({
-            text: action.title,
-            onPress: () => props.onSelect(action.id),
-          })),
-        )
-      }
-    />
-  ),
+    children?: ReactNode;
+  }) =>
+    props.children ? (
+      <>{props.children}</>
+    ) : (
+      <button
+        aria-label={props.label}
+        onClick={() =>
+          nativeAlert(
+            props.title,
+            undefined,
+            props.actions.map((action) => ({
+              text: action.title,
+              onPress: () => props.onSelect(action.id),
+            })),
+          )
+        }
+      />
+    ),
 }));
 const state = vi.hoisted(() => ({
   // Whether the screen is focused and the app active; a task is marked read only then.
@@ -439,6 +443,30 @@ it("loads expanded work from the shared child read and opens a child-only thread
   expect(home()?.textContent).toContain("More work is available.");
   await press("Open work thread");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "child-thread" });
+});
+
+it("names each coding thread of an expanded task, so two threads can be told apart", async () => {
+  const coding = (threadId: string, title: string) =>
+    decode({
+      kind: "coding",
+      taskId: "t1",
+      environmentId: "env",
+      threadId,
+      title,
+      state: "bound",
+      lastActivityAt: at,
+    });
+  state.rows = [
+    task("t1", "Fix the build"),
+    coding("thread-a", "Patch web"),
+    coding("thread-b", "Patch mobile"),
+  ];
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).toContain("Patch web");
+  expect(home()?.textContent).toContain("Patch mobile");
+  await press("GOAT thread: Patch mobile");
+  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "thread-b" });
 });
 
 it("returns from a hidden finished task by revealing and scrolling to its row", async () => {

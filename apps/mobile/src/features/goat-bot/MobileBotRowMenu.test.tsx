@@ -1,16 +1,17 @@
-import { act, type ReactNode } from "react";
+import { act, type ReactElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 type Action = { id: string; title: string };
 type MenuProps = {
   actions: ReadonlyArray<Action>;
+  shouldOpenOnLongPress?: boolean;
   onPressAction?: (event: { nativeEvent: { event: string } }) => void;
   children: ReactNode | ((open: () => void) => ReactNode);
 };
 const native = vi.hoisted(() => ({
   platform: { OS: "ios" as "ios" | "android" },
-  menus: [] as Array<{ kind: string; actions: ReadonlyArray<Action> }>,
+  menus: [] as Array<{ kind: string; actions: ReadonlyArray<Action>; longPress?: boolean }>,
   press: null as null | ((id: string) => void),
   shown: 0,
 }));
@@ -34,13 +35,14 @@ vi.mock("react-native", () => ({
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
 }));
 const menu = vi.hoisted(() => (kind: string) => (props: MenuProps) => {
-  native.menus.push({ kind, actions: props.actions });
+  native.menus.push({ kind, actions: props.actions, longPress: props.shouldOpenOnLongPress });
   native.press = (id) => props.onPressAction?.({ nativeEvent: { event: id } });
   return (
     <div>{typeof props.children === "function" ? props.children(() => {}) : props.children}</div>
   );
 });
-// Android uses the native menu view, which opens above the Home sheet's modal; show() opens it.
+// Android uses the native menu view so it is not drawn behind the Home sheet's modal; that layering
+// is native and is not checked here. show() opens it.
 vi.mock("@react-native-menu/menu", async () => {
   const React = await import("react");
   return {
@@ -61,7 +63,7 @@ const actions = [
   { id: "read", title: "Mark read" },
 ];
 
-async function show(os: "ios" | "android") {
+async function show(os: "ios" | "android", row?: ReactElement) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   native.platform.OS = os;
   native.menus = [];
@@ -70,18 +72,15 @@ async function show(os: "ios" | "android") {
   const root = createRoot(container);
   await act(async () =>
     root.render(
-      <MobileBotRowMenu
-        label="Actions for Task"
-        title="Task"
-        actions={actions}
-        onSelect={onSelect}
-      />,
+      <MobileBotRowMenu label="Actions for Task" title="Task" actions={actions} onSelect={onSelect}>
+        {row}
+      </MobileBotRowMenu>,
     ),
   );
   return { container, onSelect, unmount: () => act(async () => root.unmount()) };
 }
 
-it("hands every row action to Android's native menu view, which opens above the Home sheet", async () => {
+it("hands every row action to Android's native menu view, which TalkBack's activation opens", async () => {
   const view = await show("android");
   expect(native.menus.at(-1)?.kind).toBe("android");
   expect(native.menus.at(-1)?.actions.map((action) => action.title)).toEqual([
@@ -108,4 +107,20 @@ it("uses the iOS menu with the same actions", async () => {
   await act(async () => native.press?.("work"));
   expect(view.onSelect).toHaveBeenCalledWith("work");
   await view.unmount();
+});
+
+it("opens the same actions on a long press of a row it wraps, on both platforms", async () => {
+  for (const os of ["android", "ios"] as const) {
+    const view = await show(os, <span>Task row</span>);
+    expect(native.menus.at(-1)).toMatchObject({ kind: os, longPress: true });
+    expect(native.menus.at(-1)?.actions).toHaveLength(4);
+    expect(view.container.textContent).toBe("Task row");
+    await act(async () => native.press?.("pin"));
+    expect(view.onSelect).toHaveBeenCalledWith("pin");
+    await view.unmount();
+  }
+  // The standalone button opens on a tap, so its menu does not also wait for a long press.
+  const button = await show("android");
+  expect(native.menus.at(-1)?.longPress).toBe(false);
+  await button.unmount();
 });

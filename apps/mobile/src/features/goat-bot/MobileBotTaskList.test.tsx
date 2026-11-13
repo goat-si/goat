@@ -38,21 +38,24 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-  }) => (
-    <button
-      aria-label={props.label}
-      onClick={() =>
-        alert(
-          props.title,
-          undefined,
-          props.actions.map((action) => ({
-            text: action.title,
-            onPress: () => props.onSelect(action.id),
-          })),
-        )
-      }
-    />
-  ),
+    children?: ReactNode;
+  }) => {
+    const open = () =>
+      alert(
+        props.title,
+        undefined,
+        props.actions.map((action) => ({
+          text: action.title,
+          onPress: () => props.onSelect(action.id),
+        })),
+      );
+    // Given a row, the menu opens on a long press of it; a context menu stands for that press.
+    return props.children ? (
+      <div onContextMenu={open}>{props.children}</div>
+    ) : (
+      <button aria-label={props.label} onClick={open} />
+    );
+  },
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <i>pin</i> }));
 vi.mock("./MobileBotPanelEmpty", () => ({
@@ -190,6 +193,24 @@ it("lists a task with its status, unread and pinned state, and the actions the b
   await act(async () => (row as HTMLButtonElement).click());
   expect(calls.peek).toHaveBeenCalledWith("task-1");
   expect(calls.open).not.toHaveBeenCalled();
+});
+
+it("opens the same row actions on a long press of the task, as the bot list did", async () => {
+  const calls = await show({ work: work([listedTask]), rows: [task] });
+  const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
+  await act(async () =>
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+  );
+  const choices = alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+  expect(choices.map((choice) => choice.text)).toEqual([
+    "Show work",
+    "Unpin",
+    "Mark done",
+    "Mark read",
+  ]);
+  await act(async () => choices[3]?.onPress?.());
+  expect(calls.update).toHaveBeenLastCalledWith({ taskId: "task-1", readThrough: at });
+  expect(calls.peek).not.toHaveBeenCalled();
 });
 
 it("lists coding threads no task owns under Other threads, even when there are no tasks", async () => {

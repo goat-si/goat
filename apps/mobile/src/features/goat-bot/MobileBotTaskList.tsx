@@ -130,54 +130,68 @@ export function mobileBotTaskListItems(props: {
         key: JSON.stringify(["task", row.task.taskId]),
         render: () => (
           <View className="flex-row items-center">
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={mobileBotTaskLabel(row)}
-              accessibilityActions={actions(row).map((action) => ({
-                name: action.id,
-                label: action.title,
-              }))}
-              onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
-              accessibilityState={{ disabled: !openable }}
-              disabled={!openable}
-              className="min-h-[44px] flex-1 flex-row items-center gap-2"
-              onPress={() => props.onPeekTask(row.task.taskId)}
+            <MobileBotRowMenu
+              label={`Actions for ${row.task.title}`}
+              title={row.task.title}
+              actions={actions(row)}
+              onSelect={(id) => choose(row, id)}
+              style={{ flex: 1 }}
             >
-              {section === "running" ? (
-                <View className="h-2 w-2 rounded-full bg-adaptive-blue-500-400" />
-              ) : (
-                <SymbolView
-                  name={section === "waiting" ? "questionmark.bubble" : "checkmark"}
-                  size={14}
-                  tintColorClassName={
-                    section === "waiting" ? "accent-warning-foreground" : "accent-foreground-muted"
-                  }
-                />
-              )}
-              <View className="flex-1">
-                <Text className="text-foreground">{row.task.title}</Text>
-                <View className="flex-row items-center gap-1">
-                  {row.view.pinnedAt ? (
-                    <SymbolView name="pin" size={12} tintColorClassName="accent-foreground-muted" />
-                  ) : null}
-                  {row.unread ? (
-                    <View
-                      accessibilityElementsHidden
-                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                    />
-                  ) : null}
-                  <Text className="text-xs text-foreground-muted">
-                    {presentTaskStatus(row.task.status, row.view.doneAt).label}
-                    {row.unread ? " · Unread" : ""}
-                  </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={mobileBotTaskLabel(row)}
+                accessibilityActions={actions(row).map((action) => ({
+                  name: action.id,
+                  label: action.title,
+                }))}
+                onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
+                accessibilityState={{ disabled: !openable }}
+                disabled={!openable}
+                className="min-h-[44px] flex-1 flex-row items-center gap-2"
+                onPress={() => props.onPeekTask(row.task.taskId)}
+              >
+                {section === "running" ? (
+                  <View className="h-2 w-2 rounded-full bg-adaptive-blue-500-400" />
+                ) : (
+                  <SymbolView
+                    name={section === "waiting" ? "questionmark.bubble" : "checkmark"}
+                    size={14}
+                    tintColorClassName={
+                      section === "waiting"
+                        ? "accent-warning-foreground"
+                        : "accent-foreground-muted"
+                    }
+                  />
+                )}
+                <View className="flex-1">
+                  <Text className="text-foreground">{row.task.title}</Text>
+                  <View className="flex-row items-center gap-1">
+                    {row.view.pinnedAt ? (
+                      <SymbolView
+                        name="pin"
+                        size={12}
+                        tintColorClassName="accent-foreground-muted"
+                      />
+                    ) : null}
+                    {row.unread ? (
+                      <View
+                        accessibilityElementsHidden
+                        className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                      />
+                    ) : null}
+                    <Text className="text-xs text-foreground-muted">
+                      {presentTaskStatus(row.task.status, row.view.doneAt).label}
+                      {row.unread ? " · Unread" : ""}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-              <SymbolView
-                name="chevron.right"
-                size={14}
-                tintColorClassName="accent-foreground-muted"
-              />
-            </Pressable>
+                <SymbolView
+                  name="chevron.right"
+                  size={14}
+                  tintColorClassName="accent-foreground-muted"
+                />
+              </Pressable>
+            </MobileBotRowMenu>
             <MobileBotRowMenu
               label={`Actions for ${row.task.title}`}
               title={row.task.title}

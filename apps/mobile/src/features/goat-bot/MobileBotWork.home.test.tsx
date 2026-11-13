@@ -89,21 +89,25 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-  }) => (
-    <button
-      aria-label={props.label}
-      onClick={() =>
-        nativeAlert(
-          props.title,
-          undefined,
-          props.actions.map((action) => ({
-            text: action.title,
-            onPress: () => props.onSelect(action.id),
-          })),
-        )
-      }
-    />
-  ),
+    children?: ReactNode;
+  }) =>
+    props.children ? (
+      <>{props.children}</>
+    ) : (
+      <button
+        aria-label={props.label}
+        onClick={() =>
+          nativeAlert(
+            props.title,
+            undefined,
+            props.actions.map((action) => ({
+              text: action.title,
+              onPress: () => props.onSelect(action.id),
+            })),
+          )
+        }
+      />
+    ),
 }));
 const state = vi.hoisted(() => ({
   rows: [] as BotThreadRow[],

@@ -584,6 +584,7 @@ export function MobileBotWork(props: {
               return entry
                 ? mobileBotWorkDetails({
                     entry,
+                    rows,
                     supported: enabled && capabilities?.goatBotChildWork === true,
                     error: expandedChildren.error,
                     pending: expandedChildren.isPending,

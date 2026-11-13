@@ -1,11 +1,13 @@
 import type { BotWorkTask } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Pressable, Text } from "react-native";
 import type { MobileBotHomeItem } from "./MobileBotTaskList";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
 
 export function mobileBotWorkDetails(props: {
   entry: BotWorkTask;
+  /** The bot list's rows, which carry each coding thread's title. */
+  rows: ReadonlyArray<BotThreadRow>;
   supported: boolean;
   error: string | null;
   pending: boolean;
@@ -17,15 +19,29 @@ export function mobileBotWorkDetails(props: {
   const items: MobileBotHomeItem[] = [
     ...entry.threads.map((thread) => ({
       key: JSON.stringify(["task-detail", id, "thread", thread.environmentId, thread.threadId]),
-      render: () => (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
-          className="min-h-[44px] justify-center"
-        >
-          <Text className="text-foreground underline">Open work thread</Text>
-        </Pressable>
-      ),
+      render: () => {
+        const coding = props.rows.find(
+          (row) =>
+            row.kind === "coding" &&
+            row.environmentId === thread.environmentId &&
+            row.threadId === thread.threadId,
+        );
+        const title = coding?.kind === "coding" ? coding.title || "GOAT thread" : null;
+        return (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              title === null ? "Work thread: " + entry.row.task.title : "GOAT thread: " + title
+            }
+            onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
+            className="min-h-[44px] justify-center"
+          >
+            <Text numberOfLines={1} className="text-foreground underline">
+              {title ?? "Open work thread"}
+            </Text>
+          </Pressable>
+        );
+      },
     })),
     ...entry.remote.map((item) => ({
       key: JSON.stringify(["task-detail", id, "remote", item.childWorkId]),
