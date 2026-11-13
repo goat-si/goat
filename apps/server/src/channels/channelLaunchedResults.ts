@@ -190,8 +190,8 @@ export const anyLaunchedResultOwed = (
 
 /**
  * Wakes for these ends that a digest outside the task's runs holds, but that its own run
- * launched: a digest folded before wakes named their launching run. Only a digest whose turn
- * began and ended counts: one cancelled while still queued was never read. Unresolved stay owed.
+ * launched: a digest folded before wakes named their launching run. Only a completed turn shows
+ * the provider took that input; any other status leaves the end owed, as do unresolved ones.
  */
 export const settledLaunchWakes = Effect.fn("ChannelBotSession.settledLaunchWakes")(function* (
   sql: SqlClient.SqlClient,
@@ -202,9 +202,7 @@ export const settledLaunchWakes = Effect.fn("ChannelBotSession.settledLaunchWake
   messages: NonNullable<WakeReading["messages"]>,
 ) {
   const own = new Set<string>(ownRuns.map((run) => run.id));
-  const others = allRuns.filter(
-    (run) => !own.has(run.id) && ENDED.has(run.status) && run.startedAt !== null,
-  );
+  const others = allRuns.filter((run) => !own.has(run.id) && run.status === "completed");
   const ids = new Set(
     ends.flatMap((end) =>
       end === "unreadable" ? [] : wakesFor(end, others, { messages }).map((wake) => wake.id),
