@@ -322,6 +322,48 @@ const downgradedMemberTask = (
   });
 
 describe("channel runtime after a downgrade", () => {
+  it.effect(
+    "repairs member ownership before bot task lookup and search and fails closed on repair errors",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        const members = yield* ChannelBotMembers.ChannelBotMembers;
+        const threads = yield* ChannelBotThreads.ChannelBotThreads;
+        const bot = yield* members.create(
+          {
+            clientRequestId: "lookup-repair",
+            name: "Helper",
+            avatar: null,
+            purpose: "Checks builds.",
+            defaultModelSelection: null,
+          },
+          owner,
+        );
+        const task = yield* downgradedMemberTask(harnessOwner, bot.botId, "running");
+        yield* sql`CREATE TRIGGER hold_lookup_repair BEFORE UPDATE OF bot_id ON channel_tasks BEGIN SELECT RAISE(ABORT, 'repair held'); END`;
+        const byId = yield* Effect.flip(
+          threads.getBotTask({ taskId: task.taskId, botId: bot.botId }, owner),
+        );
+        const search = yield* Effect.flip(
+          threads.searchBotTasks({ botId: bot.botId, query: task.title }, owner),
+        );
+        assert.strictEqual(byId.reason, "persistence_failed");
+        assert.strictEqual(search.reason, "persistence_failed");
+        yield* sql`DROP TRIGGER hold_lookup_repair`;
+        const found = yield* threads.getBotTask({ taskId: task.taskId, botId: bot.botId }, owner);
+        assert.strictEqual(found.task.state, "known");
+        const page = yield* threads.searchBotTasks({ botId: bot.botId, query: task.title }, owner);
+        assert.isTrue(page.tasks.some((row) => row.taskId === task.taskId));
+        const wrongBot = yield* Effect.flip(
+          threads.getBotTask({ taskId: task.taskId, botId: MAIN }, owner),
+        );
+        assert.strictEqual(wrongBot.reason, "not_found");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("does no work until member tasks are back with their bots", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

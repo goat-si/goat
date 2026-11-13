@@ -3,6 +3,14 @@ import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcP
 import { WS_METHODS } from "./rpc.ts";
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 
+it("guards bot task lookup and search with read while preserving existing task permissions", () => {
+  for (const method of ["channel.getBotTask", "channel.searchBotTasks"] as const)
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:read"]);
+  expect(clientRpcRequiredScopes("channel.getTask", {})).toEqual([]);
+  expect(clientRpcRequiredScopes("channel.updateTaskView", {})).toEqual(["orchestration:operate"]);
+  expect(clientRpcRequiredScopes("channel.retryTask", {})).toEqual(["orchestration:operate"]);
+});
+
 it("requires orchestration read for native child work", () => {
   expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.getNativeChildWork, {})).toEqual([
     "orchestration:read",

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Queue from "effect/Queue";
+import * as Option from "effect/Option";
+import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
   ChannelListBotThreadsInput,
@@ -24,6 +29,55 @@ const decodeRowsBefore = Schema.decodeUnknownSync(
 const at = "2026-11-04T10:00:00.000Z";
 
 describe("bot thread contracts", () => {
+  it.effect("rejects a NUL query at the RPC boundary the same way as an invalid limit", () =>
+    Effect.gen(function* () {
+      const rpc = ChannelRpcs.requests.get("channel.searchBotTasks");
+      if (rpc === undefined) throw new Error("missing search RPC");
+      const group = RpcGroup.make(rpc);
+      const disconnects = yield* Queue.unbounded<number>();
+      const replies = yield* Queue.unbounded<unknown>();
+      const ready = yield* Deferred.make<Parameters<RpcServer.Protocol["Service"]["run"]>[0]>();
+      let handled = 0;
+      const protocol = RpcServer.Protocol.of({
+        run: (receive) => Deferred.succeed(ready, receive).pipe(Effect.andThen(Effect.never)),
+        disconnects,
+        send: (_client, response) => Queue.offer(replies, response).pipe(Effect.asVoid),
+        end: () => Effect.void,
+        clientIds: Effect.succeed(new Set()),
+        initialMessage: Effect.succeed(Option.none()),
+        supportsAck: false,
+        supportsTransferables: false,
+        supportsSpanPropagation: false,
+        supportsNotifications: false,
+        codecFor: RpcSerialization.json.codecFor,
+      });
+      yield* RpcServer.make(group).pipe(
+        Effect.provideService(RpcServer.Protocol, protocol),
+        Effect.provide(
+          group.toLayerHandler("channel.searchBotTasks", () =>
+            Effect.sync(() => {
+              handled++;
+              return { tasks: [] };
+            }),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      const receive = yield* Deferred.await(ready);
+      const send = (id: string, payload: unknown) =>
+        receive(0, { _tag: "Request", id, tag: "channel.searchBotTasks", payload, headers: [] });
+      yield* send("1", { botId: "main", query: "abc\0zzz" });
+      const nul = yield* Queue.take(replies);
+      yield* send("2", { botId: "main", query: "abc", limit: 51 });
+      const limit = yield* Queue.take(replies);
+      expect(handled).toBe(0);
+      expect(nul).toMatchObject({ _tag: "Exit", exit: { _tag: "Failure" } });
+      expect(limit).toMatchObject({ _tag: "Exit", exit: { _tag: "Failure" } });
+      expect((nul as { exit: { cause: { _tag: string } } }).exit.cause._tag).toBe(
+        (limit as { exit: { cause: { _tag: string } } }).exit.cause._tag,
+      );
+    }),
+  );
   it("round trips known and unavailable lookup results through the RPC success codec", () => {
     const rpc = ChannelRpcs.requests.get("channel.getBotTask");
     if (rpc === undefined) throw new Error("missing lookup RPC");
