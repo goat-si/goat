@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  ChannelTaskId,
   CommandId,
   MessageId,
   ProjectId,
@@ -13,7 +14,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import { resolveSessionRun } from "../channels/channelBotSessionRuns.ts";
+import { resolveSessionRun, sessionTaskRuns } from "../channels/channelBotSessionRuns.ts";
+import { launchedResultOwed } from "../channels/channelLaunchedResults.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
 import { finishedWake, newLaunchWatch } from "../mcp/launchWatch.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -45,9 +47,15 @@ const layer = Layer.mergeAll(
 
 const supervisor = ThreadId.make("thread:supervisor");
 
-const runEnd = (lane: string, host: string | null) => {
+const runEnd = (
+  lane: string,
+  host: string | null,
+  launcherThreadId = supervisor,
+  run = `run:${lane}`,
+  end?: string,
+) => {
   const watch = newLaunchWatch({
-    launcherThreadId: supervisor,
+    launcherThreadId,
     host,
     threadId: ThreadId.make(`thread:${lane}`),
     projectId: null,
@@ -57,26 +65,31 @@ const runEnd = (lane: string, host: string | null) => {
     now: 0,
   });
   const wake = finishedWake({
-    watch,
-    runId: RunId.make(`run:${lane}`),
+    // A later end of a run carries its own id only once the watch recorded the earlier one.
+    watch: end === undefined ? watch : { ...watch, reportedEnds: { [run]: "earlier end" } },
+    runId: RunId.make(run),
     status: "completed",
     title: lane,
     branch: null,
     worktreePath: null,
     excerpt: `${lane} is done.`,
+    ...(end === undefined ? {} : { end }),
   });
   return { ...wake, messageId: wake.messageId };
 };
 
-const notice = (input: {
-  readonly commandId: string;
-  readonly messageId: string;
-  readonly text: string;
-  readonly notification: OrchestrationV2Notification;
-}) => ({
+const notice = (
+  input: {
+    readonly commandId: string;
+    readonly messageId: string;
+    readonly text: string;
+    readonly notification: OrchestrationV2Notification;
+  },
+  threadId = supervisor,
+) => ({
   type: "message.dispatch" as const,
   commandId: CommandId.make(input.commandId),
-  threadId: supervisor,
+  threadId,
   messageId: MessageId.make(input.messageId),
   text: input.text,
   attachments: [],
@@ -303,4 +316,139 @@ it.effect("a stored command notice belongs to the task whose run started the com
     const owner = yield* resolveSessionRun(sql, supervisor, projection, noticeRun.id);
     expect(owner?.task_id).toBe("task:logistics");
   }).pipe(Effect.provide(Layer.merge(layer, databaseLayer))),
+);
+
+/** A task thread whose first turn is running, with these notices queued behind it. */
+const queueBehindTurn = (thread: ThreadId, wakes: ReadonlyArray<ReturnType<typeof runEnd>>) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create"),
+      threadId: thread,
+      projectId: ProjectId.make("project:notice-digest"),
+      title: "Task thread",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("work"),
+      threadId: thread,
+      messageId: MessageId.make("message:work"),
+      text: "Launch the children.",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    for (const wake of wakes) yield* orchestrator.dispatch(notice(wake, thread));
+    for (const level of ["elevated", "critical"])
+      yield* orchestrator.dispatch(
+        notice(
+          {
+            commandId: `server:pressure:${level}`,
+            messageId: `${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:${level}`,
+            text: `Resource pressure: box-a is ${level}.`,
+            notification: {
+              source: { kind: "monitor" },
+              outcome: "updated",
+              summary: `box-a is under ${level} resource pressure`,
+            },
+          },
+          thread,
+        ),
+      );
+    const projection = yield* store.getThreadProjection(thread);
+    // Host pressure still coalesces; launch completions keep a turn each.
+    expect(queuedRunsInDeliveryOrder(projection).map((run) => run.userMessageId)).toEqual([
+      ...wakes.map((wake) => wake.messageId),
+      `${HOST_PRESSURE_MESSAGE_PREFIX}box-a:wake:elevated`,
+    ]);
+    return projection;
+  });
+
+const childEnd = (
+  thread: ThreadId,
+  run: string,
+  endIso: string | null = null,
+  reportedEnds: Record<string, string> = {},
+) => ({
+  launcherThreadId: thread,
+  childThreadId: ThreadId.make("thread:child-b"),
+  runId: RunId.make(run),
+  endIso,
+  watch: { detached: false, skippedRuns: [], reportedEnds },
+});
+
+const session = ThreadId.make("goat-bot-session:digest");
+const remote = () => runEnd("child-a", "box-a", session);
+const local = (run = "run:child-b", end?: string) => runEnd("child-b", null, session, run, end);
+const FIRST_END = "2026-10-12T00:00:00.000Z";
+const SECOND_END = "2026-10-12T00:05:00.000Z";
+it.effect.each([
+  [
+    "a remote child's end, then a local one's",
+    () => [remote(), local()],
+    childEnd(session, "run:child-b"),
+  ],
+  [
+    "a local child's end, then a remote one's",
+    () => [local(), remote()],
+    childEnd(session, "run:child-b"),
+  ],
+  [
+    "two runs of one child",
+    () => [local(), local("run:child-b:2")],
+    childEnd(session, "run:child-b:2"),
+  ],
+  [
+    "two ends of one run retried in place",
+    () => [local(), local("run:child-b", SECOND_END)],
+    childEnd(session, "run:child-b", SECOND_END, { "run:child-b": FIRST_END }),
+  ],
+] as const)(
+  "regression: on a GOAT Bot session %s keep a turn each, so the local child's result is not left owed",
+  ([, wakesFor, end]) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const projection = yield* queueBehindTurn(session, wakesFor());
+      const work = projection.runs.find((run) => run.userMessageId === "message:work")!;
+      // The session recorded its turn for the task, and the turn launched child-b here.
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${session}, 'message:work', 'task:digest', 1, 'task', '1970-01-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+        VALUES ('child-work:task:digest:child-b', ${JSON.stringify({
+          surface: "thread_launch",
+          callerThreadId: session,
+          callerRunId: work.id,
+          destination: { threadId: "thread:child-b" },
+        })}, '1970-01-01T00:00:00.000Z')`;
+      const own = yield* sessionTaskRuns(sql, session, projection, {
+        taskId: ChannelTaskId.make("task:digest"),
+        generation: 1,
+      });
+      expect(launchedResultOwed(end, own, projection.runs)).toBe(false);
+    }).pipe(Effect.provide(Layer.merge(layer, databaseLayer))),
+);
+
+it.effect(
+  "regression: on a channel task worker each launch completion keeps a turn, so none stays owed",
+  () =>
+    Effect.gen(function* () {
+      const worker = ThreadId.make("channel-worker:digest");
+      const projection = yield* queueBehindTurn(worker, [
+        runEnd("child-a", "box-a", worker),
+        runEnd("child-b", null, worker),
+      ]);
+      expect(launchedResultOwed(childEnd(worker, "run:child-b"), projection.runs)).toBe(false);
+    }).pipe(Effect.provide(layer)),
 );

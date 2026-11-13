@@ -6,8 +6,10 @@ import type {
   OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
+import { isGoatBotSessionThreadId } from "@goat/contracts";
 import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 
+import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
 import { PULL_REQUEST_WAKE_MESSAGE_PREFIX } from "./goat/PullRequestWatchWakes.ts";
@@ -245,7 +247,17 @@ export function foldIntoQueuedNotice(
     queued.notification.aboutRunId !== command.notification.aboutRunId
   )
     return undefined;
-  const notices = foldNotice(parseNotices(queued.id, queued.text), {
+  const existing = parseNotices(queued.id, queued.text);
+  // A channel task owns each run on its threads by the run's own message id, so a launched
+  // thread's end needs a run of its own there; reading retained ids only refuses a fold.
+  if (
+    (isGoatBotSessionThreadId(command.threadId) || isChannelWorkerThreadId(command.threadId)) &&
+    [command.messageId, queued.id, ...existing.map((notice) => notice.id)].some((id) =>
+      id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX),
+    )
+  )
+    return undefined;
+  const notices = foldNotice(existing, {
     id: command.messageId,
     text: command.text,
   });
