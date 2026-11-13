@@ -46,8 +46,25 @@ const issued = {
 };
 
 describe("native Windows runtime credentials", () => {
-  it("refuses Pen member issuance before contacting the server", async () => {
-    using posted = vi.spyOn(globalThis, "fetch");
+  it("accepts only the requested Pen member subject and scopes", async () => {
+    using _now = vi.spyOn(Date, "now").mockReturnValue(now);
+    const member = {
+      ...issued,
+      subject: `pen-member:${"a".repeat(26)}`,
+      scopes: ["orchestration:read"],
+      childSetupPurpose: undefined,
+    };
+    using posted = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(member));
+    expect(
+      await requestNativeRuntimeCredential(origin, secret, {
+        kind: "pen-member-session",
+        nodeId: "a".repeat(26),
+        scopes: ["orchestration:read"],
+        ttl: "1h",
+      }),
+    ).toEqual(JSON.parse(JSON.stringify(member)));
+    expect(posted).toHaveBeenCalledOnce();
+    posted.mockResolvedValue(Response.json({ ...member, subject: `pen-member:${"b".repeat(26)}` }));
     await expect(
       requestNativeRuntimeCredential(origin, secret, {
         kind: "pen-member-session",
@@ -55,8 +72,7 @@ describe("native Windows runtime credentials", () => {
         scopes: ["orchestration:read"],
         ttl: "1h",
       }),
-    ).rejects.toThrow("Pen member sessions are unsupported.");
-    expect(posted).not.toHaveBeenCalled();
+    ).rejects.toThrow("Session grant mismatch.");
   });
   it("returns the issuer session id and bounded purpose to Home with the issued bearer", async () => {
     using _now = vi.spyOn(Date, "now").mockReturnValue(now);

@@ -7,6 +7,7 @@ import {
   AuthStandardClientScopes,
   ChildSetupPurpose,
   RuntimeMode,
+  PenId,
 } from "@goat/contracts";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
@@ -196,6 +197,7 @@ const sessionIssueCommand = Command.make("issue", {
   ttl: ttlFlag,
   label: labelFlag,
   subject: subjectFlag,
+  penMember: Flag.String("pen-member").pipe(Flag.withSchema(PenId), Flag.optional),
   tokenOnly: tokenOnlyFlag,
   json: jsonFlag,
   runtimeModeCeiling: runtimeModeCeilingFlag,
@@ -214,7 +216,13 @@ const sessionIssueCommand = Command.make("issue", {
           flags,
           (environmentAuth) =>
             Effect.gen(function* () {
+              if (Option.isSome(flags.subject) && Option.isSome(flags.penMember))
+                return yield* new CliError.UserError({
+                  cause: "conflicting flags",
+                  userMessage: "--subject and --pen-member are mutually exclusive",
+                });
               const issued = yield* environmentAuth.issueSession({
+                ...(Option.isSome(flags.penMember) ? { penMemberNode: flags.penMember.value } : {}),
                 scopes: flags.scopes,
                 ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
                 ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),

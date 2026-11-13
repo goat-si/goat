@@ -55,6 +55,7 @@ export function mergeHubNodes(input: {
         checkedAt: state?.checkedAt ?? null,
         lastSeenAt: state?.lastSeenAt ?? null,
         lastError: state?.lastError ?? null,
+        ...(registration?.addedBy.pen ? { pen: registration.addedBy.pen } : {}),
       },
       environmentId,
       label,

@@ -93,7 +93,7 @@ const mcpSession = {
 const decodeSessionRequest = Schema.decodeUnknownEffect(RuntimeSessionRequest);
 
 it.layer(NodeServices.layer)("runtime session route", (it) => {
-  it.effect("recognizes and refuses Pen member issuance without creating a session", () =>
+  it.effect("issues the requested Pen member session with its exact scopes", () =>
     Effect.gen(function* () {
       const body = {
         kind: "pen-member-session",
@@ -104,7 +104,14 @@ it.layer(NodeServices.layer)("runtime session route", (it) => {
       yield* decodeSessionRequest(body);
       const auth = yield* EnvironmentAuth.EnvironmentAuth;
       const send = yield* serve();
-      expect((yield* send({ peer: "127.0.0.1", token: "secret", body })).status).toBe(400);
+      const response = yield* send({ peer: "127.0.0.1", token: "secret", body });
+      expect(response.status).toBe(200);
+      const issued = (yield* Effect.promise(() => response.json())) as {
+        subject: string;
+        scopes: ReadonlyArray<string>;
+      };
+      expect(issued.subject).toBe(`pen-member:${body.nodeId}`);
+      expect(issued.scopes).toEqual(body.scopes);
       expect(yield* auth.listSessions()).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(layerAuth)),
   );

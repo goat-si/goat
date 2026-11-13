@@ -33,6 +33,8 @@ import * as SshAuth from "@goat/ssh/auth";
 import { discoverSshHosts } from "@goat/ssh/config";
 import { SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
+import { PenManagedRoutes } from "../hubNodes/PenManagedRoutes.ts";
+import { guardPenManaged } from "./penManagedSsh.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -456,7 +458,8 @@ const validateSshLaunchAttachments = Effect.fn("SshRemoteDispatch.validateSshLau
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
-  const manager = yield* SshTunnel.SshEnvironmentManager;
+  const penRoutes = yield* PenManagedRoutes;
+  const manager = guardPenManaged(yield* SshTunnel.SshEnvironmentManager, penRoutes);
   const runtime = yield* Effect.context<RuntimeServices>();
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = Context.get(runtime, FileSystem.FileSystem);
@@ -495,6 +498,7 @@ const make = Effect.gen(function* () {
     });
   if (Option.isSome(cloudMachines))
     yield* cloudMachines.value.onAliasInvalidated((alias) => invalidateAlias(alias));
+  yield* penRoutes.registerCleanup((alias) => invalidateAlias(alias));
 
   // Hosts linked over HTTPS. Optional so test layers without it dial every alias as plain SSH.
   const linkedHosts = yield* Effect.serviceOption(LinkedHosts.LinkedHosts);

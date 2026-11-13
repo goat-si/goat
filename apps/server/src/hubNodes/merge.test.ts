@@ -3,6 +3,7 @@ import { EnvironmentId } from "@goat/contracts";
 import type { LinkedHost } from "../linkedHosts/LinkedHosts.ts";
 import type { Registration, RouteState } from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
+import { legacyConnection } from "./legacyConnection.ts";
 
 const hub = EnvironmentId.make("env-hub");
 const remote = EnvironmentId.make("env-remote");
@@ -54,6 +55,28 @@ const merge = (input: Partial<Parameters<typeof mergeHubNodes>[0]> = {}) =>
   });
 
 describe("mergeHubNodes", () => {
+  it("keeps Pen ownership on its own route when registrations share an identity", () => {
+    const pen = { meshId: "mesh", nodeId: "member", noisePub: "key" };
+    const node = merge({
+      registrations: [
+        { ...registration("manual"), addedBy: { kind: "agent", at } },
+        { ...registration("pen-member"), addedBy: { kind: "import", at, pen } },
+      ],
+      linked: [link],
+    }).nodes[0]!;
+    expect(node.addedBy).toEqual({ kind: "agent", at });
+    expect(node.routes.find((route) => route.routeId === "ssh:pen-member")?.pen).toEqual(pen);
+    expect(node.routes.find((route) => route.routeId === "ssh:manual")?.pen).toBeUndefined();
+    expect(node.routes.find((route) => route.routeId === "linked:linked")?.pen).toBeUndefined();
+  });
+
+  it("does not attribute a Pen registration to an agent in legacy connections", () => {
+    const pen = { meshId: "mesh", nodeId: "member", noisePub: "key" };
+    const node = merge({
+      registrations: [{ ...registration("pen-member"), addedBy: { kind: "agent", at, pen } }],
+    }).nodes[0]!;
+    expect(legacyConnection(node)?.addedBy).toBeUndefined();
+  });
   it("deduplicates identity, orders routes, and exposes linked access without credentials", () => {
     const snapshot = merge({
       registrations: [registration()],

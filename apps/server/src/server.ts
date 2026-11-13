@@ -279,6 +279,7 @@ import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
 import * as PenServer from "./pen/PenServerLayers.ts";
+import * as PenMembership from "./pen/PenMembershipLayers.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -825,6 +826,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
       Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provide(SshRemoteDispatchLive.layerPenRoutes),
     ),
   ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
@@ -1030,6 +1032,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
     PenServer.layer,
+    PenMembership.layer,
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),

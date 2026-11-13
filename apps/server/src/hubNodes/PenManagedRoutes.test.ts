@@ -40,7 +40,7 @@ const harness = (start: PenMembershipView = ready(["a", "a"])) => {
     route: trusted() as ReturnType<typeof trusted> | { refused: "no-recorded-key" },
   };
   return Effect.map(
-    PenManagedRoutes.make({ inspect: () => Effect.sync(() => state.route) }).pipe(
+    PenManagedRoutes.make({ inspect: () => Effect.sync(() => state.route), persisted: [] }).pipe(
       Effect.provideService(
         PenMembershipWatch,
         PenMembershipWatch.of({

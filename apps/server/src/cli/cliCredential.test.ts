@@ -90,6 +90,46 @@ const runCliUnstubbed = (args: ReadonlyArray<string>, env: Record<string, string
   );
 
 describe("credential-minting commands", () => {
+  it.effect("issues a member session and rejects a simultaneous subject", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* tempBaseDir;
+      const node = "a".repeat(26);
+      yield* runCli([
+        "auth",
+        "session",
+        "issue",
+        "--base-dir",
+        baseDir,
+        "--pen-member",
+        node,
+        "--json",
+      ]);
+      const lines = yield* TestConsole.logLines;
+      expect(lines.join("\n")).toContain(`pen-member:${node}`);
+      const result = yield* runCli([
+        "auth",
+        "session",
+        "issue",
+        "--base-dir",
+        baseDir,
+        "--pen-member",
+        node,
+        "--subject",
+        "browser",
+      ]).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      const malformed = yield* runCli([
+        "auth",
+        "session",
+        "issue",
+        "--base-dir",
+        baseDir,
+        "--pen-member",
+        "invalid",
+      ]).pipe(Effect.result);
+      expect(malformed._tag).toBe("Failure");
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer)),
+  );
   it.effect.each(
     mintingCommands.flatMap((command) =>
       threadShells.map((shell) => ({
