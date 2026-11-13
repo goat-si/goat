@@ -311,8 +311,9 @@ export const HubMachineStatus = Schema.Struct({
   provisioner: DisposableMachineProvisioner,
   stateSince: IsoDateTime,
   /**
-   * Only in the answer that minted it: the token the machine joins with. GOAT never stores or
-   * logs it, and a replay of the same request answers without it.
+   * Only in the answer that minted it: the token the machine joins with. The attach service never
+   * keeps it, and a replay answers without it; an agent caller's tool output, which carries it, is
+   * kept in that thread's history and its provider's transcript.
    */
   invite: Schema.optionalKey(
     Schema.Struct({

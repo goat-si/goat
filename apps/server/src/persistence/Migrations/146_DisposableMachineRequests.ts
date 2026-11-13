@@ -3,7 +3,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 /**
  * An attach's request key: a digest of its caller and clientRequestId. A repeat with the same key
- * answers the stored record's status, never the invite token, which GOAT does not store. A
+ * answers the stored record's status, never the invite token, which this table never holds. A
  * reissue's key is reserved in disposable_machine_requests before it cancels anything, and keeps
  * its outcome: running, ok, settled, or the refusal it ended with.
  */

@@ -25,7 +25,7 @@ export interface PenSubject {
 
 export interface PenMinted {
   readonly inviteId: string;
-  /** Bearer token; returned to the provisioner once, never stored or logged. */
+  /** Bearer token; returned to the provisioner once, never written to a record or a log. */
   readonly token: string;
   readonly expiresAtMs: number;
 }

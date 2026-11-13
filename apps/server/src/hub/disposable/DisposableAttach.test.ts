@@ -53,7 +53,7 @@ it.effect(
 );
 
 it.effect(
-  "the first answer carries the token; a repeat answers without it and GOAT stores it nowhere",
+  "the first answer carries the token; a repeat answers without it and no record holds it",
   () =>
     world((pen) =>
       Effect.gen(function* () {

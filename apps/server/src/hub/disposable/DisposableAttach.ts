@@ -405,7 +405,7 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Dispatches an admitted mint and returns its token once; GOAT never stores it. The token leaves
+   * Dispatches an admitted mint and returns its token once; no record holds it. The token leaves
    * only after the forward commit and one more check of the provisioner's grant; when either
    * refuses, that exact invite is cancelled before anyone sees the token.
    */
