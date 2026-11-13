@@ -152,4 +152,17 @@ a connection to that device. OpenCodex must allow it too: the row says whether i
 does, or <strong>unknown</strong> when your OpenCodex does not report it yet.</p>
 <p>Fleet shows the same devices in its <strong>Hub</strong> entry. Select its count to see each
 one.</p>
+<p>A Remote Link Child’s row also shows what its link to the hub carried: bytes
+to and from the hub in the last hour and the last 24 hours, the share that went
+through a Pen relay, the SSH alias the link uses (<strong>via relay</strong> for a Pen alias,
+<strong>direct</strong> otherwise), and whether it runs over HTTP or a WebSocket. Select the
+machine on the Fleet page to see the same line. GOAT counts from its own second
+reading of the hub’s OpenCodex, so traffic before that does not show, and a short
+measurement says how long it covers. Bytes whose route GOAT could not confirm
+are shown apart from relay and direct ones. A row says <strong>not measured</strong> when the
+hub’s OpenCodex does not report a number yet.</p>
+<p>GOAT warns in Hub and Fleet when one Child sends more than 5 GB through the relay
+in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
+turn a warning off, in <strong>Settings → Hub → Relay traffic warning</strong>. A warning
+never stops a turn or a link.</p>
 </article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#turn-it-on">Turn it on</a></li><li><a href="#add-repair-or-remove-a-device">Add, repair, or remove a device</a></li><li><a href="#sync-opencodex-models">Sync OpenCodex models</a></li><li><a href="#permission-profiles">Permission profiles</a></li><li><a href="#read-a-device">Read a device</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
