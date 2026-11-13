@@ -9,6 +9,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -302,29 +303,46 @@ export const makeRoutes = (deps: RoutesDeps) => {
             };
       }
       yield* deps.audit(caller, alias, "started", input.decisionId);
-      // Once ocx may have reached the Home, an error or an interruption leaves the edit unknown.
-      const ran = yield* deps.ocx.home(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS).pipe(
-        Effect.map((output) => ({ output })),
-        Effect.catchTags({
-          HubOcxError: (error) =>
-            error.reason === "ocx_missing" ? Effect.fail(error) : Effect.succeed({ output: null }),
+      // Admitted right before the process starts: from then on the Home may have the edit, so an
+      // error or an interruption spends the approval. Only ocx itself stays interruptible.
+      const started = yield* Ref.make(false);
+      const admit = Ref.set(started, true).pipe(Effect.as(true));
+      const answer = yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const ran = yield* restore(
+            deps.ocx.homeAdmitted(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS, admit),
+          ).pipe(
+            Effect.map((output) => ({ output: output ?? null })),
+            Effect.catchTags({
+              HubOcxError: (error) =>
+                error.reason === "ocx_missing"
+                  ? Effect.fail(error)
+                  : Effect.succeed({ output: null }),
+            }),
+            Effect.onInterrupt(() =>
+              Effect.flatMap(Ref.get(started), (ran) =>
+                ran ? deps.used(caller, input.decisionId).pipe(Effect.ignore) : Effect.void,
+              ),
+            ),
+          );
+          const answer: HubDeviceRoutesResult =
+            ran.output === null
+              ? {
+                  deviceAlias: alias,
+                  linkId: link.linkId,
+                  state: "failed",
+                  message:
+                    "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
+                }
+              : routesAnswer(alias, link.linkId, ran.output, true);
+          // Only a fixed refusal proves nothing changed; any other outcome spends the approval.
+          const refused =
+            answer.state === "unsupported" ||
+            (answer.state === "failed" && answer.code !== undefined);
+          if (!refused) yield* deps.used(caller, input.decisionId);
+          return answer;
         }),
-        Effect.onInterrupt(() => deps.used(caller, input.decisionId).pipe(Effect.ignore)),
       );
-      const answer: HubDeviceRoutesResult =
-        ran.output === null
-          ? {
-              deviceAlias: alias,
-              linkId: link.linkId,
-              state: "failed",
-              message:
-                "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
-            }
-          : routesAnswer(alias, link.linkId, ran.output, true);
-      // Only a fixed refusal proves nothing changed; any other outcome spends the approval.
-      const refused =
-        answer.state === "unsupported" || (answer.state === "failed" && answer.code !== undefined);
-      if (!refused) yield* deps.used(caller, input.decisionId);
       yield* deps.audit(caller, alias, answer.code ?? answer.state, input.decisionId);
       return answer;
     }).pipe(Effect.catchTags({ HubOcxError: unreachable(alias) }));
