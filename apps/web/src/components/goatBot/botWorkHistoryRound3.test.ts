@@ -1,5 +1,5 @@
 import { rememberHistoryRows } from "./botWorkHistoryStore.test-support";
-import { BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import { BotId, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
 import {
@@ -8,6 +8,9 @@ import {
   updateHistoryView,
   beginHistoryRead,
   finishHistoryRead,
+  historyScope,
+  historyResult,
+  syncHistoryCurrent,
 } from "./botWorkHistoryStore";
 
 const decode = Schema.decodeUnknownSync(BotThreadRow);
@@ -65,4 +68,34 @@ it("drops cached history when a later answer has no history marker", () => {
   if (!token) throw new Error("Expected a history request");
   finishHistoryRead(env, null, token, [], false);
   expect(historyTask(env, task.task.taskId)).toBeUndefined();
+});
+
+it("keeps separate bot walks and invalidates a page from an older list revision", () => {
+  resetHistoryTasksForTests();
+  const member = BotId.make("member");
+  syncHistoryCurrent(env, null, 1, []);
+  syncHistoryCurrent(env, member, 1, []);
+  const stale = beginHistoryRead(env, null);
+  const other = beginHistoryRead(env, member);
+  if (!stale || !other) throw new Error("Expected both reads");
+  syncHistoryCurrent(env, null, 2, []);
+  finishHistoryRead(
+    env,
+    null,
+    stale,
+    [{ rows: [row("stale")], mainMessageCount: 0, history: {} }],
+    true,
+  );
+  finishHistoryRead(
+    env,
+    member,
+    other,
+    [{ rows: [row("member")], mainMessageCount: 0, history: {} }],
+    true,
+  );
+  const main = historyScope(env, null);
+  const memberScope = historyScope(env, member);
+  if (!main || !memberScope) throw new Error("Expected both scopes");
+  expect(historyResult(main).rows).toEqual([]);
+  expect(historyResult(memberScope).rows).toHaveLength(1);
 });
