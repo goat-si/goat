@@ -8,6 +8,7 @@ import {
   ChannelSearchBotTasksInput,
 } from "./channelGateway.ts";
 import { BotId } from "./botProfile.ts";
+import { ChannelRpcs } from "./channelRpc.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
 const decodeUpdate = Schema.decodeUnknownSync(ChannelUpdateTaskViewInput);
@@ -23,6 +24,58 @@ const decodeRowsBefore = Schema.decodeUnknownSync(
 const at = "2026-11-04T10:00:00.000Z";
 
 describe("bot thread contracts", () => {
+  it("round trips known and unavailable lookup results through the RPC success codec", () => {
+    const rpc = ChannelRpcs.requests.get("channel.getBotTask");
+    if (rpc === undefined) throw new Error("missing lookup RPC");
+    const codec = Schema.toCodecJson(rpc.successSchema);
+    const encode = Schema.encodeSync(codec);
+    const decode = Schema.decodeUnknownSync(codec);
+    const task = { taskId: "task-1", title: "Review", status: "running", updatedAt: at };
+    const coding = {
+      kind: "coding",
+      taskId: "task-1",
+      environmentId: "env",
+      threadId: "thread",
+      state: "bound",
+      lastActivityAt: at,
+    };
+    const remote = {
+      childWorkId: "child",
+      taskId: "task-1",
+      callerThreadId: "caller",
+      host: "box",
+      state: "bound",
+      lastActivityAt: at,
+    };
+    const view = { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null };
+    for (const result of [
+      {
+        task: {
+          state: "known",
+          row: {
+            kind: "task",
+            task,
+            view,
+            lastActivityAt: at,
+            unread: true,
+            mainMessagesSinceQuiet: 1,
+          },
+        },
+        codingRows: [coding],
+        remoteWork: [remote],
+        launchesTruncated: false,
+        partial: false,
+      },
+      {
+        task: { state: "unavailable", task },
+        codingRows: [coding],
+        remoteWork: [remote],
+        launchesTruncated: false,
+        partial: true,
+      },
+    ])
+      expect(decode(encode(decode(result)))).toEqual(result);
+  });
   it("rejects a NUL in a bot task search query", () => {
     const decode = Schema.decodeUnknownSync(ChannelSearchBotTasksInput);
     expect(() => decode({ botId: "main", query: "abc\0zzz" })).toThrow();
