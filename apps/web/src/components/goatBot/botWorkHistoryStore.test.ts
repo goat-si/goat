@@ -1,10 +1,10 @@
+import { rememberHistoryRows } from "./botWorkHistoryStore.test-support";
 import { BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
 import {
   acknowledgeHistoryRow,
   historyTask,
-  rememberHistoryRows,
   resetHistoryTasksForTests,
 } from "./botWorkHistoryStore";
 

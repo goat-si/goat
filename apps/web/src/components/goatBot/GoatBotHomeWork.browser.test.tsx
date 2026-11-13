@@ -1,3 +1,4 @@
+import { rememberHistoryRows } from "./botWorkHistoryStore.test-support";
 import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -42,11 +43,7 @@ vi.mock("~/state/query", () => ({
 }));
 
 import { GoatBotHomeWork } from "./GoatBotHomeWork";
-import {
-  rememberHistoryRows,
-  resetHistoryTasksForTests,
-  useHistoryWork,
-} from "./botWorkHistoryStore";
+import { resetHistoryTasksForTests, useHistoryWork } from "./botWorkHistoryStore";
 import { ChannelTaskId } from "@goat/contracts";
 
 const environmentId = EnvironmentId.make("env");
