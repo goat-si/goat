@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { reportAtomCommandResult } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, ChannelSearchBotTasksResult } from "@goat/contracts";
 import type { useNavigate } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
@@ -44,7 +45,10 @@ export function useGoatBotTaskSearch(
       ? NO_PERMISSION
       : channelEnvironment.searchBotTasks.permissionAtom(environmentId),
   );
-  const read = useAtomCommand(channelEnvironment.searchBotTasks, { reportFailure: false });
+  const read = useAtomCommand(channelEnvironment.searchBotTasks, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const usable = bots.filter(
     (bot) => bot.state !== "deleted" && bot.environmentId === environmentId,
   );
@@ -84,12 +88,17 @@ export function useGoatBotTaskSearch(
           },
         },
       }));
+      // Superseded reads run to completion; their answers are ignored.
       const answer = await read({
         environmentId: bot.environmentId,
         input: { botId: bot.botId, query: text, ...(cursor ? { cursor } : {}) },
       });
       inFlight.current.delete(flightKey);
       if (sequence.current !== version) return;
+      reportAtomCommandResult(answer, {
+        label: channelEnvironment.searchBotTasks.label,
+        reportFailure: false,
+      });
       setSearch((prev) => {
         if (prev.key !== key) return prev;
         const old = prev.pages[bot.botId] ?? emptyPage();
