@@ -902,3 +902,29 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a resend after a journal answer starts a new run of failed reads; one failed read right after it waits",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the add left its entry open
+        yield* TestClock.adjust(HOUR);
+        host.control.journalUnreadable = true;
+        yield* enroll; // a failed read starts a run
+        // Two hours on the journal answers "open", long stale, so the id is sent again...
+        yield* TestClock.adjust(2 * HOUR);
+        host.control.journalUnreadable = false;
+        host.control.onAdd = () => {
+          host.control.journalUnreadable = true;
+        };
+        yield* enroll;
+        expect(linkAdds(host.control.calls)).toHaveLength(2);
+        // ...and the read right after that send fails: the old run is over, so it waits.
+        expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+      }),
+    ),
+);

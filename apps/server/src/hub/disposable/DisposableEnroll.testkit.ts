@@ -115,6 +115,8 @@ export const fakeEnrollHost = () => {
     journalUnreadable: false,
     /** A repeat of an open entry leaves it open, as a Home that keeps failing to recover it would. */
     openStaysOpen: false,
+    /** Runs as each link add arrives, before it answers. */
+    onAdd: undefined as (() => void) | undefined,
     holdOperations: undefined as Hold | undefined,
     journal,
     links,
@@ -125,6 +127,7 @@ export const fakeEnrollHost = () => {
   const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
   const output = (code: number, stdout = ""): OcxOutput => ({ code, stdout });
   const add = (args: ReadonlyArray<string>) => {
+    control.onAdd?.();
     const alias = args[2] ?? "";
     const operationId = args[args.indexOf("--operation-id") + 1] ?? "";
     const known = journal.get(operationId);

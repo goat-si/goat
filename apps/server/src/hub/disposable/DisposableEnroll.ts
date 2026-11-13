@@ -453,7 +453,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       yield* stop(row, enroll, "machine_key_path");
       return false;
     }
-    const link = { attempt: 0, intentAtMs: 0, ...enroll.link };
+    // A run of failed reads belongs to the journal reads; record() ends it.
+    const { unreadableSinceMs: _run, ...link } = { attempt: 0, intentAtMs: 0, ...enroll.link };
     const outcome =
       answer.kind === "directory"
         ? answer.chmod
@@ -518,8 +519,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       const ended = yield* authorityEnded(row, current);
       if (ended !== undefined) return yield* exclusive(pause(row, ended));
       const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
-      // The 2-hour window counts from the id's first store, whatever was resent since.
-      const { openSinceMs: _seen, ...rest } = link;
+      // The 2-hour window counts from the id's first store, whatever was resent since; the answer
+      // that led here ended any run of failed reads.
+      const { openSinceMs: _seen, unreadableSinceMs: _run, ...rest } = link;
       const resent = { ...enroll, link: { ...rest, sends: (link.sends ?? 1) + 1 } };
       if ((yield* forward(row, current, resent, {})) !== "committed") return;
       const again = yield* read(row.attach_id);
