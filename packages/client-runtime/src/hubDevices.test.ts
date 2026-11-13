@@ -8,6 +8,7 @@ import {
   type OpenCodexChildSetup,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 
 import {
   connectHubProxySaveError,
@@ -352,7 +353,7 @@ describe("cloudAutoJoinSaveError", () => {
 // The hub reads a switch that is on with no expiry, a past one or one over 30 days ahead as closed.
 it("reads the disposable machines consent as the hub does", () => {
   const now = Date.parse("2026-11-14T00:00:00.000Z");
-  const at = (days: number) => new Date(now + days * 86_400_000).toISOString();
+  const at = (days: number) => DateTime.formatIso(DateTime.makeUnsafe(now + days * 86_400_000));
   expect(disposableConsentEnded({ enabled: true, expiresAt: at(10) }, now)).toBe(false);
   expect(disposableConsentEnded({ enabled: true, expiresAt: at(-1) }, now)).toBe(true);
   expect(disposableConsentEnded({ enabled: true, expiresAt: null }, now)).toBe(true);
