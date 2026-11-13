@@ -279,6 +279,7 @@ export function GoatBotChatView({
                   {member ? (
                     <GoatBotSessionAvatar
                       size="sm"
+                      surface="chip"
                       chatOpen
                       emoji={avatar}
                       waitingCount={memberWaiting}
@@ -288,6 +289,7 @@ export function GoatBotChatView({
                   ) : (
                     <GoatBotMainAvatar
                       size="sm"
+                      surface="chip"
                       chatOpen
                       emoji={avatar}
                       activity={reading ? { state: "reading" } : removed ? null : working}

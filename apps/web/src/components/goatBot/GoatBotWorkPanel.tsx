@@ -357,9 +357,7 @@ export function GoatBotWorkPanel({
               />
             </GoatBotSectionCard>
             <GoatBotSectionCard title="Machines">
-              <div className="px-3 py-3">
-                <GoatBotComputer environmentId={environmentId} botId={member?.botId ?? null} />
-              </div>
+              <GoatBotComputer environmentId={environmentId} botId={member?.botId ?? null} />
             </GoatBotSectionCard>
             <GoatBotSuggested environmentId={environmentId} />
           </div>

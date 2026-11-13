@@ -862,8 +862,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   font-size: 14px;
   line-height: 18px;
   font-weight: 600;
-  background: color-mix(in oklab, var(--background) 72%, transparent);
+  /* Published so a bot avatar inside parts its colour from the capsule it really sits on. */
+  --goat-name-surface: color-mix(in oklab, var(--background) 72%, transparent);
+  background: var(--goat-name-surface);
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+
+.goat-name-capsule:has(> .goat-name-avatar):hover {
+  --goat-name-surface: var(--accent);
 }
 
 /* With the bot's face inside, the capsule hugs it like a chip: 28px tall, round on the left. */

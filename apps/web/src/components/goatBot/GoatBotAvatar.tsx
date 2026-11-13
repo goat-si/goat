@@ -44,6 +44,8 @@ const SURFACE = {
       "border-sidebar group-hover/bot-row:border-sidebar-row-hover group-data-[active=true]/bot-row:border-sidebar-row-selected group-active/bot-row:border-sidebar-row-active",
   },
   popover: { fill: "bg-popover", dotRing: "border-popover" },
+  /** The chat header's name capsule, which publishes its own background and hover colour. */
+  chip: { fill: "bg-(--goat-name-surface)", dotRing: "border-(--goat-name-surface)" },
   rail: {
     fill: "bg-background group-hover/rail:bg-accent group-aria-[current=page]/rail:bg-accent",
     dotRing:
