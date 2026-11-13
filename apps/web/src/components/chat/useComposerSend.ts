@@ -82,6 +82,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
+import { useSendWithRouting } from "./useSendWithRouting";
 import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
@@ -246,6 +247,7 @@ interface ComposerSendInput {
   readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
   readonly needsLoadBalancing: boolean;
   readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
+  readonly refreshBeforeSend: DraftEnvironmentRouting["refreshBeforeSend"];
   readonly readPendingEnvironmentChange: DraftEnvironmentRouting["readPendingEnvironmentChange"];
   readonly pendingApprovals: PendingThreadRequests["pendingApprovals"];
   readonly respondingRequestIds: PendingThreadRequests["respondingRequestIds"];
@@ -344,6 +346,7 @@ export function useComposerSend(input: ComposerSendInput) {
     clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
+    refreshBeforeSend,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
@@ -595,7 +598,6 @@ export function useComposerSend(input: ComposerSendInput) {
         sendInFlightRef.current = false;
       });
   };
-
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -1796,6 +1798,11 @@ export function useComposerSend(input: ComposerSendInput) {
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
   };
-
-  return { onSend, continueThreadOnSsh, forkCommand };
+  const onSendWithRouting = useSendWithRouting(
+    onSend,
+    sendInFlightRef,
+    readPendingEnvironmentChange,
+    refreshBeforeSend,
+  );
+  return { onSend: onSendWithRouting, continueThreadOnSsh, forkCommand };
 }
