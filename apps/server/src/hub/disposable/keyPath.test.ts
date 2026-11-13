@@ -10,6 +10,8 @@ import * as Path from "effect/Path";
 
 import { goatFolders, keyPathFor } from "./keyPath.ts";
 
+// it.live: these walk real folders the test makes, whose owner and mode only a real lstat reports.
+// Windows is skipped: GOAT stops there at the path form, and its modes say nothing of the ACL.
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 
 /** A folder of the user running the test that its group or others can write. */
@@ -249,6 +251,8 @@ it.live.skipIf(WINDOWS)("the key's own folder is judged strictly however the pat
     const sticky = path.join(at.root, "sticky");
     yield* fs.makeDirectory(path.join(sticky, "sub"), { recursive: true });
     yield* fs.chmod(sticky, 0o1777);
+    // Under a umask of 002 sub would be 0775 and refused before the walk reached "..".
+    yield* fs.chmod(path.join(sticky, "sub"), 0o755);
     yield* fs.writeFileString(path.join(sticky, "machine_ed25519"), "key", { mode: 0o600 });
     yield* fs.symlink(path.join(sticky, "sub") + "/..", path.join(at.disposable, "via"));
     const key = path.join(at.disposable, "via", "machine_ed25519");

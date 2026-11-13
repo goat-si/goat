@@ -10,7 +10,10 @@ import * as ProcessRunner from "../../processRunner.ts";
 import { phaseOf } from "../HubOcx.ts";
 import { identityHintOf, journalServed, reachAnswerOf, writeKnownHostsOnce } from "./EnrollHost.ts";
 
+// it.live: these run real processes and write real files, which only wall-clock fixtures can.
+// Windows is skipped: the stand-in ocx is a shell script, and GOAT refuses a Windows hub's key.
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
+const ROOT = process.getuid?.() === 0;
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
 // A stand-in ocx: the full journal listing of a busy Home is far past HubOcx's 256 KiB cap.
@@ -87,7 +90,8 @@ it("ocx's refusal of a key file is read by its hint, as the CLI prints it", () =
   ).toBe("identity_file_missing");
 });
 
-it.live.skipIf(WINDOWS)("a known_hosts file GOAT cannot read is never replaced", () =>
+// Root reads a file of mode 0000, so the unreadable file this test needs cannot exist for it.
+it.live.skipIf(WINDOWS || ROOT)("a known_hosts file GOAT cannot read is never replaced", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
