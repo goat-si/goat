@@ -1,5 +1,6 @@
 import {
   ChannelGatewayError,
+  ChannelTask,
   ChannelTaskId,
   type ChannelSearchBotTasksInput,
 } from "@goat/contracts";
@@ -11,18 +12,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 const invalid = () => new ChannelGatewayError({ reason: "invalid_input" });
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
-const decodeSearchRows = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Array(
-      Schema.Struct({
-        taskId: Schema.String,
-        title: Schema.String,
-        createdAt: Schema.String,
-        titleTruncated: Schema.Number,
-      }),
-    ),
-  ),
-);
+const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const tag = (value: string) =>
   NodeCrypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
 type Key = { readonly createdAt: string; readonly taskId: string };
@@ -93,11 +83,14 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
   // A stored title is matched up to its first NUL character.
   // ORDER BY evaluates predicates for at most 500 materialized candidates even when the result limit is smaller.
   return sql<{
-    readonly tasks_json: string;
     readonly partial: number;
     readonly last_created_at: string | null;
     readonly last_task_id: string | null;
     readonly more: number;
+    readonly task_id: string | null;
+    readonly conversation_id: string | null;
+    readonly created_at: string | null;
+    readonly task_json: string | null;
   }>`
     WITH candidates AS MATERIALIZED (
       SELECT task_id, created_at, conversation_id FROM channel_tasks INDEXED BY channel_tasks_owner_bot_created
@@ -105,7 +98,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
       ORDER BY created_at DESC, task_id DESC LIMIT 501
     ), processed AS MATERIALIZED (SELECT * FROM candidates LIMIT 500),
     evaluated AS MATERIALIZED (
-      SELECT p.task_id, p.created_at,
+      SELECT p.task_id, p.created_at, p.conversation_id,
         CASE WHEN octet_length(t.task_json) > 262144 THEN 0
           WHEN NOT json_valid(t.task_json) THEN 0
           WHEN json_type(t.task_json, '$.title') IS NOT 'text' THEN 0
@@ -126,14 +119,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
           WHEN NOT EXISTS (SELECT 1 FROM channel_conversations c WHERE c.conversation_id = p.conversation_id AND c.owner_id = ${scope.ownerId} AND c.kind = 'goat') THEN 0
           WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') = 'turn' THEN 0
           WHEN json_extract(t.task_json, '$.title') LIKE ${pattern} ESCAPE ${escape} THEN 1
-          ELSE 0 END AS matches,
-        CASE WHEN octet_length(t.task_json) > 262144 THEN NULL
-          WHEN NOT json_valid(t.task_json) THEN NULL
-          ELSE substr(json_extract(t.task_json, '$.title'), 1, 200) END AS title,
-        CASE WHEN octet_length(t.task_json) > 262144 THEN 0
-          WHEN NOT json_valid(t.task_json) THEN 0
-          ELSE length(json_extract(t.task_json, '$.title')) > 200
-            OR instr(CAST(json_extract(t.task_json, '$.title') AS BLOB), x'00') > 0 END AS truncated
+          ELSE 0 END AS matches
       FROM processed p JOIN channel_tasks t ON t.task_id = p.task_id
     ), ranked AS MATERIALIZED (
       SELECT *, COALESCE(sum(matches) OVER (ORDER BY created_at DESC, task_id DESC
@@ -142,14 +128,17 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
     ), page AS MATERIALIZED (
       SELECT * FROM ranked WHERE previous_matches < ${scope.limit ?? 20}
       ORDER BY created_at DESC, task_id DESC
+    ), metadata AS MATERIALIZED (
+      SELECT COALESCE(max(CASE WHEN valid = 0 THEN 1 ELSE 0 END), 0) AS partial,
+        (SELECT created_at FROM page ORDER BY created_at ASC, task_id ASC LIMIT 1) AS last_created_at,
+        (SELECT task_id FROM page ORDER BY created_at ASC, task_id ASC LIMIT 1) AS last_task_id,
+        (SELECT count(*) FROM candidates) > (SELECT count(*) FROM page) AS more
+      FROM page
     )
-    SELECT COALESCE(json_group_array(json_object('taskId', task_id, 'title', title,
-      'createdAt', created_at, 'titleTruncated', truncated)) FILTER (WHERE matches = 1), '[]') AS tasks_json,
-      COALESCE(max(CASE WHEN valid = 0 THEN 1 ELSE 0 END), 0) AS partial,
-      (SELECT created_at FROM page ORDER BY created_at ASC, task_id ASC LIMIT 1) AS last_created_at,
-      (SELECT task_id FROM page ORDER BY created_at ASC, task_id ASC LIMIT 1) AS last_task_id,
-      (SELECT count(*) FROM candidates) > (SELECT count(*) FROM page) AS more
-    FROM page`;
+    SELECT metadata.*, matched.task_id, matched.conversation_id, matched.created_at, t.task_json
+    FROM metadata LEFT JOIN page matched ON matched.matches = 1
+    LEFT JOIN channel_tasks t ON t.task_id = matched.task_id
+    ORDER BY matched.created_at DESC, matched.task_id DESC`;
 };
 
 export const searchBotTasks = Effect.fn("ChannelBotThreads.searchBotTasks")(function* (
@@ -169,16 +158,35 @@ export const searchBotTasks = Effect.fn("ChannelBotThreads.searchBotTasks")(func
   const rows = yield* searchStatement(sql, scope, after).pipe(Effect.mapError(failed));
   const row = rows[0];
   if (row === undefined) return yield* failed();
-  const parsed = yield* Effect.try(() => decodeSearchRows(row.tasks_json)).pipe(
-    Effect.mapError(failed),
-  );
-  const tasks = parsed.map((item) => ({
-    taskId: ChannelTaskId.make(item.taskId),
-    title: item.title.trim(),
-    createdAt: item.createdAt,
-    ...(item.titleTruncated ? { titleTruncated: true } : {}),
-  }));
-  const partial = row.partial === 1;
+  const tasks: Array<{
+    taskId: ChannelTaskId;
+    title: string;
+    createdAt: string;
+    titleTruncated?: boolean;
+  }> = [];
+  let partial = row.partial === 1;
+  for (const item of rows) {
+    if (item.task_id === null) continue;
+    if (item.task_json === null || item.conversation_id === null || item.created_at === null)
+      return yield* failed();
+    const json = item.task_json;
+    const task = yield* Effect.try(() => decodeTask(json)).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (
+      task === undefined ||
+      task.taskId !== item.task_id ||
+      task.conversationId !== item.conversation_id
+    ) {
+      partial = true;
+      continue;
+    }
+    tasks.push({
+      taskId: ChannelTaskId.make(item.task_id),
+      ...cutBotWorkTitle(task.title),
+      createdAt: item.created_at,
+    });
+  }
   const more = row.more === 1;
   const key =
     row.last_created_at === null || row.last_task_id === null

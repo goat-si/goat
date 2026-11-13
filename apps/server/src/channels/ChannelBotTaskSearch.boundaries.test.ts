@@ -79,6 +79,21 @@ describe("bot task search boundaries", () => {
           ["needle-valid"],
         );
         assert.strictEqual(page.partial, true);
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1 },
+          owner,
+        );
+        assert.deepStrictEqual(first.tasks, []);
+        assert.strictEqual(first.partial, true);
+        assert.isString(first.nextCursor);
+        const next = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle", limit: 1, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          next.tasks.map((task) => String(task.taskId)),
+          ["needle-valid"],
+        );
       }),
     ),
   );
