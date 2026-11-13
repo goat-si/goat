@@ -42,9 +42,9 @@ const Text = (max: number) =>
     ),
   );
 const Row = Schema.Struct({
-  attach_id: wire.attachId,
+  attach_id: Text(64),
   node_id: Schema.String,
-  state: wire.state,
+  state: Text(40),
   state_since: wire.stateSince,
   created_at: Schema.String,
   provisioner_json: Schema.fromJsonString(StoredProvisioner),

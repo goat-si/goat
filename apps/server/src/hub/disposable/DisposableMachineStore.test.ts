@@ -108,6 +108,28 @@ it.effect("a row the wire cannot carry makes the table unreadable, never the hub
   ),
 );
 
+// A trimming decoder would read "kept " (open to SQL) as a final record, and a padded attach id
+// as one commitForward can never find; the read must fail instead.
+it.effect("a padded state or attach id makes the table unreadable instead of reading changed", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const store = yield* Store.DisposableMachineStore;
+      const sql = yield* SqlClient.SqlClient;
+      for (const [attachId, state] of [
+        ["a1", "kept "],
+        ["a1 ", "invited"],
+      ] as const) {
+        yield* insert(attachId, "g", { state });
+        expect(yield* store.records.pipe(Effect.flip), attachId + "/" + state).toBeInstanceOf(
+          Store.DisposableStoreError,
+        );
+        yield* sql`DELETE FROM disposable_machines`;
+      }
+    }),
+  ),
+);
+
 it.effect("an unreadable table reads as no records, so every machine is kept", () =>
   world(
     Effect.gen(function* () {
