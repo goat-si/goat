@@ -21,7 +21,7 @@ import {
   stateMessage,
 } from "./attachModel.ts";
 import type * as Store from "./DisposableMachineStore.ts";
-import { decodeEnroll, enrollMessage, enrollSteps } from "./enrollModel.ts";
+import { decodeEnroll, enrollMessage, enrollSteps, leftPenMessage } from "./enrollModel.ts";
 import type { PenInviteRef } from "./PenInvites.ts";
 
 /** A disposable_machines row, the SQL that selects records by phase, and the fixed refusals. */
@@ -121,7 +121,12 @@ export const status = (
   machineKey?: string,
 ): HubMachineStatus => {
   const enroll = decodeEnroll(row.enroll_json);
+  const leftWithLink =
+    row.pen_removed_at !== null && (row.link_id !== null || row.link_operation_id !== null);
   const { message, nextAction } =
+    (leftWithLink
+      ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
+      : undefined) ??
     (row.pen_admitted_at === null ? undefined : enrollMessage(row.state, row.name, enroll)) ??
     stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);

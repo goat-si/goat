@@ -282,8 +282,12 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const as = (result: string): Enroll => ({ ...enroll, link: { ...link, outcome: result } });
     switch (outcome.kind) {
       case "committed":
-        yield* note(row, as("committed"), { link_id: outcome.linkId, step: "verify" });
-        yield* audit(row.attach_id, "hub.machine_link", "committed");
+        if (yield* note(row, as("committed"), { link_id: outcome.linkId, step: "verify" }))
+          yield* audit(row.attach_id, "hub.machine_link", "committed");
+        // The link exists whoever moved the fence; its id is a fact the record must not lose.
+        else
+          yield* sql`UPDATE disposable_machines SET link_id = ${outcome.linkId}
+            WHERE attach_id = ${row.attach_id} AND link_id IS NULL`;
         return "done" as const;
       case "failed_clean":
         if (FINAL_LINK_CODES.has(outcome.code)) yield* stop(row, as(outcome.code), outcome.code);
@@ -443,6 +447,25 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     return yield* verifyStep(row, before, enroll, route, row.link_id);
   });
 
+  /**
+   * A record that left Pen while it held or started a link: the journal is read once for a link
+   * the record does not name yet, then the record is final and its status names the link.
+   */
+  const settleLeft = Effect.fn("DisposableEnroll.settleLeft")(function* (row: Row) {
+    const operationId = row.link_operation_id;
+    const outcome =
+      row.link_id === null && operationId !== null ? yield* readBack(row, operationId) : undefined;
+    const linkId = outcome?.kind === "committed" ? outcome.linkId : row.link_id;
+    const now = yield* nowIso;
+    const settled = yield* exclusive(
+      sql`UPDATE disposable_machines SET state = 'failed', final_at = ${now}, state_since = ${now},
+        link_id = ${linkId}, updated_at = ${now}
+        WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} AND state = 'left_pen'
+        RETURNING attach_id`,
+    );
+    if (settled.length === 1) yield* audit(row.attach_id, "hub.machine_left_pen", "link_named");
+  });
+
   /** One step for one record, if it is due; its failures are the caller's pass to log. */
   const advance = Effect.fn("DisposableEnroll.advance")(function* (attachId: string) {
     const claimed = yield* Ref.modify(running, (set) =>
@@ -451,7 +474,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     if (!claimed) return;
     yield* Effect.gen(function* () {
       const row = yield* read(attachId);
-      if (row !== undefined && due(row)) yield* step(row);
+      if (row?.state === "left_pen" && row.final_at === null) yield* settleLeft(row);
+      else if (row !== undefined && due(row)) yield* step(row);
     }).pipe(
       Effect.ensuring(
         Ref.update(running, (set) => new Set([...set].filter((id) => id !== attachId))),

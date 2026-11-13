@@ -152,7 +152,9 @@ SSH host key with another disposable machine, stops for you to decide.
 
 Each machine is a full Pen member and can reach services on your machines'
 loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
-it with [`pen revoke`](pen.md#remove-a-machine). An older GOAT on the
+it with [`pen revoke`](pen.md#remove-a-machine). Removing a linked machine from Pen leaves its
+link on the hub; the machine list names the link and the `ocx link revoke`
+command that removes it. An older GOAT on the
 hub shows **Update GOAT on this hub** instead of these settings.
 
 ## Sync OpenCodex models

@@ -203,6 +203,7 @@ export const DISPOSABLE_MACHINE_STATES = [
   "admitted",
   "attaching",
   "linked",
+  "left_pen",
   "attached",
   "failed",
   "unknown",

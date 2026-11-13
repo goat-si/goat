@@ -447,3 +447,52 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a linked machine removed from Pen keeps its link named, with the step that removes it",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        for (let pass = 0; pass < 4; pass += 1) yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
+        pen.members.delete(key(1));
+        yield* listed(attachId);
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "failed",
+          penMember: false,
+          message: expect.stringContaining("lnk_0000000000000001"),
+          nextAction: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
+        });
+      }),
+    ),
+);
+
+it.effect(
+  "a link that commits while its machine is removed from Pen is still recorded and named",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        yield* enroll;
+        yield* enroll;
+        const hold = yield* makeHold();
+        host.control.holdOperations = hold;
+        const pass = yield* Effect.forkChild(enroll); // the add commits; its read back is held
+        yield* Deferred.await(hold.arrived);
+        pen.members.delete(key(1));
+        yield* listed(attachId);
+        yield* Deferred.succeed(hold.release, undefined);
+        yield* Fiber.join(pass);
+        host.control.holdOperations = undefined;
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "failed",
+          nextAction: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
+        });
+      }),
+    ),
+);

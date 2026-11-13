@@ -512,10 +512,12 @@ export const make = Effect.gen(function* () {
         view !== undefined && !view.has(row.expected_sign_pub);
       if (missing(yield* members) && missing(yield* pen.members)) {
         // The fence moves with the removal, so an enrollment step in flight commits nothing after it.
+        // A record that holds or started a link stays open until enrollment reads what it left.
+        const linking = row.link_id !== null || row.link_operation_id !== null;
         row = yield* save(row, effects, {
           fence: row.fence + 1,
           pen_removed_at: yield* nowIso,
-          ...(row.final_at === null ? { state: "failed" } : {}),
+          ...(row.final_at === null ? { state: linking ? "left_pen" : "failed" } : {}),
         });
         yield* audit(row.attach_id, "hub.machine_left_pen", "removed");
       }
@@ -597,7 +599,8 @@ export const make = Effect.gen(function* () {
     );
   const enrollPass = Effect.gen(function* () {
     const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
-      WHERE final_at IS NULL AND ${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching')
+      WHERE final_at IS NULL AND ((${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching'))
+        OR state = 'left_pen')
       ORDER BY created_at LIMIT ${ENROLL_LIMIT}`.pipe(Effect.mapError(storageFailed));
     // One record's failure is logged and never stops the others.
     yield* Effect.forEach(

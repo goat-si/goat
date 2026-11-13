@@ -253,6 +253,43 @@ const WAITING: Record<string, string> = {
 const waitingText = (outcome: string | undefined) =>
   outcome === undefined ? undefined : WAITING[outcome];
 
+/** A machine that left Pen while this hub's OpenCodex held, or was making, a link for it. */
+export const leftPenMessage = (
+  name: string,
+  final: boolean,
+  linkId: string | null,
+  operationId: string | null,
+): { readonly message: string; readonly nextAction: string | null } => {
+  if (!final)
+    return {
+      message: name + " left Pen; GOAT is reading what its link operation left on this hub.",
+      nextAction: null,
+    };
+  if (linkId !== null)
+    return {
+      message:
+        name +
+        " was removed from Pen while this hub's OpenCodex held link " +
+        linkId +
+        " for it; the link and the Child on the machine stay.",
+      nextAction:
+        "Remove the link on the hub with ocx link revoke --link-id " +
+        linkId +
+        " (add --force --yes if the machine is gone). Detaching comes in a later GOAT.",
+    };
+  return {
+    message:
+      name +
+      " was removed from Pen during link operation " +
+      operationId +
+      ", which OpenCodex had not finished.",
+    nextAction:
+      "Check it on the hub with ocx link operations --operation-id " +
+      operationId +
+      "; if it made a link, remove it with ocx link revoke.",
+  };
+};
+
 /**
  * The fixed text for an admitted attach (design section 2, "What the caller sees"); undefined for a
  * state the invite texts cover.
