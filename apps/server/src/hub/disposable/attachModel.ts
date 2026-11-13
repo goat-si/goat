@@ -5,7 +5,7 @@ import { type HubMachineStatus, type HubMachineStep, RuntimeMode } from "@goat/c
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { PenInviteState } from "./PenInvites.ts";
+import type { PenInviteStatus } from "./PenInvites.ts";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -69,10 +69,15 @@ export const encodeEffects = Schema.encodeSync(EffectsJson);
  * GOAT knows was made and Pen no longer has stays open, holding the slot.
  */
 export const observe = (
-  effect: AttachEffect,
-  answer: PenInviteState,
+  known: AttachEffect,
+  answer: PenInviteStatus,
   nowMs: number,
 ): AttachEffect => {
+  // Once Pen names the invite a mint made, GOAT asks by that id from then on.
+  const effect =
+    known.inviteId === undefined && answer.inviteId !== undefined
+      ? { ...known, inviteId: answer.inviteId }
+      : known;
   switch (answer.state) {
     case "cancelled":
     case "expired":

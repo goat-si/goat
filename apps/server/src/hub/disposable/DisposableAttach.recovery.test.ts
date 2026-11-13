@@ -67,6 +67,47 @@ it.effect("a known invite Pen no longer has keeps its slot, under withdrawal and
   ),
 );
 
+it.effect("a switch change while the last grant check is pending still withholds the token", () =>
+  world((pen, _home, grant) =>
+    Effect.gen(function* () {
+      grant.gate = yield* Deferred.make<void>();
+      grant.reached = yield* Deferred.make<void>();
+      grant.gateOnCall = 2;
+      const attaching = yield* attach(1).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(grant.reached);
+      yield* switchTo({ cap: 5 });
+      yield* Deferred.succeed(grant.gate, undefined);
+      const outcome = yield* Fiber.join(attaching);
+      expect(outcome._tag === "Failure" && outcome.failure.reason).toBe("switch_off");
+      expect(liveMints(pen.book)).toEqual([]);
+    }),
+  ),
+);
+
+// The mint's answer was lost, so GOAT learns the invite id from Pen's status, and from then on
+// asks by it: a later loss of Pen's book must not read as a fence.
+it.effect(
+  "an invite id learned from status after a lost mint answer keeps the slot if Pen loses it",
+  () =>
+    world((pen) =>
+      Effect.gen(function* () {
+        pen.control.loseMint = true;
+        expect(yield* reason(attach(1))).toBe("unknown_outcome");
+        expect(yield* reason(attach(2))).toBe("unknown_outcome");
+        pen.control.loseMint = false;
+        yield* reconcile;
+        pen.book.clear();
+        const [, second] = yield* rows;
+        const again = yield* reissue(String(second?.attach_id), "re-1");
+        expect(again).not.toHaveProperty("invite");
+        yield* switchTo({ enabled: false });
+        yield* reconcile;
+        expect((yield* rows).every((row) => row.final_at === null)).toBe(true);
+        expect(pen.control.tokensSeen).toEqual([]);
+      }),
+    ),
+);
+
 it.effect("a reissue of an expired invite mints nothing, and the record frees its slot", () =>
   world((pen) =>
     Effect.gen(function* () {

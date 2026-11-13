@@ -16,6 +16,7 @@ import {
   PEN_ATTACH_FEATURES,
   type PenInviteRef,
   type PenInviteState,
+  type PenInviteStatus,
   PenInviteUnknown,
   PenInvites,
 } from "./PenInvites.ts";
@@ -141,19 +142,25 @@ export const fakePen = () => {
         const entry = refOf(ref);
         if (entry === undefined) return { state: "absent" } satisfies PenInviteState;
         expire(entry, yield* now);
+        const named = entry.inviteId === undefined ? {} : { inviteId: entry.inviteId };
         switch (entry.state) {
           case "live":
-            return { state: "live", expiresAtMs: entry.expiresAtMs } satisfies PenInviteState;
+            return {
+              ...named,
+              state: "live",
+              expiresAtMs: entry.expiresAtMs,
+            } satisfies PenInviteStatus;
           case "burned":
             return {
+              ...named,
               state: "burned",
               nonce: entry.nonce ?? "",
               ...(entry.admit === undefined
                 ? {}
                 : { admit: entry.admit, member: members.has(entry.signPub) }),
-            } satisfies PenInviteState;
+            } satisfies PenInviteStatus;
           default:
-            return { state: entry.state } satisfies PenInviteState;
+            return { ...named, state: entry.state } satisfies PenInviteStatus;
         }
       }),
     ack: (ref) =>

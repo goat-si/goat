@@ -52,6 +52,9 @@ export type PenInviteState =
   /** No entry or fence. */
   | { readonly state: "absent" };
 
+/** A status answer, with the invite id Pen names once the mint made an invite. */
+export type PenInviteStatus = PenInviteState & { readonly inviteId?: string };
+
 export class PenInviteUnknown extends Data.TaggedError("PenInviteUnknown")<{
   readonly reason: string;
 }> {}
@@ -71,7 +74,7 @@ export class PenInvites extends Context.Service<
     readonly cancel: (
       ref: PenInviteRef,
     ) => Effect.Effect<"cancelled" | "burned" | "expired" | "absent", PenInviteUnknown>;
-    readonly status: (ref: PenInviteRef) => Effect.Effect<PenInviteState, PenInviteUnknown>;
+    readonly status: (ref: PenInviteRef) => Effect.Effect<PenInviteStatus, PenInviteUnknown>;
     /** Lets Pen forget a terminal entry or a fence GOAT has recorded. */
     readonly ack: (ref: PenInviteRef) => Effect.Effect<"acked" | "absent", PenInviteUnknown>;
   }

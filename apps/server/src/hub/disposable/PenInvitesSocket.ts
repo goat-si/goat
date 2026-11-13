@@ -15,6 +15,7 @@ import {
   PenInvites,
   type PenInviteRef,
   type PenInviteState,
+  type PenInviteStatus,
 } from "./PenInvites.ts";
 
 // One answer line; a status reply carries a few small fields, ls every member with host keys.
@@ -64,6 +65,33 @@ const decodeAcked = decode(Acked);
 
 const unknown = (reason: string) => new PenInviteUnknown({ reason });
 const encodeLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** What one invite.status reply says, or unknown when it is not what Pen promises for its state. */
+const stateOf = (
+  reply: typeof InviteStatus.Type,
+): Effect.Effect<PenInviteState, PenInviteUnknown> => {
+  switch (reply.state) {
+    case "live":
+      return reply.expiresAt === undefined
+        ? Effect.fail(unknown("live without expiry"))
+        : Effect.succeed({ state: "live", expiresAtMs: reply.expiresAt });
+    case "burned":
+      return reply.nonce === undefined
+        ? Effect.fail(unknown("burned without nonce"))
+        : Effect.succeed({
+            state: "burned",
+            nonce: reply.nonce,
+            ...(reply.admit === undefined ? {} : { admit: reply.admit }),
+            ...(reply.member === undefined ? {} : { member: reply.member }),
+          });
+    case "burned-unsaved":
+      return reply.nonce === undefined
+        ? Effect.fail(unknown("burned without nonce"))
+        : Effect.succeed({ state: "burned-unsaved", nonce: reply.nonce });
+    default:
+      return Effect.succeed({ state: reply.state });
+  }
+};
 
 const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
@@ -159,29 +187,13 @@ const make = Effect.gen(function* () {
       return yield* ask({ op: "invite.status", ...named(ref) }).pipe(
         Effect.flatMap((line) => answer(decodeInviteStatus(line), "invite.status")),
         Effect.flatMap(about(ref, "invite.status")),
-        Effect.flatMap((reply): Effect.Effect<PenInviteState, PenInviteUnknown> => {
-          switch (reply.state) {
-            case "live":
-              return reply.expiresAt === undefined
-                ? Effect.fail(unknown("live without expiry"))
-                : Effect.succeed({ state: "live", expiresAtMs: reply.expiresAt });
-            case "burned":
-              return reply.nonce === undefined
-                ? Effect.fail(unknown("burned without nonce"))
-                : Effect.succeed({
-                    state: "burned",
-                    nonce: reply.nonce,
-                    ...(reply.admit === undefined ? {} : { admit: reply.admit }),
-                    ...(reply.member === undefined ? {} : { member: reply.member }),
-                  });
-            case "burned-unsaved":
-              return reply.nonce === undefined
-                ? Effect.fail(unknown("burned without nonce"))
-                : Effect.succeed({ state: "burned-unsaved", nonce: reply.nonce });
-            default:
-              return Effect.succeed({ state: reply.state });
-          }
-        }),
+        Effect.flatMap((reply) =>
+          stateOf(reply).pipe(
+            Effect.map((state): PenInviteStatus =>
+              reply.inviteId === undefined ? state : { ...state, inviteId: reply.inviteId },
+            ),
+          ),
+        ),
       );
     }),
     ack: Effect.fn("PenInvites.ack")(function* (ref) {

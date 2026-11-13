@@ -108,6 +108,7 @@ it.live("speaks Pen's bound-invite ops on its control socket and reads only what
       });
       expect(pen.asked.at(-1)).toEqual({ op: "invite", subject, mintId: "m-1", expiresAt: 5 });
       expect(yield* invites.status({ mintId: "m-1" })).toEqual({
+        inviteId: "inv-1",
         state: "burned",
         nonce: "n1",
         admit: "h1",

@@ -311,6 +311,35 @@ export const make = Effect.gen(function* () {
     return yield* provisionerEnded(row, current);
   });
   const settingsNow = settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
+  /**
+   * The provisioner's grant is read outside the settings lock; under it, the switch, its grant, the
+   * named thread and the goatclaw policy that grant was resolved from must be as they were.
+   */
+  const lockedEnded = (
+    row: Row,
+    before: ServerSettings,
+    current: ServerSettings,
+    nowMs: number,
+  ) => {
+    const gate = disposableSwitch(current.hub, nowMs);
+    if (!gate.open) return gate.reason;
+    if (gate.grant !== row.grant_id) return "switch_off" as const;
+    if (unnamed(row, current)) return "provisioner_refused" as const;
+    if (JSON.stringify(current.goatclaw) !== JSON.stringify(before.goatclaw))
+      return "delegation_lost" as const;
+    return undefined;
+  };
+  /** The last check before a token leaves: the grant now, then the switch under the lock. */
+  const finalCheck = Effect.fn("DisposableAttach.finalCheck")(function* (row: Row) {
+    const before = yield* settingsNow;
+    const ended = yield* authorityEnded(row, before);
+    if (ended !== undefined || before === undefined) return ended ?? ("switch_off" as const);
+    return yield* settings
+      .withSettingsSnapshot((current) =>
+        Effect.map(Clock.currentTimeMillis, (nowMs) => lockedEnded(row, before, current, nowMs)),
+      )
+      .pipe(Effect.orElseSucceed(() => "switch_off" as const));
+  });
 
   /**
    * Admits the next mint (design section 2, Effect admission): the provisioner's grant is checked
@@ -321,16 +350,15 @@ export const make = Effect.gen(function* () {
     row: Row,
     effects: ReadonlyArray<AttachEffect>,
   ) {
-    const ended = yield* authorityEnded(row, yield* settingsNow);
-    if (ended !== undefined) return ended;
+    const before = yield* settingsNow;
+    const ended = yield* authorityEnded(row, before);
+    if (ended !== undefined || before === undefined) return ended ?? ("switch_off" as const);
     return yield* settings
       .withSettingsSnapshot((current) =>
         sql.withTransaction(
           Effect.gen(function* () {
-            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-            if (!gate.open) return gate.reason;
-            if (gate.grant !== row.grant_id) return "switch_off" as const;
-            if (unnamed(row, current)) return "provisioner_refused" as const;
+            const locked = lockedEnded(row, before, current, yield* Clock.currentTimeMillis);
+            if (locked !== undefined) return locked;
             const [now] =
               yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
             if (
@@ -430,7 +458,7 @@ export const make = Effect.gen(function* () {
     if (fresh === undefined) return yield* storageFailed();
     // A thread's modes, profile or a session can change without the settings lock; any change
     // that landed before this check withdraws the invite, any later one is reconcile's withdrawal.
-    const lost = yield* authorityEnded(fresh, yield* settingsNow);
+    const lost = yield* finalCheck(fresh);
     if (lost !== undefined)
       return yield* withdrawMinted(fresh, { ...intent, state: "done" }, invite.inviteId, lost);
     yield* audit(row.attach_id, "hub.machine_mint", "invited");
