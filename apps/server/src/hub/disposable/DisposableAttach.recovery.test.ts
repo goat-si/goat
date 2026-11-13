@@ -24,6 +24,49 @@ const attachIdOf = Effect.map(rows, (all) => String(all[0]?.attach_id));
 const liveMints = (book: ReadonlyMap<string, { state: string }>) =>
   [...book.entries()].filter(([, entry]) => entry.state === "live").map(([mintId]) => mintId);
 
+// A thread's modes or profile and a session change without the settings lock, so the check that
+// guards the token must come after the commit: any change before it then withdraws the invite.
+it.effect(
+  "the last grant check runs after the commit, and a grant lost by then gets no token",
+  () =>
+    world((pen, _home, grant) =>
+      Effect.gen(function* () {
+        grant.gate = yield* Deferred.make<void>();
+        grant.reached = yield* Deferred.make<void>();
+        grant.gateOnCall = 2;
+        const attaching = yield* attach(1).pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(grant.reached);
+        expect(yield* rows).toMatchObject([{ state: "invited" }]);
+        grant.value = { ...GRANT, goatclaw: { ...GRANT.goatclaw, hosts: ["pen-other"] } };
+        yield* Deferred.succeed(grant.gate, undefined);
+        const outcome = yield* Fiber.join(attaching);
+        expect(outcome._tag === "Failure" && outcome.failure.reason).toBe("delegation_lost");
+        expect(JSON.stringify(outcome)).not.toContain("pen1_TOKEN");
+        expect(liveMints(pen.book)).toEqual([]);
+      }),
+    ),
+);
+
+// Cancelling a mintId Pen does not know leaves a fence and answers cancelled; for an invite GOAT
+// knows was made, that answer would hide an admission Pen lost track of.
+it.effect("a known invite Pen no longer has keeps its slot, under withdrawal and reissue", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      const second = yield* attach(2);
+      pen.book.clear();
+      const again = yield* reissue(second.attachId, "re-1");
+      expect(again).not.toHaveProperty("invite");
+      expect(again.state).not.toBe("failed");
+      yield* switchTo({ enabled: false });
+      yield* reconcile;
+      expect(yield* listed(first.attachId)).toMatchObject({ state: "paused" });
+      expect((yield* rows).every((row) => row.final_at === null)).toBe(true);
+      expect(pen.control.tokensSeen).toHaveLength(2);
+    }),
+  ),
+);
+
 it.effect("a reissue of an expired invite mints nothing, and the record frees its slot", () =>
   world((pen) =>
     Effect.gen(function* () {

@@ -14,6 +14,7 @@ import {
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -45,7 +46,12 @@ import {
 import * as Store from "./DisposableMachineStore.ts";
 import { disposableSwitch } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
-import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvites.ts";
+import {
+  PEN_ATTACH_FEATURES,
+  type PenInviteRef,
+  type PenInviteState,
+  PenInvites,
+} from "./PenInvites.ts";
 
 export type { StoredProvisioner };
 
@@ -130,12 +136,17 @@ const refusalText: Record<Refusal, string> = {
   provisioner_refused: "This thread is not named in Attach disposable machines.",
   delegation_lost: "The provisioner no longer holds the grant this attach started with.",
 };
-const refusalOf = (reason: Store.ForwardRefusal): Refusal =>
-  reason === "switch_expired" || reason === "delegation_lost"
+const refusalOf = (reason: Store.ForwardRefusal | "provisioner_refused"): Refusal =>
+  reason === "switch_expired" || reason === "provisioner_refused"
     ? reason
     : reason === "fence_moved" || reason === "not_found"
       ? "conflict"
       : "switch_off";
+/** The forward commit found the provisioner no longer named; failing the write rolls it back. */
+class NotNamed extends Data.TaggedError("NotNamed")<{}> {}
+/** Pen is asked by invite id once GOAT knows it, so a lost entry never reads as a fresh fence. */
+const refOf = (effect: AttachEffect): PenInviteRef =>
+  effect.inviteId === undefined ? { mintId: effect.id } : { inviteId: effect.inviteId };
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,
@@ -269,17 +280,21 @@ export const make = Effect.gen(function* () {
    * undefined while it may: the switch is on, unexpired and still the record's grant, a thread is
    * still named, and the provisioner still holds at least the grant recorded at attach start.
    */
+  const unnamed = (row: Row, current: ServerSettings) => {
+    const provisioner = provisionerOf(row);
+    return (
+      provisioner === undefined ||
+      (provisioner.kind === "thread" &&
+        !current.hub.attachDisposableMachines.provisioners.includes(provisioner.threadId as never))
+    );
+  };
+  // Reads goatclaw profiles through the settings service, so it never runs under the settings lock.
   const provisionerEnded = Effect.fn("DisposableAttach.provisionerEnded")(function* (
     row: Row,
     current: ServerSettings,
   ) {
     const provisioner = provisionerOf(row);
-    if (
-      provisioner === undefined ||
-      (provisioner.kind === "thread" &&
-        !current.hub.attachDisposableMachines.provisioners.includes(provisioner.threadId as never))
-    )
-      return "provisioner_refused" as const;
+    if (provisioner === undefined || unnamed(row, current)) return "provisioner_refused" as const;
     const now = yield* provisioners.grantOf(provisioner, row.node_id);
     if (!coversDelegation(now, decodeDelegation(row.delegation_json)))
       return "delegation_lost" as const;
@@ -295,53 +310,69 @@ export const make = Effect.gen(function* () {
     if (gate.grant !== row.grant_id) return "switch_off" as const;
     return yield* provisionerEnded(row, current);
   });
-  // The forward commit checks the switch itself; this is the provisioner's part.
-  const holdsNow = (row: Row) =>
-    settings.getSettings.pipe(
-      Effect.flatMap((current) => provisionerEnded(row, current)),
-      Effect.map((ended) => ended === undefined),
-      Effect.orElseSucceed(() => false),
-    );
+  const settingsNow = settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
 
   /**
-   * Admits the next mint inside the settings write lock (design section 2, Effect admission): the
-   * provisioner's authority holds, and the record is exactly as read. Only the mints are written; no
-   * lock is held across the dispatch that follows.
+   * Admits the next mint (design section 2, Effect admission): the provisioner's grant is checked
+   * first, then inside the settings write lock the switch, its grant, the named thread and the
+   * record as read. Only the mints are written; no lock is held across the dispatch.
    */
   const admitMint = Effect.fn("DisposableAttach.admitMint")(function* (
     row: Row,
     effects: ReadonlyArray<AttachEffect>,
   ) {
+    const ended = yield* authorityEnded(row, yield* settingsNow);
+    if (ended !== undefined) return ended;
     return yield* settings
       .withSettingsSnapshot((current) =>
-        Effect.gen(function* () {
-          const ended = yield* authorityEnded(row, current);
-          if (ended !== undefined) return ended;
-          return yield* sql.withTransaction(
-            Effect.gen(function* () {
-              const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-              if (!gate.open) return gate.reason;
-              const [now] =
-                yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
-              if (
-                now === undefined ||
-                now.fence !== row.fence ||
-                now.effects_json !== row.effects_json
-              )
-                return "conflict" as const;
-              yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
-                  updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
-              return "admitted" as const;
-            }),
-          );
-        }),
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+            if (!gate.open) return gate.reason;
+            if (gate.grant !== row.grant_id) return "switch_off" as const;
+            if (unnamed(row, current)) return "provisioner_refused" as const;
+            const [now] =
+              yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
+            if (
+              now === undefined ||
+              now.fence !== row.fence ||
+              now.effects_json !== row.effects_json
+            )
+              return "conflict" as const;
+            yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
+                updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
+            return "admitted" as const;
+          }),
+        ),
       )
       .pipe(Effect.mapError(storageFailed));
   });
 
+  /** Cancels a minted invite by its id before its token is seen, and stores the outcome. */
+  const withdrawMinted = Effect.fn("DisposableAttach.withdrawMinted")(function* (
+    row: Row,
+    effect: AttachEffect,
+    inviteId: string,
+    reason: Refusal,
+  ) {
+    const withdrawn: AttachEffect = { ...effect, inviteId, withdrawn: true };
+    const cancelled = yield* pen.cancel({ inviteId }).pipe(Effect.option);
+    yield* save(
+      row,
+      replace(
+        effectsOf(row),
+        cancelled._tag === "Some" ? afterCancel(withdrawn, cancelled.value) : withdrawn,
+      ),
+      { invite_id: inviteId, mint_id: effect.id },
+    );
+    yield* audit(row.attach_id, "hub.machine_mint", "withdrawn");
+    return yield* fail(reason, refusalText[reason] + " The new invite was cancelled.");
+  });
+
   /**
-   * Dispatches an admitted mint and returns its token once; GOAT never stores it. When the forward
-   * commit is refused, that exact mintId is cancelled before anyone sees the token.
+   * Dispatches an admitted mint and returns its token once; GOAT never stores it. The token leaves
+   * only after the forward commit and one more check of the provisioner's grant; when either
+   * refuses, that exact invite is cancelled before anyone sees the token.
    */
   const dispatchMint = Effect.fn("DisposableAttach.dispatchMint")(function* (
     row: Row,
@@ -371,38 +402,38 @@ export const make = Effect.gen(function* () {
     const expiresAt = DateTime.formatIso(DateTime.makeUnsafe(invite.expiresAtMs));
     const done = replace(effects, { ...intent, state: "done", inviteId: invite.inviteId });
     const committed = yield* store
-      .commitForward(
-        { attachId: row.attach_id, fence: row.fence },
+      .commitForward({ attachId: row.attach_id, fence: row.fence }, (current) =>
         Effect.gen(function* () {
+          if (unnamed(row, current)) return yield* new NotNamed();
           const now = yield* nowIso;
           yield* sql`UPDATE disposable_machines SET invite_id = ${invite.inviteId}, mint_id = ${intent.id},
               invite_expires_at = ${expiresAt}, state = 'invited', step = 'invite',
               effects_json = ${encodeEffects(done)}, state_since = ${now}, updated_at = ${now}
               WHERE attach_id = ${row.attach_id}`;
         }),
-        holdsNow(row),
       )
-      .pipe(Effect.mapError(storageFailed));
-    if (!committed.committed) {
-      const late: AttachEffect = {
-        ...intent,
-        state: "late",
-        inviteId: invite.inviteId,
-        withdrawn: true,
-      };
-      const cancelled = yield* pen.cancel({ mintId: intent.id }).pipe(Effect.option);
-      yield* save(
-        row,
-        replace(effects, cancelled._tag === "Some" ? afterCancel(late, cancelled.value) : late),
-        { invite_id: invite.inviteId, mint_id: intent.id },
+      .pipe(
+        Effect.catchTags({
+          NotNamed: () =>
+            Effect.succeed({ committed: false, reason: "provisioner_refused" } as const),
+        }),
+        Effect.mapError(storageFailed),
       );
-      yield* audit(row.attach_id, "hub.machine_mint", "withdrawn");
-      const reason = refusalOf(committed.reason);
-      return yield* fail(reason, refusalText[reason] + " The new invite was cancelled.");
-    }
-    yield* audit(row.attach_id, "hub.machine_mint", "invited");
+    if (!committed.committed)
+      return yield* withdrawMinted(
+        row,
+        { ...intent, state: "late" },
+        invite.inviteId,
+        refusalOf(committed.reason),
+      );
     const fresh = yield* read(row.attach_id);
     if (fresh === undefined) return yield* storageFailed();
+    // A thread's modes, profile or a session can change without the settings lock; any change
+    // that landed before this check withdraws the invite, any later one is reconcile's withdrawal.
+    const lost = yield* authorityEnded(fresh, yield* settingsNow);
+    if (lost !== undefined)
+      return yield* withdrawMinted(fresh, { ...intent, state: "done" }, invite.inviteId, lost);
+    yield* audit(row.attach_id, "hub.machine_mint", "invited");
     return status(fresh, { token: invite.token, expiresAt });
   });
 
@@ -454,6 +485,13 @@ export const make = Effect.gen(function* () {
           state: "intent",
           expiresAtMs: (yield* Clock.currentTimeMillis) + INVITE_LIFETIME_MS,
         };
+        // The grant is read before the settings lock: resolving it goes through the settings service.
+        const delegation = yield* provisioners.grantOf(caller.provisioner, nodeId);
+        if (delegation === undefined)
+          return yield* fail(
+            "provisioner_refused",
+            "This caller is not named in Attach disposable machines or lacks hub.manage for this machine.",
+          );
         const reserved = yield* settings
           .withSettingsSnapshot((current) =>
             Effect.gen(function* () {
@@ -465,8 +503,6 @@ export const make = Effect.gen(function* () {
                 return "provisioner_refused" as const;
               if (!matchesDisposableNameRule(value.nameRule, input.name))
                 return "name_rule" as const;
-              const delegation = yield* provisioners.grantOf(caller.provisioner, nodeId);
-              if (delegation === undefined) return "provisioner_refused" as const;
               return yield* sql.withTransaction(
                 Effect.gen(function* () {
                   const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
@@ -560,12 +596,12 @@ export const make = Effect.gen(function* () {
       for (const effect of openEffects(effects)) {
         let next = effect;
         if (next.withdrawn === true) {
-          // By mintId: a mint Pen has not seen yet is fenced, and a late create makes nothing.
-          const cancelled = yield* pen.cancel({ mintId: next.id }).pipe(Effect.option);
+          // An unseen mint is cancelled by mintId, which fences a late create; a known one by its id.
+          const cancelled = yield* pen.cancel(refOf(next)).pipe(Effect.option);
           if (cancelled._tag === "Some") next = afterCancel(next, cancelled.value);
         }
         if (next.settled === undefined) {
-          const answer = yield* pen.status({ mintId: next.id }).pipe(Effect.option);
+          const answer = yield* pen.status(refOf(next)).pipe(Effect.option);
           if (answer._tag === "Some") {
             next = observe(next, answer.value, yield* Clock.currentTimeMillis);
             if (answer.value.state === "burned" && answer.value.admit !== undefined)
@@ -600,7 +636,7 @@ export const make = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
     if (!effects.some((effect) => ackable(effect, nowMs))) return row;
     for (const effect of effects.filter((entry) => ackable(entry, nowMs))) {
-      const acked = yield* pen.ack({ mintId: effect.id }).pipe(Effect.option);
+      const acked = yield* pen.ack(refOf(effect)).pipe(Effect.option);
       if (acked._tag === "Some") effects = replace(effects, { ...effect, acked: true });
     }
     return yield* save(row, effects);
@@ -635,7 +671,7 @@ export const make = Effect.gen(function* () {
     open: AttachEffect,
   ) {
     const cancelled = yield* pen
-      .cancel({ mintId: open.id })
+      .cancel(refOf(open))
       .pipe(
         Effect.catch(() =>
           fail(
