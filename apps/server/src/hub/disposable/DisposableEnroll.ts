@@ -260,6 +260,14 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     // The design's pin check: a key Pen changed since the route step is a conflict before any ssh.
     if ((yield* pinHolds(row, route)) === "changed")
       return yield* conflict(row, enroll, "pin_changed");
+    // The private known_hosts holds the pinned line, written again if it went missing.
+    const line = disposableKnownHosts(row.node_id, route.hostKey);
+    const pinned =
+      line === undefined
+        ? undefined
+        : yield* host.knownHosts(row.attach_id, line).pipe(Effect.result);
+    if (pinned?._tag === "Failure" && pinned.failure.reason === "changed")
+      return yield* conflict(row, enroll, "pin_changed");
     const key = yield* machineKey.identity.pipe(Effect.option);
     const reached =
       key._tag === "None"

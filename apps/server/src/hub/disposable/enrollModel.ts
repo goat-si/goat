@@ -249,6 +249,8 @@ const WAITING: Record<string, string> = {
     "GOAT could not write the machine's known_hosts file in its state folder; it tries again on the next pass.",
   unreachable: "GOAT cannot reach the machine through Pen yet; it tries again on the next pass.",
   key_refused: "The machine refused this hub's machine key.",
+  host_key_unknown:
+    "ssh found no host key in GOAT's known_hosts for this machine; GOAT writes it again on the next pass.",
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
   machine_key_unusable:

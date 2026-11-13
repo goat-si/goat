@@ -16,15 +16,27 @@ import type { PenNode } from "../penSshRoute.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
 /** How a reach ended; ssh's own lines decide it, and none of them is kept. */
-export type ReachAnswer = "ok" | "key_refused" | "host_key_changed" | "unreachable" | "unusable";
-export const reachAnswerOf = (code: number | null, stderr: string): ReachAnswer =>
-  code === 0
-    ? "ok"
-    : /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/u.test(stderr)
-      ? "host_key_changed"
-      : /Permission denied \(/u.test(stderr)
-        ? "key_refused"
-        : "unreachable";
+export type ReachAnswer =
+  | "ok"
+  | "key_refused"
+  | "host_key_changed"
+  | "host_key_unknown"
+  | "unreachable"
+  | "unusable";
+const lineIs = (stderr: string, pattern: RegExp) =>
+  stderr.split(/\r?\n/u).some((line) => pattern.test(line.trim()));
+/** Whole lines only, so a machine's banner repeating ssh's words decides nothing. */
+export const reachAnswerOf = (code: number | null, stderr: string): ReachAnswer => {
+  if (code === 0) return "ok";
+  // GOAT's own known_hosts for the machine is missing or unreadable: ssh then also says it failed.
+  if (
+    lineIs(stderr, /^No \S+ host key is known for \S+ and you have requested strict checking\.$/u)
+  )
+    return "host_key_unknown";
+  if (lineIs(stderr, /^Host key verification failed\.$/u)) return "host_key_changed";
+  if (lineIs(stderr, /^(?:\S+: )?Permission denied \([a-z,-]+\)\.$/u)) return "key_refused";
+  return "unreachable";
+};
 
 /**
  * Whether the Home serves its link operation journal, from the exit code of the full listing alone.
@@ -121,7 +133,8 @@ export const layer = Layer.effect(
           if (options === undefined) return "unusable" as const;
           const ran = yield* runner.run({
             command: yield* resolveSshCommand,
-            args: [...options, `pen-${route.nodeId}`, "true"],
+            // ERROR keeps a machine's banner and ssh's own notices out of what decides the answer.
+            args: [...options, "-o", "LogLevel=ERROR", `pen-${route.nodeId}`, "true"],
             timeout: REACH_TIMEOUT,
             timeoutBehavior: "timedOutResult",
             maxOutputBytes: 64 * 1024,

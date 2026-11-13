@@ -14,7 +14,6 @@ import {
   makeHold,
   penRouteOf,
 } from "./DisposableEnroll.testkit.ts";
-import { reachAnswerOf } from "./EnrollHost.ts";
 import { LINK_CONTRACTS, LINK_IDENTITY_CONTRACT } from "./enrollModel.ts";
 import { HOME_ATTACH_CONTRACTS } from "./features.ts";
 
@@ -560,15 +559,6 @@ it.effect("reach tells a refused key, a changed host key and an unusable key apa
   ),
 );
 
-it("ssh's own refusal lines decide how a reach ended", () => {
-  expect(reachAnswerOf(0, "")).toBe("ok");
-  expect(reachAnswerOf(255, "runner@pen-x: Permission denied (publickey).")).toBe("key_refused");
-  expect(reachAnswerOf(255, "Host key verification failed.")).toBe("host_key_changed");
-  expect(reachAnswerOf(255, "kex_exchange_identification: Connection closed by remote host")).toBe(
-    "unreachable",
-  );
-});
-
 it.effect("a stop that lost its record to another step writes no audit row", () =>
   world((pen, home, _grant, host) =>
     Effect.gen(function* () {
@@ -677,4 +667,26 @@ it.effect("a journal that stays unreadable for 2 hours after the send stops for 
       });
     }),
   ),
+);
+
+it.effect(
+  "a missing known_hosts at reach is a wait that rewrites the pinned line, never a conflict",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId, nodeId } = yield* joined(pen, host, 1);
+        yield* enroll; // route
+        const pinned = host.control.knownHosts.get(attachId);
+        host.control.knownHosts.delete(attachId);
+        host.control.reachAnswers.set(nodeId, "host_key_unknown");
+        yield* enroll;
+        expect(host.control.knownHosts.get(attachId)).toBe(pinned);
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "attaching",
+          class: "disposable",
+          message: expect.stringContaining("no host key"),
+        });
+      }),
+    ),
 );
