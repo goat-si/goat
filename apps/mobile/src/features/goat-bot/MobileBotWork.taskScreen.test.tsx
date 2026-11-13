@@ -583,3 +583,32 @@ it("an action that completes while a reread is out reads the task once more afte
   await act(async () => second.settle(AsyncResult.success(lookedUp("completed"))));
   expect(lookups("env", "main", "task-old")).toBe(3);
 });
+
+it("a bot change starts from a list that has not settled: nothing old is shown and nothing is looked up until it does", async () => {
+  reset();
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  await show("task-old");
+  expect(button("Pin")).toBeDefined();
+  Object.assign(state.task, { data: null, isSuccess: false, isPending: true });
+  await show("task-old", scout);
+  expect(button("Pin")).toBeUndefined();
+  expect(text()).not.toContain("Done");
+  expect(lookups("env", "scout", "task-old")).toBe(0);
+  Object.assign(state.task, { data: { rows: [] }, isSuccess: true, isPending: false });
+  await show("task-old", scout);
+  expect(lookups("env", "scout", "task-old")).toBe(1);
+});
+
+it("a Pin that completes after the task screen closed refreshes no list and reads nothing", async () => {
+  reset();
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  const sent = deferred();
+  state.update.mockReturnValueOnce(sent.promise);
+  await show("task-old");
+  await press("Pin");
+  await act(async () => root?.unmount());
+  root = undefined;
+  await act(async () => sent.settle(AsyncResult.success({})));
+  expect(refreshes("env", "main")).toBe(0);
+  expect(lookups("env", "main", "task-old")).toBe(1);
+});

@@ -342,6 +342,7 @@ it("an answer belongs to its period: after the capability goes and returns, the 
   await net.calls[0]?.answer(known("t1"));
   expect(state()).toBe("known");
   await show({ supported: false });
+  expect(state()).toBe("off");
   await show();
   expect(asked()).toEqual(["t1", "t1"]);
   expect(state()).toBe("loading");
