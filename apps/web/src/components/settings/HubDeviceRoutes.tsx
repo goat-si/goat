@@ -51,7 +51,9 @@ export function HubDeviceRoutes({
   const waitingKey = `${environmentId}\u0000${alias}`;
   const waiting = useAtomValue(waitingRoutesAtom)[waitingKey] ?? null;
   const setWaiting = (next: WaitingChange | null) => {
-    const { [waitingKey]: _previous, ...rest } = registry.get(waitingRoutesAtom);
+    const rest = Object.fromEntries(
+      Object.entries(registry.get(waitingRoutesAtom)).filter(([key]) => key !== waitingKey),
+    );
     registry.set(waitingRoutesAtom, next === null ? rest : { ...rest, [waitingKey]: next });
   };
   const [open, setOpen] = useState(false);
