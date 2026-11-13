@@ -185,10 +185,13 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
     yield* requireReadiedCloudMachine(target.alias);
     const { penNodeId, ...ensureOptions } = options ?? {};
-    // A managed Pen route is admitted here, in main, on every ensure: never on the renderer's word.
+    // A Pen route is admitted here, in main, on every ensure: never on the renderer's word.
+    // Only a reconnect that neither installs nor issues a credential may run while Pen is down.
     if (penNodeId !== undefined)
       yield* (yield* DesktopPenMembers.DesktopPenMembers).requireTrusted(target, penNodeId, {
-        requireReady: ensureOptions.issuePairingToken !== false,
+        requireReady:
+          ensureOptions.issuePairingToken !== false ||
+          ensureOptions.installation !== "existing-only",
       });
     yield* Effect.annotateCurrentSpan({
       senderId: event?.sender.id,
@@ -227,7 +230,6 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
     return yield* sshEnvironment
       .ensureEnvironment(target, {
         ...ensureOptions,
-        ...(penNodeId === undefined ? {} : { installation: "existing-only" as const }),
         onPreparationProgress: (progress) => {
           annotate({
             operationId: progress.operationId,

@@ -73,6 +73,12 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
 import { desktopWakeups } from "./desktopWakeups";
 import {
+  issuePenBearer,
+  penMembersGateway,
+  penPreparationFailure,
+  sshRuntimePendingError,
+} from "./platformPen";
+import {
   desktopLocalConnectionId,
   readDesktopSecondaryBootstrapsResult,
   type DesktopSecondaryBootstrapsRead,
@@ -217,33 +223,6 @@ function clientMetadata() {
   });
 }
 
-function sshRuntimePendingError(pending: {
-  readonly reason: "busy" | "unknown" | "contended";
-  readonly detail?: "recovery-stale";
-  readonly refreshCause?: "drain_unavailable";
-  readonly replacement: "older" | "legacy" | "incompatible" | "capability";
-  readonly liveVersion: string;
-  readonly requestedVersion: string;
-}) {
-  const waiting =
-    pending.replacement === "capability"
-      ? `Remote runtime GOAT ${pending.liveVersion} cannot grant memory access to tasks, so it will be replaced with GOAT ${pending.requestedVersion} when its work finishes.`
-      : "Remote runtime will be replaced when its work finishes.";
-  return new ConnectionTransientError({
-    reason: "remote-unavailable",
-    detail:
-      pending.detail === "recovery-stale"
-        ? "Remote recovery is locked. Remove ~/.goat/ssh-launch/replacement.recovery on the remote host after checking that no GOAT client is replacing this runtime."
-        : pending.refreshCause === "drain_unavailable"
-          ? `Remote runtime GOAT ${pending.liveVersion} can't hand over to GOAT ${pending.requestedVersion} right now. GOAT retries every 10 minutes.`
-          : pending.reason === "contended"
-            ? "Another client is replacing the remote runtime."
-            : pending.reason === "unknown"
-              ? `${waiting} Waiting for a verified idle response.`
-              : waiting,
-  });
-}
-
 /** Readies a cloud machine through the GOAT server that owns it, before the desktop dials it. */
 export type CloudMachinePreflight = (alias: string) => Effect.Effect<void, ConnectionBlockedError>;
 
@@ -343,6 +322,8 @@ function isExplicitSshCredentialRejection(error: ConnectionAttemptError): boolea
 
 interface DesktopSshPreparationOptions {
   readonly keyOnly?: boolean;
+  readonly installation?: "existing-only";
+  readonly penNodeId?: string;
   readonly onHostAnswered?: Effect.Effect<void>;
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => Effect.Effect<void>;
   readonly attemptContext?: DesktopSshAttemptContext;
@@ -384,6 +365,8 @@ const ensureDesktopSshRuntime = Effect.fn("web.connectionPlatform.ssh.ensure")(f
     try: () =>
       bridge.ensureSshEnvironment(target, {
         issuePairingToken,
+        ...(options?.installation === undefined ? {} : { installation: options.installation }),
+        ...(options?.penNodeId === undefined ? {} : { penNodeId: options.penNodeId }),
         ...(options?.keyOnly === undefined ? {} : { keyOnly: options.keyOnly }),
         ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
         ...(bridge.supportsSshEnvironmentProgress === true
@@ -410,7 +393,7 @@ const ensureDesktopSshRuntime = Effect.fn("web.connectionPlatform.ssh.ensure")(f
             }
           : {}),
       }),
-    catch: sshPreparationFailure,
+    catch: penPreparationFailure,
   }).pipe(withSshConnectionTiming("ensure"), Effect.exit);
   active = false;
   yield* Queue.offer(reports, { type: "done" });
@@ -429,15 +412,16 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   grants: SshPairingGrants = sshPairingGrants,
 ) {
   yield* preflightCloudMachine(target.alias, readyCloudMachine);
-  const bootstrap = yield* ensureDesktopSshRuntime(bridge, target, true, options);
+  const penNodeId = options?.penNodeId;
+  // A Pen machine is signed in to as a member; no pairing credential is ever made for it.
+  const bootstrap = yield* ensureDesktopSshRuntime(
+    bridge,
+    target,
+    penNodeId === undefined,
+    options,
+  );
   if ("type" in bootstrap) return yield* sshRuntimePendingError(bootstrap.pending);
   const pairingToken = bootstrap.pairingToken;
-  if (pairingToken === null) {
-    return yield* new ConnectionBlockedError({
-      reason: "authentication",
-      detail: "The SSH environment did not issue a pairing credential.",
-    });
-  }
   const descriptor = yield* Effect.tryPromise({
     try: () => bridge.fetchSshEnvironmentDescriptor(bootstrap.httpBaseUrl),
     catch: sshPreparationFailure,
@@ -448,6 +432,19 @@ export const provisionDesktopSshEnvironment = Effect.fn(
       detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
     });
   }
+  if (penNodeId !== undefined)
+    return {
+      environmentId: descriptor.environmentId,
+      label: descriptor.label,
+      bootstrap,
+      bearerToken: yield* issuePenBearer(bridge, bootstrap.target, penNodeId),
+      verifiedEndpoint: { httpBaseUrl: bootstrap.httpBaseUrl, descriptor },
+    };
+  if (pairingToken === null)
+    return yield* new ConnectionBlockedError({
+      reason: "authentication",
+      detail: "The SSH environment did not issue a pairing credential.",
+    });
   const access = yield* Effect.tryPromise({
     try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
     catch: (cause) => {
@@ -502,6 +499,8 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
   ) {
     yield* preflightCloudMachine(input.target.alias, readyCloudMachine);
     const progressOptions: DesktopSshPreparationOptions = {
+      ...(input.installation === undefined ? {} : { installation: input.installation }),
+      ...(input.penNodeId === undefined ? {} : { penNodeId: input.penNodeId }),
       ...(input.onHostAnswered === undefined ? {} : { onHostAnswered: input.onHostAnswered }),
       ...(input.onPreparationProgress === undefined
         ? {}
@@ -876,6 +875,7 @@ const layerCapabilities = Layer.effectContext(
       Context.add(ClientCapabilities.RelayDeviceIdentity, identity),
       Context.add(ClientCapabilities.ClientPresentation, presentation),
       Context.add(ClientCapabilities.SshEnvironmentGateway, ssh),
+      Context.add(ClientCapabilities.PenMembersGateway, penMembersGateway(window.desktopBridge)),
     );
   }),
 );

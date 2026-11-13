@@ -127,7 +127,10 @@ describe("SSH runtime IPC", () => {
     Effect.gen(function* () {
       const asked: Array<{ readonly requireReady: boolean }> = [];
       const exit = yield* ensureSshEnvironment
-        .handler({ target: penTarget, options: { penNodeId: penNode, issuePairingToken: false } })
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, issuePairingToken: false, installation: "existing-only" },
+        })
         .pipe(
           Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
           Effect.provideService(
@@ -145,11 +148,14 @@ describe("SSH runtime IPC", () => {
     }),
   );
 
-  it.effect("an admitted Pen machine is ensured existing-only, whatever the renderer sent", () =>
+  it.effect("a Pen ensure that may install GOAT needs a live member list naming the machine", () =>
     Effect.gen(function* () {
       let received: unknown;
       yield* ensureSshEnvironment
-        .handler({ target: penTarget, options: { penNodeId: penNode, keyOnly: true } })
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, keyOnly: true, issuePairingToken: false },
+        })
         .pipe(
           Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
             ...unusedSshService,
@@ -179,7 +185,7 @@ describe("SSH runtime IPC", () => {
           ),
           Effect.provide(desktopAt("/nonexistent-home")),
         );
-      assert.deepEqual(received, { keyOnly: true, installation: "existing-only" });
+      assert.deepEqual(received, { keyOnly: true, issuePairingToken: false });
     }),
   );
 
