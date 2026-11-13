@@ -24,6 +24,43 @@ import {
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
 
+it("shows the bot's waiting state in the Home hero", async () => {
+  screenSession.activity = {
+    state: "working",
+    text: "Waiting for you",
+    attention: "waiting",
+    wait: "you",
+  };
+  screenSession.faceShell = {
+    source: { pendingRuntimeRequest: { kind: "approval", blocking: true } },
+  };
+  const view = await render(<GoatBotScreen visible />);
+  expect(
+    view.container.querySelector('[aria-label="Task header"] [data-avatar="waiting"]'),
+  ).not.toBeNull();
+  await view.unmount();
+  screenSession.activity = null;
+  screenSession.faceShell = null;
+});
+
+it("shows a member's initial and accent in the Home hero", async () => {
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    role: "member",
+    color: "#2F6FED",
+    avatar: null,
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+  } as unknown as import("@goat/contracts").BotProfile;
+  const view = await render(<GoatBotScreen visible member={scout} />);
+  const hero = view.container.querySelector('[aria-label="Task header"] [data-avatar]');
+  expect(hero?.getAttribute("data-avatar-emoji")).toBe("S");
+  expect(hero?.getAttribute("data-avatar-accent")).toBe("#2F6FED");
+  await view.unmount();
+});
+
 it("releases a picker result that arrives after the GOAT Bot screen unmounts", async () => {
   picker.release.mockClear();
   picker.onPicked = null;

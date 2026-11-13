@@ -74,6 +74,7 @@ export function MobileBotWork(props: {
   readonly taskCard?: ReactNode;
   /** The bot's face for the header chip Android draws above the chat. */
   readonly chipFace?: ReactNode;
+  readonly heroFace?: ReactNode;
   /** The home sheet's open state when the chat's header chip controls it. */
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
@@ -332,24 +333,17 @@ export function MobileBotWork(props: {
       render: () => (
         <View>
           <View className="items-center gap-2 pt-2 pb-4">
-            <GoatBotFaceAvatar
-              state="idle"
-              size={56}
-              emoji={props.botAvatar}
-              accent={props.botAccent}
-            />
-            <Text accessibilityRole="header" className="text-lg font-semibold text-foreground">
+            {props.heroFace ?? (
+              <GoatBotFaceAvatar
+                state="idle"
+                size={96}
+                emoji={props.botAvatar}
+                accent={props.botAccent}
+              />
+            )}
+            <Text accessibilityRole="header" className="text-xl font-semibold text-foreground">
               {botName}
             </Text>
-            {props.onEditBot ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={props.onEditBot}
-                className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
-              >
-                <Text className="font-goat-medium text-primary-text">Edit bot</Text>
-              </Pressable>
-            ) : null}
           </View>
         </View>
       ),
@@ -713,13 +707,25 @@ export function MobileBotWork(props: {
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
         <View className="flex-1 bg-screen px-4 pt-4">
-          <Pressable
-            accessibilityRole="button"
-            onPress={closeSheet}
-            className="min-h-[44px] self-start justify-center px-2"
-          >
-            <Text className="text-foreground">Close</Text>
-          </Pressable>
+          <View className="flex-row items-center justify-between">
+            <Pressable
+              accessibilityRole="button"
+              onPress={closeSheet}
+              className="min-h-[44px] self-start justify-center px-2"
+            >
+              <Text className="text-foreground">Close</Text>
+            </Pressable>
+            {props.onEditBot ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit bot"
+                onPress={props.onEditBot}
+                className="min-h-[44px] min-w-[44px] items-center justify-center"
+              >
+                <SymbolView name="pencil" size={18} tintColorClassName="accent-icon-muted" />
+              </Pressable>
+            ) : null}
+          </View>
           {/* The status card scrolls away and the tab row sticks, so large text still leaves
               room for the list. */}
           {/* The keyboard insets the list, so a note's wording field and its buttons can scroll
