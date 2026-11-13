@@ -920,8 +920,9 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
 - The answer of the control op `status` gains a last member `features`, an array of strings naming what the node supports
   of this section: `invite.subject/1` (a subject on `invite`), `invite.cancel/1` (`invite.cancel`), `invite.mint/1` (`mintId` with an
   absolute `expiresAt`) and `invite.status/1` (`invite.status`, kept terminal entries and `invite.ack`). The rest of the answer
-  is unchanged, and the answers that embed the same status object (`relays`, `login-bind`) do not carry it. An older node's
-  answer has no such member; a caller checks the features it needs before each mint and cancel.
+  is unchanged. Only the `status` op carries it: the other ops that answer with the status object (`name`, `reconnect`,
+  `relays`, `login-bind`, `account-unbind`) keep their old shape. An older node's answer has no such member; a caller checks the features it
+  needs before each mint and cancel.
 - `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
   `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
   `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to. A

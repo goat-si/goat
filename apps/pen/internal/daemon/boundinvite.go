@@ -12,8 +12,8 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
-// Features is the status op's feature list: P1 subject, P3 cancel, P4 mint (mintId with an absolute expiresAt) and
-// P4 status (invite.status, kept terminal entries, invite.ack).
+// Features is the status op's feature list: a subject on invite, invite.cancel, a mintId with an absolute expiresAt,
+// and invite.status with kept terminal entries and invite.ack.
 var Features = []string{"invite.subject/1", "invite.cancel/1", "invite.mint/1", "invite.status/1"}
 
 // boundInviteRequest is an invite op that names its subject (contract "Bound invites").
