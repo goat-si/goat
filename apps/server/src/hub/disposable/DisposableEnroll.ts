@@ -428,13 +428,10 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         : undefined;
     if (missing !== undefined) {
       if (enroll.link?.outcome !== missing)
+        // Sends and the open entry's first sight belong to the stored id; a contract miss keeps them.
         yield* note(row, {
           ...enroll,
-          link: {
-            attempt: enroll.link?.attempt ?? 0,
-            intentAtMs: enroll.link?.intentAtMs ?? 0,
-            outcome: missing,
-          },
+          link: { attempt: 0, intentAtMs: 0, ...enroll.link, outcome: missing },
         });
       return;
     }

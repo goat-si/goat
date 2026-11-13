@@ -690,3 +690,24 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a pass that finds a contract missing does not reset the sends of the stored id", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      for (let n = 0; n < 20; n += 1) host.control.adds.push("not_journalled");
+      yield* enroll;
+      yield* enroll;
+      yield* enroll; // first send
+      yield* enroll; // second send
+      const full = home.contracts;
+      home.contracts = new Set(["link.route/1", "link.operation/1", "link.recover/1"]);
+      yield* enroll;
+      home.contracts = full;
+      for (let pass = 0; pass < 6; pass += 1) yield* enroll;
+      expect(linkAdds(host.control.calls)).toHaveLength(3);
+      expect(yield* listed(attachId)).toMatchObject({ state: "paused" });
+    }),
+  ),
+);
