@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   cloudAutoJoinSaveError,
   connectHubProxySaveError,
+  disposableConsentEnded,
   disposableSwitchSaveError,
   hubDeviceList,
 } from "@goat/client-runtime/hub-devices";
@@ -131,6 +132,19 @@ function HubNodesSelection({
 const SETUP_REFRESH_MS = 15_000;
 const STATUS_REFRESH_MS = 60_000;
 
+/** When the consent ends, or that it ended; a phone renews it by turning the switch off and on. */
+function consentText(
+  value: { readonly enabled: boolean; readonly expiresAt: string | null },
+  nowMs: number,
+): string {
+  if (!value.enabled) return "";
+  if (disposableConsentEnded(value, nowMs))
+    return " Consent has ended: turn the switch off and on to renew it for 30 days.";
+  return value.expiresAt === null
+    ? ""
+    : ` Consent ends ${new Date(value.expiresAt).toLocaleString()}.`;
+}
+
 /** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
 function HubDevicesList({
   environmentId,
@@ -258,7 +272,7 @@ function HubDevicesList({
           <View className="flex-row items-center gap-3">
             <View className="flex-1 gap-1">
               <Text className="text-foreground">Attach disposable machines</Text>
-              <Text className="text-sm text-foreground-muted">{`Threads you name in Settings on desktop or web, and you there, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.`}</Text>
+              <Text className="text-sm text-foreground-muted">{`Threads you name in Settings on desktop or web, and you there, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${consentText(hubSettings.attachDisposableMachines, now)}`}</Text>
             </View>
             <ThemedSwitch
               accessibilityLabel="Attach disposable machines"

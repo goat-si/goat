@@ -56,7 +56,11 @@ vi.mock("./settingsLayout", () => ({
 import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
 
 const environmentId = EnvironmentId.make("test-hub");
-function setup(enabled: boolean, expiresAt: string | null = null) {
+const NOW = Date.parse("2026-11-14T00:00:00.000Z");
+// An open consent ends within the hub's 30 days; one with no end reads as ended.
+const OPEN_UNTIL = new Date(NOW + 10 * 86_400_000).toISOString();
+function setup(enabled: boolean, expiresAt: string | null = enabled ? OPEN_UNTIL : null) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   state.hub = {
     ...DEFAULT_SERVER_SETTINGS.hub,
     enabled: true,
@@ -74,7 +78,13 @@ function setup(enabled: boolean, expiresAt: string | null = null) {
   });
   state.reissue.mockReset();
   const registry = AtomRegistry.make();
-  return { registry, [Symbol.dispose]: () => registry.dispose() };
+  return {
+    registry,
+    [Symbol.dispose]: () => {
+      registry.dispose();
+      clock.mockRestore();
+    },
+  };
 }
 
 it("saves disposable machine consent, describes Pen access, and names an older hub", async () => {
@@ -147,4 +157,18 @@ it("pasting the pen identity --json line fills both keys", async () => {
     environmentId,
     input: expect.objectContaining({ name: "cc-1", signPub: "sign-key", noisePub: "noise-key" }),
   });
+});
+
+it("a consent that ends while the page is open shows as ended on the next refresh", async () => {
+  using fixture = setup(true);
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await expect.element(screen.getByRole("button", { name: "Attach a machine" })).toBeEnabled();
+  vi.mocked(Date.now).mockReturnValue(NOW + 11 * 86_400_000);
+  await userEvent.click(screen.getByRole("button", { name: "Refresh machines" }));
+  await expect.element(screen.getByText(/Consent ended/)).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Attach a machine" })).toBeDisabled();
 });

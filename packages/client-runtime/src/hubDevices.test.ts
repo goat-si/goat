@@ -12,6 +12,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   connectHubProxySaveError,
   cloudAutoJoinSaveError,
+  disposableConsentEnded,
   disposableSwitchSaveError,
   hubDeviceList,
   presentChildSetup,
@@ -346,6 +347,17 @@ describe("cloudAutoJoinSaveError", () => {
     expect(cloudAutoJoinSaveError(false, false)).toBeNull();
     expect(cloudAutoJoinSaveError(true, true)).toBeNull();
   });
+});
+
+// The hub reads a switch that is on with no expiry, a past one or one over 30 days ahead as closed.
+it("reads the disposable machines consent as the hub does", () => {
+  const now = Date.parse("2026-11-14T00:00:00.000Z");
+  const at = (days: number) => new Date(now + days * 86_400_000).toISOString();
+  expect(disposableConsentEnded({ enabled: true, expiresAt: at(10) }, now)).toBe(false);
+  expect(disposableConsentEnded({ enabled: true, expiresAt: at(-1) }, now)).toBe(true);
+  expect(disposableConsentEnded({ enabled: true, expiresAt: null }, now)).toBe(true);
+  expect(disposableConsentEnded({ enabled: true, expiresAt: at(31) }, now)).toBe(true);
+  expect(disposableConsentEnded({ enabled: false, expiresAt: null }, now)).toBe(false);
 });
 
 it("flags an older hub that dropped the disposable machines switch turned on", () => {

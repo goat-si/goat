@@ -1,9 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { disposableSwitchSaveError } from "@goat/client-runtime/hub-devices";
+import {
+  disposableConsentEnded,
+  disposableSwitchSaveError,
+} from "@goat/client-runtime/hub-devices";
 import { isHubMachinesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
-  DISPOSABLE_SWITCH_DAYS,
   HubMachinesError,
   ThreadId,
   type EnvironmentId,
@@ -40,7 +42,7 @@ const isMachinesError = Schema.is(HubMachinesError);
 const decodeIdentity = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ signPub: Schema.String, noisePub: Schema.String })),
 );
-const DAY_MS = 24 * 60 * 60 * 1000;
+const RENEW_AT = "9999-12-31T00:00:00.000Z";
 /** The hub's own refusal text; anything else (a dropped connection) gets the fixed fallback. */
 function failureText(failure: unknown, fallback: string): string {
   return isMachinesError(failure) ? failure.detail : fallback;
@@ -105,13 +107,13 @@ export function DisposableMachinesSettings({
       else setError(`No new invite was made: ${result.value.message}`);
     }
   }
-  // The server keeps an expired switch on and reads it as closed; only a person renews it.
-  const expired =
-    settings.enabled && settings.expiresAt !== null && Date.parse(settings.expiresAt) <= now;
-  const expires =
-    settings.enabled && settings.expiresAt !== null
-      ? ` Consent ${expired ? "ended" : "ends"} ${new Date(settings.expiresAt).toLocaleString()}.`
-      : "";
+  // The hub keeps an ended consent switched on and reads it as closed; only a person renews it.
+  const expired = disposableConsentEnded(settings, now);
+  const expires = !settings.enabled
+    ? ""
+    : settings.expiresAt === null
+      ? " Consent has ended."
+      : ` Consent ${expired ? "ended" : "ends"} ${new Date(settings.expiresAt).toLocaleString()}.`;
   if (list.failure !== null && isHubMachinesUnsupportedError(list.failure))
     return (
       <SettingsSection title="Disposable machines">
@@ -136,9 +138,9 @@ export function DisposableMachinesSettings({
                 variant="outline"
                 disabled={!available}
                 onClick={() =>
-                  void update({
-                    expiresAt: new Date(Date.now() + DISPOSABLE_SWITCH_DAYS * DAY_MS).toISOString(),
-                  })
+                  // The hub holds any expiry to 30 days past its own clock, so a slow clock here
+                  // cannot send a date that is already past.
+                  void update({ expiresAt: RENEW_AT })
                 }
               >
                 Renew for 30 days
@@ -274,13 +276,24 @@ export function DisposableMachinesSettings({
         description="Every machine attached this way, with who vouched for it and whether its key is still in Pen."
         control={
           <div className="flex items-center gap-2">
-            <Button size="xs" variant="outline" onClick={list.refresh}>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                setNow(Date.now());
+                list.refresh();
+              }}
+            >
               Refresh machines
             </Button>
             <Button
               size="xs"
               disabled={!canAttach || busy || !hub.enabled || !settings.enabled || expired}
-              onClick={() => setDialog({ kind: "attach" })}
+              onClick={() => {
+                const at = Date.now();
+                setNow(at);
+                if (!disposableConsentEnded(settings, at)) setDialog({ kind: "attach" });
+              }}
             >
               Attach a machine
             </Button>

@@ -629,3 +629,29 @@ it("saves disposable machine consent, describes Pen access, and names an older h
   });
   expect(container.textContent).toContain("Update GOAT there to turn this on.");
 });
+
+it("tells a phone that the disposable machines consent ended and how to renew it", async () => {
+  const hub = {
+    ...second,
+    serverConfig: {
+      settings: {
+        hub: {
+          enabled: true,
+          autoJoinCloudMachines: true,
+          attachDisposableMachines: {
+            enabled: true,
+            cap: 10,
+            provisioners: [],
+            nameRule: "",
+            expiresAt: null,
+            grantId: "g",
+          },
+        },
+      },
+    },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  await render();
+  expect(container.textContent).toContain("Consent has ended: turn the switch off and on");
+});

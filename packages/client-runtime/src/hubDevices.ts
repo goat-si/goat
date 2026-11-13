@@ -1,5 +1,6 @@
 import {
   childReadyProofIsCurrent,
+  DISPOSABLE_SWITCH_DAYS,
   withoutUnprovenReady,
   type ChildReadyNextAction,
   type ChildReadyStep,
@@ -366,4 +367,17 @@ export function disposableSwitchSaveError(requested: boolean, saved: boolean): s
   return requested && !saved
     ? "This hub runs an older GOAT without disposable machines. Update GOAT there to turn this on."
     : null;
+}
+
+/**
+ * Reads the disposable machines consent as the hub does: on with no expiry, a past one or one more
+ * than 30 days ahead is closed, and only a person renews it.
+ */
+export function disposableConsentEnded(
+  value: { readonly enabled: boolean; readonly expiresAt: string | null },
+  nowMs: number,
+): boolean {
+  if (!value.enabled) return false;
+  const at = value.expiresAt === null ? Number.NaN : Date.parse(value.expiresAt);
+  return !(at > nowMs) || at > nowMs + DISPOSABLE_SWITCH_DAYS * 86_400_000;
 }
