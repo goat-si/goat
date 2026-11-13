@@ -143,11 +143,55 @@ it("reads a task's real conversation with one way to its thread, and Escape goes
   expect(onBack).toHaveBeenCalledOnce();
 });
 
-it("acknowledges a task's unread activity the way its task view does", async () => {
+/** A peek at one task, unread through the given activity, as the panel renders it. */
+function ackPeek(
+  taskId: string,
+  unreadThrough: string | null,
+  statusLabel = "Done",
+  environmentId = "bot-home",
+) {
+  return (
+    <GoatBotWorkPeek
+      taskId={ChannelTaskId.make(taskId)}
+      title="Count the stars"
+      statusLabel={statusLabel}
+      rows={rows}
+      environmentId={EnvironmentId.make(environmentId)}
+      unreadThrough={unreadThrough}
+      onAcknowledged={actions.refresh}
+      onBack={() => {}}
+    />
+  );
+}
+
+/** Resets the shared acknowledgement record and the mocks every acknowledgement test reads. */
+function setup() {
+  resetTaskReadAcknowledgementsForTests();
   actions.permit = true;
   actions.update.mockReset();
   actions.update.mockResolvedValue({ _tag: "Success" });
   actions.refresh.mockReset();
+}
+
+const sentFor = (taskId: string, environmentId = "bot-home") =>
+  actions.update.mock.calls.filter(
+    ([value]) => value.input.taskId === taskId && value.environmentId === environmentId,
+  ).length;
+
+/** An update that answers only when the test lets it. */
+function holdNextUpdate() {
+  let land = (_result: { _tag: string }) => {};
+  actions.update.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        land = resolve;
+      }),
+  );
+  return (result: { _tag: string }) => land(result);
+}
+
+it("acknowledges a task's unread activity the way its task view does", async () => {
+  setup();
   await using _screen = await render(
     <GoatBotWorkPeek
       taskId={ChannelTaskId.make("task-a")}
@@ -170,10 +214,7 @@ it("acknowledges a task's unread activity the way its task view does", async () 
 });
 
 it("acknowledges an unread task once through rerenders and Strict Mode", async () => {
-  actions.permit = true;
-  actions.update.mockReset();
-  actions.update.mockResolvedValue({ _tag: "Success" });
-  actions.refresh.mockReset();
+  setup();
   const peek = (statusLabel: string) => (
     <StrictMode>
       <GoatBotWorkPeek
@@ -198,8 +239,7 @@ it("acknowledges an unread task once through rerenders and Strict Mode", async (
 });
 
 it("leaves the server alone when this device may not change the task view", async () => {
-  actions.update.mockReset();
-  actions.refresh.mockReset();
+  setup();
   actions.permit = false;
   await using _screen = await render(
     <GoatBotWorkPeek
@@ -215,38 +255,10 @@ it("leaves the server alone when this device may not change the task view", asyn
   );
   expect(actions.update).not.toHaveBeenCalled();
   expect(actions.refresh).not.toHaveBeenCalled();
-  actions.permit = true;
 });
 
-/** A peek at one task, unread through the given activity, as the panel renders it. */
-function ackPeek(taskId: string, unreadThrough: string | null, statusLabel = "Done") {
-  return (
-    <GoatBotWorkPeek
-      taskId={ChannelTaskId.make(taskId)}
-      title="Count the stars"
-      statusLabel={statusLabel}
-      rows={rows}
-      environmentId={EnvironmentId.make("bot-home")}
-      unreadThrough={unreadThrough}
-      onAcknowledged={actions.refresh}
-      onBack={() => {}}
-    />
-  );
-}
-
-function setupAck() {
-  resetTaskReadAcknowledgementsForTests();
-  actions.permit = true;
-  actions.update.mockReset();
-  actions.update.mockResolvedValue({ _tag: "Success" });
-  actions.refresh.mockReset();
-}
-
-const sentFor = (taskId: string) =>
-  actions.update.mock.calls.filter(([value]) => value.input.taskId === taskId).length;
-
 it("does not retry a failed acknowledgement on rerender, and reopening the task sends it once", async () => {
-  setupAck();
+  setup();
   actions.update.mockResolvedValueOnce({ _tag: "Failure" });
   const first = await render(ackPeek("task-fail", at));
   await vi.waitFor(() => expect(sentFor("task-fail")).toBe(1));
@@ -260,7 +272,7 @@ it("does not retry a failed acknowledgement on rerender, and reopening the task 
 });
 
 it("sends a failed acknowledgement once more when update permission comes back", async () => {
-  setupAck();
+  setup();
   actions.update.mockResolvedValueOnce({ _tag: "Failure" });
   await using screen = await render(ackPeek("task-permit", at));
   await vi.waitFor(() => expect(sentFor("task-permit")).toBe(1));
@@ -276,7 +288,7 @@ it("sends a failed acknowledgement once more when update permission comes back",
 });
 
 it("sends A once when the peek goes from A to B and back while A is still in flight", async () => {
-  setupAck();
+  setup();
   let land = (_result: { _tag: string }) => {};
   actions.update.mockImplementationOnce(
     () =>
@@ -295,7 +307,7 @@ it("sends A once when the peek goes from A to B and back while A is still in fli
 });
 
 it("sends nothing more when a task is closed and reopened while its acknowledgement is in flight or after it landed", async () => {
-  setupAck();
+  setup();
   let land = (_result: { _tag: string }) => {};
   actions.update.mockImplementationOnce(
     () =>
@@ -318,7 +330,7 @@ it("sends nothing more when a task is closed and reopened while its acknowledgem
 });
 
 it("sends a new acknowledgement when newer activity arrives on an open task", async () => {
-  setupAck();
+  setup();
   await using screen = await render(ackPeek("task-newer", at));
   await vi.waitFor(() => expect(sentFor("task-newer")).toBe(1));
   await screen.rerender(ackPeek("task-newer", "2026-11-09T01:00:00.000Z"));
@@ -327,4 +339,55 @@ it("sends a new acknowledgement when newer activity arrives on an open task", as
     environmentId: "bot-home",
     input: { taskId: "task-newer", readThrough: "2026-11-09T01:00:00.000Z" },
   });
+});
+
+it("sends once more when update permission returns while a request is pending and it then fails", async () => {
+  setup();
+  const land = holdNextUpdate();
+  await using screen = await render(ackPeek("task-intent-permit", at));
+  await vi.waitFor(() => expect(sentFor("task-intent-permit")).toBe(1));
+  actions.permit = false;
+  await screen.rerender(ackPeek("task-intent-permit", at, "Denied"));
+  await expect.element(screen.getByText("Denied")).toBeVisible();
+  actions.permit = true;
+  await screen.rerender(ackPeek("task-intent-permit", at, "Allowed"));
+  await expect.element(screen.getByText("Allowed")).toBeVisible();
+  expect(sentFor("task-intent-permit")).toBe(1);
+  land({ _tag: "Failure" });
+  await vi.waitFor(() => expect(sentFor("task-intent-permit")).toBe(2));
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  expect(sentFor("task-intent-permit")).toBe(2);
+});
+
+it("sends once more when a task is reopened while its request is pending and it then fails", async () => {
+  setup();
+  const land = holdNextUpdate();
+  const first = await render(ackPeek("task-intent-reopen", at));
+  await vi.waitFor(() => expect(sentFor("task-intent-reopen")).toBe(1));
+  await first[Symbol.asyncDispose]();
+  await using reopened = await render(ackPeek("task-intent-reopen", at, "Reopened"));
+  await expect.element(reopened.getByText("Reopened")).toBeVisible();
+  expect(sentFor("task-intent-reopen")).toBe(1);
+  land({ _tag: "Failure" });
+  await vi.waitFor(() => expect(sentFor("task-intent-reopen")).toBe(2));
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  expect(sentFor("task-intent-reopen")).toBe(2);
+});
+
+it("keeps environments apart when their ids would join into the same text", async () => {
+  setup();
+  const first = await render(ackPeek("c", at, "Done", "a|b"));
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  await first[Symbol.asyncDispose]();
+  await using _second = await render(ackPeek("b|c", at, "Done", "a"));
+  await vi.waitFor(() => expect(sentFor("b|c", "a")).toBe(1));
+});
+
+it("acknowledges an activity that is not a date again when the task is next opened", async () => {
+  setup();
+  const first = await render(ackPeek("task-undated", "not a date"));
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  await first[Symbol.asyncDispose]();
+  await using _again = await render(ackPeek("task-undated", "not a date", "Again"));
+  await vi.waitFor(() => expect(sentFor("task-undated")).toBe(2));
 });
