@@ -15,7 +15,7 @@ vi.mock("react-native-safe-area-context", () => ({
 vi.mock("react-native", () => ({
   Platform: nativePlatform,
   Easing: { linear: (value: number) => value },
-  StyleSheet: { absoluteFill: {} },
+  StyleSheet: { absoluteFill: {}, hairlineWidth: 1 },
   useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),
   Animated: {
     View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,

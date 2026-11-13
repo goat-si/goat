@@ -27,7 +27,17 @@ import type {
 import { ChannelTaskId } from "@goat/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Alert, FlatList, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Alert,
+  FlatList,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -56,6 +66,19 @@ const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
 const NO_WORDINGS: MobileNoteWordings = new Map();
+function carded(items: ReadonlyArray<MobileBotHomeItem>): MobileBotHomeItem[] {
+  return items.map((item, index) => ({
+    ...item,
+    card:
+      items.length === 1
+        ? "only"
+        : index === 0
+          ? "first"
+          : index === items.length - 1
+            ? "last"
+            : "middle",
+  }));
+}
 type HomeScroll = {
   readonly index: number;
   readonly viewPosition: number;
@@ -331,7 +354,7 @@ export function MobileBotWork(props: {
   ): MobileBotHomeItem => ({
     key,
     render: () => (
-      <View className={`${first ? "mt-2" : "mt-4"} flex-row items-center justify-between`}>
+      <View className={`${first ? "mt-2" : "mt-5"} flex-row items-center justify-between`}>
         <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
         {action}
       </View>
@@ -419,6 +442,7 @@ export function MobileBotWork(props: {
       ),
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
+    const workStart = homeItems.length;
     if (goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0) {
       homeItems.push(
         message(
@@ -498,6 +522,11 @@ export function MobileBotWork(props: {
         );
       }
     }
+    homeItems.splice(
+      workStart,
+      homeItems.length - workStart,
+      ...carded(homeItems.slice(workStart)),
+    );
     // The routines entry follows its section label, at the next two places in the list.
     const index = homeItems.length + 1;
     const routinesItem: MobileBotHomeItem = {
@@ -554,24 +583,30 @@ export function MobileBotWork(props: {
           </Pressable>
         ) : null,
       ),
-      routinesItem,
+      ...carded([routinesItem]),
     );
-    homeItems.push(sectionLabel("machines-label", "Machines"), {
-      key: "machines",
-      render: () => (
-        <MobileBotComputer
-          environmentId={environmentId}
-          connected={selected?.connected === true}
-          botId={member?.botId ?? null}
-          botName={botName}
-          workKey={`${workKey}#${props.workRevision ?? ""}`}
-        />
-      ),
-    });
+    homeItems.push(
+      sectionLabel("machines-label", "Machines"),
+      ...carded([
+        {
+          key: "machines",
+          render: () => (
+            <MobileBotComputer
+              environmentId={environmentId}
+              connected={selected?.connected === true}
+              botId={member?.botId ?? null}
+              botName={botName}
+              workKey={`${workKey}#${props.workRevision ?? ""}`}
+            />
+          ),
+        },
+      ]),
+    );
   } else {
     homeItems.push(
       {
         key: "library",
+        card: "only",
         render: () => (
           <MobileBotLibrary
             environmentId={environmentId}
@@ -584,6 +619,7 @@ export function MobileBotWork(props: {
       sectionLabel("notes-label", "Memory"),
       {
         key: "notes",
+        card: "only",
         render: () => (
           <MobileBotMemory
             environmentId={environmentId}
@@ -780,7 +816,24 @@ export function MobileBotWork(props: {
             testID="goat-bot-home-scroll"
             data={homeItems}
             keyExtractor={(item) => item.key}
-            renderItem={({ item }) => <>{item.render()}</>}
+            renderItem={({ item }) =>
+              item.card ? (
+                <View
+                  className={`min-h-[44px] justify-center border-border bg-grouped-card px-3 ${item.card === "first" || item.card === "only" ? "rounded-t-2xl" : ""} ${item.card === "last" || item.card === "only" ? "rounded-b-2xl" : ""}`}
+                  style={{
+                    borderLeftWidth: StyleSheet.hairlineWidth,
+                    borderRightWidth: StyleSheet.hairlineWidth,
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderBottomWidth:
+                      item.card === "last" || item.card === "only" ? StyleSheet.hairlineWidth : 0,
+                  }}
+                >
+                  {item.render()}
+                </View>
+              ) : (
+                <>{item.render()}</>
+              )
+            }
             // A routine row far down Home may not be measured yet: land near it, then try again.
             onScrollToIndexFailed={(info) => {
               const scroll = lastScroll.current;
@@ -799,7 +852,6 @@ export function MobileBotWork(props: {
               listRef.current?.scrollToIndex(retry);
             }}
             stickyHeaderIndices={[1]}
-            contentContainerClassName="gap-2"
             contentContainerStyle={{ paddingBottom: bottomInset }}
             initialNumToRender={12}
             windowSize={7}

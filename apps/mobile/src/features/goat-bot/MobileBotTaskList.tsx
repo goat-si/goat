@@ -22,6 +22,7 @@ type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 /** One entry of the bot's Home list, which mounts only the entries near the screen. */
 export interface MobileBotHomeItem {
   readonly key: string;
+  readonly card?: "only" | "first" | "middle" | "last";
   /** Builds the entry when the list mounts it, so off-screen entries cost nothing. */
   readonly render: () => ReactNode;
 }
@@ -163,8 +164,7 @@ export function mobileBotTaskListItems(props: {
                 accessibilityLabel={
                   title === null ? "Work thread: " + row.task.title : "GOAT thread: " + title
                 }
-                // The list puts a gap between entries; a thread stays snug under its task.
-                className="-mt-2 ml-4 min-h-[44px] justify-center"
+                className="ml-4 min-h-[44px] justify-center"
                 onPress={() =>
                   props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
                 }

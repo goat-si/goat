@@ -19,6 +19,7 @@ vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { hairlineWidth: 1 },
   Platform: nativePlatform,
   Switch: () => null,
   View: (props: Props) => <div {...forward(props)}>{props.children}</div>,

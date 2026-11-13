@@ -238,6 +238,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { hairlineWidth: 1 },
   View: ({
     children,
     style,
