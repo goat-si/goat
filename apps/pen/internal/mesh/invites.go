@@ -297,21 +297,6 @@ func (iv *Invites) CancelID(id, mintID string, clock func() time.Time) (state, i
 	return InviteCancelled, x.ID, nil
 }
 
-// State is the state of the invite id under the book's lock: live, burned, cancelled, expired (as written), or
-// absent.
-func (iv *Invites) State(id string) string {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	x, ok := iv.byID[id]
-	switch {
-	case !ok:
-		return InviteAbsent
-	case x.State == "":
-		return InviteLive
-	}
-	return x.State
-}
-
 // findLocked finds the entry named by id, or by mintID among the invites and then the fences.
 func (iv *Invites) findLocked(id, mintID string) (Invite, bool) {
 	if id != "" {

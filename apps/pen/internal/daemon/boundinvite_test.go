@@ -382,8 +382,8 @@ func TestAnOrdinaryInvitesAnswerIsUnchanged(t *testing.T) {
 	}
 }
 
-// A cancel that lands after a bound invite is made but before its waiter is registered still ends the wait: the
-// waiter checks the invite's state once it is registered.
+// A cancel (and even its ack) that lands after a bound invite is made but before its waiter is registered still ends
+// the wait: a minted wait is registered under its mintId before the invite exists.
 func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -392,9 +392,14 @@ func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
 	clk := &clock{}
 	clk.ms.Store(time.Now().UnixMilli())
 	a := founder(t, ctx, rs, "a", clk)
-	a.d.boundCreated = func(id string) {
-		if _, err := a.d.inviteBook().Cancel(id, "", clk.now); err != nil {
-			t.Error(err)
+	// Between the create and the waiter: a cancel by mintId and its ack, which leave no trace of the invite.
+	a.d.boundCreated = func(string) {
+		var c InviteCancelReply
+		if err := rawCall(t, a.st, `{"op":"invite.cancel","mintId":"m1"}`, &c); err != nil || c.State != "cancelled" {
+			t.Errorf("cancel: %+v, %v", c, err)
+		}
+		if err := rawCall(t, a.st, `{"op":"invite.ack","mintId":"m1"}`, &c); err != nil || c.State != "acked" {
+			t.Errorf("ack: %+v, %v", c, err)
 		}
 	}
 	jid := newIdentity(t)

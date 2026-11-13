@@ -448,26 +448,31 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, reply)
+	d.awaitJoin(ctx, c, r, id, "", nil, reply)
 }
 
-// awaitJoin answers r, then the invite's admission or expiry, unless the client hangs up first.
-func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, reply func(any)) {
-	wait := make(chan *mesh.Member, 1)
+// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. A minted
+// invite's wait was registered under its mintId before the invite existed (wait, mint); here it moves to the invite
+// id in one hold of d.mu, so exactly one key names the channel at any time.
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id, mint string, wait chan *mesh.Member, reply func(any)) {
+	if wait == nil {
+		wait = make(chan *mesh.Member, 1)
+	}
 	d.mu.Lock()
-	d.inviteWait[id] = wait
+	if mint == "" || d.inviteWait[mintKey(mint)] == wait {
+		d.inviteWait[id] = wait
+	}
+	if mint != "" {
+		delete(d.inviteWait, mintKey(mint))
+	}
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
-		delete(d.inviteWait, id)
+		if d.inviteWait[id] == wait {
+			delete(d.inviteWait, id)
+		}
 		d.mu.Unlock()
 	}()
-	// A cancel that came before the waiter was registered found nobody to tell; one after this check finds it.
-	if d.inviteBook().State(id) == mesh.InviteCancelled {
-		reply(r)
-		reply(map[string]any{"t": "cancelled"})
-		return
-	}
 	reply(r)
 	gone := clientGone(c)
 	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))
