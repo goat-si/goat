@@ -794,6 +794,18 @@ it("opens the held task once when the dismissal is reported twice", async () => 
   expect(state.openTask).toHaveBeenCalledTimes(1);
 });
 
+it("a failed read mark marks nothing in Home's walk", async () => {
+  resetTaskReadAcknowledgementsForTests();
+  state.run.mockClear();
+  state.run.mockImplementationOnce(async () => ({ _tag: "Failure" }));
+  await open();
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  await press("Back to home. Old report");
+  expect(reads()).toEqual([{ taskId: "o1", readThrough: at }]);
+  expect(button("Old report")?.getAttribute("aria-label")).toContain("unread");
+});
+
 it("a read mark sent before Home closed lands in the reopened Home's walk", async () => {
   resetTaskReadAcknowledgementsForTests();
   state.run.mockClear();
