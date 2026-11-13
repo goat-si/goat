@@ -629,3 +629,27 @@ it("returns to the older-server pane when lookup capability is withdrawn", async
   await expect.element(screen.getByRole("heading", { name: "Task thread" })).toBeVisible();
   expect(state.lookup).toHaveBeenCalledOnce();
 });
+
+it("shows lookup loading and does not retry a permission refusal", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  let finish!: (value: unknown) => void;
+  state.lookup.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("status")).toHaveTextContent("Loading task…");
+  await act(() =>
+    finish({
+      _tag: "Failure",
+      cause: Cause.fail(new ChannelGatewayError({ reason: "forbidden" })),
+    }),
+  );
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent("Permission to read this task is unavailable.");
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+});
