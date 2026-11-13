@@ -26,6 +26,53 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("treats a mismatched stored task view as unavailable", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("mismatch-view", { status: "running", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        const taskId = ChannelTaskId.make("mismatch-view");
+        const view = JSON.stringify({
+          taskId: "other",
+          pinnedAt: null,
+          doneAt: null,
+          readThrough: null,
+        });
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${TaskViews.taskViewKey(ownerId, taskId)}, ${view}, ${at(1)})`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask({ taskId, botId: BotId.make("main") }, owner);
+        assert.strictEqual(result.task.state, "unavailable");
+        assert.strictEqual(result.partial, true);
+        assert.notProperty(result.task, "view");
+      }),
+    ),
+  );
+  it.effect("returns at most 50 search matches and keeps creation-time ties stable", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 52; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "task", limit: 50 },
+          owner,
+        );
+        assert.lengthOf(first.tasks, 50);
+        assert.isString(first.nextCursor);
+        const last = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "task", limit: 50, cursor: first.nextCursor ?? "" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          [...first.tasks, ...last.tasks].map((task) => String(task.taskId)),
+          Array.from({ length: 52 }, (_, index) => name(51 - index)),
+        );
+        assert.isUndefined(last.nextCursor);
+      }),
+    ),
+  );
   it.effect("rejects a search query longer than 256 UTF-8 bytes", () =>
     provide(
       Effect.gen(function* () {
