@@ -66,6 +66,7 @@ export function GoatBotHomeWork({
   focusTaskId = null,
   focusRef,
   notice = null,
+  historySupported = false,
   historyAvailable = false,
   historyLoading = false,
   historyFailed = false,
@@ -99,6 +100,7 @@ export function GoatBotHomeWork({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
+  readonly historySupported?: boolean;
   readonly historyAvailable?: boolean;
   readonly historyLoading?: boolean;
   readonly historyFailed?: boolean;
@@ -154,7 +156,11 @@ export function GoatBotHomeWork({
       {loaded && !failed && empty && !historyAvailable && (
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
-          <p className="text-muted-foreground">Ask {botName} in chat to start work.</p>
+          <p className="text-muted-foreground">
+            Ask {botName} in chat to start work.
+            {!historySupported &&
+              " Unpinned tasks that finished more than three days ago aren't listed here."}
+          </p>
         </div>
       )}
       {work.running.map((task) => row(task, "running"))}

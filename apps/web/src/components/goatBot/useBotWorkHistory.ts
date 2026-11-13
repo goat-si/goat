@@ -119,6 +119,7 @@ export function useBotWorkHistory(
     if (active.current === request) active.current = null;
   }
   return {
+    historySupported,
     rows: merged.supported && historySupported ? merged.rows : current.rows,
     remoteWork:
       merged.supported && historySupported ? merged.remoteWork : (current.remoteWork ?? []),

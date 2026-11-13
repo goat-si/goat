@@ -337,6 +337,7 @@ export function GoatBotWorkPanel({
                 supported={supported}
                 offline={offline}
                 onRetry={refresh}
+                historySupported={history.historySupported}
                 historyAvailable={history.hasMore}
                 historyLoading={history.loading}
                 historyFailed={history.failed}

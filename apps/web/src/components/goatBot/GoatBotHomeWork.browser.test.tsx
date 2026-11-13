@@ -227,10 +227,18 @@ it("an access-denied read explains itself and offers no retry that can never suc
 
 it("an empty list offers the next action without claiming history is unavailable", async () => {
   const rows = setup([]);
-  await using screen = await render(view(rows));
+  await using screen = await render(view(rows, { historySupported: true }));
   await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText(/Ask GOAT Bot in chat to start work/)).toBeVisible();
   expect(screen.container.textContent).not.toContain("aren't listed here");
+});
+
+it("explains the three-day cutoff when history is unsupported", async () => {
+  const rows = setup([]);
+  await using screen = await render(view(rows, { historySupported: false }));
+  await expect
+    .element(screen.getByText(/Unpinned tasks that finished more than three days/))
+    .toBeVisible();
 });
 
 it("says the computer is offline instead of loading forever, and an unsupported read never loads", async () => {
