@@ -462,7 +462,9 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
 
   const search: WorkspaceSearchIndex["Service"]["search"] = Effect.fn(
     "WorkspaceSearchIndex.search",
-  )(function* (query, limit, kind, imageOnly) {
+  )(function* (rawQuery, limit, kind, imageOnly) {
+    // fff parses "[" as a glob; fuzzy matching still finds bracketed paths without it.
+    const query = rawQuery.replaceAll("[", "");
     const pageSize = imageOnly ? WORKSPACE_INDEX_PAGE_SIZE : Math.max(1, limit + 1);
     const incompleteBeforeQuery = hasIncompleteInitialScan();
     if (kind === "file" || imageOnly) {
