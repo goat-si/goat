@@ -66,6 +66,7 @@ export function useBotThreads(
     remoteWork: threads.data?.remoteWork ?? NO_REMOTE_WORK,
     supported,
     loaded: threads.isSuccess,
+    pending: threads.isPending,
     failed: threads.error !== null,
     failure: threads.failure,
     /** The bot's own turns asking a question in its chat, which the rows never list. */

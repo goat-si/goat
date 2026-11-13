@@ -62,7 +62,7 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh, loaded, failed } = useBotThreads(
+  const { rows, remoteWork, refresh, loaded, pending, failed } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -71,7 +71,7 @@ export function GoatBotTaskPane({
     environmentId,
     taskId,
     member?.botId ?? BotId.make("main"),
-    loaded && !failed && listedTask === undefined && member?.state !== "deleted",
+    loaded && !pending && !failed && listedTask === undefined && member?.state !== "deleted",
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
