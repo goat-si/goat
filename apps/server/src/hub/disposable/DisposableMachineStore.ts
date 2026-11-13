@@ -1,6 +1,7 @@
 import {
   DISPOSABLE_FINAL_STATES,
   type DisposableMachineState,
+  HubNodeMachineClass,
   ServerSettingsError,
   type ServerSettings,
   ThreadId,
@@ -29,11 +30,14 @@ const StoredProvisioner = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("person"), sessionId: Schema.String }),
 ]);
 
+// The fields the hub nodes snapshot sends decode with its own schemas, so a row it could not carry
+// fails this read (every machine kept) instead of the whole snapshot.
+const wire = HubNodeMachineClass.fields;
 const Row = Schema.Struct({
-  attach_id: Schema.String,
+  attach_id: wire.attachId,
   node_id: Schema.String,
-  state: Schema.String,
-  state_since: Schema.String,
+  state: wire.state,
+  state_since: wire.stateSince,
   created_at: Schema.String,
   provisioner_json: Schema.fromJsonString(StoredProvisioner),
   final_at: Schema.NullOr(Schema.String),
@@ -41,7 +45,7 @@ const Row = Schema.Struct({
   machine_install_id: Schema.NullOr(Schema.String),
   sshd_pin: Schema.NullOr(Schema.String),
   link_id: Schema.NullOr(Schema.String),
-  conflicts_json: Schema.fromJsonString(Schema.Array(Schema.String)),
+  conflicts_json: Schema.fromJsonString(wire.conflicts),
   pen_admitted_at: Schema.NullOr(Schema.String),
   pen_removed_at: Schema.NullOr(Schema.String),
 });

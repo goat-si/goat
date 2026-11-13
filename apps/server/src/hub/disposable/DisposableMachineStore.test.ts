@@ -68,6 +68,38 @@ const world = <A, E, R>(body: Effect.Effect<A, E, R>) =>
     ),
   );
 
+// A row the hub nodes snapshot could not send must fail the read here, where it reads as kept.
+it.effect("a row the wire cannot carry makes the table unreadable, never the hub node list", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const store = yield* Store.DisposableMachineStore;
+      yield* insert("a1", "g");
+      expect(yield* store.records).toHaveLength(1);
+      for (const overrides of [
+        { conflicts_json: JSON.stringify(Array.from({ length: 17 }, (_, i) => "c" + i)) },
+        { state: "s".repeat(41) },
+        { state: " " },
+      ]) {
+        yield* insert("bad", "g", {
+          ...overrides,
+          expected_sign_pub: "sb",
+          expected_noise_pub: "nb",
+          node_id: "nb",
+        });
+        expect(yield* store.records.pipe(Effect.flip), JSON.stringify(overrides)).toBeInstanceOf(
+          Store.DisposableStoreError,
+        );
+        expect(yield* store.recordsOrKept).toEqual([]);
+        yield* Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql`DELETE FROM disposable_machines WHERE attach_id = 'bad'`,
+        );
+      }
+    }),
+  ),
+);
+
 it.effect("an unreadable table reads as no records, so every machine is kept", () =>
   world(
     Effect.gen(function* () {
