@@ -106,7 +106,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
     ), processed AS MATERIALIZED (SELECT * FROM candidates LIMIT 500),
     evaluated AS MATERIALIZED (
       SELECT p.task_id, p.created_at,
-        CASE WHEN length(CAST(t.task_json AS BLOB)) > 262144 THEN 0
+        CASE WHEN octet_length(t.task_json) > 262144 THEN 0
           WHEN NOT json_valid(t.task_json) THEN 0
           WHEN json_type(t.task_json, '$.title') IS NOT 'text' THEN 0
           WHEN length(trim(json_extract(t.task_json, '$.title'))) = 0 THEN 0
@@ -115,7 +115,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
           WHEN json_extract(t.task_json, '$.taskId') != p.task_id THEN 0
           WHEN json_extract(t.task_json, '$.conversationId') != p.conversation_id THEN 0
           ELSE 1 END AS valid,
-        CASE WHEN length(CAST(t.task_json AS BLOB)) > 262144 THEN 0
+        CASE WHEN octet_length(t.task_json) > 262144 THEN 0
           WHEN NOT json_valid(t.task_json) THEN 0
           WHEN json_type(t.task_json, '$.title') IS NOT 'text' THEN 0
           WHEN length(trim(json_extract(t.task_json, '$.title'))) = 0 THEN 0
@@ -127,12 +127,13 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
           WHEN COALESCE(json_extract(t.task_json, '$.kind'), 'work') = 'turn' THEN 0
           WHEN json_extract(t.task_json, '$.title') LIKE ${pattern} ESCAPE ${escape} THEN 1
           ELSE 0 END AS matches,
-        CASE WHEN length(CAST(t.task_json AS BLOB)) > 262144 THEN NULL
+        CASE WHEN octet_length(t.task_json) > 262144 THEN NULL
           WHEN NOT json_valid(t.task_json) THEN NULL
           ELSE substr(json_extract(t.task_json, '$.title'), 1, 200) END AS title,
-        CASE WHEN length(CAST(t.task_json AS BLOB)) > 262144 THEN 0
+        CASE WHEN octet_length(t.task_json) > 262144 THEN 0
           WHEN NOT json_valid(t.task_json) THEN 0
-          ELSE length(json_extract(t.task_json, '$.title')) > 200 END AS truncated
+          ELSE length(json_extract(t.task_json, '$.title')) > 200
+            OR instr(CAST(json_extract(t.task_json, '$.title') AS BLOB), x'00') > 0 END AS truncated
       FROM processed p JOIN channel_tasks t ON t.task_id = p.task_id
     ), ranked AS MATERIALIZED (
       SELECT *, COALESCE(sum(matches) OVER (ORDER BY created_at DESC, task_id DESC
