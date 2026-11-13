@@ -108,7 +108,7 @@ export const makeCodexCatalogFreshness = <E>(input: {
       baseline ??= before.mtimeMs < input.startedAtMs ? entries : "unknown";
   });
   const refresh = (filename: string) =>
-    read(filename).pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
+    read(filename).pipe(Effect.timeoutOption("2 seconds"), Effect.ignoreCause);
 
   const judge = (model: string) => {
     const entry = current?.entries?.get(model);
@@ -130,7 +130,8 @@ export const makeCodexCatalogFreshness = <E>(input: {
         Effect.map(Option.getOrUndefined),
         Effect.orElseSucceed(() => undefined),
       );
-      const changed = seen !== undefined && seen.identity !== current?.identity;
+      // Unconfirmed counts as changed: the file did not answer, or GOAT has no read to compare.
+      const changed = seen === undefined || seen.identity !== current?.identity;
       if (changed && !refreshing) {
         refreshing = true;
         yield* refresh(known).pipe(
@@ -138,8 +139,8 @@ export const makeCodexCatalogFreshness = <E>(input: {
           Effect.forkDetach,
         );
       }
-      // Until the background read lands, a changed file counts as changing this model too.
-      return (changed && current?.entries?.has(model) === true) || judge(model);
+      // Until a background read confirms the file, a changed one counts as changing this model.
+      return changed || judge(model);
     }
     const filename = Option.isSome(catalogPath) ? catalogPath.value : yield* resolvePath;
     if (filename !== undefined) yield* refresh(filename);

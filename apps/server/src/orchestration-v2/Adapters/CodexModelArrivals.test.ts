@@ -408,11 +408,11 @@ it.effect("a process that could not say where its catalog is is asked again a mi
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("a cached-only check waits only a moment for a catalog file that does not respond", () =>
+it.effect("a catalog file that does not answer placement in a moment counts as changed", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
-    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
     let stuck = false;
     // A slow or hung file system, as a network mount can be.
     const stuckFs: FileSystem.FileSystem = {
@@ -431,9 +431,9 @@ it.effect("a cached-only check waits only a moment for a catalog file that does 
         readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
       },
     });
-    assert.strictEqual(yield* modelStatus(known), "outdated");
+    assert.strictEqual(yield* modelStatus(known), "ready");
     stuck = true;
-    // Placement runs on the serial dispatch path, so it answers from memory past a short bound.
+    // Placement holds dispatch, so it waits only briefly, and an unconfirmed file may have changed.
     const placed = yield* modelStatus(known, { cachedOnly: true }).pipe(
       Effect.forkChild({ startImmediately: true }),
     );
@@ -469,6 +469,37 @@ it.effect("placement sees a catalog change before GOAT has read the new file", (
     assert.strictEqual(yield* modelStatus(known), "ready");
     yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
     reading = false;
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("placement treats a catalog GOAT could never read as changed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    let reads = 0;
+    // The first read never finishes, as on a briefly hung file system.
+    const flakyFs: FileSystem.FileSystem = {
+      ...fs,
+      readFileString: (path, encoding) =>
+        reads++ === 0 ? Effect.never : fs.readFileString(path, encoding),
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: flakyFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    const first = yield* modelStatus(known).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* TestClock.adjust("2 seconds");
+    assert.strictEqual(yield* Fiber.join(first), "ready");
     assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
