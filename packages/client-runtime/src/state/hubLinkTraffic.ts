@@ -15,7 +15,7 @@ export interface HubLinkView {
 
 const UNITS = ["B", "kB", "MB", "GB", "TB"] as const;
 
-/** Decimal units, as the warning thresholds are set: "1.4 GB", "820 MB", "0 B". */
+/** Decimal units, as the warning thresholds are set: "1.4 GB", "5 GB", "820 MB", "0 B". */
 export function formatLinkBytes(bytes: number): string {
   let value = Math.max(0, bytes);
   let unit = 0;
@@ -24,7 +24,7 @@ export function formatLinkBytes(bytes: number): string {
     unit += 1;
   }
   const digits = unit === 0 || value >= 10 ? 0 : 1;
-  return `${value.toFixed(digits)} ${UNITS[unit]}`;
+  return `${value.toFixed(digits).replace(/\.0$/u, "")} ${UNITS[unit]}`;
 }
 
 const eachWay = (to: number, from: number) => `↑${formatLinkBytes(to)} ↓${formatLinkBytes(from)}`;
@@ -91,4 +91,23 @@ export function hubRelayWarningLabel(warning: OpenCodexHubRelayWarning | null): 
   return warning === null
     ? null
     : `Children sent ${formatLinkBytes(warning.relayBytes)} through the Pen relay in 24 h (warning at ${formatLinkBytes(warning.thresholdBytes)}). Nothing is stopped.`;
+}
+
+/** The Remote Link Child a Fleet machine is: its dispatcher alias, any alias that named it, or its label. */
+export function hubLinkOfMachine<
+  Device extends { readonly alias: string; readonly tunnel: unknown },
+>(
+  devices: ReadonlyArray<Device>,
+  machine: {
+    readonly label: string;
+    readonly sshHost: { readonly alias: string } | null;
+    readonly reportedAliases: ReadonlyArray<{ readonly alias: string }>;
+  },
+): Device | null {
+  const names = new Set([
+    ...(machine.sshHost === null ? [] : [machine.sshHost.alias]),
+    ...machine.reportedAliases.map(({ alias }) => alias),
+    machine.label,
+  ]);
+  return devices.find((device) => device.tunnel !== null && names.has(device.alias)) ?? null;
 }

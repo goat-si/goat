@@ -32,6 +32,12 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["cloud machine boat opencodex child bootstrap automatic join auto-join"],
   },
   {
+    id: "hub-relay-warning",
+    title: "Relay traffic warning",
+    to: "/settings/hub",
+    searchTerms: ["pen relay traffic bytes gigabytes warning threshold opencodex child link route"],
+  },
+  {
     id: "hub-permission-profiles",
     title: "Permission profiles",
     to: "/settings/hub",

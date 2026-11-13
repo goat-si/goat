@@ -11,6 +11,7 @@ import { Link } from "@tanstack/react-router";
 import { cn } from "~/lib/utils";
 
 import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
+import { HubRelayWarning } from "../settings/HubLinkLines";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
@@ -152,6 +153,7 @@ export function FleetHubSummary({
           )}
         </span>
       </span>
+      <HubRelayWarning warning={hub.relayWarning} className="text-2xs text-warning-foreground" />
     </div>
   );
 }

@@ -266,11 +266,11 @@ describe("link traffic", () => {
     const device = hub!.devices[0]!;
     expect(hubDeviceSeverity(device)).toBe("warning");
     expect(hubDeviceFacts(device).slice(-5)).toEqual([
-      "over 5.0 GB through the relay in 24 h",
+      "over 5 GB through the relay in 24 h",
       "via relay pen-macmini",
       "HTTP",
       "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h",
-      "not via relay ↑2.0 GB ↓200 MB in 24 h",
+      "not via relay ↑2 GB ↓200 MB in 24 h",
     ]);
   });
 
