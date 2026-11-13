@@ -904,3 +904,39 @@ it.effect(
       }),
     ),
 );
+
+it.effect("an answer from the journal between failed reads restarts the 2 hours", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.adds.push("open");
+      for (let pass = 0; pass < 3; pass += 1) yield* enroll; // open, first seen now
+      yield* TestClock.adjust(60_000);
+      host.control.journalUnreadable = true;
+      yield* enroll; // a failed read
+      yield* TestClock.adjust(60_000);
+      host.control.journalUnreadable = false;
+      yield* enroll; // the journal answers: still open
+      yield* TestClock.adjust(2 * HOUR);
+      host.control.journalUnreadable = true;
+      yield* enroll; // failing again, for the first time since that answer
+      expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+    }),
+  ),
+);
+
+it.effect(
+  "a key-file refusal is read against the journal first; a recorded operation is kept",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        // ocx printed a refusal line, yet the Home recorded the operation (an earlier send of the id).
+        host.control.adds.push({ identityRefused: "identity_file_missing", journalled: true });
+        for (let pass = 0; pass < 4; pass += 1) yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
+      }),
+    ),
+);

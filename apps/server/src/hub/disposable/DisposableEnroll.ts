@@ -336,6 +336,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         ? { ...answered, unreadableSinceMs }
         : answered;
     const as = (result: string): Enroll => ({ ...enroll, link: { ...link, outcome: result } });
+    // Branches below may write nothing, so the end of a failed-read run is stored here.
+    if (outcome.kind !== "unreadable" && unreadableSinceMs !== undefined)
+      yield* note(row, { ...enroll, link });
     switch (outcome.kind) {
       case "committed":
         if (yield* note(row, as("committed"), { link_id: outcome.linkId, step: "verify" }))
