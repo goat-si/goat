@@ -642,9 +642,11 @@ it("failing-first: a send waits for a late folded question before anchoring", as
   const host = document.createElement("div");
   host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
   const pending = [{ key: "late", text: "Keep", questionRowId: null }];
-  const view = (shown: ReadonlyArray<GoatBotRow>, submissions: typeof pending) => (
-    <GoatBotTimeline rows={shown} onRetry={() => {}} {...{ submissions }} />
-  );
+  const view = (
+    shown: ReadonlyArray<GoatBotRow>,
+    submissions: typeof pending,
+    committedSends = new Map<string, string>(),
+  ) => <GoatBotTimeline rows={shown} onRetry={() => {}} {...{ submissions, committedSends }} />;
   await using screen = await render(view(rows, []), { container: host, router: false }); // No navigation links in these rows.
   const element = scroller(screen.container);
   await act(() => {
@@ -667,6 +669,18 @@ it("failing-first: a send waits for a late folded question before anchoring", as
     element.getBoundingClientRect().bottom + 1,
   );
   expect(distanceFromBottom(element)).toBeGreaterThan(48);
+  const committed = { ...answered, answerSending: false, answerInputRowId: "committed-late" };
+  const committedRows = [...rows.slice(0, 10), committed, ...rows.slice(10)];
+  await screen.rerender(view(committedRows, pending, new Map([["late", "committed-late"]])));
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(view(committedRows, pending, new Map([["late", "committed-late"]])));
+  expect(element.scrollTop).toBe(0);
 });
 
 const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>

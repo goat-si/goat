@@ -125,15 +125,16 @@ export function useGoatBotFollow({
         (row) =>
           row.kind === "user" && (row.sendKey === key || row.id === committedSends?.get(key)),
       );
-      const question =
-        send.questionRowId === null
-          ? undefined
-          : rows.find(
-              (row) =>
-                row.kind === "bot" &&
-                row.id === send.questionRowId &&
-                row.answer === send.text.trim(),
-            );
+      const question = rows.find(
+        (row) =>
+          row.kind === "bot" &&
+          (row.answerInputRowId === `pending:${key}` ||
+            (row.answerInputRowId !== undefined &&
+              row.answerInputRowId === committedSends?.get(key)) ||
+            (send.questionRowId !== null &&
+              row.id === send.questionRowId &&
+              row.answer === send.text.trim())),
+      );
       if (!sent && !question) continue;
       pending.current.delete(key);
       clearJumpPadding();
