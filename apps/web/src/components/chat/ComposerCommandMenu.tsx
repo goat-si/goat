@@ -30,12 +30,13 @@ import {
   UserRoundIcon,
   type IconComponent,
 } from "~/components/solar";
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
@@ -196,6 +197,16 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   const availability = props.item.type === "capability" ? props.item.availability : null;
   const inactive = availability !== null && availability.state !== "available";
   const detail = props.item.type === "capability" ? composerCapabilityDetail(props.item) : null;
+  const description = detail ?? props.item.description;
+  const descriptionRef = useRef<HTMLSpanElement>(null);
+  const [descriptionTruncated, setDescriptionTruncated] = useState(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- measure the active description after it renders
+  useLayoutEffect(() => {
+    const node = descriptionRef.current;
+    setDescriptionTruncated(
+      props.isActive && description.length > 0 && !!node && node.scrollWidth > node.clientWidth,
+    );
+  }, [props.isActive, description]);
 
   return (
     <CommandItem
@@ -275,9 +286,20 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
             props.item.label
           )}
         </span>
-        <span className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs">
-          {detail ?? props.item.description}
-        </span>
+        <Tooltip open={descriptionTruncated}>
+          <TooltipTrigger
+            tabIndex={-1}
+            render={
+              <span
+                ref={descriptionRef}
+                className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs"
+              />
+            }
+          >
+            {description}
+          </TooltipTrigger>
+          <TooltipPopup>{description}</TooltipPopup>
+        </Tooltip>
         {availability?.state === "unavailable" && availability.setup ? (
           <Badge className="ms-auto" variant="outline">
             Set up
