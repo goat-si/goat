@@ -12,9 +12,9 @@ const consent = (hub: HubSettings) => {
 };
 
 /**
- * Turning the hub off turns the switch off, so only a person reopens it. While the switch is or
- * becomes on, each consent change gets a new grantId; 30 days start only when the switch itself
- * turns on without a chosen expiry, and any expiry is held to 30 days ahead (a past one stays).
+ * The switch is off whenever the hub is, and turning it off clears its expiry, so a switch that
+ * turns on with an expiry has one a person chose (held to 30 days ahead; a past one stays closed)
+ * and one without gets 30 days. Each consent change while it is or becomes on gets a new grantId.
  */
 const stampDisposableSwitch = (
   current: ServerSettings,
@@ -22,21 +22,20 @@ const stampDisposableSwitch = (
 ): Effect.Effect<ServerSettings> => {
   const before = current.hub.attachDisposableMachines;
   const asked = next.hub.attachDisposableMachines;
-  const hubTurnedOff = current.hub.enabled && !next.hub.enabled;
-  const value = hubTurnedOff && asked.enabled ? { ...asked, enabled: false } : asked;
+  const value = asked.enabled && !next.hub.enabled ? { ...asked, enabled: false } : asked;
   const hub = { ...next.hub, attachDisposableMachines: value };
   if (consent(current.hub) === consent(hub) || (!before.enabled && !value.enabled))
     return Effect.succeed(value === asked ? next : { ...next, hub });
   return DateTime.now.pipe(
     Effect.map((now): ServerSettings => {
       const ceiling = DateTime.add(now, { days: DISPOSABLE_SWITCH_DAYS });
-      const turnedOn = !before.enabled && value.enabled;
-      const chosen = value.expiresAt !== before.expiresAt && value.expiresAt !== null;
-      const expiresAt =
-        turnedOn && !chosen
-          ? DateTime.formatIso(ceiling)
-          : value.expiresAt !== null &&
-              Date.parse(value.expiresAt) > DateTime.toEpochMillis(ceiling)
+      const expiresAt = !value.enabled
+        ? null
+        : value.expiresAt === null
+          ? before.enabled
+            ? null
+            : DateTime.formatIso(ceiling)
+          : Date.parse(value.expiresAt) > DateTime.toEpochMillis(ceiling)
             ? DateTime.formatIso(ceiling)
             : value.expiresAt;
       return {

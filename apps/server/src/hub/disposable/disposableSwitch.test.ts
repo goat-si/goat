@@ -133,7 +133,8 @@ it.effect("an expired switch stays closed when any write turns the hub off and o
     const closed = Effect.gen(function* () {
       const hub = (yield* service.getSettings).hub;
       expect(disposableSwitch(hub, 31 * DAY_MS).open).toBe(false);
-      expect(hub.attachDisposableMachines.expiresAt).toBe(iso(30));
+      // Turning the hub off turned the switch off and cleared its expiry; nothing renewed it.
+      expect(hub.attachDisposableMachines.expiresAt).toBeNull();
     });
     yield* service.updateSettings({ hub: { enabled: false } });
     yield* service.updateSettings({ hub: { enabled: true } });
@@ -171,6 +172,34 @@ it.effect("a person's past expiry keeps the switch closed, and a far one is held
     yield* TestClock.adjust(DAY_MS);
     yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: true } } });
     expect((yield* value).expiresAt).toBe(iso(36));
+    // A person who turns it on again with an expiry already past keeps it closed.
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } });
+    yield* service.updateSettings({
+      hub: { attachDisposableMachines: { enabled: true, expiresAt: iso(2) } },
+    });
+    expect((yield* value).expiresAt).toBe(iso(2));
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } });
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { expiresAt: iso(2) } } });
+    yield* service.updateSettings({
+      hub: { attachDisposableMachines: { enabled: true, expiresAt: iso(2) } },
+    });
+    expect((yield* value).expiresAt).toBe(iso(2));
+    expect(disposableSwitch((yield* service.getSettings).hub, 6 * DAY_MS).open).toBe(false);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("the switch stays off while the hub is off, so turning the hub on never opens it", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    yield* service.start;
+    yield* service.updateSettings({ hub: { enabled: false } });
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: true } } });
+    expect((yield* service.getSettings).hub.attachDisposableMachines.enabled).toBe(false);
+    yield* service.updateSettings({ hub: { enabled: true } });
+    expect(disposableSwitch((yield* service.getSettings).hub, 0)).toEqual({
+      open: false,
+      reason: "switch_off",
+    });
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 

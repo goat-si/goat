@@ -85,6 +85,8 @@ it.effect("a thread turning the hub off and on cannot reopen an expired disposab
     );
     const hub = (yield* settings.getSettings).hub;
     expect(disposableSwitch(hub, 31 * DAY_MS).open).toBe(false);
-    expect(hub.attachDisposableMachines.expiresAt).toBe(opened);
+    // Turning the hub off turned the switch off and cleared its expiry; nothing renewed it.
+    expect(hub.attachDisposableMachines).toMatchObject({ enabled: false, expiresAt: null });
+    expect(opened).not.toBeNull();
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );

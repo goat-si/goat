@@ -82,7 +82,9 @@ it.effect("a client with settings:write cannot reopen an expired switch through 
       yield* asClient({ patch: { hub: { enabled: true } } });
       const hub = (yield* runtime.settings.getSettings).hub;
       expect(disposableSwitch(hub, now).open).toBe(false);
-      expect(hub.attachDisposableMachines.expiresAt).toBe(opened.expiresAt);
+      // Turning the hub off turned the switch off and cleared its expiry; nothing renewed it.
+      expect(hub.attachDisposableMachines).toMatchObject({ enabled: false, expiresAt: null });
+      expect(opened.enabled).toBe(true);
     }).pipe(
       Effect.provide(Layer.mock(Routes.CodexRouteService)({})),
       Effect.provideContext(runtime.context),

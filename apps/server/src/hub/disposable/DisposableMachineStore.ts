@@ -61,6 +61,8 @@ const isStorageFailure = (error: unknown): error is SqlError | ServerSettingsErr
   isSqlError(error) || isServerSettingsError(error);
 /** A failure of the caller's write, kept apart from the store's own storage failures. */
 class WriteFailed<E> extends Data.TaggedError("WriteFailed")<{ readonly error: E }> {}
+/** The switch expired while the write ran; failing the transaction rolls the write back. */
+class ExpiredDuringWrite extends Data.TaggedError("ExpiredDuringWrite")<{}> {}
 
 /** Why a forward commit did not run. */
 export type ForwardRefusal =
@@ -157,10 +159,17 @@ export const make = Effect.gen(function* () {
               const value = yield* write(current).pipe(
                 Effect.mapError((error) => new WriteFailed({ error })),
               );
+              // Settings cannot change while the lock is held, but the clock can pass the expiry.
+              if (!disposableSwitch(current.hub, yield* Clock.currentTimeMillis).open)
+                return yield* new ExpiredDuringWrite();
               return { committed: true, value } as const;
             }),
           )
           .pipe(
+            Effect.catchTags({
+              ExpiredDuringWrite: () =>
+                Effect.succeed<Forward<A>>({ committed: false, reason: "switch_expired" }),
+            }),
             Effect.timeoutOrElse({
               duration: COMMIT_BOUND,
               orElse: () => Effect.fail(unreadable()),

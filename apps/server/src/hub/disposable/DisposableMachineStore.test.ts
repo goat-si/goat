@@ -350,3 +350,33 @@ it.effect("a record cannot enter a final state without final_at", () =>
     }),
   ),
 );
+
+it.effect("a write admitted before the switch expires but finishing after it is rolled back", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const settings = yield* Settings.ServerSettingsService;
+      const store = yield* Store.DisposableMachineStore;
+      yield* settings.updateSettings(switchOn);
+      yield* settings.updateSettings({
+        hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
+      });
+      yield* insert("a1", yield* currentGrant);
+      const inside = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const commit = yield* store
+        .commitForward({ attachId: "a1", fence: 0 }, () =>
+          advance("a1", "admitted").pipe(
+            Effect.andThen(Deferred.succeed(inside, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(inside);
+      yield* TestClock.adjust(11_000);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(commit)).toEqual({ committed: false, reason: "switch_expired" });
+      expect(yield* stateOf("a1")).toBe("invited");
+    }),
+  ),
+);
