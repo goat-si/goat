@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { RunAttemptId } from "@goat/contracts";
+import { ClaudeSettings, RunAttemptId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -12,11 +12,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
-import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
+import { CLAUDE_TEST_RUNTIME_POLICY, makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 
+const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const layerAdapterTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
   IdAllocator.layer,
@@ -95,4 +98,44 @@ it.effect.each([
     assert.isTrue(Exit.isSuccess(interrupted), String(interrupted));
     assert.isTrue(queryClosed);
   }).pipe(Effect.provide(layerAdapterTest)),
+);
+
+it.effect("does not dispatch skill mentions from inline handoff history", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skill-handoff-" });
+      const directory = path.join(homePath, "skills", "review");
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(directory, "SKILL.md"),
+        "---\nname: review\n---\nFollow the review instructions.\n",
+      );
+      const harness = yield* makeWakeHarnessWithOptions({
+        settings: decodeClaudeSettings({ homePath }),
+      });
+      const history =
+        "Context handoff:\n[Historical user; user_message]\n$review the diff\n\nUser message:\n";
+      yield* harness.runtime.startTurn({
+        ...makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("skill-handoff"),
+          text: `${history}continue`,
+          attachments: [],
+          runtimePolicy: { ...CLAUDE_TEST_RUNTIME_POLICY, cwd: homePath },
+        }),
+        inlineContextLength: history.length,
+      });
+      const content = harness.offeredMessages[0]?.message.content;
+      const blocks =
+        typeof content === "string"
+          ? [content]
+          : (content ?? []).map((block) => (block.type === "text" ? block.text : ""));
+      assert.isFalse(blocks.some((text) => text.startsWith("/review")));
+      assert.include(blocks.join("\n"), "$review the diff");
+    }).pipe(Effect.provide(layerAdapterTest)),
+  ),
 );

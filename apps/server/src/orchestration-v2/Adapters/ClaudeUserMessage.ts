@@ -9,12 +9,15 @@ export function makeClaudeUserMessage(input: {
   readonly text: string;
   readonly priority?: SDKUserMessage["priority"];
   readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
+  readonly skillMentionsFrom?: number;
   readonly uuid?: SDKUserMessage["uuid"];
 }): SDKUserMessage {
   // Claude expands a skill only when `/name` starts the last text block.
   // Keep the whole request before that block; see ClaudeSkillDispatch.
   const dispatch =
-    input.skills === undefined ? undefined : planClaudeSkillDispatch(input.text, input.skills);
+    input.skills === undefined
+      ? undefined
+      : planClaudeSkillDispatch(input.text, input.skills, input.skillMentionsFrom);
   // Claude runs `/goal` only when it opens the prompt, so a goal stays one block.
   const isGoalCommand = parseGoalCommand({ text: input.text }) !== null;
   return {
@@ -36,4 +39,16 @@ export function makeClaudeUserMessage(input: {
     ...(input.priority === undefined ? {} : { priority: input.priority }),
     ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
   };
+}
+
+export function handoffSkillOffset(
+  promptText: string,
+  userText: string,
+  inlineContextLength: number | undefined,
+) {
+  return inlineContextLength === undefined
+    ? {}
+    : {
+        skillMentionsFrom: promptText.length - userText.slice(inlineContextLength).trimEnd().length,
+      };
 }

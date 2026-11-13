@@ -1,5 +1,5 @@
-import { claudeQueryFlagEnvironment } from "./ClaudeQueryFlags.ts";
-import { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
+import { handoffSkillOffset, makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
 export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
 import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
 import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
@@ -1433,20 +1433,6 @@ export function claudeToolSearchOverride(value: string | undefined): "true" | un
 
 // Claude Code 2.1.310's integer parsing for auto:N. Scientific notation counts only when it is an
 // integer, grouped digits (1_000, 1,000, or 1 000) are joined, and anything else uses parseInt.
-const CLAUDE_SCIENTIFIC_INTEGER = /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/;
-const CLAUDE_GROUPED_INTEGER = /^[+-]?\d{1,3}([_,\u00A0\u202F ])\d{3}(?:\1\d{3})*$/;
-function parseClaudeInteger(text: string): number {
-  const value = text.trim();
-  if (value.length <= 32 && CLAUDE_SCIENTIFIC_INTEGER.test(value)) {
-    const number = Number(value);
-    return Number.isInteger(number) ? number : Number.NaN;
-  }
-  if (value.length <= 32 && CLAUDE_GROUPED_INTEGER.test(value)) {
-    return Number.parseInt(value.replace(/[_,\u00A0\u202F ]/g, ""), 10);
-  }
-  return Number.parseInt(value, 10);
-}
-
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -2206,11 +2192,15 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly fileSystem: FileSystem.FileSystem;
   readonly pdfReservation: Effect.Success<ReturnType<typeof reserveClaudePdfBudget>>;
   readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
+  readonly skillMentionsFrom?: number;
 }) {
   if (input.attachments.length === 0) {
     const message = makeClaudeUserMessage({
       text: input.text,
       ...(input.skills === undefined ? {} : { skills: input.skills }),
+      ...(input.skillMentionsFrom === undefined
+        ? {}
+        : { skillMentionsFrom: input.skillMentionsFrom }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
     });
@@ -2234,7 +2224,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   const dispatch =
     input.skills === undefined
       ? undefined
-      : planClaudeSkillDispatch(textWithAttachmentPaths, input.skills);
+      : planClaudeSkillDispatch(textWithAttachmentPaths, input.skills, input.skillMentionsFrom);
   const content: Array<ClaudeUserContentBlock> = [];
   // Base64 adds a third to the payload. Leave room below Anthropic's 32 MB
   // request limit for text, instructions, and SDK framing. The SDK does not
@@ -10578,14 +10568,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfBudgets.get(nativeThreadId)!,
               persistAttachmentBudget(nativeThreadId),
             );
+            const promptText = applyClaudePromptEffortPrefix(
+              turnInput.message.text,
+              compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
+            );
             const userMessage =
               promptUuid === null
                 ? null
                 : yield* makeClaudeUserMessageWithAttachments({
-                    text: applyClaudePromptEffortPrefix(
+                    text: promptText,
+                    ...handoffSkillOffset(
+                      promptText,
                       turnInput.message.text,
-                      compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
-                        .promptEffort,
+                      turnInput.inlineContextLength,
                     ),
                     attachments: turnInput.message.attachments,
                     attachmentsDir,

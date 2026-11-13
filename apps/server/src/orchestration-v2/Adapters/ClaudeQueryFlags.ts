@@ -19,3 +19,17 @@ export function claudeQueryFlagEnvironment(input: {
       : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
   };
 }
+
+const CLAUDE_SCIENTIFIC_INTEGER = /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/;
+const CLAUDE_GROUPED_INTEGER = /^[+-]?\d{1,3}([_,\u00A0\u202F ])\d{3}(?:\1\d{3})*$/;
+export function parseClaudeInteger(text: string): number {
+  const value = text.trim();
+  if (value.length <= 32 && CLAUDE_SCIENTIFIC_INTEGER.test(value)) {
+    const number = Number(value);
+    return Number.isInteger(number) ? number : Number.NaN;
+  }
+  if (value.length <= 32 && CLAUDE_GROUPED_INTEGER.test(value)) {
+    return Number.parseInt(value.replace(/[_,\u00A0\u202F ]/g, ""), 10);
+  }
+  return Number.parseInt(value, 10);
+}
