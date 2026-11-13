@@ -2,6 +2,7 @@
  * Two readings of OpenCodex's link counters subtract only under the same epoch and generation;
  * a delta spreads evenly over the time between them. Relay or direct bytes need the same route,
  * classified, at both readings. At most MAX_LINKS series of SLOTS five-minute slots are held.
+ * Only pairs at most MAX_PAIR_MS apart count as measured time; a longer gap is averaged.
  */
 export const SLOT_MS = 5 * 60_000;
 const HOUR_MS = 3_600_000;
@@ -9,7 +10,9 @@ const DAY_MS = 24 * HOUR_MS;
 // One slot more than a day, so the oldest partial slot of a 24-hour window is still held.
 const SLOTS = DAY_MS / SLOT_MS + 1;
 const MAX_LINKS = 256;
-const FIELDS = 7;
+// Readings come only while something reads host status: a longer gap spreads its bytes evenly.
+const MAX_PAIR_MS = SLOT_MS;
+const FIELDS = 9;
 const [
   TO_HOME,
   FROM_HOME,
@@ -18,13 +21,17 @@ const [
   DIRECT_TO_HOME,
   DIRECT_FROM_HOME,
   MEASURED,
-] = [0, 1, 2, 3, 4, 5, 6] as const;
+  AVERAGED,
+  UNCOUNTED,
+] = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 export interface LinkTrafficCounters {
   readonly epoch: string;
   readonly generation: number;
   readonly toHomeBytes: number;
   readonly fromHomeBytes: number;
+  /** Requests whose body OpenCodex could not count (no Content-Length); absent when not reported. */
+  readonly toHomeUncounted?: number | undefined;
 }
 
 export interface LinkTrafficReading {
@@ -41,7 +48,12 @@ export interface LinkTrafficWindow {
   readonly relayFromHomeBytes: number;
   readonly directToHomeBytes: number;
   readonly directFromHomeBytes: number;
+  /** Time covered by readings at most one slot apart. */
   readonly measuredMs: number;
+  /** Time covered by longer gaps, whose bytes are averaged over the gap. */
+  readonly averagedMs: number;
+  /** Requests in the window whose body bytes are missing from toHomeBytes. */
+  readonly uncountedRequests: number;
 }
 
 export interface LinkTrafficView {
@@ -115,6 +127,8 @@ function sum(series: Series, at: number, windowMs: number): LinkTrafficWindow {
     directToHomeBytes: whole(DIRECT_TO_HOME),
     directFromHomeBytes: whole(DIRECT_FROM_HOME),
     measuredMs: Math.min(windowMs, whole(MEASURED)),
+    averagedMs: Math.min(windowMs, whole(AVERAGED)),
+    uncountedRequests: Math.max(0, Math.ceil((totals[UNCOUNTED] ?? 0) - 1e-9)),
   };
 }
 
@@ -153,6 +167,11 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
         const same = last.routeKey !== undefined && last.routeKey === next.routeKey;
         const relay = same && next.routeKey?.startsWith("relay:") === true;
         const direct = same && next.routeKey?.startsWith("direct:") === true;
+        const gap = at - last.at;
+        const uncounted =
+          last.toHomeUncounted === undefined || next.toHomeUncounted === undefined
+            ? 0
+            : Math.max(0, next.toHomeUncounted - last.toHomeUncounted);
         spread(series, last.at, at, [
           toHome,
           fromHome,
@@ -160,7 +179,9 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
           relay ? fromHome : 0,
           direct ? toHome : 0,
           direct ? fromHome : 0,
-          at - last.at,
+          gap <= MAX_PAIR_MS ? gap : 0,
+          gap <= MAX_PAIR_MS ? 0 : gap,
+          uncounted,
         ]);
       }
       series.last = next;
@@ -186,7 +207,7 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
       const series = book.get(linkId);
       if (series === undefined) return undefined;
       const day = sum(series, at, DAY_MS);
-      if (day.measuredMs === 0) return undefined;
+      if (day.measuredMs + day.averagedMs === 0) return undefined;
       return { hour: sum(series, at, HOUR_MS), day };
     },
     /** Relay bytes both ways in the last 24 hours over every link held, including removed ones. */

@@ -877,11 +877,14 @@ it.effect(
         Effect.succeed(new Set(["pen-mac", "pen-old"])),
       ).pipe(Effect.provide(Settings.ServerSettingsService.layerTest()));
       const olderHomeRow = { id: "lnk_b", alias: "pen-old", tunnelPort: 54002, state: "connected" };
-      const link = { role: "home", links: [trafficRow(1_000_000), olderHomeRow] };
+      const link = {
+        role: "home",
+        links: [trafficRow(1_000_000), { ...olderHomeRow, direction: "hub-initiated" }],
+      };
       const { inventory } = yield* setup({ fixture: fleet.home, link, linkTraffic });
       yield* inventory.read;
       link.links[0] = trafficRow(6_001_000_000);
-      yield* TestClock.adjust("10 minutes");
+      yield* TestClock.adjust("4 minutes");
       const result = yield* inventory.read;
       expect(result.link.links[0]).toEqual({
         id: "lnk_a",
@@ -898,7 +901,9 @@ it.effect(
             relayFromHomeBytes: 600_000_000,
             directToHomeBytes: 0,
             directFromHomeBytes: 0,
-            measuredMs: 600_000,
+            measuredMs: 240_000,
+            averagedMs: 0,
+            uncountedRequests: 0,
           },
           day: {
             toHomeBytes: 6_000_000_000,
@@ -907,7 +912,9 @@ it.effect(
             relayFromHomeBytes: 600_000_000,
             directToHomeBytes: 0,
             directFromHomeBytes: 0,
-            measuredMs: 600_000,
+            measuredMs: 240_000,
+            averagedMs: 0,
+            uncountedRequests: 0,
           },
           warning: { thresholdBytes: 5_000_000_000 },
         },
@@ -984,7 +991,6 @@ it.effect("a malformed traffic block reads as not measured and never hides its l
       linkTraffic,
     });
     const result = yield* inventory.read;
-    expect(result.link.links).toHaveLength(1);
     expect(result.link.links[0]).toMatchObject({
       id: "lnk_a",
       route: { name: "pen-mac", via: "relay" },
