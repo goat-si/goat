@@ -13,27 +13,112 @@ export const DISPOSABLE_NAME_RULE_DEFAULT = "^[a-z][a-z0-9-]{0,30}$";
 export const DISPOSABLE_CAP_DEFAULT = 10;
 export const DISPOSABLE_SWITCH_DAYS = 30;
 
-const compiles = (rule: string) => {
-  try {
-    return new RegExp(rule, "u") instanceof RegExp;
-  } catch {
-    return "Expected a regular expression.";
+/** A machine name longer than Pen's longest node name never matches. */
+export const DISPOSABLE_NAME_MAX = 63;
+const NAME_CHAR = /^[a-z0-9_.-]$/u;
+
+type Piece = {
+  readonly accepts: (char: string) => boolean;
+  readonly kind: "one" | "maybe" | "many";
+};
+
+/**
+ * The name rule is a person's pattern matched against names a provisioner chooses, so it is kept
+ * to a subset with no groups or alternation (letters, digits, - _ . and \. literals, `.`, [..]
+ * classes, quantifiers ? * + {n} {n,} {n,m} up to 64) and matched in linear time below; a full
+ * regular expression could backtrack for minutes on a chosen name. ^ and $ are implied.
+ */
+const parseNameRule = (rule: string): ReadonlyArray<Piece> | undefined => {
+  const body = rule.replace(/^\^/u, "").replace(/(?<!\\)\$$/u, "");
+  const pieces: Array<Piece> = [];
+  let at = 0;
+  while (at < body.length) {
+    let accepts: (char: string) => boolean;
+    const char = body[at] ?? "";
+    if (char === "[") {
+      const close = body.indexOf("]", at + 2);
+      if (close < 0) return undefined;
+      const inside = body.slice(at + 1, close);
+      const ranges: Array<readonly [string, string]> = [];
+      for (let index = 0; index < inside.length; index += 1) {
+        const from = inside[index] ?? "";
+        if (!NAME_CHAR.test(from)) return undefined;
+        const to = inside[index + 2];
+        if (inside[index + 1] === "-" && to !== undefined && NAME_CHAR.test(to)) {
+          if (to < from) return undefined;
+          ranges.push([from, to]);
+          index += 2;
+        } else ranges.push([from, from]);
+      }
+      accepts = (c) => ranges.some(([from, to]) => c >= from && c <= to);
+      at = close + 1;
+    } else if (char === "\\") {
+      const literal = body[at + 1] ?? "";
+      if (!/^[.\-_]$/u.test(literal)) return undefined;
+      accepts = (c) => c === literal;
+      at += 2;
+    } else if (char === ".") {
+      accepts = () => true;
+      at += 1;
+    } else if (NAME_CHAR.test(char)) {
+      accepts = (c) => c === char;
+      at += 1;
+    } else return undefined;
+    let min = 1;
+    let max: number = 1;
+    const quantifier = /^(?:[?*+]|\{(\d{1,2})(?:(,)(\d{1,2})?)?\})/u.exec(body.slice(at));
+    if (quantifier !== null) {
+      const [text, low, comma, high] = quantifier;
+      if (text === "?") [min, max] = [0, 1];
+      else if (text === "*") [min, max] = [0, Infinity];
+      else if (text === "+") [min, max] = [1, Infinity];
+      else {
+        min = Number(low);
+        max = comma === undefined ? min : high === undefined ? Infinity : Number(high);
+      }
+      if (min > 64 || (max !== Infinity && (max > 64 || max < min))) return undefined;
+      at += text.length;
+    }
+    for (let copy = 0; copy < min; copy += 1) pieces.push({ accepts, kind: "one" });
+    if (max === Infinity) pieces.push({ accepts, kind: "many" });
+    else for (let copy = min; copy < max; copy += 1) pieces.push({ accepts, kind: "maybe" });
+    if (pieces.length > 512) return undefined;
   }
+  return pieces;
 };
 
 /** The names disposable members may carry. It bounds names; it never grants a class. */
 export const DisposableNameRule = Schema.String.check(
   Schema.isMaxLength(200),
-  Schema.makeFilter(compiles),
+  Schema.makeFilter((rule: string) =>
+    parseNameRule(rule) === undefined
+      ? "Use letters, digits, - _ . and \\., [a-z] classes and counts such as {0,30}."
+      : true,
+  ),
 );
 
-/** Whether a machine name matches the rule as a whole. */
+/** Whether a machine name matches the rule as a whole, in time linear in name and rule. */
 export const matchesDisposableNameRule = (rule: string, name: string) => {
-  try {
-    return new RegExp(`^(?:${rule})$`, "u").test(name);
-  } catch {
-    return false;
+  const pieces = parseNameRule(rule);
+  if (pieces === undefined || name.length > DISPOSABLE_NAME_MAX) return false;
+  const close = (states: ReadonlySet<number>) => {
+    const out = new Set(states);
+    for (let index = 0; index < pieces.length; index += 1)
+      if (out.has(index) && pieces[index]?.kind !== "one") out.add(index + 1);
+    return out;
+  };
+  let states = close(new Set([0]));
+  for (const char of name) {
+    const next = new Set<number>();
+    for (const index of states) {
+      const piece = pieces[index];
+      if (piece === undefined || !piece.accepts(char)) continue;
+      next.add(piece.kind === "many" ? index : index + 1);
+    }
+    states = close(next);
+    if (states.size === 0) return false;
   }
+  return states.has(pieces.length);
 };
 
 const DisposableCap = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }));
@@ -106,19 +191,23 @@ export const DISPOSABLE_FINAL_STATES: ReadonlySet<DisposableMachineState> = new 
   "kept",
 ]);
 
-export const DisposableMachineProvisioner = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("thread"), threadId: ThreadId }),
-  /** A person in Settings; their session is kept on the hub, never sent to clients. */
-  Schema.Struct({ kind: Schema.Literal("person") }),
-]);
+/**
+ * Who vouched for the machine: kind "thread" with its threadId, or "person" (their session stays on
+ * the hub). Kinds are text so a newer kind never makes an older client drop the node.
+ */
+export const DisposableMachineProvisioner = Schema.Struct({
+  kind: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
+  threadId: Schema.optionalKey(ThreadId),
+});
 export type DisposableMachineProvisioner = typeof DisposableMachineProvisioner.Type;
 
 /**
- * A hub node's class when a disposable record matches it. Absent means kept. `conflict` blocks
- * every destructive step and automatic action until a person resolves it; `conflicts` says why.
+ * A hub node's class when a disposable record matches it. Absent means kept. `disposable` or
+ * `conflict` today, as text so a newer class never drops the node; a client shows a class it does
+ * not know as a conflict. `conflict` blocks every destructive step and automatic action.
  */
 export const HubNodeMachineClass = Schema.Struct({
-  class: Schema.Literals(["disposable", "conflict"]),
+  class: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
   attachId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   state: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
   stateSince: IsoDateTime,

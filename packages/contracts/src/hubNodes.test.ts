@@ -40,6 +40,30 @@ describe("HubNode", () => {
     expect(decodeNode({ ...base, routes: [] })._tag).toBe("Failure");
   });
 
+  // A newer server can send a class or provisioner kind this client does not know yet.
+  it("still decodes a node whose machine class or provisioner kind is newer than this client", () => {
+    const node = {
+      nodeId: "env-1",
+      environmentId: "env-1",
+      label: "cc-04",
+      kind: "ssh",
+      status: "unknown",
+      lastSeenAt: null,
+      addedBy: null,
+      routes: [route],
+      machineClass: {
+        class: "retiring",
+        attachId: "a1",
+        state: "draining",
+        stateSince: "2026-11-13T00:00:00.000Z",
+        provisioner: { kind: "cloud-run" },
+        penMember: true,
+        conflicts: [],
+      },
+    };
+    expect(decodeNode(node)._tag).toBe("Success");
+  });
+
   it("keeps linked-host metadata and has no token field", () => {
     const linked = {
       kind: "linked",
