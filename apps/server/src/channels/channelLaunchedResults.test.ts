@@ -214,6 +214,8 @@ const foldedSession = (input: {
   readonly digest: ReadonlyArray<string>;
   readonly stored?: (thread: string) => boolean;
   readonly digestStatus?: string;
+  /** When the digest's turn began; null for one that never left the queue. */
+  readonly digestStartedAt?: string | null;
 }) =>
   Effect.gen(function* () {
     yield* runMigrations();
@@ -258,6 +260,8 @@ const foldedSession = (input: {
         id: RunId.make("digest"),
         ordinal: input.launches.length + 1,
         status: input.digestStatus ?? "completed",
+        startedAt:
+          input.digestStartedAt === undefined ? "2026-11-07T00:01:00.000Z" : input.digestStartedAt,
         userMessageId: digest.id,
       },
     ];
@@ -366,7 +370,7 @@ it.effect("invariant: a folded wake with no stored launch record stays owed", ()
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-const twoTasksFolded = (digestStatus: string) =>
+const twoTasksFolded = (digestStatus: string, digestStartedAt?: string | null) =>
   foldedSession({
     launches: [
       { task: "task:one", run: "launch-one", threads: [childA] },
@@ -374,22 +378,35 @@ const twoTasksFolded = (digestStatus: string) =>
     ],
     digest: [childA, childB],
     digestStatus,
+    ...(digestStartedAt === undefined ? {} : { digestStartedAt }),
   });
 
-it.effect.each(["queued", "starting", "running"])(
+it.effect.each(["preparing", "queued", "starting", "running", "waiting"])(
   "regression: another task's stored digest that is %s credits nothing, so this task stays owed",
   (status) =>
     Effect.gen(function* () {
-      const { recovered } = yield* twoTasksFolded(status);
+      const { recovered } = yield* twoTasksFolded(
+        status,
+        status === "running" || status === "waiting" ? "2026-11-07T00:01:00.000Z" : null,
+      );
       expect(yield* recovered("task:two")).toEqual({ owed: true, own: ["launch-two"] });
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-it.effect.each(["completed", "cancelled"])(
-  "contract: once another task's stored digest has ended (%s), this task's end settles, and that turn stays the other task's",
+it.effect(
+  "regression: another task's stored digest cancelled while still queued credits nothing, so this task stays owed as on dev",
+  () =>
+    Effect.gen(function* () {
+      const { recovered } = yield* twoTasksFolded("cancelled", null);
+      expect(yield* recovered("task:two")).toEqual({ owed: true, own: ["launch-two"] });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each(["completed", "cancelled", "failed"])(
+  "contract: once another task's stored digest started and then ended (%s), this task's end settles, and that turn stays the other task's",
   (status) =>
     Effect.gen(function* () {
-      const { recovered } = yield* twoTasksFolded(status);
+      const { recovered } = yield* twoTasksFolded(status, "2026-11-07T00:01:00.000Z");
       // The digest is never one of task two's runs, so its answer is not task two's result.
       expect(yield* recovered("task:two")).toEqual({ owed: false, own: ["launch-two"] });
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
