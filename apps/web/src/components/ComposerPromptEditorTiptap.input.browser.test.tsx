@@ -822,3 +822,15 @@ describe("an Arabic line", () => {
     );
   });
 });
+
+it("formats selected text as inline code when typed backticks surround it", async () => {
+  await using screen = await mountEditor("hello tail");
+  const { editor } = screen;
+  await act(async () => {
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    typeText(editor, 1, 6, "`");
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("`hello` tail");
+  await act(async () => editor.commands.setTextSelection(editor.state.doc.content.size - 1));
+  expect(textWithMark(editor, "code")).toEqual(["hello"]);
+});
