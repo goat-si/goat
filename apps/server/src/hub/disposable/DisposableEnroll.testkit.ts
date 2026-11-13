@@ -49,7 +49,7 @@ export type AddScript =
   /** The Home stopped mid-operation: the entry stays open until the same id is repeated. */
   | "open"
   /** The Home refuses the key file before its journal opens, naming the hint. */
-  | { readonly identityRefused: string };
+  | { readonly identityRefused: string; readonly journalled?: true };
 
 /** Holds a call until released; `arrived` completes once `want` calls wait. */
 export interface Hold {
@@ -135,8 +135,24 @@ export const fakeEnrollHost = () => {
     }
     const script = control.adds.shift() ?? "commit";
     if (script === "not_journalled") return output(1);
-    if (typeof script === "object" && "identityRefused" in script)
+    if (typeof script === "object" && "identityRefused" in script) {
+      if (script.journalled === true) {
+        const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
+        journal.set(operationId, { operationId, alias, state: "committed", linkId });
+        links.set(linkId, {
+          id: linkId,
+          alias,
+          childKind: "ephemeral",
+          exclusive: true,
+          explicitRoute: {
+            proxyCommand: args[args.indexOf("--proxy-command") + 1],
+            user: args[args.indexOf("--ssh-user") + 1],
+            port: Number(args[args.indexOf("--ssh-port") + 1]),
+          },
+        });
+      }
       return { code: 1, stdout: "", phase: script.identityRefused };
+    }
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);

@@ -12,7 +12,7 @@ import { makeAuthority } from "./attachAuthority.ts";
 import { conflictCount } from "./attachModel.ts";
 import { type Columns, IN_PEN, type Row, samePolicy } from "./attachRow.ts";
 import * as Store from "./DisposableMachineStore.ts";
-import { EnrollHost } from "./EnrollHost.ts";
+import { EnrollHost, identityHintOf } from "./EnrollHost.ts";
 import {
   decodeEnroll,
   decodeRoute,
@@ -42,15 +42,6 @@ import { disposableKnownHosts } from "./routeContract.ts";
 // ocx link add gives up at 360 s; the margin lets it report before GOAT stops waiting.
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
-const IDENTITY_HINTS: ReadonlySet<string> = new Set([
-  "identity_file_missing",
-  "identity_file_not_regular",
-  "identity_file_permissions",
-  "identity_file_directory",
-  "identity_file_ancestor",
-  "identity_file_unreadable",
-  "identity_file_unsupported_platform",
-]);
 type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
 // Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
 const ENROLL_LIMIT = 100;
@@ -434,11 +425,13 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       }),
       LINK_ADD_TIMEOUT_MS,
     );
-    // OpenCodex refuses a key file it cannot use before its journal opens and names why.
-    const refused = added?.phase;
-    if (refused !== undefined && IDENTITY_HINTS.has(refused))
+    // OpenCodex refuses a key file it cannot use before its journal opens and names why; the
+    // journal is read first, so an operation an earlier send recorded is never stopped over.
+    const outcome = yield* readBack(row, operationId);
+    const refused = added === undefined ? undefined : identityHintOf(added);
+    if (outcome.kind === "not_found" && refused !== undefined)
       return yield* stop(row, enroll, refused);
-    yield* record(row, enroll, yield* readBack(row, operationId), true);
+    yield* record(row, enroll, outcome, true);
   });
 
   /**

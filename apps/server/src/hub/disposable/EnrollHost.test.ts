@@ -8,7 +8,7 @@ import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../../processRunner.ts";
 import { phaseOf } from "../HubOcx.ts";
-import { journalServed, reachAnswerOf, writeKnownHostsOnce } from "./EnrollHost.ts";
+import { identityHintOf, journalServed, reachAnswerOf, writeKnownHostsOnce } from "./EnrollHost.ts";
 
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
@@ -85,4 +85,27 @@ it("ocx's refusal of a key file is read by its hint, as the CLI prints it", () =
       "Error: The identity file does not exist. (code invalid_identity_file, hint identity_file_missing)",
     ),
   ).toBe("identity_file_missing");
+});
+
+it.live.skipIf(WINDOWS)("a known_hosts file GOAT cannot read is never replaced", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(yield* fs.makeTempDirectoryScoped(), "known_hosts");
+    const line = "pen-x ssh-ed25519 AAAA\n";
+    const file = yield* writeKnownHostsOnce(dir, "a1", "pen-x ssh-ed25519 BBBB\n");
+    yield* fs.chmod(file, 0o000);
+    const refused = yield* writeKnownHostsOnce(dir, "a1", line).pipe(Effect.flip);
+    yield* fs.chmod(file, 0o600);
+    expect(refused.reason).toBe("unwritable");
+    expect(yield* fs.readFileString(file)).toBe("pen-x ssh-ed25519 BBBB\n");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it("only the CLI's own refusal line of a failed command reads as a key-file hint", () => {
+  expect(identityHintOf({ code: 1, phase: "identity_file_missing" })).toBe("identity_file_missing");
+  expect(identityHintOf({ code: 0, phase: "identity_file_missing" })).toBeUndefined();
+  expect(identityHintOf({ code: 1, phase: "remote_disconnect_failed" })).toBeUndefined();
+  // A bare word elsewhere in the output is not the CLI's line.
+  expect(phaseOf("Error: the Child said identity_file_missing in its own log")).toBeUndefined();
 });

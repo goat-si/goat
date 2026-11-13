@@ -61,6 +61,24 @@ export const journalServed = Effect.fn("EnrollHost.journalServed")(
   Effect.orElseSucceed(() => false),
 );
 
+const IDENTITY_HINTS: ReadonlySet<string> = new Set([
+  "identity_file_missing",
+  "identity_file_not_regular",
+  "identity_file_permissions",
+  "identity_file_directory",
+  "identity_file_ancestor",
+  "identity_file_unreadable",
+  "identity_file_unsupported_platform",
+]);
+/**
+ * OpenCodex's refusal of the key file, from a failed ocx only; phaseOf reads it from the CLI's own
+ * "(code invalid_identity_file, hint …)" line, never from a bare word.
+ */
+export const identityHintOf = (output: { readonly code: number; readonly phase?: string }) =>
+  output.code !== 0 && output.phase !== undefined && IDENTITY_HINTS.has(output.phase)
+    ? output.phase
+    : undefined;
+
 /** The machine's known_hosts holds another key (changed), or could not be written (unwritable). */
 export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
   readonly reason: "changed" | "unwritable";
