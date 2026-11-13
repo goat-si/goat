@@ -824,11 +824,7 @@ function useChatMarkdownState({
         panelPath={panelPath}
         line={fileLinkMeta.line}
         label={fileLinkLabel(
-          {
-            path: fileLinkMeta.filePath,
-            ...(fileLinkMeta.line !== undefined ? { line: fileLinkMeta.line } : {}),
-            ...(fileLinkMeta.column !== undefined ? { column: fileLinkMeta.column } : {}),
-          },
+          { ...fileLinkMeta, path: fileLinkMeta.filePath },
           fileLinkParentSuffixByPath,
         )}
         copyMarkdown={copyMarkdown}
