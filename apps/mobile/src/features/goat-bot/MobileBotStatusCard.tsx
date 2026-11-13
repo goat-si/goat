@@ -126,7 +126,8 @@ export function MobileBotStatusCard(props: {
     canConfigureSlack: false,
     now,
   });
-  if (props.quietWhenReady && diagnostics.lines.every((line) => line.tone === "ok")) return null;
+  if (props.quietWhenReady && !home.error && diagnostics.lines.every((line) => line.tone === "ok"))
+    return null;
   return (
     <View
       accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
