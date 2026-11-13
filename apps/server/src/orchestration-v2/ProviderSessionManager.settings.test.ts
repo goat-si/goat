@@ -12,11 +12,15 @@ import {
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Test fixture paths.
+import * as NodePath from "node:path";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import { HttpServer } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as NetAddress from "effect/net/NetAddress";
@@ -84,6 +88,10 @@ interface Fixture {
   duringModelStatus: Effect.Effect<void>;
   /** When set, processes answer with Codex's real model check over this listing of theirs. */
   listServed: Effect.Effect<ReadonlyArray<string>> | undefined;
+  /** When set, processes read this `model_catalog_json` file at startup, as Codex does. */
+  catalogFile:
+    | { readonly filename: string; readonly fileSystem: FileSystem.FileSystem }
+    | undefined;
   /** Runs before the manager stops a session's armed idle timer to re-arm it. */
   beforeIdleInterrupt: Effect.Effect<void>;
 }
@@ -105,6 +113,7 @@ const makeFixture = Effect.gen(function* () {
     listingUnavailable: false,
     duringModelStatus: Effect.void,
     listServed: undefined,
+    catalogFile: undefined,
     beforeIdleInterrupt: Effect.void,
   };
   fixture.liveWork.confirm = Effect.sync(() => fixture.liveWork.held);
@@ -136,13 +145,27 @@ const makeAdapter = (fixture: Fixture): ProviderAdapter.ProviderAdapterV2["Servi
       fixture.keptProcessKnows = undefined;
       const catalogModels = () =>
         fixture.catalog.map((slug) => ({ slug, name: slug, isCustom: false, capabilities: null }));
+      const { catalogFile } = fixture;
       const arrivals =
-        fixture.listServed === undefined
+        fixture.listServed === undefined && catalogFile === undefined
           ? undefined
           : makeCodexModelArrivals({
               atStart: catalogModels(),
               offered: Effect.sync(catalogModels),
-              listServed: Effect.suspend(() => fixture.listServed ?? Effect.succeed([])),
+              listServed: Effect.suspend(
+                () => fixture.listServed ?? Effect.succeed(fixture.catalog),
+              ),
+              startedAtMs: yield* Clock.currentTimeMillis,
+              ...(catalogFile && {
+                catalog: {
+                  cwd: "/",
+                  home: undefined,
+                  fileSystem: catalogFile.fileSystem,
+                  readConfig: Effect.succeed({
+                    config: { model_catalog_json: catalogFile.filename },
+                  }),
+                },
+              }),
             });
       return {
         instanceId,
@@ -590,6 +613,75 @@ it.effect(
         assert.strictEqual(yield* Queue.size(fixture.closed), 1);
       }).pipe(Effect.provide(layer(fixture)));
     }),
+);
+
+/** Codex's `model_catalog_json` with the session model's context window, written at `writtenAtMs`. */
+const writeCatalog = (filename: string, contextWindow: number, writtenAtMs: number) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const models = [{ slug: modelSelection.model, context_window: contextWindow }];
+    yield* fs.writeFileString(filename, JSON.stringify({ models }));
+    yield* fs.utimes(filename, writtenAtMs / 1000, writtenAtMs / 1000);
+  });
+
+/** A fixture whose processes read a catalog file written before the clock reaches 10 seconds. */
+const catalogFixture = Effect.gen(function* () {
+  const fixture = yield* makeFixture;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const filename = NodePath.join(yield* fileSystem.makeTempDirectoryScoped(), "catalog.json");
+  yield* writeCatalog(filename, 272_000, 1_000);
+  fixture.catalogFile = { filename, fileSystem };
+  yield* TestClock.adjust("10 seconds");
+  // The catalog sync rewrites the file at 20 seconds; later opens start after it.
+  const changeCatalog = writeCatalog(filename, 1_048_576, 20_000).pipe(
+    Effect.andThen(TestClock.adjust("15 seconds")),
+  );
+  return { fixture, changeCatalog };
+});
+
+it.effect(
+  "a turn after the catalog changed a model's details opens a fresh process when Codex is idle",
+  () =>
+    Effect.gen(function* () {
+      const { fixture, changeCatalog } = yield* catalogFixture;
+      yield* Effect.gen(function* () {
+        const { manager, open, runTurn, providerSessionId } = yield* sharedSession;
+        yield* finishTurn(fixture, runTurn, threadA);
+        yield* changeCatalog;
+        yield* open(threadB);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 1);
+        assert.isTrue(yield* manager.isLive(providerSessionId));
+        // The new process read the changed catalog, so the next turn keeps it.
+        yield* open(threadC);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+      }).pipe(Effect.provide(layer(fixture)));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "while work runs, a model whose catalog details changed still starts its turn and nothing stops",
+  () =>
+    Effect.gen(function* () {
+      const { fixture, changeCatalog } = yield* catalogFixture;
+      yield* Effect.gen(function* () {
+        const { open, runTurn } = yield* sharedSession;
+        const turn = yield* runTurn(threadA).pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(fixture.turnStarted);
+        yield* changeCatalog;
+
+        yield* open(threadB);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 1);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 0);
+
+        // Once the running turn ends, the next turn restarts the process with the new catalog.
+        yield* Deferred.succeed(fixture.endTurn, undefined);
+        yield* Fiber.join(turn);
+        yield* open(threadB);
+        assert.strictEqual(yield* Ref.get(fixture.opens), 2);
+        assert.strictEqual(yield* Queue.size(fixture.closed), 1);
+      }).pipe(Effect.provide(layer(fixture)));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("a model no fresh process would know never restarts or refuses", () =>

@@ -224,47 +224,62 @@ it("adapters with one thread per session still replace a released session", () =
     stored,
   );
 });
-it.effect("a new thread on a model the shared Codex process predates opens its own process", () =>
-  Effect.gen(function* () {
-    const addedModel = "combo/deepseek-flash-pool";
-    const { providerSessionIdFor } = yield* IdAllocator.IdAllocatorV2.pipe(
-      Effect.flatMap((idAllocator) =>
-        makeProviderSessionPlacement({
-          idAllocator,
-          settings: Effect.succeed({ codexAppServerIsolation: "shared" }),
-          // The shared process started before the model was added to Codex's catalog.
-          sessions: {
-            get: (id) =>
-              Effect.succeed(
-                id === sharedId
-                  ? Option.some({
-                      // Placement runs on the serial dispatch path, so it may only read memory.
-                      modelStatus: (model, options) =>
-                        options?.cachedOnly === true
-                          ? Effect.succeed(model === addedModel ? "predated" : "ready")
-                          : Effect.die("placement asked the process"),
-                    })
-                  : Option.none(),
-              ),
-          },
-        }),
-      ),
-      Effect.provide(IdAllocator.layer),
-    );
-    const placeOn = (threadId: ThreadId, model: string) =>
-      providerSessionIdFor({
-        adapter: adapterWith(CodexProviderCapabilitiesV2) as never,
-        providerInstanceId: instanceId,
-        threadId,
-        model,
-      });
-    assert.strictEqual(
-      yield* placeOn(threadA, addedModel),
-      IdAllocator.derive.providerSession({ providerInstanceId: instanceId, threadId: threadA }),
-    );
-    assert.strictEqual(yield* placeOn(threadB, "gpt-5.4"), sharedId);
-  }).pipe(
-    Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.provideService(HostProcess.Environment, {}),
-  ),
+it.effect(
+  "a new thread on a model the shared Codex process predates or holds outdated opens its own process",
+  () =>
+    Effect.gen(function* () {
+      const addedModel = "combo/deepseek-flash-pool";
+      const changedModel = "morph/morph-dsv41flash-1017";
+      const threadC = ThreadId.make("thread-c");
+      const { providerSessionIdFor } = yield* IdAllocator.IdAllocatorV2.pipe(
+        Effect.flatMap((idAllocator) =>
+          makeProviderSessionPlacement({
+            idAllocator,
+            settings: Effect.succeed({ codexAppServerIsolation: "shared" }),
+            // The shared process started before the model was added to Codex's catalog.
+            sessions: {
+              get: (id) =>
+                Effect.succeed(
+                  id === sharedId
+                    ? Option.some({
+                        // Placement runs on the serial dispatch path, so it may only read memory.
+                        modelStatus: (model, options) =>
+                          options?.cachedOnly === true
+                            ? Effect.succeed(
+                                model === addedModel
+                                  ? "predated"
+                                  : model === changedModel
+                                    ? "outdated"
+                                    : "ready",
+                              )
+                            : Effect.die("placement asked the process"),
+                      })
+                    : Option.none(),
+                ),
+            },
+          }),
+        ),
+        Effect.provide(IdAllocator.layer),
+      );
+      const placeOn = (threadId: ThreadId, model: string) =>
+        providerSessionIdFor({
+          adapter: adapterWith(CodexProviderCapabilitiesV2) as never,
+          providerInstanceId: instanceId,
+          threadId,
+          model,
+        });
+      assert.strictEqual(
+        yield* placeOn(threadA, addedModel),
+        IdAllocator.derive.providerSession({ providerInstanceId: instanceId, threadId: threadA }),
+      );
+      // Its catalog entry changed after the shared process started, so a new one reads the change.
+      assert.strictEqual(
+        yield* placeOn(threadC, changedModel),
+        IdAllocator.derive.providerSession({ providerInstanceId: instanceId, threadId: threadC }),
+      );
+      assert.strictEqual(yield* placeOn(threadB, "gpt-5.4"), sharedId);
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, {}),
+    ),
 );

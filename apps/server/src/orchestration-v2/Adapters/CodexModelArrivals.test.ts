@@ -1,8 +1,12 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ServerProviderModel } from "@goat/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Test fixture paths.
+import * as NodePath from "node:path";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
@@ -266,4 +270,75 @@ it.effect("an answer taken before GOAT's catalog changed is listed again before 
     assert.strictEqual(yield* modelStatus(added, { since }), "ready");
     assert.strictEqual(yield* Ref.get(lists), 2);
   }),
+);
+
+/** A Codex catalog file as `model_catalog_json` points at it, last written at `writtenAtMs`. */
+const writeCatalog = (
+  filename: string,
+  windows: Readonly<Record<string, number>>,
+  writtenAtMs: number,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const models = Object.entries(windows).map(([slug, contextWindow]) => ({
+      slug,
+      context_window: contextWindow,
+    }));
+    yield* fs.writeFileString(filename, JSON.stringify({ models }));
+    yield* fs.utimes(filename, writtenAtMs / 1000, writtenAtMs / 1000);
+  });
+
+/** A process started at `startedAtMs` that lists both models and reads its catalog from `filename`. */
+const catalogArrivals = (filename: string, startedAtMs: number) =>
+  Effect.gen(function* () {
+    const configReads = yield* Ref.make(0);
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known), model(added)],
+      offered: Effect.succeed([model(known), model(added)]),
+      listServed: Effect.succeed([known, added]),
+      startedAtMs,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Ref.update(configReads, (count) => count + 1).pipe(
+          Effect.as({ config: { model_catalog_json: filename } }),
+        ),
+      },
+    });
+    return { modelStatus, configReads: Ref.get(configReads) };
+  });
+
+it.effect(
+  "a model whose catalog entry changed after the process started is outdated; others stay ready",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000, [added]: 400_000 }, 1_000);
+      const { modelStatus, configReads } = yield* catalogArrivals(filename, 2_000);
+      assert.strictEqual(yield* modelStatus(known), "ready");
+
+      // The catalog sync raised one model's window while the process kept its startup copy.
+      yield* writeCatalog(filename, { [known]: 1_048_576, [added]: 400_000 }, 3_000);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+      assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+      assert.strictEqual(yield* modelStatus(added), "ready");
+      assert.strictEqual(yield* modelStatus("not/in-the-catalog"), "missing");
+      assert.strictEqual(yield* configReads, 1);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a catalog changed before GOAT first read it leaves every catalogued model outdated",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      // As for a kept process: the file changed after it started and before GOAT looked.
+      yield* writeCatalog(filename, { [known]: 1_048_576, [added]: 400_000 }, 3_000);
+      const { modelStatus } = yield* catalogArrivals(filename, 2_000);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+      assert.strictEqual(yield* modelStatus(added), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

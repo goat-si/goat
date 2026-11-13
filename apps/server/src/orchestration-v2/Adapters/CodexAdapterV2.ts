@@ -69,9 +69,9 @@ import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
 import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 import {
+  codexProcessStart,
   listCodexModelSlugs,
   makeCodexModelArrivals,
-  reconnectsKeptProcess,
 } from "./CodexModelArrivals.ts";
 import { refuseUnready } from "../ProviderSessionRetirement.ts";
 export {
@@ -1573,20 +1573,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(toOpenSessionError)
             : [];
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
-        const { offeredModels } = adapterOptions;
-        // A kept process read its catalog in an earlier GOAT run, so what GOAT offers now says nothing.
-        const atStart =
-          offeredModels === undefined
-            ? undefined
-            : (yield* reconnectsKeptProcess({
-                  detached,
-                  survivors,
-                  instanceId: adapterOptions.instanceId,
-                  providerSessionId: input.providerSessionId,
-                  threadId: input.threadId,
-                }))
-              ? []
-              : yield* offeredModels;
+        const processStart = yield* codexProcessStart({
+          ...input,
+          ...adapterOptions,
+          detached,
+          survivors,
+        });
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
@@ -7282,10 +7274,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const listServed = ensureInitialized.pipe(
           Effect.andThen(listCodexModelSlugs((params) => client.request("model/list", params))),
         );
+        const { cwd } = routeInput.execution;
         const modelStatus =
-          offeredModels === undefined || atStart === undefined
-            ? undefined
-            : makeCodexModelArrivals({ atStart, offered: offeredModels, listServed });
+          processStart &&
+          makeCodexModelArrivals({
+            ...processStart,
+            listServed,
+            catalog: {
+              cwd,
+              fileSystem,
+              home: adapterOptions.environment.HOME,
+              readConfig: ensureInitialized.pipe(
+                Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
+              ),
+            },
+          });
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
