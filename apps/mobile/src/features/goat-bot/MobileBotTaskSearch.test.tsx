@@ -3,7 +3,9 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
+const spoken = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("react-native", () => ({
+  AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   View: (props: Props) => <div>{props.children}</div>,
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (props: Props & { onPress?: () => void }) => (
@@ -55,6 +57,7 @@ const openTask = vi.fn();
 async function setup(botId = "main") {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   net.calls = [];
+  spoken.lines = [];
   openTask.mockClear();
   root?.unmount();
   root = createRoot(container);
@@ -368,6 +371,33 @@ it("at 50 hits says only the first 50 are shown when the server had more, and no
     await walkTo50({});
     expect(text()).not.toContain("More tasks may exist");
     expect(button("Load more")).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("speaks each status once when it changes, and nothing while a page is read", async () => {
+  vi.useFakeTimers();
+  try {
+    await setup();
+    await type("report");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    expect(spoken.lines).toEqual([]);
+    await net.calls[0]?.answer({ tasks: [], nextCursor: "c1", partial: true });
+    expect(spoken.lines).toEqual(["Some results could not be checked."]);
+    await act(async () => button("Load more")?.click());
+    await net.calls[1]?.answer({ tasks: [], endedEarly: true, partial: true });
+    expect(spoken.lines).toEqual([
+      "Some results could not be checked.",
+      "Some results could not be checked. Search ended early.",
+    ]);
+    await type("x".repeat(257));
+    expect(spoken.lines.at(-1)).toBe("Search text is too long for task titles.");
+    await type("plans");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await net.calls[2]?.fail("persistence_failed");
+    expect(spoken.lines.at(-1)).toBe("Couldn't search tasks.");
+    expect(spoken.lines).toHaveLength(4);
   } finally {
     vi.useRealTimers();
   }

@@ -12,6 +12,25 @@ import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
 import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
 import type { useMobileTaskScreen } from "./useMobileTaskScreen";
+import { useMobileStatusAnnouncement } from "./useMobileStatusAnnouncement";
+import type { MobileTaskLookup } from "./useMobileBotTaskLookup";
+
+/** What the screen reader is told when the by-id read settles on something other than the task. */
+function lookupLine(lookup: MobileTaskLookup) {
+  switch (lookup.state) {
+    case "denied":
+      return "Permission to read this task is unavailable.";
+    case "failed":
+      return "Couldn't load this task.";
+    case "missing":
+      return "This task cannot be found here.";
+    case "known":
+    case "unavailable":
+      return lookup.result.partial ? "Some task details could not be checked." : null;
+    default:
+      return null;
+  }
+}
 import { lookedUpTitle } from "./lookedUpTitle";
 
 /**
@@ -46,6 +65,7 @@ export function MobileTaskHeader(props: {
 }) {
   const { lookup, canUpdate, retried } = props.screen;
   const onUpdate = (input: ChannelUpdateTaskViewInput) => void props.screen.update(input);
+  useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null);
   const found =
     props.task === undefined && (lookup.state === "known" || lookup.state === "unavailable");
   const task = props.task ?? (lookup.state === "known" ? lookup.task : undefined);
@@ -86,7 +106,7 @@ export function MobileTaskHeader(props: {
         <Pressable
           accessibilityRole="button"
           onPress={props.onRetryRead}
-          className="min-h-[44px] justify-center"
+          className="min-h-[44px] min-w-[44px] justify-center"
         >
           <Text className="text-danger-foreground">Couldn't load task. Try again</Text>
         </Pressable>
@@ -94,14 +114,10 @@ export function MobileTaskHeader(props: {
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
       {lookup.state === "loading" ? (
-        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-          Loading task…
-        </Text>
+        <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
       {lookup.state === "missing" ? (
-        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-          This task cannot be found here.
-        </Text>
+        <Text className="text-foreground-muted">This task cannot be found here.</Text>
       ) : null}
       {(props.older && lookup.state === "off") ||
       lookup.state === "denied" ||
@@ -115,7 +131,7 @@ export function MobileTaskHeader(props: {
             accessibilityState={{ disabled: !props.enabled }}
             disabled={!props.enabled}
             onPress={props.onOpenHome}
-            className="min-h-[44px] justify-center"
+            className="min-h-[44px] min-w-[44px] justify-center"
           >
             <Text className={props.enabled ? "text-foreground underline" : "text-foreground-muted"}>
               Open Home
@@ -130,7 +146,7 @@ export function MobileTaskHeader(props: {
         <Pressable
           accessibilityRole="button"
           onPress={() => lookup.retry()}
-          className="min-h-[44px] justify-center"
+          className="min-h-[44px] min-w-[44px] justify-center"
         >
           <Text className="text-danger-foreground">Couldn't load this task. Try again</Text>
         </Pressable>

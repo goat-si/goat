@@ -14,6 +14,7 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("react-native", () => ({
   Platform: nativePlatform,
+  AccessibilityInfo: { announceForAccessibility: () => {} },
   Easing: { linear: (value: number) => value },
   StyleSheet: { absoluteFill: {}, hairlineWidth: 1 },
   useAnimatedValue: () => ({ setValue: () => {}, interpolate: () => 0 }),

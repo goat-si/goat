@@ -3,7 +3,31 @@ import { useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 
 import { lookedUpTitle } from "./lookedUpTitle";
-import { useMobileBotTaskSearch } from "./useMobileBotTaskSearch";
+import { useMobileBotTaskSearch, type MobileTaskSearchState } from "./useMobileBotTaskSearch";
+import { useMobileStatusAnnouncement } from "./useMobileStatusAnnouncement";
+
+const TOO_LONG = "Search text is too long for task titles.";
+const NONE = "No matching tasks.";
+const PARTIAL = "Some results could not be checked.";
+const CAPPED = "More tasks may exist. Narrow your search.";
+const ENDED = "Search ended early.";
+
+/** A search says nothing matched only when it is complete. */
+const complete = (value: MobileTaskSearchState) =>
+  !value.partial && !value.endedEarly && value.cursor === undefined;
+
+/** What the field's status says now, as one line; silent while a page is read. */
+function statusLine(tooLong: boolean, value: MobileTaskSearchState | null) {
+  if (tooLong) return TOO_LONG;
+  if (value === null || value.loading) return null;
+  if (value.failed) return "Couldn't search tasks.";
+  const lines = [
+    complete(value) && value.tasks.length === 0 ? NONE : null,
+    value.partial ? PARTIAL : null,
+    value.capped ? CAPPED : value.endedEarly ? ENDED : null,
+  ].filter((line) => line !== null);
+  return lines.length > 0 ? lines.join(" ") : null;
+}
 
 // Tasks of a routine share a title; when each started tells them apart.
 const startedAt = new Intl.DateTimeFormat(undefined, {
@@ -34,6 +58,7 @@ export function MobileBotTaskSearch(props: {
     text,
   });
   const value = search.value;
+  useMobileStatusAnnouncement(statusLine(search.tooLong, search.query === null ? null : value));
   return (
     <View className="gap-1 pb-2">
       <TextInput
@@ -47,9 +72,7 @@ export function MobileBotTaskSearch(props: {
         clearButtonMode="while-editing"
         className="min-h-[44px] rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground"
       />
-      {search.tooLong ? (
-        <Text className="text-foreground-muted">Search text is too long for task titles.</Text>
-      ) : null}
+      {search.tooLong ? <Text className="text-foreground-muted">{TOO_LONG}</Text> : null}
       {search.query === null || value === null ? null : (
         <>
           {value.tasks.map((task) => {
@@ -80,25 +103,23 @@ export function MobileBotTaskSearch(props: {
             <Pressable
               accessibilityRole="button"
               onPress={search.retry}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] min-w-[44px] justify-center"
             >
               <Text className="text-danger-foreground">Couldn't search tasks. Try again</Text>
             </Pressable>
-          ) : value.tasks.length === 0 && value.cursor === undefined && !value.endedEarly ? (
-            <Text className="text-foreground-muted">No matching tasks.</Text>
+          ) : value.tasks.length === 0 && complete(value) ? (
+            <Text className="text-foreground-muted">{NONE}</Text>
           ) : null}
-          {value.partial ? (
-            <Text className="text-foreground-muted">Some results could not be checked.</Text>
-          ) : null}
+          {value.partial ? <Text className="text-foreground-muted">{PARTIAL}</Text> : null}
           {value.capped ? (
-            <Text className="text-foreground-muted">More tasks may exist. Narrow your search.</Text>
+            <Text className="text-foreground-muted">{CAPPED}</Text>
           ) : value.endedEarly ? (
-            <Text className="text-foreground-muted">Search ended early.</Text>
+            <Text className="text-foreground-muted">{ENDED}</Text>
           ) : value.cursor !== undefined && !value.loading && !value.failed ? (
             <Pressable
               accessibilityRole="button"
               onPress={search.loadMore}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] min-w-[44px] justify-center"
             >
               <Text className="text-foreground">Load more</Text>
             </Pressable>

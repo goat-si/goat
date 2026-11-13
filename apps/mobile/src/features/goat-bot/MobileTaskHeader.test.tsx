@@ -5,7 +5,9 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
+const spoken = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("react-native", () => ({
+  AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   View: (props: Props) => <div>{props.children}</div>,
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (props: Props & { onPress?: () => void; disabled?: boolean }) => (
@@ -162,5 +164,47 @@ it("a task the server does not have shows no chat card, so nothing on the screen
   });
   expect(text()).toContain("This task cannot be found here.");
   expect(text()).not.toContain("chat card");
+  await act(async () => root.unmount());
+});
+
+it("tells the screen reader once when the lookup settles on a failure, a refusal or partial details", async () => {
+  spoken.lines = [];
+  const root = await render({ state: "loading" });
+  expect(spoken.lines).toEqual([]);
+  const next = async (lookup: MobileTaskLookup) =>
+    act(async () =>
+      root.render(
+        <MobileTaskHeader
+          task={undefined}
+          screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
+          title="Old report"
+          botName="GOAT Bot"
+          environmentId={"env" as never}
+          enabled
+          canRetry
+          older
+          loading={false}
+          failed={false}
+          childError={false}
+          onRetryRead={() => {}}
+          onOpenThread={() => {}}
+          onOpenHome={openHome}
+          card={null}
+        />,
+      ),
+    );
+  await next({ state: "failed", retry });
+  await next({ state: "failed", retry });
+  await next({ state: "denied" });
+  await next({
+    state: "known",
+    task: knownTask,
+    result: result({ state: "known", row } as never, { partial: true }),
+  });
+  expect(spoken.lines).toEqual([
+    "Couldn't load this task.",
+    "Permission to read this task is unavailable.",
+    "Some task details could not be checked.",
+  ]);
   await act(async () => root.unmount());
 });
