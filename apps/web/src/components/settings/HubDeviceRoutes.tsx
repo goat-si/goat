@@ -41,19 +41,27 @@ export function HubDeviceRoutes({
   // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
   const editable = canChange && routes?.exclusive !== true;
 
-  /** keepAnswer: a read-back after a change updates the list and leaves the change's notice. */
+  /**
+   * keepAnswer: a read-back after a change. It updates the list and leaves the change's notice;
+   * one that fails says so and drops the list, which no longer shows what the Home holds.
+   */
   const settle = (result: Awaited<ReturnType<typeof list>>, keepAnswer = false) => {
+    const failure =
+      result._tag === "Failure"
+        ? (() => {
+            const cause = squashAtomCommandFailure(result);
+            return cause instanceof Error ? cause.message : String(cause);
+          })()
+        : result.value.state === "ok"
+          ? null
+          : result.value.message;
+    if (keepAnswer && failure !== null) {
+      setReadError(failure);
+      setRoutes(null);
+      return;
+    }
     if (result._tag === "Failure") {
-      const failure = squashAtomCommandFailure(result);
-      if (keepAnswer) {
-        setReadError(failure instanceof Error ? failure.message : String(failure));
-        return;
-      }
-      setAnswer({
-        deviceAlias: alias,
-        state: "failed",
-        message: failure instanceof Error ? failure.message : String(failure),
-      });
+      setAnswer({ deviceAlias: alias, state: "failed", message: failure ?? "" });
       return;
     }
     if (!keepAnswer) setAnswer(result.value);

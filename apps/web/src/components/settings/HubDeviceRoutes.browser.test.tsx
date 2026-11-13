@@ -93,6 +93,28 @@ it("a read-back that fails after a stored change shows its error beside the stor
   await expect
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Could not read the routes again: connection lost");
+  await expect.element(screen.getByText("pen-mini")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent(
+      "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
+    );
+});
+
+it("a read-back the Home answers as failed shows its error, and no longer shows the old list as current", async () => {
+  await using opened = await addStored({
+    _tag: "Success",
+    value: {
+      deviceAlias: "mini",
+      state: "failed",
+      message: "ocx link routes exited 1 on this Home.",
+    } satisfies HubDeviceRoutesResult,
+  });
+  const { screen } = opened;
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("Could not read the routes again: ocx link routes exited 1 on this Home.");
+  await expect.element(screen.getByText("pen-mini")).not.toBeInTheDocument();
   await expect
     .element(screen.getByRole("status"))
     .toHaveTextContent(
