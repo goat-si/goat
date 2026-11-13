@@ -37,6 +37,11 @@ const state = vi.hoisted(() => ({
   lists: [] as Array<string | null>,
   rows: [] as ReadonlyArray<GoatBotRow>,
   realTimeline: false,
+  baseline: new Set<string>(),
+  sources: new Set<string>(),
+}));
+vi.mock("./useGoatBotSource", () => ({
+  useGoatBotSource: () => ({ baselineIds: state.baseline, sourceIds: state.sources }),
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
@@ -139,6 +144,7 @@ vi.mock("./useGoatBotSession", () => ({
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
+      source: { baselineIds: state.baseline, sourceIds: state.sources },
       rowsForTask: (id: string) => {
         state.session(id);
         return state.rows;
@@ -169,6 +175,68 @@ function Pane({ onClose }: { onClose: () => void }) {
     />
   );
 }
+
+it("does not cue a historical result revealed in a task pane, but cues a new result", async () => {
+  state.realTimeline = true;
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      state.realTimeline = false;
+      state.rows = [];
+    },
+  };
+  const rows: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `m-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-11-04T10:00:00.000Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const bot = (id: string): GoatBotRow => ({
+    kind: "bot",
+    id,
+    text: id,
+    tone: "reply",
+    proactive: false,
+    replyTo: null,
+    options: [],
+    createdAt: "2026-11-04T10:00:00.000Z",
+    firstInGroup: true,
+    groupPosition: "single",
+  });
+  state.rows = rows;
+  state.baseline = new Set([...rows.map((row) => row.id), "history"]);
+  state.sources = new Set(state.baseline);
+  await using screen = await render(
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <Pane onClose={() => {}} />
+    </div>,
+  );
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  state.rows = [...rows, bot("history")];
+  await screen.rerender(
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <Pane onClose={() => {}} />
+    </div>,
+  );
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  state.sources = new Set([...state.sources, "new"]);
+  state.rows = [...state.rows, bot("new")];
+  await screen.rerender(
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <Pane onClose={() => {}} />
+    </div>,
+  );
+  expect(screen.container.textContent).toContain("Jump to latest");
+});
 
 function TwoTaskPanes() {
   const [answered, setAnswered] = useState(false);

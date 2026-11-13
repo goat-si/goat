@@ -1,7 +1,7 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { userEvent } from "vite-plus/test/browser";
 import { expect, it, vi } from "vite-plus/test";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import "../../index.css";
 
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -61,6 +61,24 @@ const visit = "2026-01-02T00:00:00Z";
 const timeline = (shown: ReadonlyArray<GoatBotRow>) => (
   <GoatBotTimeline rows={shown} unreadSince={visit} onRetry={() => {}} />
 );
+it("restores the unread pill when filtered arrivals leave the cue", async () => {
+  using host = shortHost();
+  await using screen = await render(timeline(rows), { container: host, router: false }); // This transcript contains no links.
+  await expect.element(screen.getByRole("button", { name: "40 new messages" })).toBeVisible();
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop -= 200;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(timeline([...rows, bot(40), bot(41)]));
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest (2 new)" }))
+    .toBeVisible();
+  await screen.rerender(timeline([...rows, bot(41)]));
+  await expect.element(screen.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  await screen.rerender(timeline(rows));
+  await expect.element(screen.getByRole("button", { name: "40 new messages" })).toBeVisible();
+});
 /** A transcript shorter than its rows, so the New line can sit above what is shown. */
 function shortHost(): HTMLElement & Disposable {
   const host = document.createElement("div");

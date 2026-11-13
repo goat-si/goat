@@ -67,6 +67,7 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  readonly source?: ReturnType<typeof useGoatBotSource> | undefined;
   readonly projectionRef?: ScopedThreadRef | null | undefined;
   readonly visibleTurnItems?: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
   readonly unreadSince?: string | null | undefined;
@@ -123,7 +124,26 @@ export interface GoatBotChatViewProps {
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
-export function GoatBotChatView({
+export function GoatBotChatView(props: GoatBotChatViewProps) {
+  return props.source === undefined ? (
+    <GoatBotChatViewWithSource {...props} />
+  ) : (
+    <GoatBotChatViewContent {...props} source={props.source} />
+  );
+}
+
+function GoatBotChatViewWithSource(props: GoatBotChatViewProps) {
+  const member = useGoatBotMember();
+  const source = useGoatBotSource(
+    props.projectionRef,
+    member?.botId ?? "main",
+    props.visibleTurnItems ?? [],
+  );
+  return <GoatBotChatViewContent {...props} source={source} />;
+}
+
+function GoatBotChatViewContent({
+  source,
   projectionRef,
   visibleTurnItems = [],
   unreadSince,
@@ -150,7 +170,7 @@ export function GoatBotChatView({
   onRestore,
   onCheckAgain,
   openHome = null,
-}: GoatBotChatViewProps) {
+}: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
   const accentStyle = useGoatBotAccentStyle();
@@ -187,7 +207,6 @@ export function GoatBotChatView({
     setOpenedHomeEntry(openHome.entry);
     setPanelOpen(true);
   }
-  const source = useGoatBotSource(projectionRef, member?.botId ?? "main", visibleTurnItems);
   const sourceBotId = member?.botId ?? "main";
   const [lastSource, setLastSource] = useState<{
     identity: string;

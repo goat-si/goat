@@ -227,9 +227,11 @@ export function GoatBotTaskPane({
       >
         <GoatBotStepsReader rows={timelineRows}>
           <GoatBotTimeline
-            key={taskId}
+            key={`${session.source?.identity ?? ""}:${taskId}`}
             taskDetails
             rows={timelineRows}
+            baselineIds={session.source?.baselineIds}
+            sourceIds={session.source?.sourceIds}
             submissions={local.taskId === taskId ? local.submissions : []}
             committedSends={localSendRows(session.visibleTurnItems)}
             environmentId={environmentId}

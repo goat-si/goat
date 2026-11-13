@@ -120,7 +120,7 @@ function GoatBotThreadSession({
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(visibleTurnItems, null, member);
+  const session = useGoatBotSession(visibleTurnItems, null, member, threadRef);
   const manage = useBotManage(environmentId);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;

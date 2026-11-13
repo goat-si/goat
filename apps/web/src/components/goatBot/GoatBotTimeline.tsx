@@ -568,7 +568,13 @@ export function GoatBotTimeline({
       }
       case "task":
         return (
-          <li key={row.id} data-follow-row={row.id} className={cn("flex", gap)}>
+          <li
+            key={row.id}
+            data-follow-row={row.id}
+            tabIndex={-1}
+            aria-label={`${row.card.title}, ${row.card.statusLabel}`}
+            className={cn("flex", gap)}
+          >
             {taskDetails || !taskThreads ? (
               <GoatBotTaskChip
                 card={row.card}

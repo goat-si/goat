@@ -139,7 +139,8 @@ export function useGoatBotFollow({
     if (baselineIds !== undefined && sourceIds !== undefined) {
       for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.current.add(id);
     }
-    const next = [...cueRef.current];
+    const displayed = new Set(rows.map((row) => row.id));
+    const next = cueRef.current.filter((id) => displayed.has(id));
     for (const row of rows) {
       if (seen.current.has(row.id)) continue;
       if (row.kind !== "bot" && row.kind !== "task") {
@@ -173,9 +174,18 @@ export function useGoatBotFollow({
     }
     scroll.scrollTop = target;
     lastScrollTopRef.current = scroll.scrollTop;
-    const focusable = cueRef.current.map(rowElement).find((row) => row?.tabIndex === 0);
-    (focusable ?? scroll).focus({ preventScroll: true });
+    first.focus({ preventScroll: true });
     clear();
   };
-  return { cueIds, following, setFollowing, jump, reachedBottom, readerMoved, alignAnchor };
+  const displayedIds = new Set(rows.map((row) => row.id));
+  const visibleCueIds = cueIds.filter((id) => displayedIds.has(id));
+  return {
+    cueIds: visibleCueIds,
+    following,
+    setFollowing,
+    jump,
+    reachedBottom,
+    readerMoved,
+    alignAnchor,
+  };
 }
