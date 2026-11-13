@@ -36,9 +36,8 @@ export function useBotWorkHistory(
   const scope = useHistoryScope(environmentId, botId);
   // oxlint-disable-next-line goat/react-effect-budget -- Reconcile the live list into the shared history walk.
   useEffect(() => {
-    if (loaded && (scope === undefined || scope.environmentId === environmentId))
-      syncHistoryCurrent(environmentId, botId, revision, current.rows);
-  }, [environmentId, botId, revision, current.rows, loaded, scope]);
+    if (loaded) syncHistoryCurrent(environmentId, botId, revision, current.rows);
+  }, [environmentId, botId, revision, current.rows, loaded]);
   const historySupported =
     botThreadsHistoryInput(capabilities, botId) !== null && !scope?.unsupported;
   const merged = mergeBotThreadHistory(

@@ -18,9 +18,9 @@ interface HistoryWork {
 }
 interface Scope {
   readonly environmentId: EnvironmentId;
-  readonly entries: Map<ChannelTaskId, HistoryWork>;
-  readonly ids: ChannelTaskId[];
-  readonly seen: Set<ChannelTaskId>;
+  readonly entries: ReadonlyMap<ChannelTaskId, HistoryWork>;
+  readonly ids: readonly ChannelTaskId[];
+  readonly seen: ReadonlySet<ChannelTaskId>;
   cursor: string | undefined;
   started: boolean;
   partial: boolean;
@@ -31,7 +31,7 @@ interface Scope {
   failed: boolean;
   revision: number | undefined;
   walkVersion: number;
-  truncated: Set<ChannelTaskId>;
+  truncated: ReadonlySet<ChannelTaskId>;
 }
 interface ReadToken {
   readonly generation: number;
@@ -46,10 +46,7 @@ const listeners = new Set<() => void>();
 let sequence = 0;
 const key = (environmentId: EnvironmentId, botId: BotId | null) =>
   JSON.stringify([environmentId, botId]);
-const notify = () => {
-  for (const [id, scope] of scopes) scopes.set(id, { ...scope });
-  listeners.forEach((listener) => listener());
-};
+const notify = () => listeners.forEach((listener) => listener());
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
   return () => {
@@ -138,29 +135,35 @@ export function syncHistoryCurrent(
   rows: readonly BotThreadRow[],
 ) {
   const scope = scopeFor(environmentId, botId);
+  const scopeId = key(environmentId, botId);
   let dirty = false;
   if (scope.revision !== revision) {
-    scope.revision = revision;
-    scope.walkVersion += 1;
-    scope.loading = false;
-    scope.cursor = undefined;
-    scope.started = false;
-    scope.capped = false;
-    scope.partial = false;
-    scope.endedEarly = false;
-    scope.unsupported = false;
-    scope.seen.clear();
+    scopes.set(scopeId, {
+      ...scope,
+      revision,
+      walkVersion: scope.walkVersion + 1,
+      loading: false,
+      cursor: undefined,
+      started: false,
+      capped: false,
+      partial: false,
+      endedEarly: false,
+      unsupported: false,
+      seen: new Set(),
+    });
     dirty = true;
   }
   for (const row of rows) {
     if (row.kind !== "task") continue;
-    for (const candidate of scopes.values()) {
+    for (const [id, candidate] of scopes) {
       if (candidate.environmentId !== environmentId) continue;
       const old = candidate.entries.get(row.task.taskId);
       if (!old) continue;
       const task = readTask(row, later(old.task.view.readThrough, row.view.readThrough));
       if (JSON.stringify(old.task) === JSON.stringify(task)) continue;
-      candidate.entries.set(row.task.taskId, applyTaskView(old, row.view, row));
+      const entries = new Map(candidate.entries);
+      entries.set(row.task.taskId, applyTaskView(old, row.view, row));
+      scopes.set(id, { ...candidate, entries });
       dirty = true;
     }
   }
@@ -172,8 +175,7 @@ export function beginHistoryRead(
 ): ReadToken | null {
   const scope = scopeFor(environmentId, botId);
   if (scope.loading || scope.capped || scope.unsupported) return null;
-  scope.loading = true;
-  scope.failed = false;
+  scopes.set(key(environmentId, botId), { ...scope, loading: true, failed: false });
   notify();
   return {
     generation: generations.get(environmentId) ?? 0,
@@ -192,8 +194,15 @@ export function finishHistoryRead(
   const scope = historyScope(environmentId, botId);
   if (!scope || scope.walkVersion !== token.walkVersion) return;
   if (!supported) {
-    scope.unsupported = true;
-    scope.loading = false;
+    scopes.set(key(environmentId, botId), {
+      ...scope,
+      entries: new Map(),
+      ids: [],
+      seen: new Set(),
+      truncated: new Set(),
+      unsupported: true,
+      loading: false,
+    });
     notify();
     return;
   }
@@ -202,6 +211,9 @@ export function finishHistoryRead(
   const seen = new Set(scope.seen);
   const truncated = new Set(scope.truncated);
   let capped = scope.capped;
+  let partial = scope.partial;
+  let endedEarly = scope.endedEarly;
+  let cursor = scope.cursor;
   for (const page of pages) {
     for (const row of page.rows) {
       if (row.kind !== "task") continue;
@@ -231,12 +243,12 @@ export function finishHistoryRead(
       if (page.history?.launchesTruncated?.includes(id)) truncated.add(id);
       else truncated.delete(id);
     }
-    scope.partial ||= page.history?.partial === true;
-    scope.endedEarly ||= page.history?.endedEarly === true;
-    scope.cursor = page.history?.nextCursor;
+    partial ||= page.history?.partial === true;
+    endedEarly ||= page.history?.endedEarly === true;
+    cursor = page.history?.nextCursor;
   }
-  if (ids.length >= BOT_WORK_HISTORY_LIMIT && scope.cursor !== undefined) capped = true;
-  if (scope.cursor === undefined && !scope.partial && !scope.endedEarly && !capped) {
+  if (ids.length >= BOT_WORK_HISTORY_LIMIT && cursor !== undefined) capped = true;
+  if (cursor === undefined && !partial && !endedEarly && !capped) {
     for (let index = ids.length - 1; index >= 0; index -= 1) {
       const id = ids[index];
       if (id !== undefined && !seen.has(id)) {
@@ -246,15 +258,19 @@ export function finishHistoryRead(
       }
     }
   }
-  scope.entries.clear();
-  for (const [id, entry] of entries) scope.entries.set(id, entry);
-  scope.ids.splice(0, scope.ids.length, ...ids);
-  scope.seen.clear();
-  for (const id of seen) scope.seen.add(id);
-  scope.truncated = truncated;
-  scope.capped = capped;
-  scope.started = true;
-  scope.loading = false;
+  scopes.set(key(environmentId, botId), {
+    ...scope,
+    entries,
+    ids,
+    seen,
+    truncated,
+    capped,
+    cursor,
+    partial,
+    endedEarly,
+    started: true,
+    loading: false,
+  });
   notify();
 }
 export function failHistoryRead(
@@ -265,8 +281,7 @@ export function failHistoryRead(
   if ((generations.get(environmentId) ?? 0) !== token.generation) return;
   const scope = historyScope(environmentId, botId);
   if (scope && scope.walkVersion === token.walkVersion) {
-    scope.loading = false;
-    scope.failed = true;
+    scopes.set(key(environmentId, botId), { ...scope, loading: false, failed: true });
     notify();
   }
 }
@@ -292,11 +307,13 @@ export function updateHistoryView(
   view: ChannelTaskView,
 ) {
   let dirty = false;
-  for (const scope of scopes.values()) {
+  for (const [id, scope] of scopes) {
     if (scope.environmentId !== environmentId) continue;
     const entry = scope.entries.get(taskId);
     if (!entry) continue;
-    scope.entries.set(taskId, applyTaskView(entry, view));
+    const entries = new Map(scope.entries);
+    entries.set(taskId, applyTaskView(entry, view));
+    scopes.set(id, { ...scope, entries });
     dirty = true;
   }
   if (dirty) notify();

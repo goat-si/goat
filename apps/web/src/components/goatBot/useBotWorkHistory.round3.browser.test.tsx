@@ -170,3 +170,15 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
     .element(screen.getByRole("button", { name: "Read history" }))
     .not.toBeInTheDocument();
 });
+
+it("does not let an unchanged current list undo a newer view update", async () => {
+  setup();
+  mock.read.mockResolvedValueOnce(page([old], {}));
+  await using screen = await render(<History list={current([old])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await act(() =>
+    updateHistoryView(env, taskId, { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" }),
+  );
+  await screen.rerender(<History list={current([])} revision={1} />);
+  await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
+});

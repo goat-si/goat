@@ -55,3 +55,14 @@ it("keeps the first 500 tasks when a history page crosses the bound", () => {
   expect(historyTask(env, ChannelTaskId.make("item-499"))?.task.title).toBe("item-499");
   expect(historyTask(env, ChannelTaskId.make("item-500"))).toBeUndefined();
 });
+
+it("drops cached history when a later answer has no history marker", () => {
+  resetHistoryTasksForTests();
+  const task = row("downgrade");
+  if (task.kind !== "task") throw new Error("task fixture");
+  rememberHistoryRows(env, [task]);
+  const token = beginHistoryRead(env, null);
+  if (!token) throw new Error("Expected a history request");
+  finishHistoryRead(env, null, token, [], false);
+  expect(historyTask(env, task.task.taskId)).toBeUndefined();
+});
