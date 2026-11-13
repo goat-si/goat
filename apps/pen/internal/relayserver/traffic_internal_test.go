@@ -200,7 +200,11 @@ func (n *liveNode) counted(t *testing.T) {
 	if err := n.ws.Write(context.Background(), websocket.MessageText, []byte("ping")); err != nil {
 		t.Fatal(err)
 	}
-	<-n.pongs
+	select {
+	case <-n.pongs:
+	case <-time.After(failsafe):
+		t.Fatal("no pong reached the node")
+	}
 }
 
 // session dials a session to n and returns its client socket and sid.
