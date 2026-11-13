@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import {
   BearerConnectionTarget,
   HubProxyConnectionTarget,
+  PenConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -59,10 +60,21 @@ export class HubProxyConnectionProfile extends Schema.TaggedClass<HubProxyConnec
   },
 ) {}
 
+export class PenConnectionProfile extends Schema.TaggedClass<PenConnectionProfile>()(
+  "PenConnectionProfile",
+  {
+    ...ConnectionProfileBase,
+    meshId: Schema.String,
+    nodeId: Schema.String,
+    noisePub: Schema.String,
+  },
+) {}
+
 export const ConnectionProfile = Schema.Union([
   BearerConnectionProfile,
   SshConnectionProfile,
   HubProxyConnectionProfile,
+  PenConnectionProfile,
 ]);
 export type ConnectionProfile = typeof ConnectionProfile.Type;
 
@@ -135,8 +147,14 @@ export class HubProxyConnectionRegistration extends Schema.TaggedClass<HubProxyC
   { target: HubProxyConnectionTarget, profile: HubProxyConnectionProfile },
 ) {}
 
+export class PenConnectionRegistration extends Schema.TaggedClass<PenConnectionRegistration>()(
+  "PenConnectionRegistration",
+  { target: PenConnectionTarget, profile: PenConnectionProfile },
+) {}
+
 export const ConnectionRegistration = Schema.Union([
   HubProxyConnectionRegistration,
+  PenConnectionRegistration,
   RelayConnectionRegistration,
   BearerConnectionRegistration,
   SshConnectionRegistration,
@@ -169,6 +187,7 @@ export function connectionRegistrationCatalogEntry(
     case "BearerConnectionRegistration":
     case "SshConnectionRegistration":
     case "HubProxyConnectionRegistration":
+    case "PenConnectionRegistration":
       return {
         target: registration.target,
         profile: Option.some(registration.profile),

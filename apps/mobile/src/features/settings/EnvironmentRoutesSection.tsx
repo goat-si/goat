@@ -48,6 +48,7 @@ const ROUTE_ICONS: Record<ConnectionRouteKind, AppSymbolName> = {
   public: "globe",
   ssh: "terminal",
   "hub-proxy": "server.rack",
+  pen: "server.rack",
 };
 
 export function EnvironmentRoutesSection({
