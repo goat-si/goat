@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   ChannelInputId,
+  CommandId,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2Run,
   RunId,
@@ -10,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -36,7 +38,11 @@ const ghostRun = RunId.make("run:accepted-follow-up");
  * A worker task with a follow-up the thread accepted, recorded before the requester's access was
  * revoked. The thread shows the follow-up's message; whether its run shows depends on `runShows`.
  */
-const acceptedFollowUp = (harness: ReturnType<typeof makeHarness>, runShows: () => boolean) =>
+const acceptedFollowUp = (
+  harness: ReturnType<typeof makeHarness>,
+  runShows: () => boolean,
+  readFails: () => boolean = () => false,
+) =>
   Effect.gen(function* () {
     yield* setupBot;
     yield* linkSlackUser();
@@ -59,8 +65,18 @@ const acceptedFollowUp = (harness: ReturnType<typeof makeHarness>, runShows: () 
     yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
     const threads = yield* ThreadManagement.ThreadManagementService;
     const worker = task.worker!.threadId;
+    // Decided when the read runs, as a real read is.
     const getThreadRecords = ((threadId, fields, options) =>
-      threads.getThreadRecords(threadId, fields, options).pipe(
+      Effect.suspend(() =>
+        threadId === worker && readFails()
+          ? Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: CommandId.make("records-read"),
+                commandType: "thread.records.read",
+              }),
+            )
+          : threads.getThreadRecords(threadId, fields, options),
+      ).pipe(
         Effect.map((records) => {
           const read = records as unknown as {
             readonly messages?: ReadonlyArray<OrchestrationV2ConversationMessage>;
@@ -127,7 +143,7 @@ it.effect(
 );
 
 it.effect(
-  "regression: a follow-up on a thread that cannot be read stops waiting at the bound",
+  "contract: a follow-up on a thread that cannot be read is never refused blind; it stays pending past the bound",
   () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -137,11 +153,9 @@ it.effect(
       assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
       yield* TestClock.adjust(Duration.millis(ACCEPTED_RUN_WAIT_MS));
       yield* forward;
-      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
-      assert.deepStrictEqual(
-        (yield* onlyTask).openQuestions.map((question) => question.text),
-        [UNCONFIRMED],
-      );
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      assert.deepStrictEqual((yield* onlyTask).openQuestions, []);
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, fence);
     }).pipe(Effect.provide(harness.layer));
   },
 );
@@ -173,6 +187,45 @@ it.effect(
       assert.isUndefined(bound.pendingAnswerMessageId);
       assert.deepStrictEqual(bound.task.openQuestions, []);
       assert.lengthOf(harness.world.sends, 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "regression: a follow-up past the deadline is not refused when the locked re-read of its thread fails, and its run is bound later",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      let shows = false;
+      let fails = false;
+      const { task, ledger, forward } = yield* acceptedFollowUp(
+        harness,
+        () => shows,
+        () => fails,
+      );
+      // The run exists, but the re-read under the refusal's lock cannot read the thread.
+      const lockable = ledger as { underWorkerLock: typeof ledger.underWorkerLock };
+      const lock = lockable.underWorkerLock;
+      lockable.underWorkerLock = (owner, body) =>
+        Effect.suspend(() => {
+          shows = true;
+          fails = true;
+          return lock(owner, body);
+        });
+      yield* TestClock.adjust(Duration.millis(ACCEPTED_RUN_WAIT_MS));
+      yield* forward;
+      assert.isTrue(shows);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      assert.deepStrictEqual((yield* onlyTask).openQuestions, []);
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, fence);
+      lockable.underWorkerLock = lock;
+      fails = false;
+      yield* forward;
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      const bound = (yield* ledger.getTask(task.taskId))!;
+      assert.strictEqual(bound.task.worker?.runId, ghostRun);
+      assert.isUndefined(bound.pendingAnswerMessageId);
+      assert.deepStrictEqual(bound.task.openQuestions, []);
     }).pipe(Effect.provide(harness.layer));
   },
 );

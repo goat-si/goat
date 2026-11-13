@@ -102,22 +102,22 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
       // ends the wait rather than extending it.
       const age = DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(event.occurredAt);
       const waiting = age >= 0 && age < ACCEPTED_RUN_WAIT_MS;
-      const readAccepted = threads.getThreadRecords(worker.threadId, ["messages", "runs"]).pipe(
-        Effect.option,
-        Effect.map(
-          Option.map((records) => {
-            const message = records.messages.find((candidate) => own.includes(candidate.id));
-            const run = records.runs.find(
-              (candidate) =>
-                own.includes(candidate.userMessageId) ||
-                (message !== undefined && candidate.id === message.runId),
-            );
-            return { message, run };
-          }),
-        ),
+      const readRecords = Effect.suspend(() =>
+        threads.getThreadRecords(worker.threadId, ["messages", "runs"]),
+      ).pipe(
+        Effect.map((records) => {
+          const message = records.messages.find((candidate) => own.includes(candidate.id));
+          const run = records.runs.find(
+            (candidate) =>
+              own.includes(candidate.userMessageId) ||
+              (message !== undefined && candidate.id === message.runId),
+          );
+          return { message, run };
+        }),
       );
-      // Read again under the refusal's write lock: a run that appeared since keeps the follow-up,
-      // and the next pass binds it.
+      const readAccepted = readRecords.pipe(Effect.option);
+      // Read again under the refusal's write lock: only a read that shows the run still absent
+      // refuses. A run that appeared, or a read that failed, keeps the follow-up for the next pass.
       const giveUp = refuseForward(
         ledger,
         stored,
@@ -126,8 +126,9 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
         pending.sequence,
         own,
         () =>
-          readAccepted.pipe(
-            Effect.map((again) => Option.isNone(again) || again.value.run === undefined),
+          readRecords.pipe(
+            Effect.map((again) => again.run === undefined),
+            Effect.orElseSucceed(() => false),
           ),
       );
       const projection = yield* readAccepted;
