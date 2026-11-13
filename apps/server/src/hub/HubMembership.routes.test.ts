@@ -170,3 +170,27 @@ it.effect("a link the Child opened, and a position past the end, are refused in 
     );
   }),
 );
+it.effect(
+  "a change ocx did not answer in time may still finish on the Home: it says to read the routes again and spends the approval",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        profile: "hub-admin",
+        linked: ["mini"],
+        routes: () => ({ code: 124, stdout: "" }),
+      });
+      const asked = yield* hub.membership.updateRoutes(scope, add);
+      yield* hub.approve(asked.decisionId!);
+      const timedOut = yield* hub.membership.updateRoutes(scope, {
+        ...add,
+        decisionId: asked.decisionId!,
+      });
+      expect(timedOut.state).toBe("failed");
+      expect(timedOut.message).toBe(
+        "ocx link routes did not answer within 2 minutes. The Home may still finish the change, so read the routes again before you retry it.",
+      );
+      expect((yield* hub.consumed).map(({ approval_id }) => approval_id)).toEqual([
+        asked.decisionId,
+      ]);
+    }),
+);

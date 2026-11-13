@@ -130,7 +130,12 @@ const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
 
 /** What ocx link routes answered, as a result; refusals keep OpenCodex's fixed words only. */
-const routesAnswer = (alias: string, linkId: string, output: OcxOutput): HubDeviceRoutesResult => {
+const routesAnswer = (
+  alias: string,
+  linkId: string,
+  output: OcxOutput,
+  changing = false,
+): HubDeviceRoutesResult => {
   const base = { deviceAlias: alias, linkId };
   if (output.code === 0) {
     const document = Option.getOrUndefined(decodeRoutes(output.stdout.trim()));
@@ -177,6 +182,15 @@ const routesAnswer = (alias: string, linkId: string, output: OcxOutput): HubDevi
           : explained,
     };
   }
+  // ocx is only the Home's HTTP client: stopping it does not stop the Home's edit.
+  if (output.code === 124)
+    return {
+      ...base,
+      state: "failed",
+      message: changing
+        ? "ocx link routes did not answer within 2 minutes. The Home may still finish the change, so read the routes again before you retry it."
+        : "ocx link routes did not answer within 2 minutes on this Home.",
+    };
   return {
     ...base,
     state: "failed",
@@ -279,8 +293,12 @@ export const makeRoutes = (deps: RoutesDeps) => {
         alias,
         link.linkId,
         yield* deps.ocx.home(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS),
+        true,
       );
-      if (answer.state === "ok") yield* deps.used(caller, input.decisionId);
+      // Only a fixed refusal proves nothing changed; any other outcome spends the approval.
+      const refused =
+        answer.state === "unsupported" || (answer.state === "failed" && answer.code !== undefined);
+      if (!refused) yield* deps.used(caller, input.decisionId);
       yield* deps.audit(caller, alias, answer.code ?? answer.state, input.decisionId);
       return answer;
     }).pipe(Effect.catchTags({ HubOcxError: unreachable(alias) }));
