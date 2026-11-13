@@ -429,3 +429,61 @@ it("a continued change whose ocx could not be started keeps the waiting change, 
   ]);
   registry.dispose();
 });
+
+it("an answer to an earlier edit that arrives after another change started waiting leaves that waiting change", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini", "pen-mini"]));
+  type Answer = { _tag: "Success"; value: HubDeviceRoutesResult };
+  let answerRemoval: (answer: Answer) => void = () => {};
+  const removal = new Promise<Answer>((resolve) => {
+    answerRemoval = resolve;
+  });
+  state.update
+    .mockReset()
+    .mockReturnValueOnce(removal)
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "needs_human",
+        message: "Changing a Child's routes needs an owner's approval.",
+        linkId: "lnk_0123456789abcdef",
+        decisionId: "decision-1",
+      } satisfies HubDeviceRoutesResult,
+    });
+  const registry = AtomRegistry.make();
+  const routes = () => (
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="hub-initiated"
+      />
+    </RegistryContext>
+  );
+  {
+    await using first = await render(routes());
+    await userEvent.click(first.getByRole("button", { name: "Routes" }));
+    await userEvent.click(first.getByRole("button", { name: "Remove pen-mini" }));
+    await expect.element(first.getByRole("button", { name: "Working…" })).toBeVisible();
+  }
+  await using screen = await render(routes());
+  await userEvent.click(screen.getByRole("button", { name: "Routes" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
+  await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  await expect.element(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+  answerRemoval({
+    _tag: "Success",
+    value: {
+      deviceAlias: "mini",
+      state: "ok",
+      code: "routes_stored_reload_failed",
+      message:
+        "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
+      linkId: "lnk_0123456789abcdef",
+    },
+  });
+  // The stale instance reads the list back once its answer is handled.
+  await expect.poll(() => state.list.mock.calls.length).toBe(3);
+  await expect.element(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+  registry.dispose();
+});
