@@ -4,6 +4,7 @@ import {
   ChannelChildWork,
   ChannelGatewayError,
   ChannelTask,
+  ChannelConversationId,
   type BotRemoteWork,
   type BotThreadRow,
   CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
@@ -443,15 +444,29 @@ const make = Effect.gen(function* () {
     owner: ChannelConnectionOwner,
   ) {
     yield* ledger.ensureTaskBotsRepaired().pipe(Effect.mapError(failed));
-    const rows = yield* sql<{ readonly task_json: string }>`SELECT t.task_json FROM channel_tasks t
+    const rows = yield* sql<{
+      readonly task_id: string;
+      readonly conversation_id: string;
+      readonly task_json: string;
+    }>`SELECT t.task_id, t.conversation_id, t.task_json FROM channel_tasks t
       JOIN channel_conversations c ON c.conversation_id = t.conversation_id
       WHERE t.task_id = ${input.taskId} AND t.owner_id = ${owner.ownerId} AND t.bot_id = ${input.botId}
         AND c.owner_id = ${owner.ownerId} AND c.kind = 'goat'`.pipe(Effect.mapError(failed));
     const stored = rows[0];
     if (stored === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
-    const task = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
+    const decodedTask = yield* Effect.try(() => decodeTask(stored.task_json)).pipe(
       Effect.mapError(failed),
     );
+    if (
+      decodedTask.taskId !== stored.task_id ||
+      decodedTask.conversationId !== stored.conversation_id
+    )
+      return yield* new ChannelGatewayError({ reason: "not_found" });
+    const task = {
+      ...decodedTask,
+      taskId: input.taskId,
+      conversationId: ChannelConversationId.make(stored.conversation_id),
+    };
     const bot = yield* ledger.getBotById(owner.ownerId, input.botId).pipe(Effect.mapError(failed));
     if (bot === undefined) return yield* new ChannelGatewayError({ reason: "not_found" });
     const viewRows = yield* sql<{
