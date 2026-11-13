@@ -20,7 +20,6 @@ import {
   CheckIcon,
   ChevronRightIcon,
   EllipsisIcon,
-  ListIcon,
   MessageCircleQuestionIcon,
 } from "../solar";
 import { Button } from "../ui/button";
@@ -135,15 +134,13 @@ export function GoatBotHomeWork({
     <div className="flex flex-col">
       {notice}
       {offline ? (
-        <p className="px-3 py-3 text-muted-foreground">
+        <p className="px-3 py-3">
           {botName}'s tasks are unavailable while the computer is offline.
         </p>
       ) : !supported ? (
-        <p className="px-3 py-3 text-muted-foreground">
-          Tasks can't be listed from this server right now.
-        </p>
+        <p className="px-3 py-3">Tasks can't be listed from this server right now.</p>
       ) : denied ? (
-        <p className="px-3 py-3 text-muted-foreground">This device can't read {botName}'s work.</p>
+        <p className="px-3 py-3">This device can't read {botName}'s work.</p>
       ) : failed ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3">
           <p className="min-w-0 flex-1">Couldn't load {botName}'s tasks.</p>
@@ -215,20 +212,29 @@ function WorkRow({
   const status = presentTaskStatus(row.task.status, row.view.doneAt);
   async function menu(position: { readonly x: number; readonly y: number }) {
     const api = readLocalApi();
-    if (api == null || !canUpdate) return;
+    if (api == null) return;
     const release = holdNavigation();
     const action = await api.contextMenu
       .show(
         [
-          { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
-          { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
-          { id: "read", label: "Mark read", disabled: !row.unread },
+          { id: "work", label: expanded ? "Hide work" : "Show work" },
+          ...(canUpdate
+            ? [
+                { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
+                { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
+                { id: "read", label: "Mark read", disabled: !row.unread },
+              ]
+            : []),
         ],
         position,
       )
       .catch(() => null)
       .finally(release);
     if (action === null) return;
+    if (action === "work") {
+      setExpanded((value) => !value);
+      return;
+    }
     const input: ChannelUpdateTaskViewInput =
       action === "pin"
         ? { taskId: row.task.taskId, pinned: row.view.pinnedAt === null }
@@ -271,27 +277,16 @@ function WorkRow({
           <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         )}
         <Button
-          variant="ghost-muted"
+          variant="ghost"
           size="icon-sm"
-          aria-label="Show work"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+          aria-label={`Actions for ${title}`}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            void menu({ x: rect.left, y: rect.bottom });
+          }}
         >
-          <ListIcon aria-hidden />
+          <EllipsisIcon />
         </Button>
-        {canUpdate ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Actions for ${title}`}
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              void menu({ x: rect.left, y: rect.bottom });
-            }}
-          >
-            <EllipsisIcon />
-          </Button>
-        ) : null}
       </div>
       {expanded && (
         <div className="pb-2 pl-9">

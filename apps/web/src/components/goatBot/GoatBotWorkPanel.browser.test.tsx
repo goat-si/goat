@@ -7,7 +7,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { render } from "../../../test/render";
 
@@ -253,9 +253,7 @@ it.each(["main", "member"] as const)(
         <GoatBotMemberContext value={bot}>{panel}</GoatBotMemberContext>
       ),
     );
-    const edit = screen.getByRole("button", { name: "Edit bot" }).element();
-    const close = screen.getByRole("button", { name: "Close" }).element();
-    expect(edit.parentElement).toBe(close.parentElement);
+    await expect.element(screen.getByRole("button", { name: "Close" })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Edit bot" }));
     await expect.element(screen.getByRole("dialog", { name: "" })).toBeVisible();
   },
@@ -696,7 +694,11 @@ it("opens the worker and the chores that thread lists leave to the bot from its 
   await expect
     .element(screen.getByRole("link", { name: /Stop the port 3774 server/ }))
     .toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Show work" }));
+  const rowActions = screen.getByRole("button", { name: "Actions for Stop the port 3774 server" });
+  await userEvent.click(rowActions);
+  await userEvent.click(page.getByRole("menuitem", { name: "Show work" }));
+  // The menu hands focus back to the button that opened it.
+  await expect.element(rowActions).toHaveFocus();
   const links = screen.getByRole("link", { name: "Open work thread" });
   await expect.element(links.nth(0)).toHaveAttribute("href", "/env/channel-worker%3Aa");
   await expect.element(links.nth(1)).toHaveAttribute("href", "/env/channel-child-work%3Achore");
@@ -723,22 +725,20 @@ it("shows a denied task read from the roster without retry", async () => {
   expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
 });
 
-it("anchors Back to chat outside the Home header for the sheet and peek", async () => {
+it("offers Back to chat on the sheet's Home and inside a peek", async () => {
   setup([], [], [runningTask]);
+  const onShowChat = vi.fn();
   await using screen = await render(
     <GoatBotWorkPanel
       environmentId={EnvironmentId.make("env")}
       threadId={ThreadId.make("bot")}
       onOpenFile={() => {}}
-      onShowChat={() => {}}
+      onShowChat={onShowChat}
       peekRows={() => []}
     />,
   );
-  const back = screen.getByRole("button", { name: "Back to chat" }).element();
-  expect(back.closest("header")).toBeNull();
-  expect(getComputedStyle(back).position).toBe("absolute");
+  await expect.element(screen.getByRole("button", { name: "Back to chat" })).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
-  expect(
-    getComputedStyle(screen.getByRole("button", { name: "Back to chat" }).element()).position,
-  ).toBe("absolute");
+  await userEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+  expect(onShowChat).toHaveBeenCalledOnce();
 });

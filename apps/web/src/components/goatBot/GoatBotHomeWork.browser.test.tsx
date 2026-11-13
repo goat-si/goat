@@ -146,14 +146,16 @@ it("Mark done reopens a finished task and Mark read clears its mark", async () =
   expect(actions.refresh).toHaveBeenCalledTimes(2);
 });
 
-it("has no row menu when this device may not change the view", async () => {
+it("offers only Show work in the row menu when this device may not change the view", async () => {
   const rows = setup([taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z")]);
   actions.permit = false;
   await using screen = await render(view(rows));
-  await expect.element(screen.getByText("Stop the port")).toBeVisible();
-  expect(
-    screen.container.querySelector("button[aria-label='Actions for Stop the port']"),
-  ).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Stop the port" }));
+  expect(actions.show).toHaveBeenCalledWith(
+    [{ id: "work", label: "Show work" }],
+    expect.anything(),
+  );
+  expect(actions.update).not.toHaveBeenCalled();
 });
 
 it("shows unread on the row", async () => {
@@ -190,12 +192,10 @@ function Expandable({ rows }: { readonly rows: readonly Row[] }) {
   return view(rows, { showAll, onShowAllChange: setShowAll });
 }
 
-it("keeps skeleton rows while the first read runs, not an empty claim", async () => {
+it("says it is loading while the first read runs, not an empty claim", async () => {
   const rows = setup([]);
   await using screen = await render(view(rows, { loaded: false }));
-  expect(screen.container.querySelectorAll("[data-slot='skeleton']").length).toBeGreaterThanOrEqual(
-    3,
-  );
+  expect(screen.container.textContent).toContain("Loading tasks…");
   expect(screen.container.textContent).not.toContain("No recent tasks");
 });
 
@@ -238,13 +238,12 @@ it("says the computer is offline instead of loading forever, and an unsupported 
     .element(screen.getByText("GOAT Bot's tasks are unavailable while the computer is offline."))
     .toBeVisible();
   expect(screen.container.textContent).not.toContain("Loading tasks");
-  expect(screen.container.querySelectorAll("[data-slot='skeleton']").length).toBe(0);
   await screen.rerender(view(rows, { loaded: false, supported: false }));
   await expect.element(screen.getByText(/Tasks can't be listed from this server/)).toBeVisible();
   expect(screen.container.textContent).not.toContain("Loading tasks");
 });
 
-it("the row's chevron opens the task like its title, and Show work opens what it ran", async () => {
+it("the row's chevron opens the task, and Show work and Hide work live in its menu", async () => {
   const rows = setup([taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z")]);
   const onOpenTask = vi.fn();
   await using screen = await render(view(rows, { onOpenTask }));
@@ -252,8 +251,18 @@ it("the row's chevron opens the task like its title, and Show work opens what it
   expect(chevron).not.toBeNull();
   await userEvent.click(chevron as Element);
   expect(onOpenTask).toHaveBeenCalledOnce();
-  const showWork = screen.getByRole("button", { name: "Show work" });
-  await userEvent.click(showWork);
-  await expect.element(showWork).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Show work" }).query()).toBeNull();
+  const actionsButton = screen.getByRole("button", { name: "Actions for Stop the port" });
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(actionsButton);
+  expect(actions.show.mock.calls[0]?.[0]).toEqual([
+    { id: "work", label: "Show work" },
+    { id: "pin", label: "Pin" },
+    { id: "done", label: "Mark done" },
+    { id: "read", label: "Mark read", disabled: true },
+  ]);
+  await userEvent.click(actionsButton);
+  expect(actions.show.mock.calls[1]?.[0]?.[0]).toEqual({ id: "work", label: "Hide work" });
   expect(onOpenTask).toHaveBeenCalledOnce();
+  expect(actions.update).not.toHaveBeenCalled();
 });

@@ -133,7 +133,7 @@ it("a chip with a shortened name closes an open task view and lands on its routi
   setup({ tasks: [routine("r1", title), routine("r2", "Look over every open pull")] });
   await using screen = await render(view([line("Look over every open pull…")]));
   await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
-  await userEvent.click(page.getByRole("button", { name: /Fix the flaky test/ }));
+  await userEvent.click(page.getByRole("button", { name: /^Fix the flaky test/ }));
   await expect.element(page.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
   await userEvent.click(
     screen.getByRole("button", { name: "Open routine Look over every open pull…" }),

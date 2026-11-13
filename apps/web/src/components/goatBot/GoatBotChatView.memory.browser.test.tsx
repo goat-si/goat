@@ -276,7 +276,7 @@ it("in the narrow sheet Escape steps from a task back to Home, then closes the s
   await userEvent.type(field, "Half a thought");
   await userEvent.click(chip);
   await expect.element(page.getByRole("tab", { name: "Home" })).toBeVisible();
-  await userEvent.click(page.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(page.getByRole("button", { name: /^Stop the port 3774 server/ }));
   await expect.element(page.getByText("Go to thread")).toBeVisible();
   await userEvent.keyboard("{Escape}");
   // The first Escape leaves the task; the sheet stays open on Home.
