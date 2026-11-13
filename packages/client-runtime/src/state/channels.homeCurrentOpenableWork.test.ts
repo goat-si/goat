@@ -24,7 +24,7 @@ const connection = Atom.make(
   AsyncResult.success([{ phase: "connected" }, Option.some({})] as const),
 );
 const permission = Atom.make(true);
-const row = Schema.decodeUnknownSync(BotThreadRow)({
+const row = Schema.decodeSync(BotThreadRow)({
   kind: "task",
   task: { taskId: "a", title: "Task", status: "running", updatedAt: "2026-11-04T00:00:00.000Z" },
   view: { taskId: "a", pinnedAt: null, doneAt: null, readThrough: null },
@@ -67,8 +67,11 @@ it("keeps links during refresh, restores Threads on failure, and recovers", () =
   ]);
   registry.mount(atom);
   expect(registry.get(atom).links).toHaveLength(1);
+  expect(registry.get(atom).list).toBe("ready");
+  expect(registry.get(atom).work.running).toHaveLength(1);
   registry.set(query, AsyncResult.success(answer, { waiting: true }));
   expect(registry.get(atom).links).toHaveLength(1);
+  expect(registry.get(atom).list).toBe("ready");
   registry.set(
     query,
     AsyncResult.fail(new Error("offline"), {
@@ -76,7 +79,10 @@ it("keeps links during refresh, restores Threads on failure, and recovers", () =
     }),
   );
   expect(registry.get(atom).links).toHaveLength(0);
+  expect(registry.get(atom).list).toBe("failed");
+  expect(registry.get(atom).work.running).toHaveLength(0);
   registry.set(query, AsyncResult.success(answer));
   expect(registry.get(atom).links).toHaveLength(1);
+  expect(registry.get(atom).list).toBe("ready");
   registry.dispose();
 });

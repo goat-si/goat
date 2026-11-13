@@ -47,6 +47,7 @@ const input = {
   sourceEnvironmentId: source,
   botId: BotId.make("main"),
   eligible: true,
+  list: "ready" as const,
   current: { rows: [task, coding, orphan], remoteWork: [launch], mainMessageCount: 0 },
   isOpenable: (_id: EnvironmentId) => true,
 };
@@ -54,7 +55,7 @@ const input = {
 describe("current Home links", () => {
   it("contains only links under current task rows, scoped by destination", () => {
     const value = selectHomeCurrentOpenableWork(input);
-    expect(value.tasks.map((entry) => entry.row.task.taskId)).toEqual(["a"]);
+    expect(value.work.running.map((entry) => entry.row.task.taskId)).toEqual(["a"]);
     expect(value.links.map((link) => [link.environmentId, link.threadId])).toEqual([
       ["source", "worker"],
       ["source", "coding"],
