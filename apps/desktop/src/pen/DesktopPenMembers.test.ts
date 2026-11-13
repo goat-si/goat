@@ -103,6 +103,10 @@ describe("DesktopPenMembers", () => {
       h.watches[0]?.onSnapshot(snapshot(1, "a"));
       const inspections = h.state.inspected.length;
       assert.equal(yield* h.service.requireMember(pin), "member");
+      assert.equal(yield* h.service.member(pin), "box-a");
+      assert.isUndefined(yield* h.service.member({ ...pin, meshId: id("x") }));
+      assert.isUndefined(yield* h.service.member({ ...pin, noisePub: key("b") }));
+      assert.isUndefined(yield* h.service.member({ ...pin, nodeId: SELF, noisePub: key("s") }));
       assert.equal(yield* h.service.requireMember({ ...pin, noisePub: key("b") }), "not-member");
       assert.equal(
         yield* h.service.requireMember({ ...pin, nodeId: SELF, noisePub: key("s") }),
@@ -110,6 +114,7 @@ describe("DesktopPenMembers", () => {
       );
       h.watches[0]?.onStale("connect");
       assert.equal(yield* h.service.requireMember(pin), "unavailable");
+      assert.isUndefined(yield* h.service.member(pin));
       assert.deepEqual(views.slice(0, 2), ["ready", "unavailable"]);
       unsubscribe();
       assert.equal(h.state.inspected.length, inspections);

@@ -70,6 +70,7 @@ export const GET_CONNECTION_CATALOG_UNREADABLE_CHANNEL =
 export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalog";
 export const DISCOVER_SSH_HOSTS_CHANNEL = "desktop:discover-ssh-hosts";
 export const GET_PEN_MEMBERS_CHANNEL = "desktop:get-pen-members";
+export const REVOKE_PEN_MEMBER_CHANNEL = "desktop:revoke-pen-member";
 export const OPEN_PEN_ROUTE_CHANNEL = "desktop:open-pen-route";
 export const CLOSE_PEN_ROUTE_CHANNEL = "desktop:close-pen-route";
 export const PEN_MEMBERS_CHANGED_CHANNEL = "desktop:pen-members-changed";

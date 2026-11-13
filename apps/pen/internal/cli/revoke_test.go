@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net"
 	"strings"
 	"testing"
 
@@ -132,5 +134,86 @@ func TestRevokeCompromisedRefusesANameThatIsAlsoAnotherMachinesFingerprintStart(
 		if !strings.Contains(err.Error(), "pen revoke --compromised "+normalFingerprint(fingerprintOf(map[string]string{target.NodeID: target.NoisePub, squatter.NodeID: squatter.NoisePub}[id]))) {
 			t.Fatalf("the refusal does not offer a command for %s: %v", id, err)
 		}
+	}
+}
+
+func TestRevokeExactSelectsOnlyTheMatchingNodeAndNoiseKey(t *testing.T) {
+	key := func(b byte) string { return ident.B64.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
+	target := mesh.Member{Name: "target", NodeID: strings.Repeat("a", 26), NoisePub: key(1), SignPub: key(2)}
+	squatter := mesh.Member{Name: target.NodeID, NodeID: strings.Repeat("b", 26), NoisePub: key(3), SignPub: key(4)}
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		ls          daemon.LsReply
+		code        int
+		subject     string
+		compromised bool
+	}{
+		{"exact match", []string{"--node", target.NodeID, "--noise", target.NoisePub}, daemon.LsReply{Members: []daemon.LsMember{{Member: target}, {Member: squatter}}}, 0, target.SignPub, false},
+		{"name cannot impersonate missing node", []string{"--node", target.NodeID, "--noise", squatter.NoisePub}, daemon.LsReply{Members: []daemon.LsMember{{Member: squatter}}}, 1, "", false},
+		{"wrong key", []string{"--node", target.NodeID, "--noise", key(5)}, daemon.LsReply{Members: []daemon.LsMember{{Member: target}}}, 1, "", false},
+		{"missing node", []string{"--node", strings.Repeat("c", 26), "--noise", target.NoisePub}, daemon.LsReply{Members: []daemon.LsMember{{Member: target}}}, 1, "", false},
+		{"departed is refused", []string{"--node", target.NodeID, "--noise", target.NoisePub}, daemon.LsReply{Revoked: []daemon.LsRevoked{{Member: target}}}, 1, "", false},
+		{"departed compromised is accepted", []string{"--node", target.NodeID, "--noise", target.NoisePub, "--compromised"}, daemon.LsReply{Revoked: []daemon.LsRevoked{{Member: target}}}, 0, target.SignPub, true},
+		{"old positional form", []string{"target"}, daemon.LsReply{Members: []daemon.LsMember{{Member: target}}}, 0, target.SignPub, false},
+		{"node alone", []string{"--node", target.NodeID}, daemon.LsReply{}, 2, "", false},
+		{"noise alone", []string{"--noise", target.NoisePub}, daemon.LsReply{}, 2, "", false},
+		{"positional with exact flags", []string{"--node", target.NodeID, "--noise", target.NoisePub, "target"}, daemon.LsReply{}, 2, "", false},
+		{"bad node", []string{"--node", "bad", "--noise", target.NoisePub}, daemon.LsReply{}, 2, "", false},
+		{"bad key", []string{"--node", target.NodeID, "--noise", "bad"}, daemon.LsReply{}, 2, "", false},
+		{"empty flags", []string{"--node=", "--noise="}, daemon.LsReply{}, 2, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tmpStore(t)
+			t.Setenv("PEN_HOME", st.Dir)
+			ln, err := net.Listen("unix", daemon.SocketPath(st))
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := make(chan []daemon.Request, 1)
+			go func() {
+				var got []daemon.Request
+				for {
+					c, err := ln.Accept()
+					if err != nil {
+						requests <- got
+						return
+					}
+					var req daemon.Request
+					if json.NewDecoder(c).Decode(&req) == nil {
+						got = append(got, req)
+						if req.Op == "ls" {
+							_ = json.NewEncoder(c).Encode(tc.ls)
+						} else {
+							_ = json.NewEncoder(c).Encode(struct{}{})
+						}
+					}
+					c.Close()
+				}
+			}()
+			var out, errOut bytes.Buffer
+			code := RunRevoke(tc.args, &out, &errOut)
+			ln.Close()
+			got := <-requests
+			if code != tc.code {
+				t.Fatalf("exit %d, want %d; stderr %s", code, tc.code, errOut.String())
+			}
+			var revokes []daemon.Request
+			for _, req := range got {
+				if req.Op == "revoke" {
+					revokes = append(revokes, req)
+				}
+			}
+			if tc.subject == "" {
+				if len(revokes) != 0 {
+					t.Fatalf("unexpected revoke requests: %+v", revokes)
+				}
+				if tc.code == 2 && len(got) != 0 {
+					t.Fatalf("usage error sent requests: %+v", got)
+				}
+			} else if len(revokes) != 1 || revokes[0].Subject != tc.subject || revokes[0].Compromised != tc.compromised {
+				t.Fatalf("revoke requests %+v; want subject %s compromised %t", revokes, tc.subject, tc.compromised)
+			}
+		})
 	}
 }

@@ -312,3 +312,26 @@ describe("connection presentation", () => {
     }
   });
 });
+
+it("updates the connection when only the Pen hold reason changes", () => {
+  const catalog = Atom.make<EnvironmentCatalogState>({
+    isReady: true,
+    entries: new Map([[FIRST, entry(FIRST)]]),
+  });
+  const hold = Atom.make<"offline" | "waiting" | undefined>("offline");
+  const presentations = createEnvironmentPresentationAtoms({
+    catalogValueAtom: catalog,
+    stateAtom: () => Atom.make(AsyncResult.success(AVAILABLE_CONNECTION_STATE)),
+    serverConfigValueAtom: () => Atom.make<ServerConfig | null>(null),
+    penHoldAtom: () => hold,
+  });
+  const registry = AtomRegistry.make();
+  const stop = registry.subscribe(presentations.presentationAtom(FIRST), () => {});
+  try {
+    expect(registry.get(presentations.presentationAtom(FIRST))?.connection.penHold).toBe("offline");
+    registry.set(hold, "waiting");
+    expect(registry.get(presentations.presentationAtom(FIRST))?.connection.penHold).toBe("waiting");
+  } finally {
+    stop();
+  }
+});
