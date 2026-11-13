@@ -3,11 +3,13 @@ import { disposableSwitchSaveError } from "@goat/client-runtime/hub-devices";
 import { isHubMachinesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
+  HubMachinesError,
   ThreadId,
   type EnvironmentId,
   type HubDisposableMachinesPatch,
   type HubMachineStatus,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { useState } from "react";
 import { randomUUID } from "~/lib/utils";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
@@ -28,6 +30,12 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+
+const isMachinesError = Schema.is(HubMachinesError);
+/** The hub's own refusal text; anything else (a dropped connection) gets the fixed fallback. */
+function failureText(failure: unknown, fallback: string): string {
+  return isMachinesError(failure) ? failure.detail : fallback;
+}
 
 export function DisposableMachinesSettings({
   environmentId,
@@ -63,9 +71,7 @@ export function DisposableMachinesSettings({
     setBusy(false);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(
-        failure instanceof Error ? failure.message : "Could not save disposable machine settings.",
-      );
+      setError(failureText(failure, "Could not save disposable machine settings."));
     } else if (patch.enabled !== undefined)
       setError(
         disposableSwitchSaveError(patch.enabled, result.value.hub.attachDisposableMachines.enabled),
@@ -81,11 +87,11 @@ export function DisposableMachinesSettings({
     setBusy(false);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not reissue the invite.");
+      setError(failureText(failure, "Could not reissue the invite."));
     } else {
       list.refresh();
       if (result.value.invite) setDialog({ kind: "invite", invite: result.value.invite });
-      else setError("The invite was not returned. Reissue it again if needed.");
+      else setError(`No new invite was made: ${result.value.message}`);
     }
   }
   const expires =
@@ -317,7 +323,7 @@ function AttachDialog({
     setBusy(false);
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
-      setError(failure instanceof Error ? failure.message : "Could not attach the machine.");
+      setError(failureText(failure, "Could not attach the machine."));
     } else {
       onAttached();
       if (result.value.invite) setInvite(result.value.invite);

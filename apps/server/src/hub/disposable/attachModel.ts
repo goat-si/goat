@@ -210,7 +210,6 @@ export const conflictCount = (json: string) =>
 export const stateMessage = (
   state: string,
   name: string,
-  inviteExpiresAt: string | null,
   removedFromPen: boolean,
 ): { readonly message: string; readonly nextAction: string | null } => {
   if (state === "failed" && removedFromPen)
@@ -221,10 +220,9 @@ export const stateMessage = (
   switch (state) {
     case "invited":
       return {
-        message:
-          "Waiting for the machine to join with the invite" +
-          (inviteExpiresAt === null ? "." : " (expires " + inviteExpiresAt + ")."),
-        nextAction: "Run pen join with the token on the machine that holds these keys.",
+        message: "Waiting for the machine to join with the invite.",
+        nextAction:
+          "Run pen join with the token on the machine that holds these keys; the invite lasts 10 minutes.",
       };
     case "admitted":
       return {
@@ -235,12 +233,13 @@ export const stateMessage = (
     case "unknown":
       return {
         message: "GOAT cannot tell yet whether the invite admitted the machine.",
-        nextAction: "Read goat_hub_machine_list again; it asks Pen for the invite's state.",
+        nextAction: "Refresh the machine list later; GOAT asks Pen again each time.",
       };
     case "paused":
       return {
-        message: "Paused: the consent this attach ran under changed.",
-        nextAction: "A person resumes it in Settings, or removes the machine from Pen.",
+        message: name + " joined Pen after the consent for its attach changed.",
+        nextAction:
+          "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
       };
     case "failed":
       return {

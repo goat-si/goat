@@ -241,12 +241,7 @@ export const make = Effect.gen(function* () {
     row: Row,
     invite?: { readonly token: string; readonly expiresAt: string },
   ): HubMachineStatus => {
-    const { message, nextAction } = stateMessage(
-      row.state,
-      row.name,
-      row.invite_expires_at,
-      row.pen_removed_at !== null,
-    );
+    const { message, nextAction } = stateMessage(row.state, row.name, row.pen_removed_at !== null);
     const provisioner = provisionerOf(row);
     return {
       attachId: row.attach_id,
@@ -446,7 +441,7 @@ export const make = Effect.gen(function* () {
       yield* audit(row.attach_id, "hub.machine_mint", "unknown");
       return yield* fail(
         "unknown_outcome",
-        "Pen's answer to the invite was lost; goat_hub_machine_list settles it by its mint id.",
+        "Pen's answer to the invite was lost. Refresh the machine list; GOAT settles it with Pen.",
       );
     }
     const invite = minted.success;
@@ -746,7 +741,7 @@ export const make = Effect.gen(function* () {
         Effect.catch(() =>
           fail(
             "unknown_outcome",
-            "Pen's answer to the cancel was lost; goat_hub_machine_list settles it, and a new clientRequestId reissues.",
+            "Pen's answer to the cancel was lost. Refresh the machine list, then reissue as a new request.",
           ),
         ),
       );
@@ -805,7 +800,7 @@ export const make = Effect.gen(function* () {
           if (earlier.outcome === "running")
             return yield* fail(
               "unknown_outcome",
-              "An earlier reissue with this key did not finish; goat_hub_machine_list settles it, and a new clientRequestId reissues.",
+              "An earlier reissue with this request did not finish. Refresh the machine list, then reissue as a new request.",
             );
           return yield* fail(earlier.outcome as HubMachinesErrorReason, earlier.detail ?? "");
         }
