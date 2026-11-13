@@ -209,7 +209,8 @@ record hash so its revoke of honest members sorts before its own revocation; the
 2. The joiner dials `/v1/client/<inviter nodeId>` with kind 0x03, `{"v":1,"stream":"join","invite":"<id>","name":"<name>"}`.
 3. The inviter sends `{"t":"offer","mesh":"<id>","inviter":"<nodeId>","nonce":"<b64url 16 bytes>"}`. The joiner answers
    `{"t":"card","card":{…}}` whose noisePub equals the key it authenticated with. The inviter burns the invite before
-   it signs (an atomic check-and-set under the state lock; the loser of a race gets CLOSE 4401), signs an `admit`,
+   it signs (an atomic check-and-set under the state lock; the loser of a race gets CLOSE 4401; a bound invite first
+   refuses a card that is not its subject, "Bound invites"), signs an `admit`,
    and sends the whole set as `records` lines of at most 64 records each, then `{"t":"done","mesh":"<id>"}`.
 4. The joiner checks the founding record against the mesh id and that the view makes it a member, then stores the set.
    Any refusal is `{"t":"refused","reason":"…"}` then close 4401.
@@ -849,6 +850,22 @@ member's sessions load which relay.
   Unix epoch, where the totals start) to the reply while any bytes are counted. Every other field keeps its name,
   type and meaning, and a node with nothing counted prints exactly what it printed before.
 
+## Bound invites (v1.3)
+
+Local to the inviting node: nothing new crosses the wire, and a joiner runs "Join" unchanged. A program on the
+inviting machine that already knows the new machine's keys (GOAT) makes an invite that admits only that machine.
+
+- Control op `invite` with a `subject`, on the control socket only (the dashboard cannot send it):
+  `{"op":"invite","subject":{"signPub":S,"noisePub":N,"name":X},"ttlMs":T,"wait":W}`. S and N are canonical base64url
+  32-byte keys and X a valid node name; the subject has exactly these three members and the line no unknown member.
+  `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes when absent). The answer is the ordinary
+  invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and makes nothing.
+- The invite's entry in `offers.json` keeps the subject. In "Join" step 3 the inviter refuses (`refused`, then 4401)
+  a card whose signPub, noisePub or name differs from the subject before it burns the invite, so a wrong machine
+  holding the token cannot use it up; the burn checks the subject again.
+- A node older than this decodes `subject` as the string of the `revoke` op, answers `{"error":"bad request"}` and
+  makes nothing, so a caller never gets an unbound token in place of a bound one.
+
 ## Close codes
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
@@ -952,6 +969,8 @@ v1.2 member-only reader refuses both valid new forms.
   applies that view; list drops and registration ends close 4401 unless the session is already closing, with every
   local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
   exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.
+- v1.3 (2026-11-13): node side only, no wire change: "Bound invites": control op `invite` with a `subject` makes an invite that
+  admits only that machine's keys and name, refused before the burn otherwise.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.

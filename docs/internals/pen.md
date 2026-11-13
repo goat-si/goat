@@ -185,6 +185,14 @@ pipe is ssh's ProxyCommand: a report must never change its output, its exit code
 counts in memory only, in fixed buckets with a cap on pairs (`apps/pen/internal/traffic`): losing a day of counts on
 restart costs less than another state file whose format must stay readable.
 
+## Bound invites
+
+An invite token is a bearer secret: whoever holds it joins. GOAT admits disposable machines whose keys it already
+has, so a bound invite names its subject and the inviter refuses any other card before the burn (`Subject` in
+`apps/pen/internal/mesh/bound.go`). The refusal has to come before the burn: a leaked token must not let another
+machine use the invite up. The op keeps the member name `subject`, which an older node decodes as the string of
+`revoke` and refuses, so a version gap fails closed instead of minting an unbound token.
+
 ## Relay cuts and typed ssh names
 
 A relay can drop a stream, open more sessions than the contract allows, or carry a host name nobody checked. None of

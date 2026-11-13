@@ -187,14 +187,19 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	if err != nil || c.SetReadDeadline(time.Time{}) != nil {
 		return
 	}
-	var req Request
 	enc := json.NewEncoder(c)
+	reply := func(v any) { enc.Encode(v) }
+	fail := func(err error) { reply(map[string]string{"error": err.Error()}) }
+	// Control socket only, like the ops below: the dashboard reaches do, never handleControl.
+	if boundOp(line) {
+		d.controlBound(ctx, c, line, reply, fail)
+		return
+	}
+	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
 		enc.Encode(map[string]string{"error": "bad request"})
 		return
 	}
-	reply := func(v any) { enc.Encode(v) }
-	fail := func(err error) { reply(map[string]string{"error": err.Error()}) }
 	switch req.Op {
 	case "watch":
 		d.controlWatch(ctx, c)
@@ -407,6 +412,8 @@ type InviteReply struct {
 	Command string `json:"command"`
 	// WindowsCommand does the same from PowerShell on Windows.
 	WindowsCommand string `json:"windowsCommand"`
+	// ID is a bound invite's id (contract "Bound invites"); an ordinary invite's answer has none.
+	ID string `json:"id,omitempty"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
@@ -418,10 +425,14 @@ func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
 	if err != nil {
 		return InviteReply{}, "", err
 	}
+	return d.inviteReply(inv), inv.ID, nil
+}
+
+func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
 	s := tok.String()
 	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s),
-		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}, inv.ID, nil
+		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
@@ -430,6 +441,11 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 		fail(err)
 		return
 	}
+	d.awaitJoin(ctx, c, r, id, reply)
+}
+
+// awaitJoin answers r, then the invite's admission or expiry, unless the client hangs up first.
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, reply func(any)) {
 	wait := make(chan mesh.Member, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait

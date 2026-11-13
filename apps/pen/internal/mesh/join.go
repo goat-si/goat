@@ -141,6 +141,8 @@ type Invite struct {
 	ID        string `json:"id"`
 	Secret    []byte `json:"secret"`
 	ExpiresAt int64  `json:"expiresAt"`
+	// Subject, when set, is the only machine the invite admits (a bound invite).
+	Subject *Subject `json:"subject,omitempty"`
 }
 
 // Invites are the node's live invites, persisted in offers.json.
@@ -197,11 +199,15 @@ func (iv *Invites) Retire() {
 
 // Create makes an invite valid for ttl.
 func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
+	return iv.create(now.Add(ttl), now, nil)
+}
+
+func (iv *Invites) create(expiresAt, now time.Time, sub *Subject) (Invite, error) {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return Invite{}, err
 	}
-	x := Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: now.Add(ttl).UnixMilli()}
+	x := Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: expiresAt.UnixMilli(), Subject: sub}
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	if iv.retired {
@@ -239,13 +245,17 @@ func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
 	return x, true
 }
 
-// Burn atomically uses an invite; only one caller ever succeeds.
-func (iv *Invites) Burn(id string, now time.Time) error {
+// Burn atomically uses an invite for the joiner whose card is cb; only one caller ever succeeds, and a bound
+// invite only for its subject.
+func (iv *Invites) Burn(id string, now time.Time, cb CardBody) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	x, ok := iv.live[id]
 	if !ok {
 		return errors.New("invite already used or expired")
+	}
+	if !x.Subject.admits(cb) {
+		return errors.New("card does not match this invite")
 	}
 	if x.ExpiresAt <= now.UnixMilli() {
 		if err := iv.saveLocked(now); err != nil {
@@ -318,6 +328,10 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	if noise, _ := ident.DecodeKey(cb.NoisePub); !bytes.Equal(noise, remoteStatic) {
 		return nil, refuse(c, "card noisePub is not the session key")
 	}
+	// A bound invite stays usable when another machine answers it: the refusal comes before the burn.
+	if inv, ok := a.Invites.Lookup(a.InviteID, a.Now()); ok && !inv.Subject.admits(cb) {
+		return nil, refuse(c, "card does not match this invite")
+	}
 	v := a.Store.View()
 	if _, gone := v.Revoked[cb.SignPub]; gone {
 		return nil, refuse(c, "this key was revoked")
@@ -335,7 +349,7 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 		if a.Store.burnGate != nil {
 			a.Store.burnGate()
 		}
-		if err := a.Invites.Burn(a.InviteID, now); err != nil {
+		if err := a.Invites.Burn(a.InviteID, now, cb); err != nil {
 			return errBurn
 		}
 		return nil
