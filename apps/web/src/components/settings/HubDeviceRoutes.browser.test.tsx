@@ -140,3 +140,44 @@ it("offers no Routes for a link the Child opened, since the Home has none to cha
   await expect.element(screen.getByRole("button", { name: "Routes" })).not.toBeInTheDocument();
   registry.dispose();
 });
+it("a change from a session that cannot answer decisions waits for one, and Continue runs that change with it", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini"]));
+  state.update
+    .mockReset()
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "needs_human",
+        message: "Changing a Child's routes needs an owner's approval.",
+        linkId: "lnk_0123456789abcdef",
+        decisionId: "decision-1",
+      } satisfies HubDeviceRoutesResult,
+    })
+    .mockResolvedValueOnce(listed(["mini-lan", "mini"]));
+  const registry = AtomRegistry.make();
+  await using screen = await render(
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="hub-initiated"
+      />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Routes" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
+  await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  await expect
+    .element(screen.getByRole("link", { name: "Open decision" }))
+    .toHaveAttribute("href", "/settings/decision-inbox");
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await expect.element(screen.getByText("mini-lan")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+  const change = { op: "add", route: "mini-lan" };
+  expect(state.update.mock.calls.map((call) => call[1].input)).toEqual([
+    { deviceAlias: "mini", change },
+    { deviceAlias: "mini", change, decisionId: "decision-1" },
+  ]);
+  registry.dispose();
+});

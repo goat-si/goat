@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { HubLinkDirection } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId, HubDeviceRoutesChange, HubDeviceRoutesResult } from "@goat/contracts";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { serverEnvironment } from "~/state/server";
@@ -42,6 +43,11 @@ export function HubDeviceRoutes({
   // A read-back after a change fails on its own, beside the change's answer.
   const [readError, setReadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // A session without settings:write gets an inbox decision; Continue runs this change with it.
+  const [waiting, setWaiting] = useState<{
+    change: HubDeviceRoutesChange;
+    decisionId: string;
+  } | null>(null);
   // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
   const editable = canChange && routes?.exclusive !== true;
 
@@ -81,11 +87,25 @@ export function HubDeviceRoutes({
     settle(await list({ environmentId, input: { deviceAlias: alias } }));
     setBusy(false);
   };
-  const change = async (next: HubDeviceRoutesChange) => {
+  const change = async (next: HubDeviceRoutesChange, decisionId?: string) => {
     setBusy(true);
     setReadError(null);
-    const result = await update({ environmentId, input: { deviceAlias: alias, change: next } });
+    setWaiting(null);
+    const result = await update({
+      environmentId,
+      input: {
+        deviceAlias: alias,
+        change: next,
+        ...(decisionId === undefined ? {} : { decisionId }),
+      },
+    });
     settle(result);
+    if (
+      result._tag === "Success" &&
+      result.value.state === "needs_human" &&
+      result.value.decisionId !== undefined
+    )
+      setWaiting({ change: next, decisionId: result.value.decisionId });
     // A stored change that the Home could not apply yet still lists, so read it back.
     if (
       result._tag === "Success" &&
@@ -215,6 +235,27 @@ export function HubDeviceRoutes({
         >
           {answer.message}
         </p>
+      )}
+      {waiting === null ? null : (
+        <div className="space-y-1.5">
+          <p className="text-muted-foreground">
+            A person who can change this hub's settings answers it in the decision inbox. Then
+            continue here.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>
+              Open decision
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || !canChange}
+              onClick={() => void change(waiting.change, waiting.decisionId)}
+            >
+              Continue
+            </Button>
+          </div>
+        </div>
       )}
     </section>
   );
