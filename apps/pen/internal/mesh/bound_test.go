@@ -988,3 +988,31 @@ func TestAJoinWhoseAdmitIsNotSavedNamesWhomItAdmitted(t *testing.T) {
 		t.Fatalf("serve %v; want a BurnedError naming the joiner", serveErr)
 	}
 }
+
+// An ordinary invite that a failed burn left out of memory but live in offers.json is not reported expired by a
+// wait unless the book is written first: a failed write is an error, never expired.
+func TestAWaitDoesNotCallAnUnwrittenRemovalExpired(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	sig := NewSignals()
+	x, err := iv.CreateNotify(time.Minute, now, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(st.Path("offers.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(st.Path("offers.json"), "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := iv.Burn(x.ID, now, CardBody{}, at(now)); err == nil {
+		t.Fatal("a burn that could not be saved succeeded")
+	}
+	if state, _, err := iv.WaitExpiry(x.ID, sig, at(now.Add(2*time.Minute))); err == nil {
+		t.Fatalf("wait expiry answered %q with no error; want the failed write reported", state)
+	}
+}

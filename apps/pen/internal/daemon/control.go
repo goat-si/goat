@@ -448,15 +448,15 @@ type InviteReply struct {
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
-	return d.createInviteNotify(ttlMs, nil)
+	return d.createInviteNotify(d.inviteBook(), ttlMs, nil)
 }
 
-func (d *Daemon) createInviteNotify(ttlMs int64, sig *mesh.Signals) (InviteReply, string, error) {
+func (d *Daemon) createInviteNotify(book *mesh.Invites, ttlMs int64, sig *mesh.Signals) (InviteReply, string, error) {
 	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), sig)
+	inv, err := book.CreateNotify(ttl, d.now(), sig)
 	if err != nil {
 		return InviteReply{}, "", err
 	}
@@ -471,18 +471,18 @@ func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	sig := mesh.NewSignals()
-	r, id, err := d.createInviteNotify(req.TTLMs, sig)
+	sig, book := mesh.NewSignals(), d.inviteBook()
+	r, id, err := d.createInviteNotify(book, req.TTLMs, sig)
 	if err != nil {
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, sig, reply)
+	d.awaitJoin(ctx, c, r, book, id, sig, reply)
 }
 
 // awaitJoin answers r, then what became of the invite (a join's outcome, its cancel or its expiry) until the client
 // hangs up. sig is the invite's Cancelled and Burned pair, attached when it was made.
-func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, sig *mesh.Signals, reply func(any)) {
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, book *mesh.Invites, id string, sig *mesh.Signals, reply func(any)) {
 	wait := make(chan joinOutcome, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
@@ -516,7 +516,7 @@ waiting:
 			reply(map[string]any{"t": "cancelled"})
 			return
 		case <-expiry:
-			state, left, err := d.inviteBook().WaitExpiry(id, sig, d.now)
+			state, left, err := book.WaitExpiry(id, sig, d.now)
 			switch {
 			case err != nil:
 				reply(map[string]string{"error": "could not record the invite's expiry: " + err.Error()})

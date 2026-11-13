@@ -227,7 +227,11 @@ func (iv *Invites) WaitExpiry(id string, sig *Signals, clock func() time.Time) (
 	x, ok := iv.byID[id]
 	switch {
 	case !ok:
-		// Neither burned nor cancelled: an ordinary invite pruned at its expiry.
+		// Neither burned nor cancelled: an ordinary invite pruned at its expiry, or dropped by a burn whose save
+		// failed. The book is written first, so offers.json no longer holds it either.
+		if err := iv.saveLocked(now); err != nil {
+			return "", 0, err
+		}
 		return InviteExpired, 0, nil
 	case x.State != "":
 		return x.State, 0, nil
