@@ -691,7 +691,7 @@ func (w *printSignal) Write(p []byte) (int, error) {
 }
 
 // Regression (a hang on goat-test-pen-windows): a node that never closes after the half-close, as one whose read
-// missed it, leaves the child waiting only until the end of its grace; then it exits 1 naming the unanswered ops, or 0
+// missed it, leaves the child waiting only until the end of its grace; then it exits 1 counting the unanswered ops, or 0
 // when every op was answered.
 func TestServiceRegisterEndsAtTheGraceWhenTheNodeMissesItsHalfClose(t *testing.T) {
 	for _, c := range []struct {
