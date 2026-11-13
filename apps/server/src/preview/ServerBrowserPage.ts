@@ -21,6 +21,7 @@ import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
 import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
+import { clickToState, heldKeys, type ClickReport } from "./clickState.ts";
 import { evaluateWithTimeout, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
@@ -641,14 +642,17 @@ const clickTarget = async (
   const { point } = aimed;
   await pointer(point, "click");
   const button = input.button ?? "left";
+  const keys = heldKeys(page, gate, input.modifiers);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
   // Listening first: a dialog that opens while the watch installs still ends the wait.
   let dialogBeforePress = false;
+  let dialogShown = false;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => {
       dialogBeforePress = !sent;
+      dialogShown = true;
       resolve("dialog");
     };
     page.once("dialog", onDialog);
@@ -679,6 +683,9 @@ const clickTarget = async (
     await gate();
     gate.signal?.throwIfAborted();
     sent = true;
+    if (count === 1) await keys.press();
+    // A dialog a key-down opened holds the page; once it is answered, the click stays unsent.
+    if (dialogShown) return undefined;
     if (count === 1)
       return locator === null
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
@@ -711,6 +718,7 @@ const clickTarget = async (
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
+    await keys.release(dialog, gate.linger);
   }
   if (!sent) watch.cancel();
   const outcome = await watch.settle(dialog).finally(() => releaseAim(aim, gate));
@@ -723,9 +731,13 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): ReturnType<typeof clickTarget> => {
+): Promise<ClickReport> => {
   try {
-    return await clickTarget(page, input, pointer, gate);
+    if (input.checked === undefined) return await clickTarget(page, input, pointer, gate);
+    const timeout = remaining(actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline));
+    return await clickToState(targetLocator(page, input), input.checked, gate, timeout, () =>
+      clickTarget(page, input, pointer, gate),
+    );
   } catch (cause) {
     const timedOut =
       (cause instanceof ServerBrowserOperationError &&
@@ -955,7 +967,9 @@ export const scroll = async (
     await gate();
     gate.signal?.throwIfAborted();
     await actionCall(gate, () =>
-      handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
+      input.deltaX === undefined && input.deltaY === undefined
+        ? handle.scrollIntoViewIfNeeded({ timeout: DISPATCH_TIMEOUT_MS })
+        : handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
     );
     return {
       settled: await settleScroll(

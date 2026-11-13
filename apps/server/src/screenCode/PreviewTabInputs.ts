@@ -64,6 +64,15 @@ const POINTER_KEYS = new Set([
   "count",
   "timeoutMs",
   "batch",
+  "checked",
+  "modifiers",
+]);
+// App key names, as cells write them for apps too, and the browser's names for them.
+const TAB_MODIFIERS: ReadonlyMap<unknown, string> = new Map([
+  ["cmd", "Meta"],
+  ["ctrl", "Control"],
+  ["alt", "Alt"],
+  ["shift", "Shift"],
 ]);
 // The browser's answer still has to reach the cell after the click gave up on its target.
 const ANSWER_RESERVE_MS = 500;
@@ -89,7 +98,8 @@ const pointerTimeout = (
 
 /**
  * A tab click's or hover's browser input: its target (a locator, or a resolved screenshot point),
- * a click's button and count (1 to 3), and how long it waits for the target; checked unsent.
+ * a click's button, count (1 to 3), wanted checked state and held keys, and how long it waits for
+ * the target; checked unsent.
  */
 export const pointerInput = (
   method: string,
@@ -107,12 +117,24 @@ export const pointerInput = (
         "invalid_argument",
         `A tab ${method === "hover" ? "hover" : "click"} does not take ${unknown}${
           unknown === "clickCount" || unknown === "clicks" ? "; its click count is count" : ""
-        }. It takes a selector, ref or point, count and timeoutMs.`,
+        }. It takes a selector, ref or point, count, timeoutMs, checked and modifiers.`,
       ),
     };
   const count = method === "hover" ? undefined : arg.count;
   if (count !== undefined && !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3))
     return { error: fail("invalid_argument", "A tab click count is 1, 2 or 3.") };
+  if (method === "hover" && (arg.checked !== undefined || arg.modifiers !== undefined))
+    return { error: fail("invalid_argument", "A tab hover takes no checked or modifiers.") };
+  if (arg.checked !== undefined && typeof arg.checked !== "boolean")
+    return { error: fail("invalid_argument", "checked is true or false.") };
+  const single = count === undefined || count === 1;
+  if (arg.checked !== undefined && (typeof target !== "string" || method !== "click" || !single))
+    return { error: fail("invalid_argument", "checked needs an element and one left click.") };
+  const keys = arg.modifiers === undefined ? [] : arg.modifiers;
+  if (!Array.isArray(keys) || !keys.every((key) => TAB_MODIFIERS.has(key)))
+    return {
+      error: fail("invalid_argument", "modifiers must contain only cmd, shift, alt or ctrl."),
+    };
   const wait = pointerTimeout(arg.timeoutMs, deadlineMillis, now);
   if ("error" in wait) return wait;
   return {
@@ -120,6 +142,8 @@ export const pointerInput = (
       ...(typeof target === "string" ? { locator: target } : { x: target.x, y: target.y }),
       ...(method === "right_click" ? { button: "right" } : {}),
       ...(count === undefined ? {} : { clickCount: count }),
+      ...(arg.checked === undefined ? {} : { checked: arg.checked }),
+      ...(keys.length === 0 ? {} : { modifiers: keys.map((key) => TAB_MODIFIERS.get(key)) }),
       timeoutMs: wait.timeoutMs,
     },
   };

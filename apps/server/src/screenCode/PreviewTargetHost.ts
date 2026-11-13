@@ -877,13 +877,17 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               readonly effect?: unknown;
               readonly evidence?: unknown;
               readonly pressesCompleted?: unknown;
+              readonly pressed?: unknown;
             })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
+      // A checked click that found the state already held sent nothing: no input went out.
+      const unsent = operation === "click" && seen?.pressed === false;
       // A range the browser set and read back is confirmed; typed text never is, nor a click a
       // dialog cut short of its count.
       const confirmed =
         navigated ||
+        unsent ||
         (seen?.effect === "confirmed" &&
           seen.pressesCompleted === undefined &&
           Array.isArray(seen.evidence) &&
@@ -899,15 +903,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                 context.limits.returnBytes,
               ),
         category: confirmed ? "confirmed" : "unverifiable",
-        evidence: navigated
-          ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
-          : confirmed && seen
-            ? (seen.evidence as ReadonlyArray<unknown>).map(
-                (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
-              )
-            : ["dispatched; observe to confirm"],
+        evidence: unsent
+          ? ["click:already in that state"]
+          : navigated
+            ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
+            : confirmed && seen
+              ? (seen.evidence as ReadonlyArray<unknown>).map(
+                  (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
+                )
+              : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
-        outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
+        ...(unsent
+          ? {}
+          : { outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" } }),
       };
     },
   );

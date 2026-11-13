@@ -107,6 +107,9 @@ const PreviewClickResult = Schema.Struct({
   /** What the server browser saw change right after the click; absent from other hosts. */
   effect: Schema.optional(Schema.Literals(["confirmed", "suspected_noop"])),
   evidence: Schema.optional(Schema.Array(Schema.String)),
+  /** With checked: whether a click was needed and sent, and the state read back after it. */
+  pressed: Schema.optional(Schema.Boolean),
+  checked: Schema.optional(Schema.Boolean),
 });
 /** The browser skill's path on a thread's first visit and a site's notes on its first visit there. */
 const guideFields = { guide: Schema.optional(Schema.String) };

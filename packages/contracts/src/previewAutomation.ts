@@ -27,6 +27,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import * as Session from "./previewAutomationSession.ts";
 import * as Screen from "./previewAutomationScreen.ts";
+import * as ActionFields from "./previewActionFields.ts";
 import { PreviewWaitStateFields, waitStateConflict } from "./previewWaitState.ts";
 import {
   PreviewAutomationFeature,
@@ -330,7 +331,8 @@ export const PreviewAutomationClickInput = Schema.Struct({
       description: "1 click, 2 double, 3 triple. Default 1.",
     }),
   ),
-}).check(singlePointerTarget);
+  ...ActionFields.PreviewClickModeFields,
+}).check(singlePointerTarget, ActionFields.clickModeProblem);
 export type PreviewAutomationClickInput = typeof PreviewAutomationClickInput.Type;
 
 export const PreviewAutomationHoverInput =
@@ -447,17 +449,7 @@ export const PreviewAutomationScrollInput = Schema.Struct({
     description: "With y, send a real wheel at this viewport point, as for zooming a map.",
   }),
   y: Schema.optional(Schema.Finite),
-}).check(
-  Schema.makeFilter((input) => {
-    if (input.selector !== undefined && input.locator !== undefined) {
-      return "Provide at most one of selector or locator.";
-    }
-    if ((input.x === undefined) !== (input.y === undefined)) return "Provide x and y together.";
-    if (input.x !== undefined && (input.selector !== undefined || input.locator !== undefined))
-      return "Provide a point or a locator, not both.";
-    return input.deltaX !== undefined || input.deltaY !== undefined || "Provide deltaX or deltaY.";
-  }),
-);
+}).check(ActionFields.scrollInputProblem);
 export type PreviewAutomationScrollInput = typeof PreviewAutomationScrollInput.Type;
 
 export const PreviewAutomationEvaluateInput = Schema.Struct({

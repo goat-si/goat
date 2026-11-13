@@ -250,7 +250,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const observed = [...(isObj && Array.isArray(value._observed) ? value._observed : []), ...(reply.e ?? [])];
     const opened = [...new Set(observed.filter((line) => /^observed:window_opened:\d{1,16}$/.test(line)).map((line) => line.split(':')[2]))];
     const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
-    const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
+    const unchanged = isObj && value.pressed === false ? 'already in that state; nothing was sent' : '';
+    const note = [unchanged, opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
     const debug = __debug || arg.verify === true || verify;
     return { ok: true, verdict, ...(note ? { note } : {}), ...(reply.w?.length ? { warnings: reply.w } : {}), ...(debug ? { result: { debug: { value, evidence: reply.e ?? [] } } } : {}) };
 
@@ -487,21 +488,22 @@ const __target = (binding, note, owner, extraProps = {}) => {
         return call('click', target);
       }
       // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
-      options = __only('click options', options, ['button', 'count', 'send', 'verify', ...(tab ? ['timeoutMs'] : ['action', 'modifiers'])]);
+      options = __only('click options', options, ['button', 'count', 'send', 'verify', 'modifiers', ...(tab ? ['timeoutMs', 'checked'] : ['action'])]);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
         throw new ScreenError('invalid_argument', 'A tab click count is 1, 2 or 3.', true);
-      if (!tab && options.modifiers !== undefined && (!Array.isArray(options.modifiers) || !options.modifiers.every((m) => ['cmd', 'shift', 'alt', 'ctrl'].includes(m))))
+      if (options.modifiers !== undefined && (!Array.isArray(options.modifiers) || !options.modifiers.every((m) => ['cmd', 'shift', 'alt', 'ctrl'].includes(m))))
         throw new ScreenError('invalid_argument', 'modifiers must contain only cmd, shift, alt or ctrl; nothing was sent.', true);
       const run = () =>
         act('click', options.button === 'right' ? 'right_click' : 'click', {
           ...aim(target),
           ...(options.count !== undefined ? { count: options.count } : {}),
           ...(tab && options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          ...(tab && options.checked !== undefined ? { checked: options.checked } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
-          ...(!tab && options.modifiers !== undefined ? { modifiers: options.modifiers } : {}),
+          ...(options.modifiers !== undefined ? { modifiers: options.modifiers } : {}),
           ...(!tab && options.verify === true ? { verify: true } : {}),
         }, options.verify === true);
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();

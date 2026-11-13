@@ -2040,7 +2040,7 @@ const make = Effect.gen(function* () {
         const targetLabel = secretFill.historySafe(tab, request.threadId)
           ? await browserHistoryTarget(tab.page, clickInput, gate.channel)
           : undefined;
-        const { effect, evidence, pressesCompleted } = await recordAction(
+        const { effect, evidence, pressesCompleted, pressed, checked } = await recordAction(
           tab,
           "click",
           () => ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gate),
@@ -2051,6 +2051,7 @@ const make = Effect.gen(function* () {
           evidence,
           url: tab.page.url(),
           ...(pressesCompleted === undefined ? {} : { pressesCompleted }),
+          ...(pressed === undefined ? {} : { pressed, checked }),
         };
       }
       case "hover":
