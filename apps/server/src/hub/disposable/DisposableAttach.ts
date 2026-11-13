@@ -71,6 +71,8 @@ export class Provisioners extends Context.Service<
 >()("goat/hub/disposable/DisposableAttach/Provisioners") {}
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
+// HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
+const MAX_INVITES_PER_ATTACH = 32;
 const OPEN = "final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')";
 const IN_PEN = "pen_admitted_at IS NOT NULL AND pen_removed_at IS NULL";
 // A final record still owes Pen an ack for a terminal entry GOAT stored.
@@ -786,6 +788,11 @@ export const make = Effect.gen(function* () {
           open.some((effect) => effect.withdrawn === true || effect.seen === "burned-without-admit")
         )
           return yield* fail("conflict", "Only an open invite can be reissued.");
+        if (effectsOf(row).length >= MAX_INVITES_PER_ATTACH)
+          return yield* fail(
+            "conflict",
+            "This attach has used all its invites; attach the machine again with a new request.",
+          );
         yield* requireFeatures;
         const ended = yield* authorityEnded(
           row,

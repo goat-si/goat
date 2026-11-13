@@ -1,7 +1,9 @@
 import { expect, it } from "@effect/vitest";
+import { HubMachineStatus } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import { penNodeId } from "./attachModel.ts";
@@ -20,6 +22,8 @@ import {
   world,
 } from "./DisposableAttach.testkit.ts";
 import { PEN_ATTACH_FEATURES } from "./PenInvites.ts";
+
+const encodeStatus = Schema.encodeUnknownExit(HubMachineStatus);
 
 // pen-protocol vectors/identity.json: this signPub's node id is gr2q7gf5lh6pzfdnurnkvputhm.
 const VECTOR_SIGN = Buffer.from(
@@ -235,6 +239,19 @@ it.effect("a reissue cancels the open invite and mints a new token for the same 
       const replay = yield* reissue(first.attachId, "re-1");
       expect(replay).not.toHaveProperty("invite");
       expect(pen.control.tokensSeen).toHaveLength(2);
+    }),
+  ),
+);
+
+it.effect("reissues stop at the wire's 32 steps, leaving the live invite and the list intact", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      for (let n = 1; n <= 31; n++) yield* reissue(first.attachId, "re-" + n);
+      expect(yield* reason(reissue(first.attachId, "re-32"))).toBe("conflict");
+      expect(pen.book.get(first.attachId + ".32")?.state).toBe("live");
+      const machine = yield* listed(first.attachId);
+      expect(encodeStatus(machine)._tag).toBe("Success");
     }),
   ),
 );
