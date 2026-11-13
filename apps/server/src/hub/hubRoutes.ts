@@ -25,6 +25,7 @@ const decodeRoutes = Schema.decodeUnknownOption(
       linkId: Schema.String,
       pin: Schema.String,
       routes: Schema.Array(Schema.String),
+      exclusive: Schema.optional(Schema.Literal(true)),
     }),
   ),
 );
@@ -44,6 +45,8 @@ const REFUSAL: Readonly<Record<string, string>> = {
   trust_file_unexpected:
     "The Home's known_hosts entry for this link is not in the shape OpenCodex expects, so nothing changed.",
   link_operation_in_progress: "Another change to this link is running. Try again when it finishes.",
+  link_exclusive:
+    "This link is exclusive: its one route is fixed, so routes cannot be added, removed or reordered.",
   routes_stored_reload_failed:
     "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
 };
@@ -130,9 +133,12 @@ const routesAnswer = (alias: string, linkId: string, output: OcxOutput): HubDevi
       ? {
           ...base,
           state: "ok",
-          message: `${alias} has ${document.routes.length} route(s).`,
+          message: document.exclusive
+            ? `${alias} has one fixed, exclusive route.`
+            : `${alias} has ${document.routes.length} route(s).`,
           pin: document.pin,
           routes: document.routes,
+          ...(document.exclusive ? { exclusive: true as const } : {}),
         }
       : {
           ...base,

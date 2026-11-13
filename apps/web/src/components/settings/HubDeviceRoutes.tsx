@@ -29,9 +29,15 @@ export function HubDeviceRoutes({
   const update = useAtomCommand(serverEnvironment.updateHubDeviceRoutes, { reportFailure: false });
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [routes, setRoutes] = useState<{ pin: string; routes: ReadonlyArray<string> } | null>(null);
+  const [routes, setRoutes] = useState<{
+    pin: string;
+    routes: ReadonlyArray<string>;
+    exclusive: boolean;
+  } | null>(null);
   const [answer, setAnswer] = useState<HubDeviceRoutesResult | null>(null);
   const [draft, setDraft] = useState("");
+  // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
+  const editable = canChange && routes?.exclusive !== true;
 
   /** keepAnswer: a read-back after a change updates the list and leaves the change's notice. */
   const settle = (result: Awaited<ReturnType<typeof list>>, keepAnswer = false) => {
@@ -46,7 +52,11 @@ export function HubDeviceRoutes({
     }
     if (!keepAnswer) setAnswer(result.value);
     if (result.value.pin !== undefined && result.value.routes !== undefined)
-      setRoutes({ pin: result.value.pin, routes: result.value.routes });
+      setRoutes({
+        pin: result.value.pin,
+        routes: result.value.routes,
+        exclusive: result.value.exclusive === true,
+      });
   };
   const read = async () => {
     setBusy(true);
@@ -97,6 +107,11 @@ export function HubDeviceRoutes({
           Close
         </Button>
       </div>
+      {routes?.exclusive === true ? (
+        <p className="text-muted-foreground">
+          This link is exclusive: its one route is fixed, so it cannot be edited here.
+        </p>
+      ) : null}
       {routes === null ? null : (
         <ol className="space-y-1">
           {routes.routes.map((route, index) => (
@@ -113,7 +128,7 @@ export function HubDeviceRoutes({
                   size="xs"
                   variant="ghost"
                   aria-label={`Move ${route} up`}
-                  disabled={busy || !canChange || index === 0}
+                  disabled={busy || !editable || index === 0}
                   onClick={() => move(index, index - 1)}
                 >
                   Up
@@ -122,7 +137,7 @@ export function HubDeviceRoutes({
                   size="xs"
                   variant="ghost"
                   aria-label={`Move ${route} down`}
-                  disabled={busy || !canChange || index === routes.routes.length - 1}
+                  disabled={busy || !editable || index === routes.routes.length - 1}
                   onClick={() => move(index, index + 1)}
                 >
                   Down
@@ -131,7 +146,7 @@ export function HubDeviceRoutes({
                   size="xs"
                   variant="ghost"
                   aria-label={`Remove ${route}`}
-                  disabled={busy || !canChange || route === routes.pin}
+                  disabled={busy || !editable || route === routes.pin}
                   onClick={() => void change({ op: "remove", route })}
                 >
                   Remove
@@ -156,14 +171,14 @@ export function HubDeviceRoutes({
           aria-label={`New route for ${alias}`}
           placeholder="SSH alias of the same machine"
           value={draft}
-          disabled={busy || !canChange}
+          disabled={busy || !editable}
           onChange={(event) => setDraft(event.target.value)}
         />
         <Button
           size="xs"
           variant="outline"
           type="submit"
-          disabled={busy || !canChange || draft.trim() === ""}
+          disabled={busy || !editable || draft.trim() === ""}
         >
           {busy ? "Working…" : "Add route"}
         </Button>

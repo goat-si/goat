@@ -83,7 +83,8 @@ it.effect(
       const unproven = "Error: Link routes request refused (409): route_unproven (hostkey)\n";
       const stored =
         "Error: Link routes request refused (500): routes_stored_reload_failed; the routes were stored\n";
-      const answers = [output("", unproven, 5), output("", stored, 1)];
+      const exclusive = "Error: Link routes request refused (409): link_exclusive\n";
+      const answers = [output("", unproven, 5), output("", stored, 1), output("", exclusive, 5)];
       const ocx = yield* hubOcx(() => answers.shift() ?? output("", "", 1));
       const args = [
         "link",
@@ -103,6 +104,7 @@ it.effect(
       const reload = yield* ocx.home(args, 1_000);
       expect(reload).toMatchObject({ code: 1, phase: "routes_stored_reload_failed" });
       expect(reload.cause).toBeUndefined();
+      expect(yield* ocx.home(args, 1_000)).toMatchObject({ code: 5, phase: "link_exclusive" });
     }),
 );
 it.effect("a ps listing over 256 KiB still counts this Home's link tunnels", () =>

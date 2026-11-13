@@ -115,3 +115,35 @@ it.effect("a device with no link on this Home is refused before ocx link routes 
     expect(routesCalls(hub.calls)).toEqual([]);
   }),
 );
+
+it.effect(
+  "an exclusive link lists its one route as exclusive, and refuses a change in plain words",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        linked: ["mini"],
+        routes: (args) =>
+          args[2] === "add"
+            ? { code: 5, stdout: "", phase: "link_exclusive" }
+            : {
+                code: 0,
+                stdout: JSON.stringify({
+                  linkId: LINK,
+                  pin: "mini",
+                  routes: ["mini"],
+                  exclusive: true,
+                }),
+              },
+      });
+      expect(yield* hub.membership.routes(scope, { deviceAlias: "mini" })).toMatchObject({
+        state: "ok",
+        routes: ["mini"],
+        exclusive: true,
+      });
+      const refused = yield* hub.membership.updateRoutes(scope, add);
+      expect(refused).toMatchObject({ state: "failed", code: "link_exclusive" });
+      expect(refused.message).toBe(
+        "This link is exclusive: its one route is fixed, so routes cannot be added, removed or reordered.",
+      );
+    }),
+);

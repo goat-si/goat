@@ -48,6 +48,8 @@ export const HubDeviceRoutesResult = Schema.Struct({
   pin: Schema.optional(Schema.String),
   /** The routes in the order the Home tries them. */
   routes: Schema.optional(Schema.Array(Schema.String)),
+  /** The link's one route is fixed at enrollment; OpenCodex refuses every edit. */
+  exclusive: Schema.optional(Schema.Literal(true)),
   code: Schema.optional(Schema.String),
   cause: Schema.optional(Schema.String),
   decisionId: Schema.optional(Schema.String),

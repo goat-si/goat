@@ -112,7 +112,7 @@ its link, in order, and marks the pinned one. Add another alias of the same
 machine, such as a LAN or Tailscale alias ahead of its `pen-<name>` alias, to
 keep its traffic off the Pen relay: the hub stores a new route only after it
 proves that machine's pinned host key over it. Move a route up or down, or
-remove one; the pinned alias stays. Agents use `goat_hub_device_routes_update`,
+remove one; the pinned alias stays. A link created with one exclusive route keeps that route and cannot be edited. Agents use `goat_hub_device_routes_update`,
 and a profile other than owner asks you first. Routes need an OpenCodex release
 with link routes on the hub; an older one says so.
 
