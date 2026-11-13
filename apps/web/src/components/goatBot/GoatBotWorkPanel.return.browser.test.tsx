@@ -184,6 +184,8 @@ it("marks and scrolls the returned row, restoring focus only when it has not mov
   expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
     "true",
   );
+  // A screen reader hears which row Back returned to, where a sighted person sees the highlight.
+  await expect.element(row).toHaveAccessibleName(/Where you left off$/);
   expect(scroll).toHaveBeenCalled();
 });
 it("does not move focus after it leaves the Back location and falls back to the Work heading for a missing row", async () => {
@@ -259,6 +261,7 @@ it("uses Back's return once: a later peek of the same task returns focus to its 
     const again = screen.getByRole("button", { name: /^Stop the port 3774 server/ });
     await expect.element(again).toHaveFocus();
     expect(again.element().closest("[data-home-return]")).toBeNull();
+    await expect.element(again).not.toHaveAccessibleName(/Where you left off/);
     expect(consumed).toHaveBeenCalledTimes(1);
   } finally {
     focusFrom.remove();
