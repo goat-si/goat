@@ -12,10 +12,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 /** Set only by the person-verified settings path; every other writer leaves the switch as it is. */
-export const PersonSwitchConsent = Context.Reference<boolean>(
-  "goat/hub/disposable/PersonSwitchConsent",
-  { defaultValue: () => false },
-);
+const PersonSwitchConsent = Context.Reference<boolean>("goat/hub/disposable/PersonSwitchConsent", {
+  defaultValue: () => false,
+});
 /** Runs a settings write as the person path does, once a person has been verified. */
 export const withPersonConsent = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, PersonSwitchConsent, true);
