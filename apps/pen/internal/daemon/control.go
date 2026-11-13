@@ -414,6 +414,8 @@ type InviteReply struct {
 	WindowsCommand string `json:"windowsCommand"`
 	// ID is a bound invite's id (contract "Bound invites"); an ordinary invite's answer has none.
 	ID string `json:"id,omitempty"`
+	// MintID repeats a bound invite's mintId.
+	MintID string `json:"mintId,omitempty"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {

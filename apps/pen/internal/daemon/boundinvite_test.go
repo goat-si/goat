@@ -93,3 +93,53 @@ func newIdentity(t *testing.T) *ident.Identity {
 	}
 	return id
 }
+
+// Over the control socket, invite.cancel ends a bound invite by its mintId or id, answers the state it is in, and a
+// cancel of a mintId nothing made yet refuses that create later.
+func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	var r InviteReply
+	if err := rawCall(t, a.st, `{"op":"invite","ttlMs":60000,"mintId":"m1","subject":`+subjectLine(jid, "j")+`}`, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.MintID != "m1" || r.ID == "" {
+		t.Fatalf("answer %+v; want the id and mintId m1", r)
+	}
+	cancelOp := func(line string) InviteCancelReply {
+		t.Helper()
+		var c InviteCancelReply
+		if err := rawCall(t, a.st, line, &c); err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		return c
+	}
+	if c := cancelOp(`{"op":"invite.cancel","mintId":"m1"}`); c.State != "cancelled" {
+		t.Fatalf("cancel by mintId: %+v", c)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err == nil {
+		t.Fatal("the subject joined with a cancelled invite")
+	}
+	if c := cancelOp(`{"op":"invite.cancel","inviteId":"` + r.ID + `"}`); c.State != "cancelled" {
+		t.Fatalf("second cancel by id: %+v", c)
+	}
+	if c := cancelOp(`{"op":"invite.cancel","mintId":"m2"}`); c.State != "cancelled" {
+		t.Fatalf("cancel of an unmade mint: %+v", c)
+	}
+	if err := rawCall(t, a.st, `{"op":"invite","mintId":"m2","subject":`+subjectLine(jid, "j")+`}`, &r); err == nil {
+		t.Fatalf("the fenced mint made an invite: %+v", r)
+	}
+	if c := cancelOp(`{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA"}`); c.State != "absent" {
+		t.Fatalf("cancel of an unknown id: %+v", c)
+	}
+	var c InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA","mintId":"m3"}`, &c); err == nil {
+		t.Fatalf("a cancel naming both an id and a mintId answered %+v", c)
+	}
+}

@@ -2,8 +2,8 @@ package mesh
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -56,19 +56,61 @@ func sameKey(a, b string) bool {
 	return err1 == nil && err2 == nil && bytes.Equal(x, y)
 }
 
-// CreateBound makes an invite that admits only sub, valid until expiresAt.
-func (iv *Invites) CreateBound(sub Subject, expiresAt, now time.Time) (Invite, error) {
+// ValidMintID reports whether m can name a mint: 1 to 64 ASCII letters, digits, '-', '_', '.' or ':'.
+func ValidMintID(m string) bool {
+	if len(m) < 1 || len(m) > 64 {
+		return false
+	}
+	for _, c := range m {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// Refusals of CreateBound for its mintID: an earlier create used it, or a cancel fenced it.
+var (
+	ErrMintUsed      = errors.New("this mintId already made an invite")
+	ErrMintCancelled = errors.New("this mintId was cancelled before its invite was made")
+)
+
+// CreateBound makes an invite that admits only sub, valid until expiresAt. A non-empty mintID names the request
+// that makes it; under the book's lock it is refused when an entry or a fence already carries that mintID.
+func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt, now time.Time) (Invite, error) {
 	if err := sub.Valid(); err != nil {
 		return Invite{}, err
+	}
+	if mintID != "" && !ValidMintID(mintID) {
+		return Invite{}, errors.New("mintId is not 1 to 64 letters, digits, '-', '_', '.' or ':'")
+	}
+	x, err := newInvite(expiresAt)
+	if err != nil {
+		return Invite{}, err
+	}
+	x.Subject, x.MintID = &sub, mintID
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	if iv.retired {
+		return Invite{}, errInviteRetired
 	}
 	if !expiresAt.After(now) {
 		return Invite{}, errors.New("the invite would expire before it is made")
 	}
-	return iv.create(expiresAt, now, &sub)
-}
-
-// subjectJSON is the subject as offers.json stores it (tests read it back).
-func subjectJSON(s *Subject) string {
-	b, _ := json.Marshal(s)
-	return string(b)
+	if mintID != "" {
+		if prior, ok := iv.findLocked("", mintID); ok && prior.ID == "" {
+			return Invite{}, ErrMintCancelled
+		} else if ok {
+			return Invite{}, ErrMintUsed
+		}
+	}
+	if iv.boundLocked() >= maxBound {
+		return Invite{}, errors.New("too many bound invites kept; acknowledge settled ones first")
+	}
+	byID := maps.Clone(iv.byID)
+	byID[x.ID] = x
+	if err := iv.commitLocked(now, byID, maps.Clone(iv.fences)); err != nil {
+		return Invite{}, err
+	}
+	return x, nil
 }

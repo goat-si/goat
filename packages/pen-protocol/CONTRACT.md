@@ -863,11 +863,28 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
 - The invite's entry in `offers.json` keeps the subject. In "Join" step 3 the inviter refuses (`refused`, then 4401)
   a card whose signPub, noisePub or name differs from the subject before it burns the invite, so a wrong machine
   holding the token cannot use it up; the burn checks the subject again.
+- `"mintId":M` names the request that makes a bound invite: 1 to 64 ASCII letters, digits, `-`, `_`, `.` or `:`, only
+  with a subject. The answer repeats it as `"mintId"`. Under the invite book's lock the create is refused, and makes
+  nothing, when an entry or a fence already carries M, so one mint makes at most one invite.
+- A bound invite is not deleted when it is used or cancelled. Its entry keeps the subject and the mintId, drops the
+  secret, and moves to `burned` with `nonce`, the offer nonce of the join that used it, in the same save as the burn and
+  before the admit is signed, or to `cancelled`. The admitted card repeats that nonce, so the admit this invite produced
+  is exactly the one whose card carries it.
+- Control op `invite.cancel`, `{"op":"invite.cancel","inviteId":I}` or `{"op":"invite.cancel","mintId":M}` (exactly
+  one; I is the invite id, 16 base64url characters for 12 bytes). Under the invite book's lock, which also orders the
+  burn, a live invite is cancelled and admits nobody from then on (an unbound one is removed). The answer
+  `{"t":"invite-cancel","inviteId":I,"mintId":M,"state":S}` repeats what was named and gives the state after the op:
+  `cancelled` (by this op or an earlier one), `burned` (a join came first), `expired`, or `absent` (no such id). A
+  mintId that names nothing yet leaves a fence and answers `cancelled`; a later create with it is refused. Of a cancel
+  and a join of one invite exactly one wins: the join that loses closes 4401, and a cancel that loses answers
+  `burned`.
+- At most 256 bound entries are kept, and 512 with fences; past that a create or a fence is refused.
 - `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
   `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
   `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to.
 - A node older than this decodes `subject` as the string of the `revoke` op, answers `{"error":"bad request"}` and
-  makes nothing, so a caller never gets an unbound token in place of a bound one.
+  makes nothing, so a caller never gets an unbound token in place of a bound one; it answers the other ops of this
+  section that it does not know the op.
 
 ## Close codes
 
@@ -974,7 +991,8 @@ v1.2 member-only reader refuses both valid new forms.
   exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.
 - v1.3 (2026-11-13): node side only, no wire change: "Bound invites": control op `invite` with a `subject` makes an invite that
   admits only that machine's keys and name, refused before the burn otherwise; `pen identity --json` prints a machine's
-  keys before it joins.
+  keys before it joins; bound invites carry a caller's mintId and are kept as `burned` or `cancelled` entries, and control op
+  `invite.cancel` cancels one by id or mintId, or fences a mintId before its create.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.

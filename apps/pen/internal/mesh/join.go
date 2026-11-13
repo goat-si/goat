@@ -3,18 +3,15 @@ package mesh
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
-	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -135,137 +132,6 @@ func loopback(host string) bool {
 
 // NodeID is the inviter's nodeId.
 func (t Token) NodeID() string { return ident.NodeID(t.SignPub) }
-
-// Invite is a live single-use invite.
-type Invite struct {
-	ID        string `json:"id"`
-	Secret    []byte `json:"secret"`
-	ExpiresAt int64  `json:"expiresAt"`
-	// Subject, when set, is the only machine the invite admits (a bound invite).
-	Subject *Subject `json:"subject,omitempty"`
-}
-
-// Invites are the node's live invites, persisted in offers.json.
-type Invites struct {
-	st   *state.Store
-	mu   sync.Mutex
-	live map[string]Invite
-	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
-	retired bool
-}
-
-// LoadInvites reads offers.json (st may be nil for in-memory use).
-func LoadInvites(st *state.Store) (*Invites, error) {
-	iv := &Invites{st: st, live: map[string]Invite{}}
-	if st == nil {
-		return iv, nil
-	}
-	var list []Invite
-	if _, err := st.ReadJSON("offers.json", &list); err != nil {
-		return nil, err
-	}
-	for _, x := range list {
-		iv.live[x.ID] = x
-	}
-	return iv, nil
-}
-
-func (iv *Invites) saveLocked(now time.Time) error {
-	list := []Invite{}
-	for id, x := range iv.live {
-		if x.ExpiresAt <= now.UnixMilli() {
-			delete(iv.live, id)
-			continue
-		}
-		list = append(list, x)
-	}
-	if iv.st == nil || iv.retired {
-		return nil
-	}
-	unlock, err := iv.st.Lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return iv.st.WriteJSON("offers.json", list, 0o600)
-}
-
-// Retire stops this book from writing offers.json; a save already running finishes first.
-func (iv *Invites) Retire() {
-	iv.mu.Lock()
-	iv.retired = true
-	iv.mu.Unlock()
-}
-
-// Create makes an invite valid for ttl.
-func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
-	return iv.create(now.Add(ttl), now, nil)
-}
-
-func (iv *Invites) create(expiresAt, now time.Time, sub *Subject) (Invite, error) {
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return Invite{}, err
-	}
-	x := Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: expiresAt.UnixMilli(), Subject: sub}
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	if iv.retired {
-		return Invite{}, errors.New("this node's mesh changed while the invite was made; run pen invite again")
-	}
-	iv.live[x.ID] = x
-	return x, iv.saveLocked(now)
-}
-
-// Prune drops expired invites from memory and offers.json.
-func (iv *Invites) Prune(now time.Time) error {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	for _, x := range iv.live {
-		if x.ExpiresAt <= now.UnixMilli() {
-			return iv.saveLocked(now)
-		}
-	}
-	return nil
-}
-
-// Lookup finds a live (unexpired, unused) invite.
-func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	x, ok := iv.live[id]
-	if !ok {
-		return Invite{}, false
-	}
-	if x.ExpiresAt <= now.UnixMilli() {
-		// The join is refused either way; a failed write leaves the secret for the next save.
-		_ = iv.saveLocked(now)
-		return Invite{}, false
-	}
-	return x, true
-}
-
-// Burn atomically uses an invite for the joiner whose card is cb; only one caller ever succeeds, and a bound
-// invite only for its subject.
-func (iv *Invites) Burn(id string, now time.Time, cb CardBody) error {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	x, ok := iv.live[id]
-	if !ok {
-		return errors.New("invite already used or expired")
-	}
-	if !x.Subject.admits(cb) {
-		return errors.New("card does not match this invite")
-	}
-	if x.ExpiresAt <= now.UnixMilli() {
-		if err := iv.saveLocked(now); err != nil {
-			return err
-		}
-		return errors.New("invite already used or expired")
-	}
-	delete(iv.live, id)
-	return iv.saveLocked(now)
-}
 
 // Admission is what an inviter needs to serve one join.
 type Admission struct {
