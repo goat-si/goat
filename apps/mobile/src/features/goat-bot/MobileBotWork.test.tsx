@@ -481,7 +481,10 @@ it("distinguishes task thread loading, missing, offline, and retry states", asyn
   expect(container.textContent).toContain("Loading task");
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
   await render(ChannelTaskId.make("task"));
-  expect(container.textContent).toContain("Task not found");
+  // A settled list without the task: it is older work, whose status and actions are in Home.
+  expect(container.textContent).toContain(
+    "Status and actions for older work are in GOAT Bot's Home.",
+  );
   Object.assign(state.task, { error: "failed", isSuccess: false });
   await render(ChannelTaskId.make("task"));
   await press("Couldn't load task");
@@ -491,15 +494,25 @@ it("distinguishes task thread loading, missing, offline, and retry states", asyn
   expect(container.textContent).toContain("offline");
 });
 
-it("shows task details in the header when a card is available", async () => {
+it("shows task details in the header when a card is available for a listed task", async () => {
   reset();
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId: "task", title: "Review", status: "running", updatedAt: at },
+    view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
   await render(ChannelTaskId.make("task"));
   expect(container.textContent).not.toContain("Task summary");
   await render(ChannelTaskId.make("task"), <span>Task summary</span>);
   expect(container.textContent).toContain("Task summary");
 });
 
-it("names a task the server no longer lists from its conversation card, not as missing", async () => {
+it("names a task the server no longer lists from its conversation card, as older work", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
   if (!root) root = createRoot(container);
@@ -508,16 +521,30 @@ it("names a task the server no longer lists from its conversation card, not as m
       <WorkWithChip
         visible
         taskId={ChannelTaskId.make("task-old")}
-        taskCardInfo={{ title: "Summarize the README", statusLabel: "Needs your input" }}
-        taskCard={<span>Connect mac-mini to open</span>}
+        taskCardInfo={{
+          key: "task-old",
+          revision: 1,
+          updatedAt: "2026-11-11T02:00:00.000Z",
+          title: "Summarize the README",
+          statusLabel: "Needs your input",
+          tone: "attention",
+          sourceLabel: null,
+          summary: null,
+          attentionLabel: null,
+          pullRequests: [],
+          target: { kind: "none", label: "No thread" },
+        }}
+        taskCard={<span>Needs your input</span>}
         onOpenTask={() => {}}
         onOpenThread={state.openThread}
       />,
     ),
   );
   expect(container.textContent).toContain("Summarize the README");
-  expect(container.textContent).toContain("Needs your input");
-  expect(container.textContent).toContain("Connect mac-mini to open");
+  expect(container.textContent).toContain(
+    "Status and actions for older work are in GOAT Bot's Home.",
+  );
+  expect(container.textContent).not.toContain("Needs your input");
   expect(container.textContent).not.toContain("Task not found");
 });
 

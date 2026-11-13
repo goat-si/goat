@@ -52,8 +52,7 @@ export function acknowledgeTaskRead({
 }): Promise<TaskReadAcknowledgementOutcome> {
   const key = requestKey(environmentId, taskId, readThrough);
   const at = Date.parse(readThrough);
-  const known = accepted.get(taskKey(environmentId, taskId));
-  if (inFlight.has(key) || (Number.isFinite(at) && known !== undefined && at <= known))
+  if (inFlight.has(key) || taskReadAccepted(environmentId, taskId, readThrough))
     return Promise.resolve("skipped");
   inFlight.add(key);
   return (
@@ -68,6 +67,17 @@ export function acknowledgeTaskRead({
         return "accepted";
       })
   );
+}
+
+/** Whether the server already accepted this activity or a newer one, as against one in flight. */
+export function taskReadAccepted(
+  environmentId: EnvironmentId,
+  taskId: ChannelTaskId,
+  readThrough: string,
+): boolean {
+  const at = Date.parse(readThrough);
+  const known = accepted.get(taskKey(environmentId, taskId));
+  return Number.isFinite(at) && known !== undefined && at <= known;
 }
 
 export function resetTaskReadAcknowledgementsForTests() {

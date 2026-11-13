@@ -21,7 +21,7 @@ import {
 
 export function GoatBotRouteScreen({
   route,
-}: StaticScreenProps<{ taskId?: string; botId?: string }>) {
+}: StaticScreenProps<{ taskId?: string; botId?: string; taskTitle?: string }>) {
   const focused = useIsFocused();
   const active = useAppActive();
   const foreground = useAppForeground();
@@ -115,6 +115,7 @@ export function GoatBotRouteScreen({
           : undefined
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
+      taskTitle={route.params?.taskTitle}
       readSnapshot={chat !== null ? readSnapshot : null}
     />
   );

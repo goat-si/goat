@@ -69,3 +69,27 @@ it("a closed row says it is disabled to assistive technology and opens nothing",
   expect(onOpenTask).toHaveBeenCalledTimes(1);
   await act(async () => root.unmount());
 });
+
+it("without its status, a row still names the work and opens its thread", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const onSelectThread = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const thread = { ...card, target: { kind: "thread", environmentId: "env", threadId: "t-1" } };
+  await act(async () =>
+    root.render(
+      <GoatBotTaskRow
+        card={thread as GoatBotTaskCard}
+        onSelectThread={onSelectThread}
+        statusHidden
+      />,
+    ),
+  );
+  const row = container.querySelector("button");
+  expect(row?.textContent).toContain("Summarize the README");
+  expect(row?.textContent).not.toContain("Needs your input");
+  expect(row?.getAttribute("aria-label")).not.toContain("Needs your input");
+  await act(async () => row?.click());
+  expect(onSelectThread).toHaveBeenCalledWith({ environmentId: "env", id: "t-1" });
+  await act(async () => root.unmount());
+});

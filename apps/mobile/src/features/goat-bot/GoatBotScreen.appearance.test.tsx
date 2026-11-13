@@ -526,7 +526,7 @@ it("shows in the main chat the work cards the shared rows keep there", async () 
   }
 });
 
-it("shows a task chip in the task header only when one exists", async () => {
+it("shows a task chip in the task header only when one exists, without the status it states", async () => {
   const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
   screenSession.supportsTaskThreads = true;
   screenSession.rows = [
@@ -554,6 +554,10 @@ it("shows a task chip in the task header only when one exists", async () => {
   const view = await render(<GoatBotScreen visible taskId={task} />);
   expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).toContain(
     "Disk summary",
+  );
+  // The task's status comes from the current list; the chat card's own may be stale.
+  expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).not.toContain(
+    "Running",
   );
   expect(list.props?.data).toEqual([]);
   await view.unmount();

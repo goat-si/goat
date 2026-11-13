@@ -5,6 +5,7 @@ import {
   acknowledgeTaskRead,
   resetTaskReadAcknowledgementsForTests,
   TASK_READ_ACKNOWLEDGED_LIMIT,
+  taskReadAccepted,
   type TaskReadUpdate,
 } from "./taskReadAcknowledgement.ts";
 
@@ -26,6 +27,22 @@ const ack = (update: TaskReadUpdate, taskId: string, readThrough = at, environme
   });
 
 describe("acknowledgeTaskRead", () => {
+  it("tells a skip for an accepted activity from a skip for one still in flight", async () => {
+    const update = setup();
+    const accepted = (readThrough: string) =>
+      taskReadAccepted(EnvironmentId.make("env"), ChannelTaskId.make("task"), readThrough);
+    let land = (_result: { _tag: string }) => {};
+    update.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+    const first = ack(update, "task", later);
+    expect(accepted(later)).toBe(false);
+    land({ _tag: "Success" });
+    await first;
+    expect(accepted(later)).toBe(true);
+    expect(accepted(at)).toBe(true);
+    expect(accepted("2026-11-09T02:00:00.000Z")).toBe(false);
+    expect(accepted("not a time")).toBe(false);
+  });
+
   it("sends a task's activity once while that request is in flight", async () => {
     const update = setup();
     let land = (_result: { _tag: string }) => {};

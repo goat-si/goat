@@ -56,13 +56,16 @@ export function mobileBotTaskListItems(props: {
   readonly chatTasks: ReadonlyArray<GoatBotTaskCard>;
   /** A listed task opens its peek on the bot's home. */
   readonly onPeekTask: (id: ChannelTaskId) => void;
-  /** A task only the conversation still shows opens its own conversation. */
-  readonly onOpenTask: (id: ChannelTaskId) => void;
+  /** A task only the conversation still shows, or an older one, opens its own screen. */
+  readonly onOpenTask: (id: ChannelTaskId, title?: string) => void;
   readonly onOpenThread: (thread: ThreadSelection) => void;
   readonly onUpdate: (input: ChannelUpdateTaskViewInput) => void;
   /** The last read failed: an empty list then says nothing about whether work exists. */
   readonly failed?: boolean;
+  /** Older work read behind Show more; absent where Home does not walk history. */
+  readonly history?: MobileBotHomeHistory | undefined;
 }): ReadonlyArray<MobileBotHomeItem> {
+  const history = props.history;
   const listed = new Set(
     [...props.work.running, ...props.work.waiting, ...props.work.finished].map((entry) =>
       String(entry.row.task.taskId),
@@ -82,10 +85,12 @@ export function mobileBotTaskListItems(props: {
             render: () => (
               <MobileBotPanelEmpty
                 title="No recent tasks"
-                next={`Ask ${props.botName} in chat to start work. Unpinned tasks that finished more than three days ago aren't listed here.`}
+                next={`Ask ${props.botName} in chat to start work.${history?.supported ? "" : " Unpinned tasks that finished more than three days ago aren't listed here."}`}
               />
             ),
           },
+          // Older work can still be read behind Show more when nothing recent is listed.
+          ...historyTail(props, 0),
         ];
   }
   const act = (row: TaskRow, action: string) => {
@@ -94,22 +99,37 @@ export function mobileBotTaskListItems(props: {
     if (action === "read")
       props.onUpdate({ taskId: row.task.taskId, readThrough: row.lastActivityAt });
   };
+  const openable = props.openable ?? true;
+  // A row the current list does not hold came from older work: it offers Show work, Open and Pin.
+  const older = (row: TaskRow) =>
+    history?.supported === true && !history.currentTaskIds.has(row.task.taskId);
   // The row menu and the open control's assistive actions offer the same choices.
   const actions = (row: TaskRow) => [
     { id: "work", title: props.expanded.has(row.task.taskId) ? "Hide work" : "Show work" },
-    ...(props.canUpdate
-      ? [
-          { id: "pin", title: row.view.pinnedAt ? "Unpin" : "Pin" },
-          { id: "done", title: row.view.doneAt ? "Reopen" : "Mark done" },
-          ...(row.unread ? [{ id: "read", title: "Mark read" }] : []),
-        ]
-      : []),
+    ...(older(row)
+      ? openable
+        ? [
+            { id: "open", title: "Open" },
+            { id: "pin", title: "Pin", attributes: { disabled: !props.canUpdate } },
+          ]
+        : []
+      : props.canUpdate
+        ? [
+            { id: "pin", title: row.view.pinnedAt ? "Unpin" : "Pin" },
+            { id: "done", title: row.view.doneAt ? "Reopen" : "Mark done" },
+            ...(row.unread ? [{ id: "read", title: "Mark read" }] : []),
+          ]
+        : []),
   ];
   const choose = (row: TaskRow, id: string) => {
     if (id === "work") props.onToggleExpanded(row.task.taskId);
-    else if (props.canUpdate) act(row, id);
+    else if (older(row)) {
+      if (id === "open" && openable) props.onOpenTask(row.task.taskId, row.task.title);
+      // Pinning an older task only refreshes the list; the pinned task then comes from it.
+      if (id === "pin" && props.canUpdate)
+        props.onUpdate({ taskId: row.task.taskId, pinned: true });
+    } else if (props.canUpdate) act(row, id);
   };
-  const openable = props.openable ?? true;
   const label = (key: string, text: string): MobileBotHomeItem => ({
     key,
     render: () => <Text className="pt-2 font-semibold text-foreground">{text}</Text>,
@@ -138,10 +158,11 @@ export function mobileBotTaskListItems(props: {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={mobileBotTaskLabel(row)}
-                accessibilityActions={actions(row).map((action) => ({
-                  name: action.id,
-                  label: action.title,
-                }))}
+                accessibilityActions={actions(row)
+                  .filter(
+                    (action) => !("attributes" in action && action.attributes?.disabled === true),
+                  )
+                  .map((action) => ({ name: action.id, label: action.title }))}
                 onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
                 accessibilityState={{ disabled: !openable }}
                 disabled={!openable}
@@ -193,25 +214,19 @@ export function mobileBotTaskListItems(props: {
           />
         ),
       });
+      if (history?.launchesTruncated.has(row.task.taskId))
+        items.push({
+          key: JSON.stringify(["task-truncated", row.task.taskId]),
+          render: () => (
+            <Text className="pb-2 pl-6 text-xs text-foreground-muted">
+              Some threads are listed in Threads.
+            </Text>
+          ),
+        });
       if (props.expanded.has(row.task.taskId)) items.push(...props.details(row.task.taskId));
     }
-    if (section === "finished" && props.work.finished.length > COLLAPSED_FINISHED) {
-      items.push({
-        key: "finished-toggle",
-        render: () => (
-          <Pressable
-            accessibilityRole="button"
-            onPress={props.onToggleFinished}
-            className="min-h-[44px] items-center justify-center"
-          >
-            <Text className="text-foreground">
-              {props.showAllFinished ? "Show less" : "Show more"}
-            </Text>
-          </Pressable>
-        ),
-      });
-    }
   }
+  items.push(...historyTail(props, props.work.finished.length));
   if (others.length > 0) items.push(label("section:other", "Other threads"));
   for (const row of others) {
     items.push({
@@ -263,4 +278,70 @@ export function carded(items: ReadonlyArray<MobileBotHomeItem>): MobileBotHomeIt
             ? "last"
             : "middle",
   }));
+}
+
+/** What Home's older-work walk tells the list. */
+export interface MobileBotHomeHistory {
+  readonly supported: boolean;
+  readonly currentTaskIds: ReadonlySet<ChannelTaskId>;
+  readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  readonly hasMore: boolean;
+  readonly loading: boolean;
+  readonly incomplete: boolean;
+  readonly failed: boolean;
+  readonly onLoadMore: () => void;
+}
+
+/**
+ * The two older-work notices, then one Show more entry: it reads older work while history can
+ * continue, and otherwise shows or hides finished tasks past the first five. The entry keeps one
+ * key either way, so the row a person pressed stays the same row.
+ */
+function historyTail(
+  props: {
+    readonly history?: MobileBotHomeHistory | undefined;
+    readonly showAllFinished: boolean;
+    readonly onToggleFinished: () => void;
+  },
+  finished: number,
+): MobileBotHomeItem[] {
+  const history = props.history;
+  const items: MobileBotHomeItem[] = [];
+  if (history?.incomplete)
+    items.push({
+      key: "history-incomplete",
+      render: () => (
+        <Text className="py-2 text-xs text-foreground-muted">Older work may be missing</Text>
+      ),
+    });
+  if (history?.failed)
+    items.push({
+      key: "history-failed",
+      render: () => (
+        <Text className="py-2 text-xs text-foreground-muted">Couldn't load older work.</Text>
+      ),
+    });
+  const continues = history?.hasMore === true;
+  if (continues || finished > COLLAPSED_FINISHED)
+    items.push({
+      key: "finished-toggle",
+      render: () => (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ busy: continues && history?.loading === true }}
+          onPress={() => {
+            if (!continues) return props.onToggleFinished();
+            if (history?.loading) return;
+            if (!props.showAllFinished) props.onToggleFinished();
+            history?.onLoadMore();
+          }}
+          className="min-h-[44px] items-center justify-center"
+        >
+          <Text className="text-foreground">
+            {continues || !props.showAllFinished ? "Show more" : "Show less"}
+          </Text>
+        </Pressable>
+      ),
+    });
+  return items;
 }
