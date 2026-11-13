@@ -410,3 +410,34 @@ it.effect("a withdrawal Pen has not confirmed reads as pending, never as a join"
     }),
   ),
 );
+
+// Every settings writer waits while a reservation holds the settings lock, so the transaction is
+// bounded: one that cannot start or finish within 15 s gives the lock back.
+it.effect("a reservation whose transaction stalls gives up the settings lock at 15 s", () =>
+  world((pen, _home, grant) =>
+    Effect.gen(function* () {
+      grant.gate = yield* Deferred.make<void>();
+      grant.reached = yield* Deferred.make<void>();
+      grant.gateOnCall = 1;
+      const attaching = yield* attach(1).pipe(Effect.flip, Effect.forkChild);
+      yield* Deferred.await(grant.reached);
+      const sql = yield* SqlClient.SqlClient;
+      const holding = yield* Deferred.make<void>();
+      const held = yield* Deferred.make<void>();
+      const holder = yield* sql
+        .withTransaction(
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(holding))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      yield* Deferred.succeed(grant.gate, undefined);
+      yield* TestClock.adjust(15_000);
+      expect((yield* Fiber.join(attaching)).reason).toBe("storage_failed");
+      expect(pen.book.size).toBe(0);
+      yield* Deferred.succeed(holding, undefined);
+      yield* Fiber.join(holder);
+      // The settings lock was given back.
+      yield* switchTo({ cap: 3 });
+    }),
+  ),
+);
