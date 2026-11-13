@@ -1007,3 +1007,51 @@ func TestPipeKeepsBytesWhenTheWallClockSlewsHalfASecond(t *testing.T) {
 		t.Fatalf("reports %+v; want 100 then 50 bytes each way counted across a 500 ms slew", r)
 	}
 }
+
+// The limits are exact and use both clocks: bytes are kept one nanosecond short of keepFor and dropped at it, when
+// only the monotonic clock or only the wall clock says so, for pending bytes and for a refused batch alike. The
+// other clock lags by 500 ms, within clockStep.
+func TestTrafficLimitsAreExactOnEitherClock(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		held, mono bool // held: a refused batch, else pending bytes; mono: the monotonic clock is the long one
+		age        time.Duration
+		kept       bool
+	}{
+		{"pending, monotonic just short", false, true, keepFor - 1, true},
+		{"pending, monotonic at keepFor", false, true, keepFor, false},
+		{"pending, wall just short", false, false, keepFor - 1, true},
+		{"pending, wall at keepFor", false, false, keepFor, false},
+		{"held, monotonic just short", true, true, keepFor - 1, true},
+		{"held, monotonic at keepFor", true, true, keepFor, false},
+		{"held, wall just short", true, false, keepFor - 1, true},
+		{"held, wall at keepFor", true, false, keepFor, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, set, got := reportOnly(t, func(n int) string {
+				if c.held && n == 1 {
+					return `{"error":"unknown op \"traffic.report\""}`
+				}
+				return `{"t":"counted"}`
+			})
+			start := s.lastTry.wall
+			s.in.Store(100)
+			s.out.Store(100)
+			if c.held {
+				set(start.Add(time.Minute), time.Minute)
+				s.report(context.Background()) // refused: 100 bytes wait, from the start
+			}
+			wall, mono := c.age-500*time.Millisecond, c.age
+			if !c.mono {
+				wall, mono = c.age, c.age-500*time.Millisecond
+			}
+			set(start.Add(wall), mono)
+			s.report(context.Background())
+			r := got()
+			sent := len(r) > 0 && r[len(r)-1].In == 100 && (!c.held || len(r) == 2)
+			if sent != c.kept {
+				t.Fatalf("reports %+v; want the 100 bytes kept %v", r, c.kept)
+			}
+		})
+	}
+}
