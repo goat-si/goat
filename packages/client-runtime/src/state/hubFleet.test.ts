@@ -2,7 +2,7 @@ import type { HostStatusEntry, OpenCodexInventorySnapshot } from "@goat/contract
 import { describe, expect, it } from "@effect/vitest";
 
 import { hubDeviceFacts, hubDeviceSeverity, hubSnapshot } from "./hubFleet.ts";
-import { hubRelayWarningLabel } from "./hubLinkTraffic.ts";
+import { hubLinkOfMachine, hubRelayWarningLabel } from "./hubLinkTraffic.ts";
 
 function inventory(
   role: "home" | "child" | "none",
@@ -316,5 +316,30 @@ describe("link traffic", () => {
     );
     const under = hubSnapshot([{ key: "home", label: "home", entry: home([]) }]);
     expect(under!.relayWarning).toBe(null);
+  });
+});
+
+describe("hubLinkOfMachine", () => {
+  const devices = [
+    { alias: "macmini-ts", tunnel: "connected" as const },
+    { alias: "studio", tunnel: null },
+  ];
+  const machine = (label: string, sshAlias: string | null = null, reported: string[] = []) => ({
+    label,
+    sshHost: sshAlias === null ? null : { alias: sshAlias },
+    reportedAliases: reported.map((alias) => ({ alias })),
+  });
+
+  it("finds a Fleet machine's Remote Link Child by its dispatcher alias, a reported alias or its label", () => {
+    expect(hubLinkOfMachine(devices, machine("Mac mini", "macmini-ts"))?.alias).toBe("macmini-ts");
+    expect(hubLinkOfMachine(devices, machine("Mac mini", null, ["macmini-ts"]))?.alias).toBe(
+      "macmini-ts",
+    );
+    expect(hubLinkOfMachine(devices, machine("macmini-ts"))?.alias).toBe("macmini-ts");
+  });
+
+  it("never matches a machine that is not a linked Child", () => {
+    expect(hubLinkOfMachine(devices, machine("studio"))).toBe(null);
+    expect(hubLinkOfMachine(devices, machine("other", "other-ts"))).toBe(null);
   });
 });
