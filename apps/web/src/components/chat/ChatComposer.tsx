@@ -2104,7 +2104,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   };
-
   const sendAfterUploads = useSendAfterUploads(composerDraftTargetKey, uploadGate);
   const submitComposer = (
     event?: { preventDefault: () => void },
@@ -3847,12 +3846,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   className="ms-1 flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
                   <ComposerFooterPrimaryActions
+                    key={`${environmentId}:${activeThreadId ?? "new"}`}
                     voiceControl={voice.voiceControl}
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     canInterrupt={canInterrupt}
+                    runId={activeThread?.runtime?.activeRunId ?? null}
                     followUpBehavior={followUpBehavior}
                     canSteer={!isCompacting}
                     alternateShortcutLabel={shortcutLabelForCommand(

@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useComposerStopState } from "./useComposerStopState";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import { ComposerVoiceButton, type ComposerVoiceButtonProps } from "./ComposerVoiceButton";
 import {
@@ -40,6 +41,7 @@ interface ComposerPrimaryActionsProps {
   pendingAction: PendingActionState | null;
   isRunning: boolean;
   canInterrupt: boolean;
+  runId?: string | null;
   followUpBehavior?: "queue" | "steer";
   canSteer?: boolean;
   alternateShortcutLabel?: string | null;
@@ -105,6 +107,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   pendingAction,
   isRunning,
   canInterrupt,
+  runId = null,
   followUpBehavior = "steer",
   canSteer = true,
   alternateShortcutLabel = null,
@@ -128,6 +131,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   keepFullHistory = false,
   onToggleKeepFullHistory,
 }: ComposerPrimaryActionsProps) {
+  const stop = useComposerStopState(runId, canInterrupt, canOperateThread);
+  const stopLabel =
+    stop.phase === "landed" ? "Stopped" : stop.phase === "pending" ? "Stopping" : "Stop generation";
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
@@ -167,24 +173,27 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               "cursor-pointer bg-composer-stop text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-colors duration-150 hover:bg-destructive active:inset-shadow-control-pressed active:shadow-none",
             )}
             {...pointerFocusProps}
-            disabled={!canOperateThread}
+            disabled={!canOperateThread || stop.disabled}
             onClick={() => {
-              if (canOperateThread) onInterrupt();
+              if (!canOperateThread || stop.disabled) return;
+              stop.start();
+              onInterrupt();
             }}
-            aria-label="Stop generation"
+            aria-label={stopLabel}
           />
         }
       >
         <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
       </TooltipTrigger>
-      <TooltipPopup>Interrupt</TooltipPopup>
+      <TooltipPopup>
+        {stop.phase === "pending" ? "Stopping…" : stop.phase === "landed" ? "Stopped" : "Interrupt"}
+      </TooltipPopup>
     </Tooltip>
   );
 
   if (pendingAction) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
-        {canInterrupt ? renderStopGenerationButton() : null}
         {pendingAction.questionIndex > 0 ? (
           compact ? (
             <Button
@@ -227,6 +236,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             questionIndex: pendingAction.questionIndex,
           })}
         </button>
+        {canInterrupt || stop.phase !== null ? renderStopGenerationButton() : null}
       </div>
     );
   }
@@ -244,6 +254,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           >
             {isConnecting || isSendBusy ? "Sending..." : "Refine"}
           </button>
+          {stop.phase !== null ? renderStopGenerationButton() : null}
         </>
       );
     }
@@ -295,11 +306,16 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </MenuPopup>
           </Menu>
         </div>
+        {stop.phase !== null ? renderStopGenerationButton() : null}
       </>
     );
   }
 
-  if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
+  if (
+    (canInterrupt || stop.phase === "pending" || stop.phase === "timedOut") &&
+    !hasSendableContent &&
+    !isEditingQueuedMessage
+  ) {
     return (
       <span className="inline-flex items-center gap-2.5">
         {voiceButton}
@@ -389,7 +405,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       </Tooltip>
     </span>
   );
-  if (compactTokens === null) return submit;
+  if (compactTokens === null)
+    return (
+      <>
+        {submit}
+        {stop.phase !== null ? renderStopGenerationButton() : null}
+      </>
+    );
 
   return (
     <div data-chat-composer-compact-send="true" className="flex items-center gap-2">
@@ -436,6 +458,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {submit}
+      {stop.phase !== null ? renderStopGenerationButton() : null}
     </div>
   );
 });
