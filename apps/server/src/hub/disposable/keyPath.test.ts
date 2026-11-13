@@ -119,3 +119,39 @@ it.live.skipIf(WINDOWS)(
       expect(yield* keyPathFor(linked, at.own)).toEqual({ kind: "ok" });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.live.skipIf(WINDOWS)(
+  "a GOAT base folder that is a symlink to another folder never gets that folder chmodded",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const at = yield* layout({ shared: 0o755, base: 0o755 });
+      // The person's own folder, group-writable; GOAT's base folder is only a link to it.
+      const home = path.join(at.root, "home");
+      yield* fs.makeDirectory(home);
+      yield* fs.chmod(home, 0o775);
+      yield* fs.rename(at.base, path.join(home, "goat-real"));
+      yield* fs.symlink(home, at.base);
+      const key = path.join(at.base, "goat-real", "userdata", "disposable", "machine_ed25519");
+      const own = [at.base, path.join(at.base, "goat-real", "userdata")];
+      expect(yield* keyPathFor(key, own)).toEqual({ kind: "directory", directory: home });
+      expect(yield* at.mode(home)).toBe(0o775);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)("the key's own folder is judged strictly however the path reaches it", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const at = yield* layout({ shared: 0o755, base: 0o755 });
+    // A sticky folder anyone can write passes above the key, never as the key's own folder.
+    const sticky = path.join(at.root, "sticky");
+    yield* fs.makeDirectory(path.join(sticky, "sub"), { recursive: true });
+    yield* fs.chmod(sticky, 0o1777);
+    yield* fs.writeFileString(path.join(sticky, "machine_ed25519"), "key", { mode: 0o600 });
+    yield* fs.symlink(path.join(sticky, "sub") + "/..", path.join(at.disposable, "via"));
+    const key = path.join(at.disposable, "via", "machine_ed25519");
+    expect(yield* keyPathFor(key, at.own)).toEqual({ kind: "directory", directory: sticky });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

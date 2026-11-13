@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 /**
  * OpenCodex's identity file rule (link.route/2): a plain path to a private regular file, and every folder
@@ -14,7 +15,10 @@ import * as Effect from "effect/Effect";
 export type KeyPathAnswer =
   | { readonly kind: "ok" }
   | { readonly kind: "form" }
-  | { readonly kind: "key"; readonly problem: "missing" | "not_regular" | "permissions" }
+  | {
+      readonly kind: "key";
+      readonly problem: "missing" | "not_regular" | "permissions" | "unreadable";
+    }
   | { readonly kind: "directory"; readonly directory: string }
   /** A symlink on the path that another user owns, who could point it elsewhere. */
   | { readonly kind: "symlink"; readonly path: string };
@@ -24,6 +28,8 @@ export type Lstat = (path: string) => Effect.Effect<
   {
     readonly uid: number;
     readonly mode: number;
+    readonly dev: number;
+    readonly ino: number;
     readonly isSymbolicLink: () => boolean;
     readonly isDirectory: () => boolean;
     readonly isFile: () => boolean;
@@ -51,21 +57,39 @@ interface Walk {
   readonly own: ReadonlySet<string>;
 }
 
+/**
+ * Removes group and other write from the very folder the walk judged: opened without following a
+ * link, and changed only while it is still that folder (device and inode) and this user's.
+ */
+const tighten = (walk: Walk, path: string, seen: { readonly dev: number; readonly ino: number }) =>
+  Effect.tryPromise(async () => {
+    const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = NodeFSP.constants;
+    const handle = await NodeFSP.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    try {
+      const now = await handle.stat();
+      if (!now.isDirectory() || now.dev !== seen.dev || now.ino !== seen.ino) return false;
+      if (now.uid !== walk.uid) return false;
+      await handle.chmod(now.mode & 0o7755);
+      return true;
+    } finally {
+      await handle.close();
+    }
+  }).pipe(Effect.orElseSucceed(() => false));
+
 /** A directory's verdict: safe, tightened by GOAT, or unsafe. */
 const judge = Effect.fn("keyPath.judge")(function* (
   walk: Walk,
   path: string,
-  stat: { readonly uid: number; readonly mode: number },
+  stat: { readonly uid: number; readonly mode: number; readonly dev: number; readonly ino: number },
   strict: boolean,
 ) {
   const owned = stat.uid === walk.uid || stat.uid === 0;
   const writable = (stat.mode & 0o022) !== 0;
   const excepted = !strict && (stat.mode & 0o1000) !== 0;
   if (owned && (!writable || excepted)) return true;
+  // Only GOAT's own folder, this user's, failing only the write rule is tightened.
   if (stat.uid !== walk.uid || !walk.own.has(path)) return false;
-  // GOAT's own folder, this user's, failing only the write rule: tighten it.
-  yield* Effect.tryPromise(() => NodeFSP.chmod(path, stat.mode & 0o7755));
-  return true;
+  return yield* tighten(walk, path, stat);
 });
 
 /** Resolves the key's directory entry by entry and judges every directory on the way. */
@@ -101,6 +125,8 @@ const resolveDirectory = Effect.fn("keyPath.resolveDirectory")(function* (
     if (!(yield* judge(walk, next, entry, pending.length === 0))) return unsafe(next);
     current = next;
   }
+  // The key's own folder is strict however the walk reached it (a link ending in .. or /).
+  if (!(yield* judge(walk, current, yield* walk.lstat(current), true))) return unsafe(current);
   return undefined;
 });
 
@@ -115,8 +141,16 @@ export const keyPathFor = Effect.fn("keyPath.check")(function* (
 ) {
   if (!isForm(keyFile)) return { kind: "form" } as const satisfies KeyPathAnswer;
   const uid = process.getuid?.() ?? -1;
+  // A folder of GOAT's that is itself a link is not GOAT's to change: it names another folder.
   const real = yield* Effect.forEach(own, (path) =>
-    Effect.tryPromise(() => NodeFSP.realpath(path)).pipe(Effect.option),
+    lstat(path).pipe(
+      Effect.flatMap((stat) =>
+        stat.isDirectory() && !stat.isSymbolicLink()
+          ? Effect.tryPromise(() => NodeFSP.realpath(path)).pipe(Effect.option)
+          : Effect.succeedNone,
+      ),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    ),
   );
   const walk: Walk = {
     uid,
@@ -136,5 +170,11 @@ export const keyPathFor = Effect.fn("keyPath.check")(function* (
       directory: NodePath.dirname(keyFile),
     })),
   );
-  return unsafe ?? ({ kind: "ok" } as const satisfies KeyPathAnswer);
+  if (unsafe !== undefined) return unsafe;
+  const readable = yield* Effect.tryPromise(() =>
+    NodeFSP.access(keyFile, NodeFSP.constants.R_OK),
+  ).pipe(Effect.option);
+  return readable._tag === "None"
+    ? ({ kind: "key", problem: "unreadable" } as const satisfies KeyPathAnswer)
+    : ({ kind: "ok" } as const satisfies KeyPathAnswer);
 });
