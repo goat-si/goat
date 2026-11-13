@@ -122,7 +122,7 @@ export function GoatBotShowMoreRow({
 }: {
   readonly expanded: boolean;
   readonly onToggle: () => void;
-  readonly label?: string;
+  readonly label?: string | undefined;
   readonly buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return (
