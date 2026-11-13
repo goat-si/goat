@@ -101,11 +101,13 @@ export function createChannelEnvironmentAtoms<R, E>(
   });
   const childWorkFamily = Atom.family((key: string) => {
     const target = JSON.parse(key) as Parameters<typeof childWorkQuery>[0];
-    return Atom.make((get) =>
-      get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
-        .goatBotChildWork === true
-        ? get(childWorkQuery(target))
-        : AsyncResult.success({ groups: [] }),
+    return Atom.readable(
+      (get) =>
+        get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
+          .goatBotChildWork === true
+          ? get(childWorkQuery(target))
+          : AsyncResult.success({ groups: [] }),
+      (refresh) => refresh(childWorkQuery(target)),
     );
   });
   /**
