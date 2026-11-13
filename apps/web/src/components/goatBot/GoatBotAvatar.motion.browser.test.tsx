@@ -115,9 +115,9 @@ it("draws an emoji avatar in place of the face, keeps its state, and leaves the 
 
 it("separates an accent from its status ring and outlines the waiting dot on the surface", async () => {
   const accent = { background: "#2F6FED", foreground: "#FFFFFF" } as const;
-  // The avatars do not use a router.
+  // The avatars do not use a router. The popover surface they declare is drawn behind them.
   await using screen = await render(
-    <>
+    <div data-surface className="bg-popover p-2">
       <div data-avatar="accent">
         <GoatBotAvatar state="failed" emoji="R" accent={accent} surface="popover" />
       </div>
@@ -127,18 +127,26 @@ it("separates an accent from its status ring and outlines the waiting dot on the
       <div data-avatar="waiting">
         <GoatBotAvatar state="waiting" emoji="R" accent={accent} surface="popover" />
       </div>
-    </>,
+    </div>,
     { router: false },
   );
+  const surfaceElement = screen.container.querySelector<HTMLElement>("[data-surface]");
   const colored = screen.container.querySelector('[data-avatar="accent"] [role="img"]');
   const fill = colored?.querySelector<HTMLElement>("[data-goat-avatar-fill]");
-  if (!(colored instanceof HTMLElement) || !fill) throw new Error("Expected the accent avatar");
-  // The ring is the 1 px border; the colour starts 1 px inside it, so the surface shows between.
+  if (!surfaceElement || !(colored instanceof HTMLElement) || !fill)
+    throw new Error("Expected the surface and the accent avatar");
+  const surface = getComputedStyle(surfaceElement).backgroundColor;
+  const ring = getComputedStyle(colored);
+  expect(surface).not.toBe("rgba(0, 0, 0, 0)");
+  // The ring: a 1 px border in the failed colour.
+  expect(Number.parseFloat(ring.borderLeftWidth)).toBeCloseTo(1, 1);
+  expect(ring.borderLeftColor).not.toBe(surface);
+  // The gap: 1 px between the ring and the colour, showing the surface behind the avatar.
   const outer = colored.getBoundingClientRect();
   const inner = fill.getBoundingClientRect();
-  expect(inner.left - outer.left).toBeCloseTo(2, 1);
-  expect(outer.right - inner.right).toBeCloseTo(2, 1);
-  expect(getComputedStyle(colored).backgroundColor).not.toBe("rgb(47, 111, 237)");
+  expect(inner.left - outer.left - Number.parseFloat(ring.borderLeftWidth)).toBeCloseTo(1, 1);
+  expect(outer.right - inner.right - Number.parseFloat(ring.borderRightWidth)).toBeCloseTo(1, 1);
+  expect(ring.backgroundColor).toBe(surface);
   expect(getComputedStyle(fill).backgroundColor).toBe("rgb(47, 111, 237)");
   expect(
     screen.container.querySelector('[data-avatar="neutral"] [data-goat-avatar-fill]'),
@@ -147,7 +155,7 @@ it("separates an accent from its status ring and outlines the waiting dot on the
     '[data-avatar="waiting"] [data-goat-waiting-dot]',
   );
   if (!dot) throw new Error("Expected the waiting dot");
-  // The dot's ring is the surface the avatar sits on.
+  // The dot's ring is the surface behind the avatar.
   expect(Number.parseFloat(getComputedStyle(dot).borderTopWidth)).toBeGreaterThan(0);
-  expect(getComputedStyle(dot).borderTopColor).toBe(getComputedStyle(colored).backgroundColor);
+  expect(getComputedStyle(dot).borderTopColor).toBe(surface);
 });
