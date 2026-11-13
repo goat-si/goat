@@ -235,6 +235,15 @@ it("says Ready for a healthy main bot once its work has loaded", async () => {
   expect(container.textContent).toContain("GPT-5.4 on Codex");
 });
 
+it("on Home, says nothing for a ready bot and still shows a bot that needs attention", async () => {
+  state.homeConnected = true;
+  await render({ rows: [], quietWhenReady: true });
+  expect(container.textContent).toBe("");
+  await render({ rows: [], turnsWaiting: ["turn-1"], quietWhenReady: true });
+  expect(container.textContent).toContain("Needs attention");
+  expect(container.textContent).toContain("1 waiting for your answer");
+});
+
 it("says the bot waits for an answer in the chat when its own turn asked a question", async () => {
   state.homeConnected = true;
   state.openChat.mockClear();

@@ -57,6 +57,8 @@ export function MobileBotStatusCard(props: {
   readonly botName?: string;
   /** The main bot, whose model a member uses until it has one of its own. */
   readonly main?: Pick<BotProfile, "name"> | null;
+  /** Home shows the card only while something is not ready, as web's Home does. */
+  readonly quietWhenReady?: boolean;
 }) {
   const { member } = props;
   const home = useMobileGoatBotHomeSettings();
@@ -124,6 +126,7 @@ export function MobileBotStatusCard(props: {
     canConfigureSlack: false,
     now,
   });
+  if (props.quietWhenReady && diagnostics.lines.every((line) => line.tone === "ok")) return null;
   return (
     <View
       accessibilityLabel={`${props.botName ?? "GOAT Bot"} status`}
