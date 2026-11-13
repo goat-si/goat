@@ -56,6 +56,7 @@ function Search({
       {groups.map((group) => (
         <section key={group.value} aria-label={group.label}>
           <h2>{group.label}</h2>
+          {group.note && <p>{group.note}</p>}
           {group.items.map((item) => (
             <button
               key={item.value}
@@ -106,17 +107,17 @@ it("searches each bot and follows a cursor through an empty page", async () => {
   await expect.element(screen.getByRole("button", { name: "Load more" })).toBeVisible();
   expect(state.read).toHaveBeenCalledWith({
     environmentId: "env",
-    input: { botId: "main", query: "papers" },
+    input: { botId: "main", query: "papers", limit: 20 },
   });
   expect(state.read).toHaveBeenCalledWith({
     environmentId: "env",
-    input: { botId: "research", query: "papers" },
+    input: { botId: "research", query: "papers", limit: 20 },
   });
   await userEvent.click(screen.getByRole("button", { name: "Load more" }));
   await expect.element(screen.getByRole("button", { name: "Find papers" })).toBeVisible();
   expect(state.read).toHaveBeenCalledWith({
     environmentId: "env",
-    input: { botId: "research", query: "papers", cursor: "next" },
+    input: { botId: "research", query: "papers", cursor: "next", limit: 20 },
   });
   await vi.waitFor(() =>
     expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toContain(
@@ -143,7 +144,10 @@ it("searches each bot and follows a cursor through an empty page", async () => {
 it("does not search an older server", async () => {
   setup();
   state.supported = false;
-  await using screen = await render(<Search query="papers" />);
+  await using screen = await render(<Search query="" />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="papers" />);
+  await act(() => vi.advanceTimersByTimeAsync(300));
   expect(state.read).not.toHaveBeenCalled();
   expect(screen.getByRole("region", { name: /tasks/ }).query()).toBeNull();
 });
@@ -300,4 +304,118 @@ it("does not redisplay an old page when returning to an earlier query", async ()
     }),
   );
   await expect.element(screen.getByRole("button", { name: "Fresh A" })).toBeVisible();
+});
+
+it.each([
+  ["ASCII 256", "x".repeat(256), true],
+  ["ASCII 257", "x".repeat(257), false],
+  ["Korean 256", "한".repeat(85) + "a", true],
+  ["Korean 258", "한".repeat(86), false],
+  ["emoji 256", "😀".repeat(64), true],
+  ["emoji 260", "😀".repeat(65), false],
+])("enforces UTF-8 search byte bounds: %s", async (_label, query, allowed) => {
+  setup();
+  state.read.mockResolvedValue({ _tag: "Success", value: { tasks: [] } });
+  await using screen = await render(<Search query="" profiles={[bots[0]!]} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query={query} profiles={[bots[0]!]} />);
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  if (allowed) expect(state.read).toHaveBeenCalledOnce();
+  else {
+    expect(state.read).not.toHaveBeenCalled();
+    await expect
+      .element(
+        screen
+          .getByRole("region", { name: "Task titles" })
+          .getByText("Search text is too long for task titles."),
+      )
+      .toBeVisible();
+  }
+});
+
+it("caps each bot's retained results at 50 and requests only the remaining slots", async () => {
+  setup();
+  state.read.mockImplementation(
+    async ({ input }: { input: { cursor?: string; limit?: number } }) => {
+      const start = input.cursor === "c20" ? 20 : input.cursor === "c40" ? 40 : 0;
+      const count = input.limit ?? 20;
+      return {
+        _tag: "Success",
+        value: {
+          tasks: Array.from({ length: count }, (_, i) => ({
+            taskId: `t${start + i}`,
+            title: `Result ${start + i}`,
+            createdAt: "2026-11-07T00:00:00.000Z",
+          })),
+          nextCursor: `c${start + count}`,
+        },
+      };
+    },
+  );
+  await using screen = await render(<Search query="" profiles={[bots[0]!]} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="work" profiles={[bots[0]!]} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await expect.element(screen.getByRole("button", { name: "Load more" })).toBeVisible();
+  expect(state.read.mock.calls[0]?.[0].input.limit).toBe(20);
+  await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await expect.element(screen.getByRole("button", { name: "Result 39" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await expect.element(screen.getByRole("button", { name: "Result 49" })).toBeVisible();
+  expect(state.read.mock.calls.map((call) => call[0].input.limit)).toEqual([20, 20, 10]);
+  expect(screen.getByRole("button", { name: "Load more" }).query()).toBeNull();
+  await expect
+    .element(screen.getByRole("region", { name: "Goaty tasks" }).getByText(/narrow/i))
+    .toBeVisible();
+});
+
+it("limits in-flight reads across superseded queries and starts the latest as slots free", async () => {
+  setup();
+  const releases: Array<() => void> = [];
+  state.read.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releases.push(() => resolve({ _tag: "Success", value: { tasks: [] } }));
+      }),
+  );
+  const profiles = Array.from({ length: 6 }, (_, i) =>
+    profile(`b${i}`, i === 0 ? "main" : "member", `Bot ${i}`),
+  );
+  await using screen = await render(<Search query="" profiles={profiles} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="a" profiles={profiles} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  expect(state.read).toHaveBeenCalledTimes(4);
+  await screen.rerender(<Search query="ab" profiles={profiles} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  expect(state.read).toHaveBeenCalledTimes(4);
+  await screen.rerender(<Search query="abc" profiles={profiles} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  expect(state.read).toHaveBeenCalledTimes(4);
+  await act(() => releases[0]?.());
+  await vi.waitFor(() => expect(state.read).toHaveBeenCalledTimes(5));
+  expect(state.read.mock.calls[4]?.[0].input.query).toBe("abc");
+  expect(state.read.mock.calls.some((call) => call[0].input.query === "ab")).toBe(false);
+  await screen.rerender(<Search query="abc" profiles={profiles} enabled={false} />);
+  await act(() => {
+    for (const release of releases) release();
+  });
+});
+
+it("stops reading and removes sections when capability is withdrawn", async () => {
+  setup();
+  state.read.mockResolvedValue({
+    _tag: "Success",
+    value: { tasks: [{ taskId: "t", title: "A task", createdAt: "2026-11-07T00:00:00.000Z" }] },
+  });
+  await using screen = await render(<Search query="" profiles={[bots[0]!]} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="work" profiles={[bots[0]!]} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await expect.element(screen.getByRole("button", { name: "A task" })).toBeVisible();
+  state.supported = false;
+  await screen.rerender(<Search query="other" profiles={[bots[0]!]} />);
+  await act(() => vi.advanceTimersByTimeAsync(300));
+  expect(state.read).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "A task" }).query()).toBeNull();
 });

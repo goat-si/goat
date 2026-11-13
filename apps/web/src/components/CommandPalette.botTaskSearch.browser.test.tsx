@@ -131,7 +131,7 @@ it("announces task search states and operates results with the palette keyboard"
   expect(status.element()).toBe(statusNode);
   expect(state.read).toHaveBeenCalledWith({
     environmentId: "env-1",
-    input: { botId: "main", query: "zebra", cursor: "next" },
+    input: { botId: "main", query: "zebra", cursor: "next", limit: 20 },
   });
   await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
   await vi.waitFor(() =>

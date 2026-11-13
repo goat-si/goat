@@ -9,9 +9,13 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { scheduleBotTaskSearch } from "./botTaskSearchScheduler";
 import { ITEM_ICON_CLASS, type CommandPaletteGroup } from "../CommandPalette.logic";
 
 const NO_PERMISSION = Atom.make(false);
+const QUERY_MAX_BYTES = 256;
+const PAGE_SIZE = 20;
+const RESULT_LIMIT = 50;
 type Page = {
   tasks: ChannelSearchBotTasksResult["tasks"];
   cursor?: string;
@@ -54,12 +58,13 @@ export function useGoatBotTaskSearch(
   );
   const botKey = usable.map((bot) => bot.botId).join("\u0000");
   const text = query.trim();
+  const tooLong = new TextEncoder().encode(text).byteLength > QUERY_MAX_BYTES;
   const valid =
     enabled &&
     supported &&
     permitted &&
     text.length > 0 &&
-    text.length <= 256 &&
+    !tooLong &&
     !text.includes("\u0000") &&
     !text.startsWith(">");
   const key = JSON.stringify([environmentId, botKey, text]);
@@ -73,9 +78,42 @@ export function useGoatBotTaskSearch(
   const sequence = useRef(0);
   const inFlight = useRef(new Set<string>());
   const request = useStableCallback(
-    async (bot: BotProfile, key: string, version: number, cursor?: string) => {
-      const flightKey = `${version}:${key}:${bot.botId}`;
-      if (inFlight.current.has(flightKey)) return;
+    async (bot: BotProfile, key: string, version: number, limit: number, cursor?: string) => {
+      // Superseded reads run to completion; their answers are ignored.
+      const answer = await read({
+        environmentId: bot.environmentId,
+        input: { botId: bot.botId, query: text, limit, ...(cursor ? { cursor } : {}) },
+      });
+      if (sequence.current !== version) return;
+      reportAtomCommandResult(answer, {
+        label: channelEnvironment.searchBotTasks.label,
+        reportFailure: false,
+      });
+      setSearch((prev) => {
+        if (prev.key !== key) return prev;
+        const old = prev.pages[bot.botId] ?? emptyPage();
+        const page: Page =
+          answer._tag === "Success"
+            ? {
+                tasks: (cursor ? [...old.tasks, ...answer.value.tasks] : answer.value.tasks).slice(
+                  0,
+                  RESULT_LIMIT,
+                ),
+                ...(answer.value.nextCursor ? { cursor: answer.value.nextCursor } : {}),
+                partial: old.partial || answer.value.partial === true,
+                endedEarly: old.endedEarly || answer.value.endedEarly === true,
+                error: false,
+                loading: false,
+              }
+            : { ...old, error: true, loading: false };
+        return { key, pages: { ...prev.pages, [bot.botId]: page } };
+      });
+    },
+  );
+  const enqueue = useStableCallback(
+    (bot: BotProfile, key: string, version: number, limit: number, cursor?: string) => {
+      const flightKey = JSON.stringify([version, key, bot.botId]);
+      if (inFlight.current.has(flightKey)) return Promise.resolve();
       inFlight.current.add(flightKey);
       setSearch((prev) => ({
         key,
@@ -88,51 +126,17 @@ export function useGoatBotTaskSearch(
           },
         },
       }));
-      // Superseded reads run to completion; their answers are ignored.
-      const answer = await read({
-        environmentId: bot.environmentId,
-        input: { botId: bot.botId, query: text, ...(cursor ? { cursor } : {}) },
-      });
-      inFlight.current.delete(flightKey);
-      if (sequence.current !== version) return;
-      reportAtomCommandResult(answer, {
-        label: channelEnvironment.searchBotTasks.label,
-        reportFailure: false,
-      });
-      setSearch((prev) => {
-        if (prev.key !== key) return prev;
-        const old = prev.pages[bot.botId] ?? emptyPage();
-        const page: Page =
-          answer._tag === "Success"
-            ? {
-                tasks: cursor ? [...old.tasks, ...answer.value.tasks] : answer.value.tasks,
-                ...(answer.value.nextCursor ? { cursor: answer.value.nextCursor } : {}),
-                partial: old.partial || answer.value.partial === true,
-                endedEarly: old.endedEarly || answer.value.endedEarly === true,
-                error: false,
-                loading: false,
-              }
-            : { ...old, error: true, loading: false };
-        return { key, pages: { ...prev.pages, [bot.botId]: page } };
-      });
+      return scheduleBotTaskSearch(
+        () => sequence.current === version,
+        () => request(bot, key, version, limit, cursor),
+      ).finally(() => inFlight.current.delete(flightKey));
     },
   );
   const start = useStableCallback((key: string, version: number) => {
-    const selected = usable;
-    const worker = async (offset: number) => {
-      for (
-        let index = offset;
-        sequence.current === version && index < selected.length;
-        index += 4
-      ) {
-        const bot = selected[index];
-        if (bot) await request(bot, key, version);
-      }
-    };
-    for (let i = 0; i < Math.min(4, selected.length); i++) void worker(i);
+    for (const bot of usable) void enqueue(bot, key, version, PAGE_SIZE);
   });
-  const load = useStableCallback((bot: BotProfile, key: string, cursor?: string) =>
-    request(bot, key, sequence.current, cursor),
+  const load = useStableCallback((bot: BotProfile, key: string, limit: number, cursor?: string) =>
+    enqueue(bot, key, sequence.current, limit, cursor),
   );
   // oxlint-disable-next-line goat/react-effect-budget -- Debounces remote search and invalidates older requests when its scope changes.
   useEffect(() => {
@@ -144,7 +148,16 @@ export function useGoatBotTaskSearch(
       sequence.current++;
     };
   }, [valid, key, start]);
-  if (!valid) return { groups: [], status: "" };
+  if (!valid) {
+    if (enabled && supported && permitted && tooLong && !text.startsWith(">")) {
+      const note = "Search text is too long for task titles.";
+      return {
+        groups: [{ value: "bot-task-query-too-long", label: "Task titles", note, items: [] }],
+        status: note,
+      };
+    }
+    return { groups: [], status: "" };
+  }
   if (search.key !== key) return { groups: [], status: "Searching tasks…" };
   const statuses: string[] = [];
   const groups = usable.flatMap((bot): CommandPaletteGroup[] => {
@@ -178,6 +191,9 @@ export function useGoatBotTaskSearch(
         : null,
       page.partial ? "Some results could not be checked." : null,
       page.endedEarly ? "Search ended early." : null,
+      page.tasks.length >= RESULT_LIMIT && page.cursor
+        ? "More tasks may exist. Narrow your search."
+        : null,
     ].filter((message) => message !== null);
     const messages = [
       page.loading ? "Searching tasks…" : null,
@@ -192,7 +208,7 @@ export function useGoatBotTaskSearch(
       ...notes,
     ].filter((message) => message !== null);
     if (messages.length) statuses.push(`${bot.name}: ${messages.join(" ")}`);
-    if (page.cursor && !page.loading)
+    if (page.cursor && !page.loading && page.tasks.length < RESULT_LIMIT)
       items.push({
         kind: "action",
         value: `bot-task-more:${bot.botId}`,
@@ -200,7 +216,8 @@ export function useGoatBotTaskSearch(
         searchTerms: [text],
         icon,
         keepOpen: true,
-        run: async () => load(bot, key, page.cursor),
+        run: async () =>
+          load(bot, key, Math.min(PAGE_SIZE, RESULT_LIMIT - page.tasks.length), page.cursor),
       });
     if (page.error && !page.loading)
       items.push({
@@ -210,7 +227,8 @@ export function useGoatBotTaskSearch(
         searchTerms: [text],
         icon,
         keepOpen: true,
-        run: async () => load(bot, key, page.cursor),
+        run: async () =>
+          load(bot, key, Math.min(PAGE_SIZE, RESULT_LIMIT - page.tasks.length), page.cursor),
       });
     const note = notes.join(" ");
     return items.length || note
