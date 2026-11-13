@@ -133,12 +133,13 @@ export function useGoatBotFollow({
               row.answerInputRowId === committedSends?.get(key)) ||
             (send.questionRowId !== null &&
               row.id === send.questionRowId &&
+              row.answerIndex !== undefined &&
               row.answer === send.text.trim())),
       );
       if (!sent && !question) continue;
       pending.current.delete(key);
       clearJumpPadding();
-      if (question) {
+      if (question && !sent) {
         setCue([]);
         setFollowing(false);
         anchor.current = question.id;
