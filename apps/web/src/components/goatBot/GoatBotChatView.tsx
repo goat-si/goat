@@ -580,6 +580,7 @@ function GoatBotChatViewContent({
               homeRef.current?.focus();
             }}
             peekRows={rowsForTask}
+            peekSource={source}
             onRetryInput={onRetryInput}
             openFile={shownFile?.file.relativePath ?? null}
             onOpenFile={openFile}
@@ -604,6 +605,7 @@ function GoatBotChatViewContent({
               notesRefreshKey={notesRefreshKey}
               onShowChat={() => setPanelOpen(false)}
               peekRows={rowsForTask}
+              peekSource={source}
               onRetryInput={onRetryInput}
               openFile={shownFile?.file.relativePath ?? null}
               onOpenFile={openFile}

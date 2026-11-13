@@ -410,3 +410,56 @@ it("sends once under Strict Mode even when that request fails", async () => {
   await expect.element(screen.getByText("After")).toBeVisible();
   expect(sentFor("task-strict-fail")).toBe(1);
 });
+
+it("cues a genuinely new row in the peek, but not an older one a card change exposes later", async () => {
+  setup();
+  const reply = (id: string, text: string): GoatBotRow => ({
+    kind: "bot",
+    id,
+    text,
+    createdAt: at,
+    tone: "reply",
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single",
+  });
+  const history = Array.from({ length: 30 }, (_, index) =>
+    reply(`h${index}`, `Earlier message ${index} with enough text to take a line or two.`),
+  );
+  // The chat's displayed thread went live holding "old"; "new" arrived afterwards.
+  const source = {
+    baselineIds: new Set([...history.map((row) => row.id), "old"]),
+    sourceIds: new Set([...history.map((row) => row.id), "old", "new"]),
+  };
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  const peek = (shown: ReadonlyArray<GoatBotRow>) => (
+    <GoatBotWorkPeek
+      taskId={ChannelTaskId.make("task-a")}
+      title="Count the stars"
+      statusLabel="Done"
+      rows={shown}
+      source={source}
+      environmentId={EnvironmentId.make("bot-home")}
+      onBack={() => {}}
+    />
+  );
+  await using screen = await render(peek(history), { container: host });
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  // A card change shows an outcome that was already there when the thread went live.
+  await screen.rerender(peek([...history, reply("old", "An outcome from before.")]));
+  await expect.element(screen.getByText("An outcome from before.")).toBeInTheDocument();
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  await screen.rerender(
+    peek([...history, reply("old", "An outcome from before."), reply("new", "A new reply.")]),
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
+    .toBeVisible();
+});

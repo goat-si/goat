@@ -3,6 +3,12 @@ import { useState } from "react";
 import { useThreadStatus } from "~/state/entities";
 import { localSendRows } from "./useGoatBotFollow";
 
+/** What decides which rows are new: the displayed thread's first-live history and its items. */
+export type GoatBotSourceIds = Pick<
+  ReturnType<typeof useGoatBotSource>,
+  "baselineIds" | "sourceIds"
+>;
+
 export function useGoatBotSource(
   ref: ScopedThreadRef | null | undefined,
   botId: string,
