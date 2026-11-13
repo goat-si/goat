@@ -111,19 +111,10 @@ it("opens a chore on another machine in that machine, and says when it is unavai
   await expect.element(screen.getByRole("link")).not.toBeInTheDocument();
 });
 
-it("retries a failed sub-work read and shows the returned subagent", async () => {
-  setup();
-  state.supported = true;
-  await using screen = await render(details());
-  await expect.element(screen.getByText("Couldn't load subagents.")).toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-  await expect.element(screen.getByText(/recovered host/)).toBeVisible();
-  expect(state.reads).toBe(2);
-});
 it.each(["failed", "cancelled", "released"] as const)(
   "shows an ended remote launch as %s without a link",
   async (remoteState) => {
-    state.connected = new Set();
+    setup();
     const item = decodeRemoteWork({
       childWorkId: "ended",
       taskId: "task-1",
@@ -141,13 +132,27 @@ it.each(["failed", "cancelled", "released"] as const)(
         remoteWork={[item]}
       />,
     );
-    expect(screen.container.textContent).toContain(
-      remoteState === "failed"
-        ? "Failed"
-        : remoteState === "cancelled"
-          ? "Cancelled"
-          : "Not started",
-    );
+    await expect
+      .element(
+        screen.getByText(
+          remoteState === "failed"
+            ? /Failed/
+            : remoteState === "cancelled"
+              ? /Cancelled/
+              : /Not started/,
+        ),
+      )
+      .toBeVisible();
     await expect.element(screen.getByRole("link")).not.toBeInTheDocument();
   },
 );
+
+it("retries a failed sub-work read and shows the returned subagent", async () => {
+  setup();
+  state.supported = true;
+  await using screen = await render(details());
+  await expect.element(screen.getByText("Couldn't load subagents.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await expect.element(screen.getByText(/recovered host/)).toBeVisible();
+  expect(state.reads).toBe(2);
+});

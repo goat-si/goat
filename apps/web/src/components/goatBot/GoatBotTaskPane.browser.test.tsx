@@ -145,6 +145,7 @@ function Pane({ onClose }: { onClose: () => void }) {
 
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
+  state.noRows = false;
   resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
@@ -319,22 +320,19 @@ it("offers no retry for work still going or on a server without it", async () =>
 });
 
 it("uses the title carried from a history row when the current list no longer contains it", async () => {
+  setup();
   state.noRows = true;
-  try {
-    const session = useGoatBotSession();
-    await using screen = await render(
-      <GoatBotTaskPane
-        environmentId={EnvironmentId.make("env")}
-        session={session}
-        taskId={ChannelTaskId.make("task-1")}
-        narrow
-        onClose={() => {}}
-        {...{ taskTitle: "Older task" }}
-      />,
-    );
-    expect(screen.container.textContent).toContain("Older task");
-    expect(screen.container.textContent).not.toContain("Task thread");
-  } finally {
-    state.noRows = false;
-  }
+  const session = useGoatBotSession();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      narrow
+      onClose={() => {}}
+      taskTitle="Older task"
+    />,
+  );
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect.element(screen.getByText("Task thread")).not.toBeInTheDocument();
 });
