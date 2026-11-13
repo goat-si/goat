@@ -605,3 +605,47 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 		t.Fatalf("the waiting caller got %+v (%v); want admitted", ev, err)
 	}
 }
+
+// A wait on an invite used before its expiry whose join never reports is answered burned once the join's own time
+// is up, instead of staying open.
+func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	defer close(release)
+	oldLink, oldExpiry := serveJoinLink, inviteExpiry
+	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
+	timers := make(chan chan time.Time, 2)
+	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time)
+		timers <- ch
+		return ch, func() bool { return true }
+	}
+	t.Cleanup(func() { serveJoinLink, inviteExpiry = oldLink, oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	go Join(ctx, jst, jid, tok, "j")
+	<-entered
+	(<-timers) <- time.Now() // the invite's expiry, while its join is held after the burn
+	(<-timers) <- time.Now() // the join's own time is up
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "burned" {
+		t.Fatalf("the waiting caller got %+v (%v); want burned", ev, err)
+	}
+}

@@ -64,7 +64,7 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if ev.T == "burned" {
-		fmt.Fprintln(stderr, "pen: the invite was used, but its join admitted nobody")
+		fmt.Fprintln(stderr, "pen: the invite was used, but no admission was reported (pen ls shows whether the machine joined)")
 		return 1
 	}
 	if ev.T != "admitted" {

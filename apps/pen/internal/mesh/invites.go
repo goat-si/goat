@@ -208,6 +208,20 @@ type Signals struct {
 	Cancelled, Burned chan struct{}
 }
 
+// BurnedNow reports, under the book's lock, whether a join has burned the invite sig belongs to. A burn checks the
+// invite, saves and closes Burned in one hold of that lock, so a burn in progress is waited for, and a bound invite's
+// burn that comes later reads its clock after this call.
+func (iv *Invites) BurnedNow(sig *Signals) bool {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	select {
+	case <-sig.Burned:
+		return true
+	default:
+		return false
+	}
+}
+
 // NewSignals makes a fresh pair.
 func NewSignals() *Signals {
 	return &Signals{Cancelled: make(chan struct{}), Burned: make(chan struct{})}

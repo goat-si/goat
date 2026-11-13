@@ -27,7 +27,7 @@ func TestPenInviteSaysWhenAJoinDidNotFinish(t *testing.T) {
 		code        int
 	}{
 		{`{"t":"admitted","member":` + member + `,"delivered":false}`, "did not finish", 1},
-		{`{"t":"burned"}`, "admitted nobody", 1},
+		{`{"t":"burned"}`, "no admission was reported", 1},
 		{`{"t":"admitted","member":` + member + `}`, "admitted j", 0},
 	} {
 		st := tmpStore(t)
