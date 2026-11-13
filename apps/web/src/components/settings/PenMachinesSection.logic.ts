@@ -38,7 +38,7 @@ export function penMemberText(member: PenMemberStatus): string {
     case "pen-offline":
       return "Offline in Pen. Threads are as this computer last saw them.";
     case "pen-down":
-      return "Waiting for Pen on this computer.";
+      return "Waiting for Pen's machine list on this computer.";
     case "waiting":
       return "Not open. This computer keeps 16 Pen machines open at a time.";
     case "not-set-up":

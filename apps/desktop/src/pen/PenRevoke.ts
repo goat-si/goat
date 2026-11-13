@@ -29,10 +29,15 @@ const failed = (message: string): DesktopPenRevokeResult => ({ status: "failed",
 const unknown = failed("The outcome is unknown; check pen ls before trying again.");
 
 export function makePenRevoke(deps: Dependencies) {
-  let busy = false;
+  // The removal in progress; only that removal may clear it.
+  let running: symbol | undefined;
   const revoke = Effect.fn("PenRevoke.revoke")(function* (pin: DesktopPenPin) {
-    if (busy) return failed("Another Pen removal is already in progress.");
-    busy = true;
+    if (running !== undefined) return failed("Another Pen removal is already in progress.");
+    const token = Symbol("pen-revoke");
+    running = token;
+    const done = () => {
+      if (running === token) running = undefined;
+    };
     let activeChild: NodeChildProcess.ChildProcess | undefined;
     return yield* Effect.gen(function* () {
       const name = yield* deps.member(pin);
@@ -71,11 +76,11 @@ export function makePenRevoke(deps: Dependencies) {
             // A killed child that never closes its pipes must not latch removals off.
             proc.once("exit", () => {
               activeChild = undefined;
-              busy = false;
+              done();
             });
             proc.once("close", (code, signal) => {
               activeChild = undefined;
-              busy = false;
+              done();
               if (signal || code === null) return finish(unknown);
               const text = output.toString("utf8").trim().slice(0, 600);
               if (code === 0) return finish({ status: "revoked", output: text });
@@ -86,17 +91,17 @@ export function makePenRevoke(deps: Dependencies) {
             resolve(failed(`Could not run Pen: ${String(error)}`));
           }
         });
-      const running = Effect.gen(function* () {
+      const completion = Effect.gen(function* () {
         const { promise } = yield* Effect.sync(() => ({ promise: createCompletion() }));
         yield* deps.onSpawn ?? Effect.void;
         return yield* Effect.promise(() => promise);
       });
-      return yield* Effect.race(running, Effect.sleep(deps.deadline).pipe(Effect.as(unknown)));
+      return yield* Effect.race(completion, Effect.sleep(deps.deadline).pipe(Effect.as(unknown)));
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
           if (activeChild) activeChild.kill("SIGKILL");
-          else busy = false;
+          else done();
         }),
       ),
     );

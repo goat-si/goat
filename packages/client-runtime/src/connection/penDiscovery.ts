@@ -184,6 +184,8 @@ const make = Effect.gen(function* () {
   });
   const pass = Effect.fn("PenDiscovery.pass")(function* (state: PenMembersInput) {
     yield* SubscriptionRef.set(availability, state.kind);
+    // A Connect asked for without a usable list is dropped, not kept for some later list.
+    if (state.kind !== "ready") forced.clear();
     if (state.kind === "unavailable") return;
     const entries = yield* SubscriptionRef.get(registry.entries);
     const result = reconcilePenRoutes({
@@ -258,7 +260,7 @@ const make = Effect.gen(function* () {
               attempts.set(key, { ...previous, online: false });
             return;
           }
-          const wasForced = forced.delete(member.nodeId);
+          const wasForced = forced.has(member.nodeId);
           const sshTarget = member.route.target;
           const attempt = yield* Effect.acquireUseRelease(
             liveSet.admitOnboarding(member.nodeId, { force: wasForced }),
@@ -293,6 +295,7 @@ const make = Effect.gen(function* () {
                 : Effect.succeed(Option.none<never>()),
             (admitted) => (admitted ? liveSet.releaseOnboarding(member.nodeId) : Effect.void),
           );
+          forced.delete(member.nodeId);
           if (Option.isNone(attempt)) {
             yield* SubscriptionRef.update(statuses, (current) =>
               current.map((row) =>

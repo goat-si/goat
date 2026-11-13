@@ -41,7 +41,7 @@ export function decide(input: {
     if (member !== undefined) known.add(member.nodeId);
     // Only Pen's presence holds a machine: an alias GOAT could not read just now is not offline.
     if (!member?.online) {
-      offline.add(entry.target.environmentId);
+      if (entry.enabled) offline.add(entry.target.environmentId);
       return [];
     }
     return entry.enabled ? [{ id: entry.target.environmentId, nodeId: member.nodeId }] : [];
@@ -95,7 +95,10 @@ const make = Effect.gen(function* () {
         (current) =>
           new Map(
             [...entries.values()]
-              .filter((entry) => isPenOnlyEntry(entry) && !live.has(entry.target.environmentId))
+              .filter(
+                (entry) =>
+                  entry.enabled && isPenOnlyEntry(entry) && !live.has(entry.target.environmentId),
+              )
               .map((entry) => {
                 const id = entry.target.environmentId;
                 return [id, current.get(id) ?? "no-list"] as const;

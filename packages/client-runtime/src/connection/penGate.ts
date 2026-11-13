@@ -28,7 +28,9 @@ export function makePenGate<
   let liveIds: ReadonlySet<EnvironmentId> = new Set();
   const mayConnect = (entry: ConnectionCatalogEntry) =>
     !isPenOnlyEntry(entry) || liveIds.has(entry.target.environmentId);
-  const setLive = Effect.fn("PenGate.setLive")(function* (ids: ReadonlySet<EnvironmentId>) {
+  // Uninterruptible: the set and the supervisors it was pushed to must not part ways halfway.
+  const setLive = (ids: ReadonlySet<EnvironmentId>) => Effect.uninterruptible(pushLive(ids));
+  const pushLive = Effect.fn("PenGate.setLive")(function* (ids: ReadonlySet<EnvironmentId>) {
     // Every other path that turns a supervisor on asks mayConnect, so only a changed id needs a push.
     const previous = liveIds;
     liveIds = new Set(ids);
