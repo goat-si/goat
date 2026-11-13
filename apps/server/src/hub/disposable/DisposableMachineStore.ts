@@ -33,10 +33,18 @@ const StoredProvisioner = Schema.Union([
 // The fields the hub nodes snapshot sends decode with its own schemas, so a row it could not carry
 // fails this read (every machine kept) instead of the whole snapshot.
 const wire = HubNodeMachineClass.fields;
+/** Non-blank, already trimmed text of at most `max` characters; nothing is rewritten on read. */
+const Text = (max: number) =>
+  Schema.String.check(
+    Schema.isMaxLength(max),
+    Schema.makeFilter((value: string) =>
+      value.length > 0 && value.trim() === value ? true : "Expected trimmed, non-blank text.",
+    ),
+  );
 const Row = Schema.Struct({
-  attach_id: wire.attachId,
+  attach_id: Text(64),
   node_id: Schema.String,
-  state: wire.state,
+  state: Text(40),
   state_since: wire.stateSince,
   created_at: Schema.String,
   provisioner_json: Schema.fromJsonString(StoredProvisioner),
@@ -45,7 +53,8 @@ const Row = Schema.Struct({
   machine_install_id: Schema.NullOr(Schema.String),
   sshd_pin: Schema.NullOr(Schema.String),
   link_id: Schema.NullOr(Schema.String),
-  conflicts_json: Schema.fromJsonString(wire.conflicts),
+  // Each reason as the wire sends it; the snapshot cuts merged reasons to 16 (disposableClass.ts).
+  conflicts_json: Schema.fromJsonString(Schema.Array(Text(60))),
   pen_admitted_at: Schema.NullOr(Schema.String),
   pen_removed_at: Schema.NullOr(Schema.String),
 });

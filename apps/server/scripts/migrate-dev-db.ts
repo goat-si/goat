@@ -408,6 +408,9 @@ const CLEARED_TABLES: ReadonlyArray<string> = [
   "fleet_goal_events",
   "fleet_goal_actions",
   "fleet_reschedule_claims",
+  // Disposable machine records: a dev server's reconcile would cancel and ack real Pen invites.
+  "disposable_machines",
+  "disposable_machine_requests",
 ];
 
 const PROVIDER_SESSIONS_TABLE = "orchestration_v2_projection_provider_sessions";

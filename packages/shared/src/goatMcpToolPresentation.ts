@@ -454,6 +454,15 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Sync", "Syncing", "Synced", "OpenCodex models"],
     "environment-update",
   ),
+  goat_hub_machine_attach: tool(
+    ["Attach", "Attaching", "Attached", "a disposable machine"],
+    "environment-update",
+  ),
+  goat_hub_machine_reissue: tool(
+    ["Reissue", "Reissuing", "Reissued", "a disposable machine invite"],
+    "environment-update",
+  ),
+  goat_hub_machine_list: tool(["List", "Listing", "Listed", "disposable machines"], "host-status"),
   goat_hub_device_setup: tool(["Set up", "Setting up", "Set up", "a Child"], "environment-update"),
   goat_hub_child_prepare: tool(
     ["Prepare", "Preparing", "Prepared", "this Child"],

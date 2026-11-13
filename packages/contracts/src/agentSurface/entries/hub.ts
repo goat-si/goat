@@ -74,6 +74,61 @@ export const hubEntries = {
       "One setup runs per machine and a concurrent call joins it; a valid proof is reused, and each new attempt starts from the Child's recorded progress.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.machine_attach": entry({
+    resource: "hub",
+    verb: "machine_attach",
+    name: "goat_hub_machine_attach",
+    toolkit: "hostStatus",
+    summary: "Admit a machine you built to this hub's Pen mesh with a bound invite.",
+    description:
+      "Start one attach for a cloud machine this thread provisioned: GOAT mints a Pen invite bound to its keys and name and returns the token once. The machine joins with pen join, and the attach ends when Pen admits it; linking it as a Child is not available yet. Read goat_hub_machine_list for its state.",
+    guide:
+      "Needs the hub setting Attach disposable machines on, unexpired, with this thread named as a provisioner (a person decides in Settings), hub.manage for pen-<nodeId> when goatclaw is on, and a full-access thread in default mode. Pass the keys pen identity --json printed on the machine. The token is a bearer secret bound to these keys: hand it only to that machine and do not write it anywhere else. The attach service keeps no copy and a repeat with the same clientRequestId answers without it, but this tool result, token included, stays in this thread's history and your provider's transcript. The invite lives 10 minutes. The attach holds one cap slot from the start. An invite that expires, or one cancelled without a replacement (a consent change), frees it. A reissue keeps the slot, and a machine that joins keeps it until it is removed from Pen. Names follow Pen's rule (1 to 32 of a-z, 0-9, - _ ., starting with a letter or digit) and the switch's name rule. Refusals: invalid_request, switch_off, switch_expired, provisioner_refused, delegation_lost, cap_reached, name_rule, key_in_use, conflict, pen_unsupported, opencodex_unsupported, unknown_outcome (it may have started: read goat_hub_machine_list), storage_failed. A Pen member admitted this way holds the owner's authority on every member until a person removes it from Pen.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service keys each attach by its caller and clientRequestId and answers a repeat from the stored record, without the token; the generic receipt would store the token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_reissue": entry({
+    resource: "hub",
+    verb: "machine_reissue",
+    name: "goat_hub_machine_reissue",
+    toolkit: "hostStatus",
+    summary: "Cancel an attach's open Pen invite and mint a new one for the same keys.",
+    description:
+      "Cancel the open invite of an attach that nobody joined yet and mint a new token bound to the same keys. If the old invite was already used, no token is minted and the attach shows what Pen recorded.",
+    guide:
+      "Only the thread that started the attach, or a person, may reissue it, under the same switch and grant checks as goat_hub_machine_attach. Use a new clientRequestId for each reissue; a repeat of one answers without a token. A lost answer needs another reissue with a new key, which cancels the token that answer carried. An attach takes at most 32 invites. Refusals: not_found, provisioner_refused, invalid_request (a clientRequestId used for another attach), conflict (no open invite; the record changed while the invite was being made; or all 32 used: the last invite holds the keys until GOAT records its expiry, on the next 30-second pass or list, later if Pen cannot be reached), switch_off, switch_expired, delegation_lost, pen_unsupported, opencodex_unsupported, unknown_outcome (read goat_hub_machine_list), storage_failed.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service records each reissue's request key on its mint and answers a repeat without minting or returning a token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_list": entry({
+    resource: "hub",
+    verb: "machine_list",
+    name: "goat_hub_machine_list",
+    toolkit: "hostStatus",
+    summary: "List this hub's disposable machines with their attach state.",
+    description:
+      "List disposable machine records, or one by attachId, with state, step, class and whether the key is still a Pen member. Reading asks Pen to settle open invites and waits up to 3 seconds; a slower answer shows on a later read.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "hub.device_verify": entry({
     resource: "hub",
     verb: "device_verify",

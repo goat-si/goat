@@ -76,8 +76,16 @@ it.effect("a row the wire cannot carry makes the table unreadable, never the hub
       const store = yield* Store.DisposableMachineStore;
       yield* insert("a1", "g");
       expect(yield* store.records).toHaveLength(1);
+      // The snapshot cuts merged reasons to 16 itself; one record with more must not hide the rest.
+      yield* insert("many", "g", {
+        conflicts_json: JSON.stringify(Array.from({ length: 17 }, (_, i) => "c" + i)),
+        expected_sign_pub: "sm",
+        expected_noise_pub: "nm",
+        node_id: "nm",
+      });
+      expect(yield* store.records).toHaveLength(2);
       for (const overrides of [
-        { conflicts_json: JSON.stringify(Array.from({ length: 17 }, (_, i) => "c" + i)) },
+        { conflicts_json: JSON.stringify(["c".repeat(61)]) },
         { state: "s".repeat(41) },
         { state: " " },
       ]) {
@@ -95,6 +103,28 @@ it.effect("a row the wire cannot carry makes the table unreadable, never the hub
           SqlClient.SqlClient,
           (sql) => sql`DELETE FROM disposable_machines WHERE attach_id = 'bad'`,
         );
+      }
+    }),
+  ),
+);
+
+// A trimming decoder would read "kept " (open to SQL) as a final record, and a padded attach id
+// as one commitForward can never find; the read must fail instead.
+it.effect("a padded state or attach id makes the table unreadable instead of reading changed", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const store = yield* Store.DisposableMachineStore;
+      const sql = yield* SqlClient.SqlClient;
+      for (const [attachId, state] of [
+        ["a1", "kept "],
+        ["a1 ", "invited"],
+      ] as const) {
+        yield* insert(attachId, "g", { state });
+        expect(yield* store.records.pipe(Effect.flip), attachId + "/" + state).toBeInstanceOf(
+          Store.DisposableStoreError,
+        );
+        yield* sql`DELETE FROM disposable_machines`;
       }
     }),
   ),

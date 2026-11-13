@@ -1,5 +1,6 @@
 import {
   childReadyProofIsCurrent,
+  DISPOSABLE_SWITCH_DAYS,
   withoutUnprovenReady,
   type ChildReadyNextAction,
   type ChildReadyStep,
@@ -359,4 +360,25 @@ export function connectHubProxySaveError(
   return requested === (saved ?? false)
     ? null
     : "Update GOAT on the hub to allow GOAT Connect devices to reach hub devices.";
+}
+
+/** The hub answered the switch off: an older hub drops it from the patch, and a hub turned off keeps it off. */
+export function disposableSwitchSaveError(requested: boolean, saved: boolean): string | null {
+  return requested && !saved
+    ? "The hub kept this switch off: the hub was turned off, or its GOAT predates disposable machines. If the hub is on, update GOAT there."
+    : null;
+}
+
+/**
+ * Reads the disposable machines consent as the hub does: on with no expiry or a past one is closed,
+ * and only a person renews it. The hub stamps a new consent to its own clock plus 30 days, so the
+ * hand-edit bound allows a day of clock skew before an expiry far ahead reads closed.
+ */
+export function disposableConsentEnded(
+  value: { readonly enabled: boolean; readonly expiresAt: string | null },
+  nowMs: number,
+): boolean {
+  if (!value.enabled) return false;
+  const at = value.expiresAt === null ? Number.NaN : Date.parse(value.expiresAt);
+  return !(at > nowMs) || at > nowMs + (DISPOSABLE_SWITCH_DAYS + 1) * 86_400_000;
 }

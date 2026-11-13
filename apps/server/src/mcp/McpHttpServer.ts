@@ -92,6 +92,7 @@ import * as ChildOpenCodexStartup from "../opencodex/ChildOpenCodexStartup.ts";
 import * as SshRemoteDispatchLive from "../sshRemote/SshRemoteDispatchLive.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import { layerDisposableAttach } from "../hub/disposable/layer.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
 import * as HubLinkTraffic from "../hub/HubLinkTraffic.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
@@ -1094,6 +1095,7 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),
+  Layer.provideMerge(layerDisposableAttach),
   // The Child side of a Home's setup, served by goat_hub_child_* on this machine.
   Layer.provideMerge(
     OpenCodexChildReady.layer.pipe(

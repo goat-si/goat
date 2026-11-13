@@ -109,6 +109,7 @@ vi.mock("../../state/server", async () => {
   return {
     serverEnvironment: {
       hubNodesLive: (target: unknown) => target,
+      hubMachinesList: (target: { environmentId: string }) => ({ machines: target.environmentId }),
       hostStatus: (target: { environmentId: string }) => ({ hostStatus: target.environmentId }),
       checkHubNodes: Object.assign(state.check, { permissionAtom }),
       removeHubNode: Object.assign(state.remove, { permissionAtom }),
@@ -190,17 +191,19 @@ beforeEach(() => {
   state.hostsError = null;
   state.refreshHosts.mockReset();
   state.query.mockReset().mockImplementation((target: object) =>
-    "hostStatus" in target
-      ? state.hostsError === null
-        ? {
-            data: { hosts: state.hosts },
-            error: null,
-            cause: null,
-            isSuccess: true,
-            refresh: state.refreshHosts,
-          }
-        : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
-      : { data: { nodes: [device], notices: [] }, error: null, cause: null },
+    "machines" in target
+      ? { data: { machines: [] }, error: null, refresh: vi.fn() }
+      : "hostStatus" in target
+        ? state.hostsError === null
+          ? {
+              data: { hosts: state.hosts },
+              error: null,
+              cause: null,
+              isSuccess: true,
+              refresh: state.refreshHosts,
+            }
+          : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
+        : { data: { nodes: [device], notices: [] }, error: null, cause: null },
   );
   for (const command of [state.check, state.remove, state.dismiss, state.setOptIn])
     command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
@@ -312,15 +315,17 @@ it("tells the user when the chosen hub is too old to keep a device list", async 
     { host: "boat-9", reachability: "ok", opencodexChild: { state: "running", checkedAt: 0 } },
   ];
   state.query.mockImplementation((target: object) =>
-    "hostStatus" in target
-      ? {
-          data: { hosts: state.hosts },
-          error: null,
-          cause: null,
-          isSuccess: true,
-          refresh: state.refreshHosts,
-        }
-      : { data: null, error: null, cause: new Error("Unknown request tag: hub.nodes.subscribe") },
+    "machines" in target
+      ? { data: { machines: [] }, error: null, refresh: vi.fn() }
+      : "hostStatus" in target
+        ? {
+            data: { hosts: state.hosts },
+            error: null,
+            cause: null,
+            isSuccess: true,
+            refresh: state.refreshHosts,
+          }
+        : { data: null, error: null, cause: new Error("Unknown request tag: hub.nodes.subscribe") },
   );
   await render();
   expect(container.textContent).toContain("This hub runs an older GOAT without a device list.");
@@ -586,4 +591,67 @@ it("explains why a pairing without hub access shows no hub devices, and opens th
   root = createRoot(container);
   await render();
   expect(container.textContent).not.toContain("These devices do not open on this phone");
+});
+
+it("saves disposable machine consent, describes Pen access, and names an older hub", async () => {
+  const hub = {
+    ...second,
+    serverConfig: {
+      settings: {
+        hub: {
+          enabled: true,
+          autoJoinCloudMachines: true,
+          attachDisposableMachines: {
+            enabled: false,
+            cap: 10,
+            provisioners: [],
+            nameRule: "",
+            expiresAt: null,
+            grantId: null,
+          },
+        },
+      },
+    },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  // An older hub drops the switch from the patch and answers with it off.
+  state.updateSettings.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: { hub: { attachDisposableMachines: { enabled: false } } },
+  });
+  await render();
+  expect(container.textContent).toContain("may admit up to 10 machines to your Pen mesh");
+  await act(async () => button("Attach disposable machines").click());
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    environmentId: second.environmentId,
+    input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
+  });
+  expect(container.textContent).toContain("If the hub is on, update GOAT there.");
+});
+
+it("tells a phone that the disposable machines consent ended and how to renew it", async () => {
+  const hub = {
+    ...second,
+    serverConfig: {
+      settings: {
+        hub: {
+          enabled: true,
+          autoJoinCloudMachines: true,
+          attachDisposableMachines: {
+            enabled: true,
+            cap: 10,
+            provisioners: [],
+            nameRule: "",
+            expiresAt: null,
+            grantId: "g",
+          },
+        },
+      },
+    },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  await render();
+  expect(container.textContent).toContain("Consent has ended: turn the switch off and on");
 });

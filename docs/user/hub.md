@@ -122,6 +122,30 @@ before you retry. Agents use `goat_hub_device_routes_update`, and a profile
 other than owner asks you first. Routes need an OpenCodex release with link
 routes on the hub; an older one says so.
 
+## Disposable machines
+
+A disposable machine is one you build for a short job, such as a cloud VM, and
+admit to your Pen mesh with a one-time invite. Turn on **Attach disposable
+machines** in **Settings → Hub** (the hub must be on), then name the threads that
+may attach machines by their thread ID (**Copy → Thread ID** in a thread's menu).
+Only a person can change this consent, and it lasts 30 days: when it ends,
+**Renew for 30 days** opens it again. Changing the threads, the cap or the name
+rule cancels invites that were not used yet.
+
+To attach a machine yourself, choose **Attach a machine**, paste the line
+`pen identity --json` prints on that machine, and name it. GOAT shows the invite
+token once; run `pen join` with it on that machine within 10 minutes. While it
+waits, **Reissue** cancels that invite and makes a new one for the same keys;
+once it has expired, attach the machine again. A provisioner
+thread does the same with `goat_hub_machine_attach`; its invite token appears in
+that thread's tool output and history, so treat the thread as holding a secret
+until the invite is used or expires.
+
+Each machine is a full Pen member and can reach services on your machines'
+loopback. GOAT does not link it as a Child yet, and it stays a Pen member until
+you remove it with [`pen revoke`](pen.md#remove-a-machine). An older GOAT on the
+hub shows **Update GOAT on this hub** instead of these settings.
+
 ## Sync OpenCodex models
 
 **Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first

@@ -148,6 +148,7 @@ import Migration0142 from "./Migrations/142_ChannelOutboxOperations.ts";
 import Migration0143 from "./Migrations/143_RemoteDispatchHostOutage.ts";
 import Migration0144 from "./Migrations/144_ChannelBotTaskHistory.ts";
 import Migration0145 from "./Migrations/145_DisposableMachines.ts";
+import Migration0146 from "./Migrations/146_DisposableMachineRequests.ts";
 import Migration0121 from "./Migrations/121_NotificationCursorRepair.ts";
 import Migration0123 from "./Migrations/123_McpEvalJournal.ts";
 import Migration0124 from "./Migrations/124_DecisionRoutes.ts";
@@ -303,6 +304,7 @@ export const migrationEntries = [
   [143, "RemoteDispatchHostOutage", Migration0143],
   [144, "ChannelBotTaskHistory", Migration0144],
   [145, "DisposableMachines", Migration0145],
+  [146, "DisposableMachineRequests", Migration0146],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

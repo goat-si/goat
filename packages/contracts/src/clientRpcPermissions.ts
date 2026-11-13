@@ -213,6 +213,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.hubNodesRemove]: AuthSettingsWriteScope,
   [WS_METHODS.hubNodesImport]: AuthSettingsWriteScope,
   [WS_METHODS.hubNodesDismissNotice]: AuthSettingsWriteScope,
+  // Attaching admits a machine to the owner's Pen mesh; the service also requires a person.
+  [WS_METHODS.hubMachinesAttach]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesReissue]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesList]: AuthOrchestrationReadScope,
   // Preparing may install GOAT on a node; enrolling lets the hub act there for every proxied client.
   [WS_METHODS.hubProxyPrepareNode]: AuthSettingsWriteScope,
   [WS_METHODS.hubProxyEnrollNode]: AuthSettingsWriteScope,

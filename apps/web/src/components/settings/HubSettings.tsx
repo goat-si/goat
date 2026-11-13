@@ -28,6 +28,7 @@ import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
 import { useHubActions } from "./HubDeviceActions";
 import { HubDeviceListSection } from "./HubDeviceList";
 import { HubRelayWarningRow } from "./HubRelayWarningSettings";
@@ -379,6 +380,7 @@ function HubControls({
           />
         ) : null}
       </SettingsSection>
+      <DisposableMachinesSettings environmentId={environmentId} />
       <HubDeviceListSection
         environmentId={environmentId}
         hosts={hosts}
