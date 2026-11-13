@@ -12,6 +12,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   connectHubProxySaveError,
   cloudAutoJoinSaveError,
+  disposableSwitchSaveError,
   hubDeviceList,
   presentChildSetup,
 } from "./hubDevices.ts";
@@ -345,6 +346,12 @@ describe("cloudAutoJoinSaveError", () => {
     expect(cloudAutoJoinSaveError(false, false)).toBeNull();
     expect(cloudAutoJoinSaveError(true, true)).toBeNull();
   });
+});
+
+it("flags an older hub that dropped the disposable machines switch turned on", () => {
+  expect(disposableSwitchSaveError(true, false)).toMatch(/Update GOAT/);
+  expect(disposableSwitchSaveError(true, true)).toBeNull();
+  expect(disposableSwitchSaveError(false, false)).toBeNull();
 });
 
 it("requires a hub upgrade when an older server silently drops Connect consent", () => {

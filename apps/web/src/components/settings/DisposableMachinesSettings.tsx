@@ -1,4 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
+import { disposableSwitchSaveError } from "@goat/client-runtime/hub-devices";
+import { isHubMachinesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   ThreadId,
@@ -64,7 +66,10 @@ export function DisposableMachinesSettings({
       setError(
         failure instanceof Error ? failure.message : "Could not save disposable machine settings.",
       );
-    }
+    } else if (patch.enabled !== undefined)
+      setError(
+        disposableSwitchSaveError(patch.enabled, result.value.hub.attachDisposableMachines.enabled),
+      );
   }
   async function reissueInvite(attachId: string) {
     setBusy(true);
@@ -87,6 +92,15 @@ export function DisposableMachinesSettings({
     settings.enabled && settings.expiresAt !== null
       ? ` Consent ends ${new Date(settings.expiresAt).toLocaleString()}.`
       : "";
+  if (list.failure !== null && isHubMachinesUnsupportedError(list.failure))
+    return (
+      <SettingsSection title="Disposable machines">
+        <SettingsRow
+          title="Attach disposable machines"
+          description="Update GOAT on this hub to attach disposable machines."
+        />
+      </SettingsSection>
+    );
   return (
     <SettingsSection title="Disposable machines">
       <SettingsRow

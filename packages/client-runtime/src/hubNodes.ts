@@ -53,7 +53,7 @@ export function hubNodeRemovalInput(node: HubNode): HubNodesRemoveInput {
   return { nodeId: node.nodeId, ...(route ? { routeId: route.routeId } : {}) };
 }
 
-export function isHubNodesUnsupportedError(error: unknown): boolean {
+function hasUnknownRequestTag(error: unknown, tag: RegExp): boolean {
   const pending: unknown[] = [error];
   const visited = new Set<unknown>();
   while (pending.length > 0 && visited.size < 40) {
@@ -61,7 +61,7 @@ export function isHubNodesUnsupportedError(error: unknown): boolean {
     if (value === null || value === undefined || visited.has(value)) continue;
     visited.add(value);
     if (typeof value === "string") {
-      if (/^Unknown request tag: hub\.nodes\.[a-z]+$/iu.test(value)) return true;
+      if (tag.test(value)) return true;
     } else if (typeof value === "object") {
       for (const key of ["message", "reason", "cause", "defect", "error", "reasons"]) {
         if (key in value) pending.push(Reflect.get(value, key));
@@ -70,6 +70,15 @@ export function isHubNodesUnsupportedError(error: unknown): boolean {
     }
   }
   return false;
+}
+
+export function isHubNodesUnsupportedError(error: unknown): boolean {
+  return hasUnknownRequestTag(error, /^Unknown request tag: hub\.nodes\.[a-z]+$/iu);
+}
+
+/** A hub whose GOAT predates disposable machines answers hub.machines.* as an unknown tag. */
+export function isHubMachinesUnsupportedError(error: unknown): boolean {
+  return hasUnknownRequestTag(error, /^Unknown request tag: hub\.machines\.[a-z]+$/iu);
 }
 
 /** Why a phone does not show a hub's devices as environments of their own, or "ready" when it does. */

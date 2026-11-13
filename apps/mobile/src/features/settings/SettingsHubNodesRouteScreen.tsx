@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   cloudAutoJoinSaveError,
   connectHubProxySaveError,
+  disposableSwitchSaveError,
   hubDeviceList,
 } from "@goat/client-runtime/hub-devices";
 import {
@@ -12,6 +13,7 @@ import {
   hubNodeRemovalInput,
   hubNodeRouteLabel,
   hubNodeStatusLabel,
+  isHubMachinesUnsupportedError,
   isHubNodesUnsupportedError,
 } from "@goat/client-runtime/hub-nodes";
 import {
@@ -148,6 +150,7 @@ function HubDevicesList({
       .hub ?? null;
   const hosts = status.data?.hosts ?? [];
   const unsupported = isHubNodesUnsupportedError(listed.cause);
+  const machinesUnsupported = isHubMachinesUnsupportedError(machines.cause);
   const snapshot = hubSnapshot(
     hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
   );
@@ -242,7 +245,15 @@ function HubDevicesList({
           />
         </View>
       )}
-      {hubSettings?.attachDisposableMachines && (
+      {hubSettings !== null && machinesUnsupported && (
+        <View className="gap-1 rounded-xl bg-grouped-card p-4">
+          <Text className="text-foreground">Attach disposable machines</Text>
+          <Text className="text-sm text-foreground-muted">
+            Update GOAT on this hub to attach disposable machines.
+          </Text>
+        </View>
+      )}
+      {hubSettings?.attachDisposableMachines && !machinesUnsupported && (
         <View className="gap-3 rounded-xl bg-grouped-card p-4">
           <View className="flex-row items-center gap-3">
             <View className="flex-1 gap-1">
@@ -254,12 +265,20 @@ function HubDevicesList({
               value={hubSettings.attachDisposableMachines.enabled}
               disabled={!canConfigure || !hubSettings.enabled || busy !== null}
               onValueChange={(enabled) =>
-                void run("disposable-machines", () =>
-                  updateSettings({
+                void run("disposable-machines", async () => {
+                  const result = await updateSettings({
                     environmentId,
                     input: { patch: { hub: { attachDisposableMachines: { enabled } } } },
-                  }),
-                )
+                  });
+                  if (result._tag === "Success")
+                    setError(
+                      disposableSwitchSaveError(
+                        enabled,
+                        result.value.hub.attachDisposableMachines.enabled,
+                      ),
+                    );
+                  return result;
+                })
               }
             />
           </View>

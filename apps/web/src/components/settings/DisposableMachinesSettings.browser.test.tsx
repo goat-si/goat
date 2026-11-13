@@ -38,15 +38,18 @@ vi.mock("./settingsLayout", () => ({
     title,
     description,
     control,
+    children,
   }: {
     title: string;
     description: ReactNode;
     control: ReactNode;
+    children?: ReactNode;
   }) => (
     <div>
       <h3>{title}</h3>
       <p>{description}</p>
       {control}
+      {children}
     </div>
   ),
 }));
@@ -59,7 +62,8 @@ function setup(enabled: boolean) {
     enabled: true,
     attachDisposableMachines: { ...DEFAULT_SERVER_SETTINGS.hub.attachDisposableMachines, enabled },
   };
-  state.save.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+  // An older hub drops the switch from the patch and answers with it off.
+  state.save.mockReset().mockResolvedValue({ _tag: "Success", value: DEFAULT_SERVER_SETTINGS });
   state.attach.mockReset().mockResolvedValue({
     _tag: "Success",
     value: { invite: { token: "secret-token", expiresAt: "2026-12-01T00:00:00.000Z" } },
@@ -69,7 +73,7 @@ function setup(enabled: boolean) {
   return { registry, [Symbol.dispose]: () => registry.dispose() };
 }
 
-it("saves disposable machine consent and describes Pen access", async () => {
+it("saves disposable machine consent, describes Pen access, and names an older hub", async () => {
   using fixture = setup(false);
   await using screen = await render(
     <RegistryContext value={fixture.registry}>
@@ -84,6 +88,7 @@ it("saves disposable machine consent and describes Pen access", async () => {
     environmentId,
     input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
   });
+  await expect.element(screen.getByText(/older GOAT without disposable machines/)).toBeVisible();
 });
 
 it("shows the invite once and clears it when the attach dialog closes", async () => {
