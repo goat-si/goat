@@ -2,6 +2,7 @@ import {
   DISPOSABLE_FINAL_STATES,
   type DisposableMachineState,
   ServerSettingsError,
+  type ServerSettings,
   ThreadId,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -9,6 +10,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { isSqlError, type SqlError } from "effect/sql/SqlError";
@@ -50,11 +52,15 @@ export class DisposableStoreError extends Data.TaggedError("DisposableStoreError
 }> {}
 
 const OPEN_LIMIT = 1000;
+// The settings write lock is held for the whole commit; nothing may keep every settings writer waiting.
+const COMMIT_BOUND = "15 seconds";
 const unreadable = () =>
   new DisposableStoreError({ message: "The hub's disposable machine records are unreadable." });
 const isServerSettingsError = Schema.is(ServerSettingsError);
 const isStorageFailure = (error: unknown): error is SqlError | ServerSettingsError =>
   isSqlError(error) || isServerSettingsError(error);
+/** A failure of the caller's write, kept apart from the store's own storage failures. */
+class WriteFailed<E> extends Data.TaggedError("WriteFailed")<{ readonly error: E }> {}
 
 /** Why a forward commit did not run. */
 export type ForwardRefusal =
@@ -78,13 +84,14 @@ export class DisposableMachineStore extends Context.Service<
      */
     readonly recordsOrKept: Effect.Effect<ReadonlyArray<DisposableRecord>>;
     /**
-     * Runs `write` in one SQL transaction while holding the settings write lock, only when the
-     * switch is on, unexpired and still the grant the record was made under, and the record's fence
-     * is the one the caller read. A settings change therefore lands wholly before or after it.
+     * Runs `write` in one transaction under the settings write lock, only while the switch holds the
+     * record's grant and the fence is the one read; it advances the fence. `write` gets the snapshot
+     * and must not call ServerSettingsService (its lookups wait for the held lock). Bounded by
+     * COMMIT_BOUND; the write's own errors pass through.
      */
     readonly commitForward: <A, E, R>(
       target: { readonly attachId: string; readonly fence: number },
-      write: Effect.Effect<A, E, R>,
+      write: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<Forward<A>, E | DisposableStoreError, R>;
   }
 >()("goat/hub/disposable/DisposableMachineStore") {}
@@ -98,7 +105,7 @@ export const make = Effect.gen(function* () {
         provisioner_json, final_at, environment_id, machine_install_id, sshd_pin, link_id,
         conflicts_json, pen_admitted_at, pen_removed_at
       FROM disposable_machines
-      WHERE final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')
+      WHERE final_at IS NULL
       ORDER BY created_at, attach_id LIMIT ${OPEN_LIMIT + 1}`;
     // A collision past the limit would go unseen, so too many records read as unreadable.
     if (rows.length > OPEN_LIMIT) return yield* unreadable();
@@ -125,39 +132,62 @@ export const make = Effect.gen(function* () {
 
   const commitForward = <A, E, R>(
     target: { readonly attachId: string; readonly fence: number },
-    write: Effect.Effect<A, E, R>,
+    write: (settings: ServerSettings) => Effect.Effect<A, E, R>,
   ): Effect.Effect<Forward<A>, E | DisposableStoreError, R> =>
     settings
       .withSettingsSnapshot((current) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            // Read the clock once the transaction is held: waiting for it can outlast the expiry.
-            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-            const [row] = yield* sql<{ readonly grant_id: string; readonly fence: number }>`
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              // Read the clock once the transaction is held: waiting for it can outlast the expiry.
+              const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+              const [row] = yield* sql<{ readonly grant_id: string; readonly fence: number }>`
                 SELECT grant_id, fence FROM disposable_machines WHERE attach_id = ${target.attachId}`;
-            const refused = (reason: ForwardRefusal): Forward<A> => ({
-              committed: false,
-              reason,
-            });
-            if (row === undefined) return refused("not_found");
-            if (!gate.open) return refused(gate.reason);
-            if (gate.grant !== row.grant_id) return refused("grant_changed");
-            if (row.fence !== target.fence) return refused("fence_moved");
-            return { committed: true, value: yield* write } as const;
-          }),
-        ),
+              const refused = (reason: ForwardRefusal): Forward<A> => ({
+                committed: false,
+                reason,
+              });
+              if (row === undefined) return refused("not_found");
+              if (!gate.open) return refused(gate.reason);
+              if (gate.grant !== row.grant_id) return refused("grant_changed");
+              if (row.fence !== target.fence) return refused("fence_moved");
+              const advanced = yield* sql`UPDATE disposable_machines SET fence = fence + 1
+                WHERE attach_id = ${target.attachId} AND fence = ${target.fence} RETURNING fence`;
+              if (advanced.length !== 1) return refused("fence_moved");
+              const value = yield* write(current).pipe(
+                Effect.mapError((error) => new WriteFailed({ error })),
+              );
+              return { committed: true, value } as const;
+            }),
+          )
+          .pipe(
+            Effect.timeoutOrElse({
+              duration: COMMIT_BOUND,
+              orElse: () => Effect.fail(unreadable()),
+            }),
+          ),
       )
       .pipe(
         Effect.catchIf(isStorageFailure, () => Effect.fail(unreadable())),
+        Effect.catchTags({ WriteFailed: (failed) => Effect.fail(failed.error as E) }),
         Effect.withSpan("DisposableMachineStore.commitForward"),
       );
 
+  // Logged once each time the table turns unreadable, not on every hub node snapshot.
+  const warned = yield* Ref.make(false);
   return DisposableMachineStore.of({
     records,
     recordsOrKept: records.pipe(
+      Effect.tap(() => Ref.set(warned, false)),
       Effect.catch((error) =>
-        Effect.logWarning("Disposable machine records unreadable; every machine reads kept.").pipe(
-          Effect.annotateLogs({ reason: error.message }),
+        Ref.getAndSet(warned, true).pipe(
+          Effect.flatMap((already) =>
+            already
+              ? Effect.void
+              : Effect.logWarning(
+                  "Disposable machine records unreadable; every machine reads kept.",
+                ).pipe(Effect.annotateLogs({ reason: error.message })),
+          ),
           Effect.as([]),
         ),
       ),

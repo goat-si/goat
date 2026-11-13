@@ -2,10 +2,10 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * Disposable machines, one row per attach (design: V1 disposable machines, section 1). A record
- * holds its keys, invite and mint unique only until it reaches a final state (final_at set); the
- * sshd pin, environment, install and link ids are compared by the class rules instead, because two
- * records sharing one must be shown as a conflict, not refused by the database.
+ * One row per attach. Keys, invite and mint are unique only while final_at is null, and the CHECK
+ * makes a final state set final_at in the same write, so "open" is final_at IS NULL everywhere.
+ * Pin, environment, install and link ids are left to the class rules: two records sharing one are a
+ * conflict to show, not a write to refuse.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -40,10 +40,14 @@ export default Effect.gen(function* () {
     created_at TEXT NOT NULL,
     state_since TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    final_at TEXT
+    final_at TEXT,
+    CHECK (final_at IS NOT NULL OR state NOT IN ('failed', 'purged', 'destroyed', 'kept'))
   )`;
   for (const column of ["node_id", "expected_sign_pub", "expected_noise_pub"] as const)
     yield* sql.unsafe(
       `CREATE UNIQUE INDEX IF NOT EXISTS disposable_machines_open_${column} ON disposable_machines(${column}) WHERE final_at IS NULL`,
     );
+  // Serves the open-record read each hub node snapshot makes.
+  yield* sql`CREATE INDEX IF NOT EXISTS disposable_machines_open_order
+    ON disposable_machines(created_at, attach_id) WHERE final_at IS NULL`;
 });

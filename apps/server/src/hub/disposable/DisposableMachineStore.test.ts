@@ -92,15 +92,18 @@ it.effect("a forward commit runs only under the switch's grant and the record's 
       yield* settings.updateSettings(switchOn);
       yield* insert("a1", yield* currentGrant);
       const forward = (fence: number, state: string) =>
-        store.commitForward({ attachId: "a1", fence }, advance("a1", state));
+        store.commitForward({ attachId: "a1", fence }, () => advance("a1", state));
 
       expect(yield* forward(0, "admitted")).toEqual({ committed: true, value: undefined });
       expect(yield* stateOf("a1")).toBe("admitted");
-      expect(yield* forward(1, "attaching")).toEqual({ committed: false, reason: "fence_moved" });
-      expect(yield* store.commitForward({ attachId: "nope", fence: 0 }, Effect.void)).toEqual({
-        committed: false,
-        reason: "not_found",
-      });
+      // The commit advanced the fence, so a second step that read fence 0 is refused.
+      expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "fence_moved" });
+      expect(yield* store.commitForward({ attachId: "nope", fence: 0 }, () => Effect.void)).toEqual(
+        {
+          committed: false,
+          reason: "not_found",
+        },
+      );
       yield* settings.updateSettings({ hub: { attachDisposableMachines: { cap: 2 } } });
       expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "grant_changed" });
       // Off, then on again with the same values, is still a new consent.
@@ -111,7 +114,7 @@ it.effect("a forward commit runs only under the switch's grant and the record's 
       expect(yield* forward(0, "attaching")).toEqual({ committed: false, reason: "grant_changed" });
       yield* insert("a2", yield* currentGrant);
       yield* TestClock.adjust(31 * DAY_MS);
-      expect(yield* store.commitForward({ attachId: "a2", fence: 0 }, Effect.void)).toEqual({
+      expect(yield* store.commitForward({ attachId: "a2", fence: 0 }, () => Effect.void)).toEqual({
         committed: false,
         reason: "switch_expired",
       });
@@ -148,7 +151,7 @@ it.effect("a forward commit queued behind a settings change sees that change", (
         Effect.provideService(Settings.ServerSettingsService, observed),
       );
       const commit = yield* store
-        .commitForward({ attachId: "a1", fence: 0 }, advance("a1", "admitted"))
+        .commitForward({ attachId: "a1", fence: 0 }, () => advance("a1", "admitted"))
         .pipe(Effect.forkChild);
       yield* Deferred.await(queued);
       yield* Deferred.succeed(release, undefined);
@@ -171,16 +174,12 @@ it.effect("a switch-off during a forward commit lets that commit finish and refu
       const inside = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const queued = yield* Deferred.make<void>();
-      const seenAtWrite = Effect.map(settings.getSettings, (current) =>
-        disposableSwitch(current.hub, 0),
-      );
       const commit = yield* store
-        .commitForward(
-          { attachId: "a1", fence: 0 },
+        .commitForward({ attachId: "a1", fence: 0 }, (current) =>
           Deferred.succeed(inside, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
             Effect.andThen(advance("a1", "admitted")),
-            Effect.andThen(seenAtWrite),
+            Effect.as(disposableSwitch(current.hub, 0)),
           ),
         )
         .pipe(Effect.forkChild);
@@ -200,7 +199,7 @@ it.effect("a switch-off during a forward commit lets that commit finish and refu
       });
       yield* Fiber.join(change);
       expect(yield* stateOf("a1")).toBe("admitted");
-      expect(yield* store.commitForward({ attachId: "a1", fence: 0 }, Effect.void)).toEqual({
+      expect(yield* store.commitForward({ attachId: "a1", fence: 0 }, () => Effect.void)).toEqual({
         committed: false,
         reason: "switch_off",
       });
@@ -235,6 +234,10 @@ it.effect("a forward commit that waits for the database past the switch's expiry
       const sql = yield* SqlClient.SqlClient;
       const settings = yield* Settings.ServerSettingsService;
       yield* settings.updateSettings(switchOn);
+      // An expiry inside the commit's bound, so the wait outlasts the switch and not the bound.
+      yield* settings.updateSettings({
+        hub: { attachDisposableMachines: { expiresAt: "1970-01-01T00:00:10.000Z" } },
+      });
       yield* insert("a1", yield* currentGrant);
       const inTransaction = yield* Deferred.make<void>();
       const releaseTransaction = yield* Deferred.make<void>();
@@ -258,14 +261,92 @@ it.effect("a forward commit that waits for the database past the switch's expiry
         Effect.provideService(Settings.ServerSettingsService, observed),
       );
       const commit = yield* store
-        .commitForward({ attachId: "a1", fence: 0 }, advance("a1", "admitted"))
+        .commitForward({ attachId: "a1", fence: 0 }, () => advance("a1", "admitted"))
         .pipe(Effect.forkChild);
       yield* Deferred.await(queued);
-      yield* TestClock.adjust(31 * DAY_MS);
+      yield* TestClock.adjust(11_000);
       yield* Deferred.succeed(releaseTransaction, undefined);
       yield* Fiber.join(holder);
       expect(yield* Fiber.join(commit)).toEqual({ committed: false, reason: "switch_expired" });
       expect(yield* stateOf("a1")).toBe("invited");
+    }),
+  ),
+);
+
+it.effect("two steps that read the same fence: the first commits, the second is refused", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const settings = yield* Settings.ServerSettingsService;
+      const store = yield* Store.DisposableMachineStore;
+      yield* settings.updateSettings(switchOn);
+      yield* insert("a1", yield* currentGrant);
+      const step = (state: string) =>
+        store.commitForward({ attachId: "a1", fence: 0 }, () => advance("a1", state));
+      expect(yield* step("admitted")).toEqual({ committed: true, value: undefined });
+      expect(yield* step("attaching")).toEqual({ committed: false, reason: "fence_moved" });
+      expect(yield* stateOf("a1")).toBe("admitted");
+    }),
+  ),
+);
+
+it.effect("a write that stalls gives up the settings lock at the bound and changes nothing", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const settings = yield* Settings.ServerSettingsService;
+      const store = yield* Store.DisposableMachineStore;
+      yield* settings.updateSettings(switchOn);
+      yield* insert("a1", yield* currentGrant);
+      const inside = yield* Deferred.make<void>();
+      const commit = yield* store
+        .commitForward({ attachId: "a1", fence: 0 }, () =>
+          advance("a1", "admitted").pipe(
+            Effect.andThen(Deferred.succeed(inside, undefined)),
+            Effect.andThen(Effect.never),
+          ),
+        )
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* Deferred.await(inside);
+      yield* TestClock.adjust(15_000);
+      expect(yield* Fiber.join(commit)).toBeInstanceOf(Store.DisposableStoreError);
+      expect(yield* stateOf("a1")).toBe("invited");
+      // Settings writers are not left waiting.
+      yield* settings.updateSettings({ hub: { attachDisposableMachines: { cap: 3 } } });
+    }),
+  ),
+);
+
+it.effect("a write's own failure reaches the caller as itself, never as unreadable records", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const settings = yield* Settings.ServerSettingsService;
+      const store = yield* Store.DisposableMachineStore;
+      yield* settings.updateSettings(switchOn);
+      yield* insert("a1", yield* currentGrant);
+      yield* insert("a2", "g", { mint_id: "m-1" });
+      const sql = yield* SqlClient.SqlClient;
+      const failure = yield* store
+        .commitForward(
+          { attachId: "a1", fence: 0 },
+          () => sql`UPDATE disposable_machines SET mint_id = 'm-1' WHERE attach_id = 'a1'`,
+        )
+        .pipe(Effect.flip);
+      expect(failure).not.toBeInstanceOf(Store.DisposableStoreError);
+      expect(yield* stateOf("a1")).toBe("invited");
+    }),
+  ),
+);
+
+it.effect("a record cannot enter a final state without final_at", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      expect(yield* insert("a1", "g", { state: "failed" }).pipe(Effect.isFailure)).toBe(true);
+      yield* insert("a2", "g", { state: "failed", final_at: T0 });
+      const store = yield* Store.DisposableMachineStore;
+      expect(yield* store.records).toEqual([]);
     }),
   ),
 );
