@@ -548,8 +548,8 @@ export function presentRunStartHold(
         runId: held.id,
         reason: hold.reason,
         nativeTurnId: hold.nativeTurnId,
-        title: "Waiting for the turn from before the restart",
-        description: `Codex is still working on ${turn}, which began before GOAT restarted. This message starts when it ends.`,
+        title: "Waiting for an earlier Codex turn",
+        description: `Codex is still working on ${turn}, which an earlier run of this thread started. This message starts when it ends.`,
       }
     : {
         runId: held.id,

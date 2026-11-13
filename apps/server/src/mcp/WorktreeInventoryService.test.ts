@@ -22,6 +22,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
+import { makeSweepRounds } from "./WorktreeSweepRounds.ts";
 
 interface ThreadFixture {
   readonly id: string;
@@ -456,6 +457,107 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("overlapping removing sweeps of one scope run one at a time within the budget", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const start = yield* Clock.currentTimeMillis;
+      const sweeps = yield* Effect.all(
+        [service.cleanup({ dryRun: false }), service.cleanup({ dryRun: false })],
+        { concurrency: "unbounded" },
+      );
+      // The second waits for the first, then is past its own budget, so it checks nothing and
+      // counts both as remaining in the round the first one closed.
+      expect(sweeps.map((sweep) => [sweep.kept.length, sweep.remaining]).toSorted()).toEqual([
+        [0, 2],
+        [2, 0],
+      ]);
+      expect((yield* Clock.currentTimeMillis) - start).toBe(80_000);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("a removing sweep that waited past its budget answers without scanning again", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup, setDuringScan } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+      let scans = 0;
+      setDuringScan(Effect.sync(() => void scans++));
+
+      // The first holds the scope for 80 s; the second gets its turn 20 s past its own budget.
+      const sweeps = yield* Effect.all(
+        [service.cleanup({ dryRun: false }), service.cleanup({ dryRun: false })],
+        { concurrency: "unbounded" },
+      );
+      expect(scans).toBe(1);
+      expect(
+        sweeps.map((sweep) => [sweep.removed.length, sweep.kept.length, sweep.remaining]),
+      ).toEqual([
+        [0, 2, 0],
+        [0, 0, 2],
+      ]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("removing sweeps of one scope past the waiting limit are refused at once", () =>
+    Effect.gen(function* () {
+      const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
+      const path = yield* addWorktree("a");
+      yield* run(path, ["commit", "--allow-empty", "-m", "work on a"]);
+      setThreads([{ id: "t0", worktreePath: path }]);
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      const sweeps = yield* Effect.all(
+        Array.from({ length: 5 }, () => Effect.result(service.cleanup({ dryRun: false }))),
+        { concurrency: "unbounded" },
+      );
+      expect(sweeps.map((sweep) => sweep._tag)).toEqual([
+        "Success",
+        "Success",
+        "Success",
+        "Success",
+        "Failure",
+      ]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("sweeps of a repo and of all repos keep separate rounds", () =>
+    Effect.gen(function* () {
+      const { service, repo, run, addWorktree, setThreads, setDuringPullRequestLookup } =
+        yield* fixture;
+      const kept = [];
+      for (const branch of ["a", "b", "c", "d"]) {
+        const path = yield* addWorktree(branch);
+        yield* run(path, ["commit", "--allow-empty", "-m", "work on " + branch]);
+        kept.push(path);
+      }
+      setThreads(kept.map((path, i) => ({ id: "t" + i, worktreePath: path })));
+      setDuringPullRequestLookup(TestClock.adjust("40 seconds"));
+
+      // Each sweep checks two of the four within its budget. A shared round would let the scoped
+      // sweep finish the all-repos round early and send the next all-repos sweep back to the start.
+      const remaining = [];
+      for (const scope of [{}, { repo }, {}, { repo }])
+        remaining.push((yield* service.cleanup({ ...scope, dryRun: false })).remaining);
+      expect(remaining).toEqual([2, 2, 0, 0]);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.effect("a worktree whose check was interrupted still counts in remaining", () =>
     Effect.gen(function* () {
       const { service, run, addWorktree, setThreads, setDuringPullRequestLookup } = yield* fixture;
@@ -796,5 +898,31 @@ describe("WorktreeInventoryService", () => {
         });
         for (const path of [dirty, local, live, pushed]) expect(yield* fs.exists(path)).toBe(true);
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+});
+
+describe("WorktreeSweepRounds", () => {
+  it.effect(
+    "bound: many repo scopes keep at most the cap of idle rounds, evicting the least recently used",
+    () =>
+      Effect.sync(() => {
+        const roundOf = makeSweepRounds(2);
+        const first = roundOf("/repo/a");
+        const second = roundOf("/repo/b");
+        expect(roundOf("/repo/a")).toBe(first);
+        for (let i = 0; i < 100; i++) roundOf("/repo/other-" + i);
+        expect(roundOf("/repo/a")).not.toBe(first);
+        expect(roundOf("/repo/b")).not.toBe(second);
+      }),
+  );
+
+  it.effect("bound: a round with a sweep running or waiting is never evicted", () =>
+    Effect.sync(() => {
+      const roundOf = makeSweepRounds(2);
+      const busy = roundOf("/repo/a");
+      busy.removingSweeps = 1;
+      for (let i = 0; i < 100; i++) roundOf("/repo/other-" + i);
+      expect(roundOf("/repo/a")).toBe(busy);
+    }),
   );
 });

@@ -728,7 +728,8 @@ export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_pr
 /** Another Codex turn on the thread that a starting run must wait for. */
 export const OrchestrationV2RunStartHold = Schema.Struct({
   /**
-   * `restart_survivor`: a turn that kept running across a GOAT server restart.
+   * `restart_survivor`: a turn an earlier run of this thread started that is still running, as after
+   * a GOAT server restart or a dropped connection to Codex.
    * `unowned_turn`: a turn Codex started that no run owns, such as a goal continuation.
    */
   reason: Schema.Literals(["restart_survivor", "unowned_turn"]),
