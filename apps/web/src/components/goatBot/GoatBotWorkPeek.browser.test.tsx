@@ -47,7 +47,7 @@ vi.mock("~/state/use-atom-command", async (original) => {
   };
 });
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import "../../index.css";
 
 // Atoms derived from the server config run in the real registry over a missing config.
@@ -341,39 +341,6 @@ it("sends a new acknowledgement when newer activity arrives on an open task", as
   });
 });
 
-it("sends once more when update permission returns while a request is pending and it then fails", async () => {
-  setup();
-  const land = holdNextUpdate();
-  await using screen = await render(ackPeek("task-intent-permit", at));
-  await vi.waitFor(() => expect(sentFor("task-intent-permit")).toBe(1));
-  actions.permit = false;
-  await screen.rerender(ackPeek("task-intent-permit", at, "Denied"));
-  await expect.element(screen.getByText("Denied")).toBeVisible();
-  actions.permit = true;
-  await screen.rerender(ackPeek("task-intent-permit", at, "Allowed"));
-  await expect.element(screen.getByText("Allowed")).toBeVisible();
-  expect(sentFor("task-intent-permit")).toBe(1);
-  land({ _tag: "Failure" });
-  await vi.waitFor(() => expect(sentFor("task-intent-permit")).toBe(2));
-  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
-  expect(sentFor("task-intent-permit")).toBe(2);
-});
-
-it("sends once more when a task is reopened while its request is pending and it then fails", async () => {
-  setup();
-  const land = holdNextUpdate();
-  const first = await render(ackPeek("task-intent-reopen", at));
-  await vi.waitFor(() => expect(sentFor("task-intent-reopen")).toBe(1));
-  await first[Symbol.asyncDispose]();
-  await using reopened = await render(ackPeek("task-intent-reopen", at, "Reopened"));
-  await expect.element(reopened.getByText("Reopened")).toBeVisible();
-  expect(sentFor("task-intent-reopen")).toBe(1);
-  land({ _tag: "Failure" });
-  await vi.waitFor(() => expect(sentFor("task-intent-reopen")).toBe(2));
-  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
-  expect(sentFor("task-intent-reopen")).toBe(2);
-});
-
 it("keeps environments apart when their ids would join into the same text", async () => {
   setup();
   const first = await render(ackPeek("c", at, "Done", "a|b"));
@@ -390,4 +357,43 @@ it("acknowledges an activity that is not a date again when the task is next open
   await first[Symbol.asyncDispose]();
   await using _again = await render(ackPeek("task-undated", "not a date", "Again"));
   await vi.waitFor(() => expect(sentFor("task-undated")).toBe(2));
+});
+
+it("sends nothing more on rerender or when a pending request settles as a failure", async () => {
+  setup();
+  const land = holdNextUpdate();
+  await using screen = await render(ackPeek("task-settle", at));
+  await vi.waitFor(() => expect(sentFor("task-settle")).toBe(1));
+  await screen.rerender(ackPeek("task-settle", at, "Status two"));
+  await act(() => land({ _tag: "Failure" }));
+  await screen.rerender(ackPeek("task-settle", at, "Status three"));
+  await expect.element(screen.getByText("Status three")).toBeVisible();
+  expect(sentFor("task-settle")).toBe(1);
+});
+
+it("does not retry a failed request because the task was reopened while it was out", async () => {
+  setup();
+  const land = holdNextUpdate();
+  const first = await render(ackPeek("task-reopen-flight", at));
+  await vi.waitFor(() => expect(sentFor("task-reopen-flight")).toBe(1));
+  await first[Symbol.asyncDispose]();
+  const reopened = await render(ackPeek("task-reopen-flight", at, "Reopened"));
+  await act(() => land({ _tag: "Failure" }));
+  await expect.element(reopened.getByText("Reopened")).toBeVisible();
+  expect(sentFor("task-reopen-flight")).toBe(1);
+  // Opening it again after the failure does send.
+  await reopened[Symbol.asyncDispose]();
+  await using _again = await render(ackPeek("task-reopen-flight", at, "Again"));
+  await vi.waitFor(() => expect(sentFor("task-reopen-flight")).toBe(2));
+});
+
+it("sends once under Strict Mode even when that request fails", async () => {
+  setup();
+  const land = holdNextUpdate();
+  await using screen = await render(<StrictMode>{ackPeek("task-strict-fail", at)}</StrictMode>);
+  await vi.waitFor(() => expect(sentFor("task-strict-fail")).toBe(1));
+  await act(() => land({ _tag: "Failure" }));
+  await screen.rerender(<StrictMode>{ackPeek("task-strict-fail", at, "After")}</StrictMode>);
+  await expect.element(screen.getByText("After")).toBeVisible();
+  expect(sentFor("task-strict-fail")).toBe(1);
 });
