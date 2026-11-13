@@ -928,3 +928,29 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a key answer without a folder drops the old folder and stops writing every pass", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.keyPath = {
+        kind: "directory",
+        directory: "/srv/team",
+        problem: "writable",
+        owner: 0,
+        chmod: false,
+      };
+      for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+      host.control.keyPath = { kind: "key", problem: "unreadable" };
+      yield* enroll;
+      const updatedAt = (yield* rows).find((row) => row.attach_id === attachId)?.updated_at;
+      yield* TestClock.adjust(60 * 1000);
+      yield* enroll;
+      yield* enroll;
+      const row = (yield* rows).find((one) => one.attach_id === attachId);
+      expect(row?.updated_at).toBe(updatedAt);
+      expect(String(row?.enroll_json)).not.toContain("/srv/team");
+    }),
+  ),
+);

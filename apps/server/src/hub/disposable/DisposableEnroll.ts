@@ -473,9 +473,11 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         : answer.kind === "symlink"
           ? answer.path
           : undefined;
+    // A folder an earlier answer named is dropped, or the record would differ and write every pass.
+    const { keyDir: _named, ...rest } = enroll;
     if (link.outcome !== outcome || enroll.keyDir !== keyDir)
       yield* note(row, {
-        ...enroll,
+        ...rest,
         ...(keyDir === undefined ? {} : { keyDir }),
         link: { ...link, outcome },
       });
