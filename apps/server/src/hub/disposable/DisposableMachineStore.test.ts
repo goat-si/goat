@@ -76,8 +76,16 @@ it.effect("a row the wire cannot carry makes the table unreadable, never the hub
       const store = yield* Store.DisposableMachineStore;
       yield* insert("a1", "g");
       expect(yield* store.records).toHaveLength(1);
+      // The snapshot cuts merged reasons to 16 itself; one record with more must not hide the rest.
+      yield* insert("many", "g", {
+        conflicts_json: JSON.stringify(Array.from({ length: 17 }, (_, i) => "c" + i)),
+        expected_sign_pub: "sm",
+        expected_noise_pub: "nm",
+        node_id: "nm",
+      });
+      expect(yield* store.records).toHaveLength(2);
       for (const overrides of [
-        { conflicts_json: JSON.stringify(Array.from({ length: 17 }, (_, i) => "c" + i)) },
+        { conflicts_json: JSON.stringify(["c".repeat(61)]) },
         { state: "s".repeat(41) },
         { state: " " },
       ]) {
