@@ -233,3 +233,6 @@ context window, a new thread on that model gets its own app-server that reads th
 change. A thread already open on the shared app-server gets it on its next turn once
 that app-server has no running work, when GOAT restarts it; until then the thread's
 turns keep the details the app-server started with.
+After GOAT itself restarts, an app-server kept running across the restart serves the
+first turn sent to it, because it may still hold that earlier work. The next turn
+restarts it once it is idle.

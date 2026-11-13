@@ -8,7 +8,7 @@ import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
 /** Larger files are not Codex catalogs GOAT can compare; such a process is never called outdated. */
-const MAX_CATALOG_BYTES = 64 * 1024 * 1024;
+const MAX_CATALOG_BYTES = 16 * 1024 * 1024;
 /** A process that did not say where its catalog is, is asked again only after this long. */
 const CONFIG_RETRY_MS = 60_000;
 
@@ -66,6 +66,7 @@ export const makeCodexCatalogFreshness = <E>(input: {
   let configFailedAtMs: number | undefined;
   let baseline: Entries | "unknown" | undefined;
   let current: { readonly identity: string; readonly entries: Entries | undefined } | undefined;
+  let refreshing = false;
 
   const resolvePath = Effect.gen(function* () {
     if (
@@ -96,37 +97,43 @@ export const makeCodexCatalogFreshness = <E>(input: {
 
   const read = Effect.fnUntraced(function* (filename: string) {
     const before = describe(yield* input.fileSystem.stat(filename));
-    if (current?.identity === before.identity)
-      return { mtimeMs: before.mtimeMs, entries: current.entries };
+    if (current?.identity === before.identity) return;
     const entries = before.readable
       ? parseEntries(yield* input.fileSystem.readFileString(filename))
       : undefined;
     // A rewrite during the read would pair new entries with the old time, so that read is dropped.
-    if (describe(yield* input.fileSystem.stat(filename)).identity !== before.identity)
-      return undefined;
+    if (describe(yield* input.fileSystem.stat(filename)).identity !== before.identity) return;
     current = { identity: before.identity, entries };
-    return { mtimeMs: before.mtimeMs, entries };
+    if (entries !== undefined)
+      baseline ??= before.mtimeMs < input.startedAtMs ? entries : "unknown";
   });
+  const refresh = (filename: string) =>
+    read(filename).pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
+
+  const judge = (model: string) => {
+    const entry = current?.entries?.get(model);
+    if (entry === undefined || baseline === undefined) return false;
+    return baseline === "unknown" || baseline.get(model) !== entry;
+  };
 
   return Effect.fn("CodexCatalogFreshness.outdated")(function* (
     model: string,
     options?: { readonly cachedOnly?: boolean },
   ) {
-    // Asking the process for its config waits on it; a cached-only check reads only the file.
-    const filename = Option.isSome(catalogPath)
-      ? catalogPath.value
-      : options?.cachedOnly === true
-        ? undefined
-        : yield* resolvePath;
-    if (filename === undefined) return false;
-    const now = yield* read(filename).pipe(
-      Effect.timeoutOption("2 seconds"),
-      Effect.map(Option.getOrUndefined),
-      Effect.orElseSucceed(() => undefined),
-    );
-    if (now?.entries === undefined) return false;
-    baseline ??= now.mtimeMs < input.startedAtMs ? now.entries : "unknown";
-    const entry = now.entries.get(model);
-    return entry !== undefined && (baseline === "unknown" || baseline.get(model) !== entry);
+    if (options?.cachedOnly === true) {
+      // Placement holds dispatch, so it answers from memory and reads the file in the background.
+      const known = Option.getOrUndefined(catalogPath);
+      if (known !== undefined && !refreshing) {
+        refreshing = true;
+        yield* refresh(known).pipe(
+          Effect.ensuring(Effect.sync(() => (refreshing = false))),
+          Effect.forkDetach,
+        );
+      }
+      return judge(model);
+    }
+    const filename = Option.isSome(catalogPath) ? catalogPath.value : yield* resolvePath;
+    if (filename !== undefined) yield* refresh(filename);
+    return judge(model);
   });
 };

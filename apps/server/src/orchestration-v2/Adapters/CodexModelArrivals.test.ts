@@ -407,3 +407,33 @@ it.effect("a process that could not say where its catalog is is asked again a mi
     assert.strictEqual(yield* modelStatus(known), "outdated");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("a cached-only check answers from memory while the catalog file does not respond", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    let stuck = false;
+    // A slow or hung file system, as a network mount can be.
+    const stuckFs: FileSystem.FileSystem = {
+      ...fs,
+      stat: (path) => (stuck ? Effect.never : fs.stat(path)),
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: stuckFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "outdated");
+    stuck = true;
+    // Placement runs on the serial dispatch path, so it must not wait on the file.
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
