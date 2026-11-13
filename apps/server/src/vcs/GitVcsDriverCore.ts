@@ -102,7 +102,8 @@ import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
 import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
 import { commitContextObjects } from "./commitContextObjects.ts";
-import { isNonRepositoryGitStderr } from "./gitNonRepository.ts";
+import { isMissingGitCwdError, isNonRepositoryGitStderr } from "./gitNonRepository.ts";
+import { localTrackingDestination } from "./localTrackingDestination.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
@@ -485,26 +486,6 @@ function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string):
   }
   const refName = trimmed.slice(prefix.length).trim();
   return refName.length > 0 ? refName : null;
-}
-
-function isMissingGitCwdError(error: GitCommandError): boolean {
-  if (!(error.cause instanceof PlatformError.PlatformError)) {
-    return false;
-  }
-
-  const reason = error.cause.reason;
-  if (reason._tag === "NotFound") {
-    return reason.pathOrDescriptor === error.cwd;
-  }
-
-  return (
-    reason._tag === "BadResource" &&
-    reason.pathOrDescriptor === error.cwd &&
-    typeof reason.cause === "object" &&
-    reason.cause !== null &&
-    "code" in reason.cause &&
-    reason.cause.code === "ENOTDIR"
-  );
 }
 
 function isUnbornHeadStderr(stderr: string): boolean {
@@ -2551,6 +2532,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return { remoteName, branchName, publishes: true, upstream: null };
     }
 
+    const local = yield* localTrackingDestination(
+      cwd,
+      branch,
+      readConfigValue,
+      readCurrentUpstreamRef,
+      resolvePushRemoteName,
+    );
+    if (local.local) return local.destination;
     const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
     if (!upstream) return null;
     // Differently named upstreams are bases, not publish targets; pushing HEAD there would write features to shared branches.
@@ -2620,7 +2609,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const hasNoLocalDelta = details.aheadCount === 0 && details.behindCount === 0;
-    if (hasNoLocalDelta && details.hasUpstream) {
+    const tracksLocal =
+      details.hasUpstream && (yield* readConfigValue(cwd, `branch.${branch}.remote`)) === ".";
+    if (hasNoLocalDelta && details.hasUpstream && !tracksLocal) {
       return {
         status: "skipped_up_to_date" as const,
         branch,
@@ -2665,7 +2656,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
-    if (!details.hasUpstream && !destination) {
+    if (!destination && (!details.hasUpstream || tracksLocal)) {
       return yield* new GitCommandError({
         ...gitCommandContext({
           operation: "GitVcsDriver.pushCurrentBranch",
@@ -2689,7 +2680,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           yield* writeConfigValue({
             cwd,
             key: `branch.${branch}.t3-merge-base-ref`,
-            value: `refs/remotes/${upstream.upstreamRef}`,
+            value:
+              upstream.remoteName === "."
+                ? `refs/heads/${upstream.branchName}`
+                : `refs/remotes/${upstream.upstreamRef}`,
           });
         }
       }
