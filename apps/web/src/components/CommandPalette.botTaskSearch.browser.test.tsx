@@ -120,6 +120,14 @@ it("announces task search states and operates results with the palette keyboard"
   state.read.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("offline"))));
   await userEvent.keyboard("{ArrowDown}{Enter}");
   await vi.waitFor(() => expect(status.element().textContent).toContain("Couldn't search tasks"));
+  expect(status.element().textContent).toContain("Some results could not be checked.");
+  await expect
+    .element(
+      page.getByText("Couldn't search tasks. Some results could not be checked.", { exact: true }),
+    )
+    .toBeVisible();
+  await expect.element(page.getByRole("option", { name: /Zebra task/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /Retry task search/ })).toBeVisible();
   expect(status.element()).toBe(statusNode);
   expect(state.read).toHaveBeenCalledWith({
     environmentId: "env-1",
@@ -178,4 +186,23 @@ it("announces empty member searches without showing them in the palette", async 
   expect(getComputedStyle(status.element()).position).toBe("absolute");
   expect(getComputedStyle(status.element()).width).toBe("1px");
   expect(page.getByRole("option", { name: /No matching tasks/ }).query()).toBeNull();
+});
+
+it("shows when an empty task search ended early", async () => {
+  state.read.mockReset();
+  state.read.mockResolvedValue({ _tag: "Success", value: { tasks: [], endedEarly: true } });
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>, { router: "/" });
+  using _clock = fakeTimers();
+  await act(() => openCommandPalette({ query: "zebra" }));
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await expect
+    .element(
+      page.getByText(
+        "No matching tasks found. Some tasks could not be checked. Search ended early.",
+        { exact: true },
+      ),
+    )
+    .toBeVisible();
+  const status = page.getByRole("status", { name: "Bot task search" });
+  expect(status.element().textContent).toContain("Search ended early.");
 });

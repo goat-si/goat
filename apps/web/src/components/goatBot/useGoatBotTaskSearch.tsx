@@ -168,16 +168,28 @@ export function useGoatBotTaskSearch(
           },
         }),
     }));
-    const messages = [
-      page.loading ? "Searching tasks…" : null,
+    const notes = [
       page.error ? "Couldn't search tasks." : null,
-      !page.loading && !page.error && page.tasks.length === 0
-        ? page.partial || page.endedEarly || page.cursor
-          ? "No matching tasks found. Some tasks could not be checked."
-          : "No matching tasks."
+      !page.loading &&
+      !page.error &&
+      page.tasks.length === 0 &&
+      (page.partial || page.endedEarly || page.cursor)
+        ? "No matching tasks found. Some tasks could not be checked."
         : null,
       page.partial ? "Some results could not be checked." : null,
       page.endedEarly ? "Search ended early." : null,
+    ].filter((message) => message !== null);
+    const messages = [
+      page.loading ? "Searching tasks…" : null,
+      !page.loading &&
+      !page.error &&
+      page.tasks.length === 0 &&
+      !page.partial &&
+      !page.endedEarly &&
+      !page.cursor
+        ? "No matching tasks."
+        : null,
+      ...notes,
     ].filter((message) => message !== null);
     if (messages.length) statuses.push(`${bot.name}: ${messages.join(" ")}`);
     if (page.cursor && !page.loading)
@@ -200,16 +212,7 @@ export function useGoatBotTaskSearch(
         keepOpen: true,
         run: async () => load(bot, key, page.cursor),
       });
-    const note = page.error
-      ? "Couldn't search tasks."
-      : !page.loading && page.tasks.length === 0 && (page.partial || page.endedEarly || page.cursor)
-        ? "No matching tasks found. Some tasks could not be checked."
-        : [
-            page.partial ? "Some results could not be checked." : null,
-            page.endedEarly ? "Search ended early." : null,
-          ]
-            .filter((message) => message !== null)
-            .join(" ");
+    const note = notes.join(" ");
     return items.length || note
       ? [
           {
