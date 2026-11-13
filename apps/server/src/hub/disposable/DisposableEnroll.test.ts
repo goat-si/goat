@@ -656,3 +656,25 @@ it.effect("a list of records never makes the machine key; only attach does", () 
     }),
   ),
 );
+
+it.effect("a journal that stays unreadable for 2 hours after the send stops for a person", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.journalUnreadable = true;
+      yield* enroll;
+      yield* enroll;
+      yield* enroll; // sent; the read back fails
+      yield* enroll;
+      expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+      yield* TestClock.adjust(2 * HOUR);
+      yield* enroll;
+      expect(linkAdds(host.control.calls)).toHaveLength(1);
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "unknown",
+        message: expect.stringContaining("for two hours"),
+      });
+    }),
+  ),
+);

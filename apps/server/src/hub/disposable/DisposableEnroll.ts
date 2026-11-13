@@ -306,8 +306,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         ? { kind: "unreadable" }
         : readOperation(answer, { operationId, alias: `pen-${row.node_id}` });
     if (outcome.kind !== "not_found") return outcome;
-    const served = yield* host.ocx(["link", "operations", "--json"], LINK_READ_TIMEOUT_MS);
-    return served?.code === 0 ? outcome : ({ kind: "unreadable" } as const);
+    return (yield* host.journalServed) ? outcome : ({ kind: "unreadable" } as const);
   });
 
   /**
@@ -356,6 +355,11 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         return "resend" as const;
       }
       case "unreadable":
+        // The same bound as "not found": past 2 hours a person reads the journal instead.
+        if ((yield* Clock.currentTimeMillis) - link.intentAtMs >= OPERATION_REPLAY_MS) {
+          yield* stop(row, as("journal_unreadable"), "journal_unreadable", { state: "unknown" });
+          return "done" as const;
+        }
         if (link.outcome !== "journal_unreadable") yield* note(row, as("journal_unreadable"));
         return "done" as const;
       case "not_found": {

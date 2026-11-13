@@ -1,4 +1,5 @@
 import { ServerConfig } from "../../config.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSshCommand } from "@goat/ssh/command";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -7,13 +8,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
+import * as Inventory from "../../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../../processRunner.ts";
 import * as Settings from "../../serverSettings.ts";
 import { HubOcx, type OcxOutput, type PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
-/** The machine's known_hosts holds another key (changed), or could not be written (unwritable). */
 /** How a reach ended; ssh's own lines decide it, and none of them is kept. */
 export type ReachAnswer = "ok" | "key_refused" | "host_key_changed" | "unreachable" | "unusable";
 export const reachAnswerOf = (code: number | null, stderr: string): ReachAnswer =>
@@ -25,6 +26,29 @@ export const reachAnswerOf = (code: number | null, stderr: string): ReachAnswer 
         ? "key_refused"
         : "unreachable";
 
+/**
+ * Whether the Home serves its link operation journal, from the exit code of the full listing alone.
+ * The listing of a busy Home is far past HubOcx's output cap, so it is read with a small cap that
+ * truncates instead of failing.
+ */
+export const journalServed = Effect.fn("EnrollHost.journalServed")(
+  function* (binary: string, env: NodeJS.ProcessEnv) {
+    const runner = yield* ProcessRunner.ProcessRunner;
+    const ran = yield* runner.run({
+      command: binary,
+      args: ["link", "operations", "--json"],
+      env,
+      timeout: "30 seconds",
+      timeoutBehavior: "timedOutResult",
+      maxOutputBytes: 4096,
+      outputMode: "truncate",
+    });
+    return !ran.timedOut && ran.code === 0;
+  },
+  Effect.orElseSucceed(() => false),
+);
+
+/** The machine's known_hosts holds another key (changed), or could not be written (unwritable). */
 export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
   readonly reason: "changed" | "unwritable";
 }> {}
@@ -43,6 +67,8 @@ export class EnrollHost extends Context.Service<
     readonly knownHosts: (attachId: string, line: string) => Effect.Effect<string, KnownHostsError>;
     /** Runs `true` on the machine over the route contract within 30 s. */
     readonly reach: (route: DisposableRoute) => Effect.Effect<ReachAnswer>;
+    /** Whether this Home's OpenCodex serves its link operation journal. */
+    readonly journalServed: Effect.Effect<boolean>;
     /** ocx on this Home; undefined when it could not be run. */
     readonly ocx: (
       args: ReadonlyArray<string>,
@@ -61,6 +87,8 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const runner = yield* ProcessRunner.ProcessRunner;
+    const inventory = yield* Inventory.OpenCodexInventory;
+    const environment = yield* HostProcess.Environment;
     const directory = path.join((yield* ServerConfig).stateDir, "disposable", "known_hosts");
     return EnrollHost.of({
       route: Effect.fn("EnrollHost.route")(
@@ -101,6 +129,13 @@ export const layer = Layer.effect(
           return ran.timedOut ? ("unreachable" as const) : reachAnswerOf(ran.code, ran.stderr);
         },
         Effect.orElseSucceed(() => "unreachable" as const),
+      ),
+      journalServed: Effect.gen(function* () {
+        const binary = (yield* inventory.read).binaries[0]?.path;
+        return binary !== undefined && (yield* journalServed(binary, environment));
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.orElseSucceed(() => false),
       ),
       ocx: Effect.fn("EnrollHost.ocx")(
         function* (args, timeoutMs) {

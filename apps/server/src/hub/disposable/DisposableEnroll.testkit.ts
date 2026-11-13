@@ -102,6 +102,8 @@ export const fakeEnrollHost = () => {
     knownHostsUnwritable: false,
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
+    /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
+    journalUnreadable: false,
     holdOperations: undefined as Hold | undefined,
     journal,
     links,
@@ -152,6 +154,7 @@ export const fakeEnrollHost = () => {
       pass(control.holdRoute).pipe(
         Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
       ),
+    journalServed: Effect.sync(() => !control.journalRouteMissing),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
@@ -184,10 +187,10 @@ export const fakeEnrollHost = () => {
           Effect.sync(() => {
             control.calls.push(args);
             if (args[0] === "link" && args[1] === "add") return add(args);
+            if (args[0] === "link" && args[1] === "operations" && control.journalUnreadable)
+              return output(1);
             if (args[0] === "link" && args[1] === "operations" && control.journalRouteMissing)
               return output(4);
-            if (args[0] === "link" && args[1] === "operations" && args[2] !== "--operation-id")
-              return output(0, json({ operations: [] }));
             if (args[0] === "link" && args[1] === "operations") {
               const operation = journal.get(args[3] ?? "");
               if (operation === undefined) return output(4);

@@ -223,6 +223,8 @@ const STOPS: Record<string, string> = {
     "The machine has a full OpenCodex install; disposable machines take only the lightweight Child.",
   require_ephemeral_unsupported: "OpenCodex cannot plant its lightweight Child on this machine.",
   link_attempts_used: "Three link attempts failed.",
+  journal_unreadable:
+    "OpenCodex's link operation journal could not be read for two hours after GOAT sent the link; check it on the hub with ocx link operations.",
   link_stuck_open:
     "OpenCodex left the link operation open and did not settle it when GOAT repeated it.",
   link_not_started:
