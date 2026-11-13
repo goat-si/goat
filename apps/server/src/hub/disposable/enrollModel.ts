@@ -1,0 +1,286 @@
+import { type HubMachineStep } from "@goat/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+/**
+ * An attach's progress after Pen admits the machine (design section 2, steps 3 to 5): the route GOAT
+ * recorded, whether it reached the machine with the hub's key, and the OpenCodex link operation.
+ * Every value is GOAT's own fixed code; nothing the machine or OpenCodex printed is stored.
+ */
+const Note = Schema.Struct({ outcome: Schema.String, at: Schema.String });
+const Enroll = Schema.Struct({
+  route: Schema.optionalKey(Note),
+  reach: Schema.optionalKey(Note),
+  link: Schema.optionalKey(
+    Schema.Struct({
+      /** Operations started; each has its own id, <attachId>.link.<attempt>. */
+      attempt: Schema.Number,
+      /** When the current operation's id was stored, before it was sent. */
+      intentAtMs: Schema.Number,
+      outcome: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  /** Why the attach stopped and only a person can move it on. */
+  stop: Schema.optionalKey(Schema.String),
+});
+export type Enroll = typeof Enroll.Type;
+const EnrollJson = Schema.fromJsonString(Enroll);
+const decodeEnrollJson = Schema.decodeOption(EnrollJson);
+/** An unreadable progress reads as stopped, so nothing acts on it. */
+export const decodeEnroll = (json: string): Enroll =>
+  Option.getOrElse(decodeEnrollJson(json), () => ({ stop: "unreadable" }));
+export const encodeEnroll = Schema.encodeSync(EnrollJson);
+
+/** The route recorded at step 3, which every later SSH command and the link use unchanged. */
+const Route = Schema.Struct({
+  proxyCommand: Schema.String,
+  user: Schema.String,
+  hostKey: Schema.String,
+  fingerprint: Schema.String,
+  knownHostsFile: Schema.String,
+});
+export type StoredRoute = typeof Route.Type;
+const RouteJson = Schema.fromJsonString(Route);
+const decodeRouteJson = Schema.decodeOption(RouteJson);
+export const decodeRoute = (json: string | null) =>
+  json === null ? undefined : Option.getOrUndefined(decodeRouteJson(json));
+export const encodeRoute = Schema.encodeSync(RouteJson);
+
+/** OpenCodex's link operations a Home must declare before GOAT links a machine (O1, O5, O6). */
+export const LINK_CONTRACTS = ["link.route/1", "link.operation/1", "link.recover/1"] as const;
+/**
+ * An explicit route on OpenCodex dev carries no identity: the Home offers its own agent and default
+ * keys. A disposable machine trusts only the hub's machine key, so the link waits for a Home that
+ * takes one with the route (proposed contract; GOAT and OpenCodex agree on the name before it ships).
+ */
+export const LINK_IDENTITY_CONTRACT = "link.route/2";
+export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file", identityFile];
+/** OpenCodex replays an operation id's recorded answer for this long (link operation journal). */
+export const OPERATION_REPLAY_MS = 2 * 60 * 60 * 1000;
+/** Link operations an attach may start before it stops for a person. */
+export const LINK_ATTEMPTS = 3;
+const SSH_PORT = 22;
+
+export const linkOperationId = (attachId: string, attempt: number) => attachId + ".link." + attempt;
+
+/** `ocx link add` for a disposable machine: planted ocx-child only, its own exclusive route. */
+export const linkAddArgs = (input: {
+  readonly alias: string;
+  readonly route: StoredRoute;
+  readonly operationId: string;
+  readonly identityArgs: ReadonlyArray<string>;
+}) => [
+  "link",
+  "add",
+  input.alias,
+  "--plant",
+  "--require-ephemeral",
+  "--expect-fingerprint",
+  input.route.fingerprint,
+  "--operation-id",
+  input.operationId,
+  "--proxy-command",
+  input.route.proxyCommand,
+  "--ssh-user",
+  input.route.user,
+  "--ssh-port",
+  String(SSH_PORT),
+  "--exclusive",
+  ...input.identityArgs,
+  "--json",
+];
+
+/** One entry of OpenCodex's link operation journal, as `ocx link operations --operation-id` prints it. */
+const Operation = Schema.Struct({
+  operationId: Schema.String,
+  kind: Schema.String,
+  alias: Schema.String,
+  state: Schema.String,
+  reserved: Schema.optionalKey(Schema.Struct({ linkId: Schema.String })),
+  error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
+});
+const decodeOperation = Schema.decodeUnknownOption(Schema.fromJsonString(Operation));
+
+export type LinkOutcome =
+  | { readonly kind: "committed"; readonly linkId: string }
+  | { readonly kind: "failed_clean"; readonly code: string }
+  | { readonly kind: "unsettled"; readonly state: "residual" | "unknown" }
+  | { readonly kind: "open" }
+  | { readonly kind: "not_found" }
+  | { readonly kind: "unreadable" };
+
+const LINK_ID = /^lnk_[0-9a-f]{16}$/u;
+const CODE = /^[a-z][a-z0-9_]{0,63}$/u;
+/** Not found is ocx's exit 4 for a 404; anything else that is not a valid entry for this id is unreadable. */
+export const readOperation = (
+  output: { readonly code: number; readonly stdout: string },
+  expected: { readonly operationId: string; readonly alias: string },
+): LinkOutcome => {
+  if (output.code === 4) return { kind: "not_found" };
+  if (output.code !== 0) return { kind: "unreadable" };
+  const operation = Option.getOrUndefined(decodeOperation(output.stdout));
+  if (
+    operation === undefined ||
+    operation.operationId !== expected.operationId ||
+    operation.kind !== "enroll" ||
+    operation.alias.toLowerCase() !== expected.alias.toLowerCase()
+  )
+    return { kind: "unreadable" };
+  switch (operation.state) {
+    case "committed": {
+      const linkId = operation.reserved?.linkId;
+      return linkId !== undefined && LINK_ID.test(linkId)
+        ? { kind: "committed", linkId }
+        : { kind: "unreadable" };
+    }
+    case "failed_clean": {
+      const code = operation.error?.code;
+      return {
+        kind: "failed_clean",
+        code: code !== undefined && CODE.test(code) ? code : "failed",
+      };
+    }
+    case "residual":
+    case "unknown":
+      return { kind: "unsettled", state: operation.state };
+    case "open":
+      return { kind: "open" };
+    default:
+      return { kind: "unreadable" };
+  }
+};
+
+/** Refusals that no retry changes: the machine holds a full install, or cannot take ocx-child. */
+export const FINAL_LINK_CODES: ReadonlySet<string> = new Set([
+  "full_install_present",
+  "require_ephemeral_unsupported",
+]);
+
+const LinkRow = Schema.Struct({
+  id: Schema.String,
+  alias: Schema.String,
+  childKind: Schema.optionalKey(Schema.String),
+  exclusive: Schema.optionalKey(Schema.Boolean),
+  explicitRoute: Schema.optionalKey(
+    Schema.Struct({ proxyCommand: Schema.String, user: Schema.String, port: Schema.Number }),
+  ),
+});
+const decodeStatus = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ links: Schema.Array(LinkRow) })),
+);
+
+/**
+ * What `ocx link status --json` says of the link this attach made: verified when it is an exclusive
+ * ephemeral Child on exactly the recorded route, gone when the Home lists no such link.
+ */
+export const verifyLink = (
+  stdout: string,
+  expected: { readonly linkId: string; readonly alias: string; readonly route: StoredRoute },
+): "verified" | "mismatch" | "gone" | "unreadable" => {
+  const status = Option.getOrUndefined(decodeStatus(stdout));
+  if (status === undefined) return "unreadable";
+  const link = status.links.find((row) => row.id === expected.linkId);
+  if (link === undefined) return "gone";
+  const route = link.explicitRoute;
+  return link.alias === expected.alias &&
+    link.childKind === "ephemeral" &&
+    link.exclusive === true &&
+    route?.proxyCommand === expected.route.proxyCommand &&
+    route.user === expected.route.user &&
+    route.port === SSH_PORT
+    ? "verified"
+    : "mismatch";
+};
+
+/** The steps after admission, for the status a caller sees. */
+export const enrollSteps = (enroll: Enroll): ReadonlyArray<HubMachineStep> => [
+  ...(enroll.route === undefined ? [] : [{ step: "route", outcome: enroll.route.outcome }]),
+  ...(enroll.reach === undefined ? [] : [{ step: "reach", outcome: enroll.reach.outcome }]),
+  ...(enroll.link?.outcome === undefined ? [] : [{ step: "link", outcome: enroll.link.outcome }]),
+];
+
+const STOPS: Record<string, string> = {
+  sshd_pin_shared:
+    "Another disposable machine presents the same SSH host key, so GOAT cannot tell them apart.",
+  pin_changed: "Pen now advertises another SSH host key for this machine than GOAT recorded.",
+  route_other_pen: "Pen's route for this machine names another Pen than the one confirmed here.",
+  route_unsafe_pen_path: "The confirmed Pen's path cannot be passed to ssh unchanged.",
+  route_several_keys: "Pen recorded more than one ed25519 host key for this machine.",
+  full_install_present:
+    "The machine has a full OpenCodex install; disposable machines take only the lightweight Child.",
+  require_ephemeral_unsupported: "OpenCodex cannot plant its lightweight Child on this machine.",
+  link_attempts_used: "Three link attempts failed.",
+  operation_lost:
+    "OpenCodex no longer has the link operation GOAT started more than two hours ago, so GOAT cannot tell whether it linked the machine.",
+  link_residual: "The link operation may have left an enrollment or a plant on the machine.",
+  link_unknown: "OpenCodex cannot tell what the link operation left.",
+  link_mismatch:
+    "The Home's link for this machine is not the exclusive lightweight Child on the recorded route.",
+  link_gone: "The Home no longer lists the link this attach made.",
+  unreadable: "GOAT cannot read this attach's progress.",
+};
+const stopText = (stop: string) => STOPS[stop] ?? "The attach stopped and needs a person.";
+
+const WAITING: Record<string, string> = {
+  no_pen: "This hub has no confirmed Pen to read the machine's route from.",
+  no_exact_block: "Pen has not written this machine's route yet.",
+  no_user: "Pen has not recorded this machine's SSH user yet.",
+  no_key: "Pen has not recorded this machine's SSH host key yet.",
+  unreachable:
+    "GOAT cannot reach the machine with the hub's machine key yet; add machineKey to its user's authorized_keys.",
+  opencodex_unsupported:
+    "This hub's OpenCodex cannot link a machine with the hub's machine key yet; update OpenCodex.",
+  journal_unreadable: "OpenCodex's link operation journal could not be read; GOAT asks again.",
+  open: "OpenCodex is still running the link operation.",
+  verify_unreadable: "OpenCodex's link status could not be read; GOAT asks again.",
+};
+const waitingText = (outcome: string | undefined) =>
+  outcome === undefined ? undefined : WAITING[outcome];
+
+/**
+ * The fixed text for an admitted attach (design section 2, "What the caller sees"); undefined for a
+ * state the invite texts cover.
+ */
+export const enrollMessage = (
+  state: string,
+  name: string,
+  enroll: Enroll,
+): { readonly message: string; readonly nextAction: string | null } | undefined => {
+  const keyStep =
+    "Add machineKey to the authorized_keys of the machine's SSH user if it is not there yet.";
+  if (enroll.stop !== undefined && (state === "paused" || state === "unknown"))
+    return {
+      message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),
+      nextAction:
+        "A person decides what happens to it. Detaching is not available yet; it stays a Pen member until a person removes it from Pen.",
+    };
+  switch (state) {
+    case "admitted":
+      return {
+        message: waitingText(enroll.route?.outcome) ?? name + " joined Pen; checking its route.",
+        nextAction: keyStep,
+      };
+    case "attaching":
+      if (enroll.reach?.outcome !== "ok")
+        return {
+          message:
+            waitingText(enroll.reach?.outcome) ??
+            name + "'s route is recorded; reaching it with the hub's machine key.",
+          nextAction: keyStep,
+        };
+      return {
+        message:
+          waitingText(enroll.link?.outcome) ??
+          "Linking " + name + " to this hub's OpenCodex as a lightweight Child.",
+        nextAction: null,
+      };
+    case "linked":
+      return {
+        message: name + " is linked to this hub's OpenCodex as a lightweight Child.",
+        nextAction:
+          "GOAT's runtime and agents there come in a later version; it stays a Pen member until a person removes it from Pen.",
+      };
+    default:
+      return undefined;
+  }
+};
