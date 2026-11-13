@@ -688,6 +688,9 @@ func (cl *Client) CloseWrite() error {
 // SetDeadline bounds the requests and replies still to come on this connection.
 func (cl *Client) SetDeadline(t time.Time) error { return cl.c.SetDeadline(t) }
 
+// SetReadDeadline bounds the reads still to come on this connection, leaving its writes unbounded.
+func (cl *Client) SetReadDeadline(t time.Time) error { return cl.c.SetReadDeadline(t) }
+
 // ErrWatchDropped is a daemon that took a watch but hung up before its first line, as it does when
 // it stops (at the end of a leave, for one).
 var ErrWatchDropped = errors.New("the pen daemon hung up before it could watch for revocations (it may be stopping or leaving the mesh); run this again once pen ls answers")
