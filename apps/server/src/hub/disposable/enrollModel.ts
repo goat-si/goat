@@ -238,7 +238,7 @@ const STOPS: Record<string, string> = {
   link_stuck_open:
     "OpenCodex left the link operation open and did not settle it when GOAT repeated it.",
   link_not_started:
-    "OpenCodex refused the link three times before recording it: the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
+    "OpenCodex refused the link three times before recording it: it may not accept this hub's machine key file (OpenCodex running as another user, or a folder on the key's path others can write), the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
   operation_lost:
     "OpenCodex no longer has the link operation GOAT started more than two hours ago, so GOAT cannot tell whether it linked the machine.",
   link_residual: "The link operation may have left an enrollment or a plant on the machine.",

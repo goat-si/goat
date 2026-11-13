@@ -425,6 +425,11 @@ it.effect(
           state: "paused",
           message: expect.stringContaining("before recording it"),
         });
+        // OpenCodex refuses a key file it cannot use before its journal opens, and its CLI prints no
+        // code for it, so the stop names that cause too.
+        expect(yield* listed(attachId)).toMatchObject({
+          message: expect.stringContaining("machine key file"),
+        });
       }),
     ),
 );
