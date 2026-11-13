@@ -176,6 +176,17 @@ export function useMobileBotTaskLookup(input: {
       } else setFailedKey(sentKey);
     });
   };
+  // A read belongs to one unbroken period in which this task is the screen's and may be looked
+  // up; a refresh does not end it. When it ends, its answer is ignored and it is no longer in flight.
+  const eligible = able && permitted && input.established && !input.holdsTask;
+  // oxlint-disable-next-line goat/react-effect-budget -- Ends the period of a read when the screen's task, its eligibility or the screen itself goes.
+  useEffect(() => {
+    if (!eligible) return;
+    return () => {
+      if (running.current?.key === key) running.current = null;
+      setInFlight((current) => (current?.key === key ? null : current));
+    };
+  }, [eligible, key]);
   const readShown = useEffectEvent(read);
   // oxlint-disable-next-line goat/react-effect-budget -- Starts the read the decision asks for, once per decision.
   useEffect(() => {

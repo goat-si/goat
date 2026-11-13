@@ -278,3 +278,61 @@ it("a stale mark for a task the screen left is dropped", async () => {
   // Back on t1 after the list held it: its answer was dropped, so it reads again, once.
   expect(asked()).toEqual(["t1", "t1"]);
 });
+
+it("a read ends with its period: after A -> B (listed) -> A its late answer is ignored and one new read serves A", async () => {
+  setup();
+  await show();
+  await show({ taskId: "t2" as Props["taskId"], holdsTask: true });
+  await show();
+  expect(asked()).toEqual(["t1", "t1"]);
+  await net.calls[0]?.answer(known("t1", { partial: true }));
+  expect(state()).toBe("loading");
+  await net.calls[1]?.answer(known("t1"));
+  expect(seen.current?.state === "known" && seen.current.result.partial).toBe(false);
+});
+
+it("a task that enters and leaves the current list while its read is out is read again, and the late answer is ignored", async () => {
+  setup();
+  await show();
+  await show({ holdsTask: true });
+  await show();
+  expect(asked()).toEqual(["t1", "t1"]);
+  await net.calls[0]?.answer(known("t1", { partial: true }));
+  expect(state()).toBe("loading");
+});
+
+it("a capability withdrawn while a read is out shows the screen without lookup, and its answer does not count later", async () => {
+  setup();
+  await show();
+  await show({ supported: false });
+  expect(state()).toBe("off");
+  await net.calls[0]?.answer(known("t1"));
+  expect(state()).toBe("off");
+  await show();
+  expect(asked()).toEqual(["t1", "t1"]);
+  expect(state()).toBe("loading");
+});
+
+it("an answer that arrives after the screen unmounted sets nothing", async () => {
+  setup();
+  await show();
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  await act(async () => root?.unmount());
+  root = null;
+  await net.calls[0]?.answer(known("t1"));
+  expect(errors).not.toHaveBeenCalled();
+  errors.mockRestore();
+});
+
+it("read permission withdrawn while a read is out shows the permission line, and its answer does not count later", async () => {
+  setup();
+  await show();
+  net.permitted = false;
+  await show();
+  expect(state()).toBe("denied");
+  await net.calls[0]?.answer(known("t1"));
+  net.permitted = true;
+  await show();
+  expect(asked()).toEqual(["t1", "t1"]);
+  expect(state()).toBe("loading");
+});

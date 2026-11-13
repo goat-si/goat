@@ -655,3 +655,38 @@ it("the Try again control pressed twice at once reads the task once", async () =
   });
   expect(lookups("task-old")).toBe(2);
 });
+
+it("a Pin that completes after the screen moved to another bot's task with the same id rereads nothing there", async () => {
+  reset();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  let settle: (value: unknown) => void = () => {};
+  state.update.mockReturnValue(new Promise((resolve) => (settle = resolve)));
+  await render(ChannelTaskId.make("task-old"));
+  await press("Pin");
+  const asMember = () =>
+    root?.render(
+      <WorkWithChip
+        visible
+        taskId={ChannelTaskId.make("task-old")}
+        member={{
+          botId: BotId.make("scout"),
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("scout-thread"),
+          name: "Scout",
+          defaultModelSelection: null,
+        }}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
+    );
+  await act(async () => asMember());
+  const scout = () =>
+    state.lookup.mock.calls.filter((call) => call[1]?.input?.botId === "scout").length;
+  expect(scout()).toBe(1);
+  await act(async () => settle(AsyncResult.success({})));
+  Object.assign(state.task, { isPending: false });
+  await act(async () => asMember());
+  expect(scout()).toBe(1);
+});
