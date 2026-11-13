@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -17,54 +18,44 @@ import (
 )
 
 // missedCloseConn is a holder connection whose reads follow a script. A step "timeout" stands for a read that saw
-// nothing within its deadline: it waits until the reader sets a read deadline (a read without one blocks, as a read
-// that missed the holder's close does on Windows) and then returns a timeout. After the script every read returns EOF,
-// as a fresh read of a closed connection does.
+// nothing within its deadline. It needs a read deadline set since the previous timeout step; without one the read
+// would block forever, as a read that missed the holder's close does on Windows, and the step fails at once with
+// errNoDeadline. After the script every read returns EOF, as a fresh read of a closed connection does.
 type missedCloseConn struct {
-	mu      sync.Mutex
-	script  []string
-	armed   chan struct{}
-	armOnce sync.Once
-	closed  chan struct{}
-	closeMu sync.Once
-	wrote   bytes.Buffer
+	mu     sync.Mutex
+	script []string
+	armed  bool
+	wrote  bytes.Buffer
 }
 
+var errNoDeadline = errors.New("a read with no deadline would block forever")
+
 func newMissedCloseConn(script ...string) *missedCloseConn {
-	return &missedCloseConn{script: script, armed: make(chan struct{}), closed: make(chan struct{})}
+	return &missedCloseConn{script: script}
 }
 
 func (c *missedCloseConn) Read(p []byte) (int, error) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.script) == 0 {
-		c.mu.Unlock()
 		return 0, io.EOF
 	}
 	step := c.script[0]
 	c.script = c.script[1:]
-	c.mu.Unlock()
 	if step != "timeout" {
 		return copy(p, step), nil
 	}
-	select {
-	case <-c.armed:
-		// Each timeout needs the reader to arm again before the next one.
-		c.mu.Lock()
-		c.armed, c.armOnce = make(chan struct{}), sync.Once{}
-		c.mu.Unlock()
-		return 0, &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}
-	case <-c.closed:
-		return 0, net.ErrClosed
+	if !c.armed {
+		return 0, &net.OpError{Op: "read", Net: "unix", Err: errNoDeadline}
 	}
+	c.armed = false
+	return 0, &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}
 }
 
 func (c *missedCloseConn) SetReadDeadline(t time.Time) error {
-	if !t.IsZero() {
-		c.mu.Lock()
-		armed, once := c.armed, &c.armOnce
-		c.mu.Unlock()
-		once.Do(func() { close(armed) })
-	}
+	c.mu.Lock()
+	c.armed = !t.IsZero()
+	c.mu.Unlock()
 	return nil
 }
 
@@ -80,7 +71,7 @@ func (c *missedCloseConn) written() string {
 	return c.wrote.String()
 }
 
-func (c *missedCloseConn) Close() error                     { c.closeMu.Do(func() { close(c.closed) }); return nil }
+func (c *missedCloseConn) Close() error                     { return nil }
 func (c *missedCloseConn) CloseWrite() error                { return nil }
 func (c *missedCloseConn) LocalAddr() net.Addr              { return &net.UnixAddr{Net: "unix"} }
 func (c *missedCloseConn) RemoteAddr() net.Addr             { return &net.UnixAddr{Net: "unix"} }
