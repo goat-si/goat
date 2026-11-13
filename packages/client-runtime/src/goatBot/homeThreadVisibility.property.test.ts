@@ -96,6 +96,8 @@ type Fixture = {
   name: string;
   rows: ReturnType<typeof row>[];
   remote?: ReturnType<typeof remoteRow>[];
+  historyRows?: ReturnType<typeof row>[];
+  historyRemote?: ReturnType<typeof remoteRow>[];
   threads: GoatBotVisibilityThread[];
   hidden: string[];
   offline?: boolean;
@@ -120,7 +122,13 @@ const fixtures: Fixture[] = [
     threads: [shell("turn-code", { from: caller, via: "create_threads" })],
     hidden: [key(source, "turn-code")],
   },
-  { name: "history-only turn", rows: [], threads: [shell("old", { from: caller })], hidden: [] },
+  {
+    name: "history-only turn",
+    rows: [],
+    historyRows: [task("old-task"), coding("old", "old-task")],
+    threads: [shell("old", { from: caller })],
+    hidden: [],
+  },
   ...(["chore", "coding"] as const).map((kind) => ({
     name: `remote ${kind} matching provenance`,
     rows: [task()],
@@ -161,12 +169,28 @@ const fixtures: Fixture[] = [
   {
     name: "more than 20 history-only launches",
     rows: [],
+    historyRows: [
+      task("old-task"),
+      ...Array.from({ length: 25 }, (_, i) => coding(`old-${i}`, "old-task")),
+    ],
     threads: Array.from({ length: 25 }, (_, i) => shell(`old-${i}`, { from: caller })),
     hidden: [],
   },
   {
     name: "released remote outside current list",
     rows: [task()],
+    historyRemote: [
+      remoteRow({
+        childWorkId: "released",
+        taskId: "task",
+        callerThreadId: caller,
+        host: "host",
+        state: "released",
+        lastActivityAt: at,
+        environmentId: remote,
+        threadId: "released",
+      }),
+    ],
     threads: [matching("released")],
     hidden: [],
   },
@@ -251,6 +275,9 @@ describe("Home and Threads two-way visibility", () => {
       mainMessageCount: 0,
       ...(fixture.remote ? { remoteWork: fixture.remote } : {}),
     };
+    if (fixture.historyRows)
+      expect(fixture.historyRows.length).toBeGreaterThan(fixture.rows.length);
+    if (fixture.historyRemote) expect(fixture.historyRemote[0]?.state).toBe("released");
     const value = selectHomeCurrentOpenableWork({
       sourceEnvironmentId: source,
       botId: BotId.make("main"),
