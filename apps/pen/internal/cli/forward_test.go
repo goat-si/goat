@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -347,19 +346,7 @@ func TestForwardAndPipeDoNotStartForANodeAlreadyRevoked(t *testing.T) {
 	defer rs.Close()
 	_, b := meshOfTwo(t, ctx, rs)
 	revokedHere := tmpStore(t) // b's identity and mesh, behind a daemon whose view revokes b
-	files, err := filepath.Glob(filepath.Join(b.Dir, "*.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(revokedHere.Dir, filepath.Base(f)), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	copyNodeFiles(t, b, revokedHere)
 	p, err := loadPeer(revokedHere)
 	if err != nil {
 		t.Fatal(err)
@@ -417,5 +404,27 @@ func TestForwardAndPipeDoNotStartForANodeAlreadyRevoked(t *testing.T) {
 	errOut.Reset()
 	if got := RunPipe([]string{"a", "9"}, io.Discard, &errOut); got == 0 || !strings.Contains(errOut.String(), "nothing was opened") {
 		t.Fatalf("pipe exit %d, stderr %q; want a refusal before any open", got, errOut.String())
+	}
+}
+
+// copyNodeFiles copies the files a node's identity and mesh are made of from a store whose daemon runs. It holds the
+// source's state lock, under which the daemon replaces config.json and mesh.json, so a read never meets a replace:
+// on Windows that read fails with a sharing violation. The daemon's own runtime files (daemon.json, written without
+// the lock) are not copied.
+func copyNodeFiles(t *testing.T, from, to *state.Store) {
+	t.Helper()
+	unlock, err := from.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for _, name := range []string{"identity.json", "config.json", "mesh.json"} {
+		data, err := os.ReadFile(from.Path(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to.Path(name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
