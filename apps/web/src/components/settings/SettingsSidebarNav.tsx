@@ -49,6 +49,7 @@ import {
   type SettingsSearchItem,
 } from "./settingsSearch";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
+import { handleSettingsSectionKeyDown } from "./settingsSectionNavigation";
 import { validateSettingsScopeSearch } from "./settingsScope";
 
 const GoatConnectSidebarSignIn = lazy(() =>
@@ -312,7 +313,11 @@ export function SettingsSidebarNav({
                 ))}
               </SidebarMenu>
             ) : (
-              <nav aria-label="Settings sections" className="flex flex-col gap-3">
+              <nav
+                aria-label="Settings sections"
+                onKeyDown={handleSettingsSectionKeyDown}
+                className="flex flex-col gap-3"
+              >
                 {navGroups.map((group, groupIndex) => {
                   const headingId = `settings-nav-group-${groupIndex}`;
                   return (
@@ -334,6 +339,7 @@ export function SettingsSidebarNav({
                           return (
                             <SidebarMenuItem key={to}>
                               <SidebarMenuButton
+                                data-settings-section={to}
                                 isActive={isActive}
                                 aria-current={isActive ? "page" : undefined}
                                 onClick={() => handleSectionClick(to)}
