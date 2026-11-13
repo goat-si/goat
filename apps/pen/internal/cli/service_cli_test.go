@@ -546,8 +546,10 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 	}
 	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
 	// It learns of the half-close from the grace seam, which the child reaches once it half-closed: a read on Windows
-	// can miss the half-close itself.
-	halfClosed := halfCloseSeam(t, nil)
+	// can miss the half-close itself. A read on Windows can miss the node's close too, so the child's grace ends once
+	// the node has closed: whichever the child sees first, its node read or the grace, it exits 1.
+	nodeClosed := make(chan time.Time)
+	halfClosed := halfCloseSeam(t, nodeClosed)
 	ln, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
@@ -558,12 +560,13 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		if err != nil {
 			return
 		}
-		defer c.Close()
 		r := bufio.NewReader(c)
 		r.ReadBytes('\n')
 		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
 		r.ReadBytes('\n')
 		<-halfClosed
+		c.Close()
+		close(nodeClosed)
 	}()
 	t.Setenv("PEN_HOME", dir)
 	key := make([]byte, 32)
@@ -571,8 +574,8 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
 	defer func() { Stdin = os.Stdin }()
 	var out, errOut bytes.Buffer
-	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "before answering 1") {
-		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op named", rc, errOut.String())
+	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "1 forwarded op(s)") {
+		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op counted", rc, errOut.String())
 	}
 }
 
