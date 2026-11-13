@@ -38,8 +38,7 @@ const EMPTY_WALK = {
 const time = (value: string | null) => (value === null ? NaN : Date.parse(value));
 const taskRows = (rows: readonly BotThreadRow[]) =>
   new Map(rows.flatMap((row) => (row.kind === "task" ? [[row.task.taskId, row] as const] : [])));
-// The current list's items win by key; the entry's history-only items, such as released remote
-// launches that only history lists, are kept.
+// The current list's items win by key, and the entry's other items are kept.
 const union = <T>(mine: readonly T[], theirs: readonly T[], key: (item: T) => string) => {
   const keys = new Set(theirs.map(key));
   return [...theirs, ...mine.filter((item) => !keys.has(key(item)))];
@@ -61,12 +60,14 @@ function writeThrough(walk: typeof EMPTY_WALK, current: ChannelListBotThreadsRes
       const task = { ...row, view: { ...row.view, pinnedAt: null } };
       const coding = (rows: readonly BotThreadRow[]) =>
         rows.filter((other) => other.kind === "coding" && other.taskId === id);
+      // A listed task's local launches never leave the current list, so a union loses nothing;
+      // of its remote launches the current list reports every one except released ones.
       return {
         ...item,
         task,
         rows: [task, ...union(coding(item.rows), coding(current.rows), botThreadKey)],
         remoteWork: union(
-          item.remoteWork,
+          item.remoteWork.filter((other) => other.state === "released"),
           (current.remoteWork ?? []).filter((other) => other.taskId === id),
           (other) => other.childWorkId,
         ),

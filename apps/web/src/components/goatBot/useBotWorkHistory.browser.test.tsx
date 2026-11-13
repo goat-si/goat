@@ -29,7 +29,8 @@ const page = (rows: readonly unknown[], history: Record<string, unknown>) => ({
   _tag: "Success",
   value: { rows, mainMessageCount: 0, history },
 });
-const current = (rows: unknown[]) => ({ rows, mainMessageCount: 0 }) as ChannelListBotThreadsResult;
+const current = (rows: unknown[], remoteWork: unknown[] = []) =>
+  ({ rows, remoteWork, mainMessageCount: 0 }) as ChannelListBotThreadsResult;
 const pinnedOld = { ...old, view: { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" } };
 // Home is keyed by environment and bot in GoatBotChatView, so a switch remounts the walk.
 function KeyedHistory(props: { list: ChannelListBotThreadsResult; botId?: BotId | null }) {
@@ -383,14 +384,14 @@ it("a current task leaving during a read drops nothing, and the notice follows t
   expect(screen.getByRole("button", { name: "Read history" }).query()).toBeNull();
 });
 
-it("a remote launch only history lists stays with the task through Pin and Unpin, listed once", async () => {
+it("a released remote launch only history lists stays with the task through Pin and Unpin, listed once", async () => {
   setup();
   const launch = {
     childWorkId: "remote-1",
     taskId,
     callerThreadId: "bot",
     host: "macbook",
-    state: "completed",
+    state: "released",
     lastActivityAt: "2026-11-13T00:00:00Z",
     threadId: "remote-thread",
     environmentId: "remote-env",
@@ -408,4 +409,23 @@ it("a remote launch only history lists stays with the task through Pin and Unpin
   await screen.rerender(<History list={current([])} />);
   await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   await expect.element(screen.getByText("remote remote-1")).toBeVisible();
+});
+
+it("a launch the current list stops listing is not kept as a stale in-progress row", async () => {
+  setup();
+  const launch = {
+    childWorkId: "remote-2",
+    taskId,
+    callerThreadId: "bot",
+    host: "macbook",
+    state: "launched",
+    lastActivityAt: "2026-11-13T00:00:00Z",
+  };
+  mock.read.mockResolvedValueOnce(page([old], {}));
+  await using screen = await render(<History list={current([old], [launch])} />);
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  await expect.element(screen.getByText("remote remote-2")).toBeVisible();
+  await screen.rerender(<History list={current([{ ...old, unread: true }])} />);
+  await expect.element(screen.getByText(/Old task Unpinned Unread/)).toBeVisible();
+  expect(screen.getByText("remote remote-2").query()).toBeNull();
 });
