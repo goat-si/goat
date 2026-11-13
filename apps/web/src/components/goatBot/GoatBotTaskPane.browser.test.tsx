@@ -409,6 +409,7 @@ it("opens a visible older task with actions after history cache pressure", async
     unread: false,
     mainMessagesSinceQuiet: 0,
   });
+  if (row.kind !== "task") throw new Error("Expected a task row");
   rememberHistoryRows(env, [row]);
   function HomeAndPane() {
     const [open, setOpen] = useState(false);
