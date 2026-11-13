@@ -121,6 +121,7 @@ import {
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
+import { notifyTerminalDuringQuestion } from "./composerSendNotices";
 import { CollapsedComposerPromptButton } from "./CollapsedComposerPromptPreview";
 import {
   ComposerBannerStack,
@@ -3168,7 +3169,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
-        if (!activeThread || isChoiceOnlyPendingQuestion || isLiteralPendingAnswer) return;
+        if (!activeThread) return;
+        if (activePendingProgress) return notifyTerminalDuringQuestion();
         const snapshot = readComposerSnapshotStable();
         const context = {
           id: randomUUID(),
@@ -3281,7 +3283,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       environmentId,
       primaryEnvironmentId,
       isConnecting,
-      isChoiceOnlyPendingQuestion,
       isLiteralPendingAnswer,
       pendingUserInputs.length,
       projectSelectionRequired,
