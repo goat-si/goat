@@ -223,27 +223,83 @@ function Expandable({ rows }: { readonly rows: readonly Row[] }) {
   return view(rows, { showAll, onShowAllChange: setShowAll });
 }
 
-it("reveals current finished work before requesting older history", async () => {
-  const rows = setup(
-    Array.from({ length: 7 }, (_, index) =>
-      taskRow(`task-${index}`, `Finished ${index + 1}`, "completed", "2026-11-04T01:00:00.000Z"),
-    ),
+const finishedRows = () =>
+  Array.from({ length: 7 }, (_, index) =>
+    taskRow(`task-${index}`, `Finished ${index + 1}`, "completed", "2026-11-04T01:00:00.000Z"),
   );
+function PagedWork({
+  rows,
+  loadMore,
+  loading = false,
+}: {
+  readonly rows: readonly Row[];
+  readonly loadMore: () => void;
+  readonly loading?: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  return view(rows, {
+    showAll,
+    onShowAllChange: setShowAll,
+    history: history({
+      supported: true,
+      hasMore: true,
+      loading,
+      loadMore,
+      currentTaskIds: new Set(rows.map((row) => row.task.taskId)),
+    }),
+  });
+}
+
+it("without Home's governance one Show more press shows the held rows and asks for older work, as before", async () => {
+  const rows = setup(finishedRows());
   const loadMore = vi.fn();
-  function Work() {
-    const [showAll, setShowAll] = useState(false);
-    return view(rows, {
-      showAll,
-      onShowAllChange: setShowAll,
-      history: history({ supported: true, hasMore: true, loadMore }),
-    });
-  }
-  await using screen = await render(<Work />);
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a governed Home reveals a held row and its atom link with one press, before older work answers", async () => {
+  const rows = setup(finishedRows()).map((row) =>
+    row.task.taskId === "task-6"
+      ? { ...row, worker: { environmentId, threadId: ThreadId.make("held-worker") } }
+      : row,
+  );
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: rows.map((row) => ({ row, remote: [] })) },
+    links: [{ taskId: "task-6", environmentId, threadId: "held-worker", kind: "worker" }],
+  };
+  // The older-work read never answers here: the held row must not wait for it.
+  const loadMore = vi.fn(() => new Promise<void>(() => {}));
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} />);
+  await expect.element(screen.getByText("Finished 7")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Finished 7" }));
+  await vi.waitFor(() =>
+    expect(
+      Array.from(screen.container.querySelectorAll("a")).map((link) => link.getAttribute("href")),
+    ).toContain("/env/held-worker"),
+  );
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a governed Home reveals its held rows even while an older-work read is still running", async () => {
+  const rows = setup(finishedRows());
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: [] },
+    links: [],
+  };
+  const loadMore = vi.fn();
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} loading />);
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   await expect.element(screen.getByText("Finished 7")).toBeVisible();
   expect(loadMore).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
-  expect(loadMore).toHaveBeenCalledOnce();
 });
 
 it("says it is loading while the first read runs, not an empty claim", async () => {
@@ -352,6 +408,12 @@ it("removes the truncated history note when the task returns to the current list
     view(rows, { history: history({ supported: true, launchesTruncated: truncated }) }),
   );
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: [] },
+    links: [],
+  };
   await screen.rerender(
     view(rows, {
       history: history({
@@ -362,6 +424,21 @@ it("removes the truncated history note when the task returns to the current list
     }),
   );
   expect(screen.getByText("Some threads are listed in Threads.").query()).toBeNull();
+});
+
+it("without Home's governance a current task keeps the truncated note, as before", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const truncated = new Set([ChannelTaskId.make("task-a")]);
+  await using screen = await render(
+    view(rows, {
+      history: history({
+        supported: true,
+        launchesTruncated: truncated,
+        currentTaskIds: truncated,
+      }),
+    }),
+  );
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
 });
 
 it("a failed older-work read is announced in the status region", async () => {
