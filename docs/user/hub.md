@@ -134,16 +134,25 @@ rule cancels invites that were not used yet.
 
 To attach a machine yourself, choose **Attach a machine**, paste the line
 `pen identity --json` prints on that machine, and name it. GOAT shows the invite
-token once; run `pen join` with it on that machine within 10 minutes. While it
+token once, with this hub's machine key. Add the key to `authorized_keys` of the
+machine's SSH user, then run `pen join` with the token on that machine within
+10 minutes. While it
 waits, **Reissue** cancels that invite and makes a new one for the same keys;
 once it has expired, attach the machine again. A provisioner
 thread does the same with `goat_hub_machine_attach`; its invite token appears in
 that thread's tool output and history, so treat the thread as holding a secret
 until the invite is used or expires.
 
+Once the machine joins, the hub checks the route Pen recorded for it, reaches
+it with the machine key alone, and links it to OpenCodex as a lightweight Child
+on that route only. The machine list shows each step. The link needs an
+OpenCodex on the hub that can use the machine key; until then the machine waits
+at the link step. A machine with a full OpenCodex install, or one that shares its
+SSH host key with another disposable machine, stops for you to decide.
+
 Each machine is a full Pen member and can reach services on your machines'
-loopback. GOAT does not link it as a Child yet, and it stays a Pen member until
-you remove it with [`pen revoke`](pen.md#remove-a-machine). An older GOAT on the
+loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
+it with [`pen revoke`](pen.md#remove-a-machine). An older GOAT on the
 hub shows **Update GOAT on this hub** instead of these settings.
 
 ## Sync OpenCodex models
