@@ -1,5 +1,7 @@
 import { ServerConfig } from "../../config.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a temporary name per write.
+import * as NodeCrypto from "node:crypto";
 import { resolveSshCommand } from "@goat/ssh/command";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -93,13 +95,26 @@ export const writeKnownHostsOnce = Effect.fn("EnrollHost.writeKnownHostsOnce")(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const file = path.join(directory, attachId);
-    const existing = yield* fs.readFileString(file).pipe(Effect.option);
-    if (existing._tag === "Some")
-      return existing.value === line ? file : yield* new KnownHostsError({ reason: "changed" });
+    const compare = (existing: string) =>
+      existing === line
+        ? Effect.succeed(file)
+        : Effect.fail(new KnownHostsError({ reason: "changed" }));
+    // Only a missing file is written; one GOAT cannot read is never replaced.
+    const existing = yield* fs.readFileString(file).pipe(
+      Effect.asSome,
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    );
+    if (existing._tag === "Some") return yield* compare(existing.value);
     yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-    const temporary = file + ".new";
+    const temporary = file + ".new-" + NodeCrypto.randomUUID();
     yield* fs.writeFileString(temporary, line, { mode: 0o600 });
-    yield* fs.rename(temporary, file);
+    // link refuses an existing name, so a file that appeared meanwhile is compared, never replaced.
+    const published = yield* fs.link(temporary, file).pipe(
+      Effect.as(true),
+      Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
+      Effect.ensuring(Effect.ignore(fs.remove(temporary))),
+    );
+    if (!published) return yield* compare(yield* fs.readFileString(file));
     return file;
   },
   Effect.catchTags({
