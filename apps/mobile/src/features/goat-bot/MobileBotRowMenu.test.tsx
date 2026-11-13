@@ -137,11 +137,13 @@ it("on Android keeps the row outside the native menu view, whose long press open
   await view.unmount();
 });
 
-it("on iOS wraps the row in a menu that opens on long press, with the same actions", async () => {
+it("on iOS wraps the row in a menu set to open on long press, given the button's actions", async () => {
   const view = await show("ios", <Row />);
   const row = view.container.querySelector('[aria-label="Task row"]');
   expect(row?.closest("[data-menu]")?.getAttribute("data-long-press")).toBe("true");
-  expect(native.menus.filter((menu) => menu.longPress)).toHaveLength(1);
-  expect(native.menus.every((menu) => menu.actions.length === 4)).toBe(true);
+  const rowMenu = native.menus.find((menu) => menu.longPress);
+  const buttonMenu = native.menus.find((menu) => menu.longPress === false);
+  expect(rowMenu?.actions).toEqual(actions);
+  expect(buttonMenu?.actions).toEqual(actions);
   await view.unmount();
 });
