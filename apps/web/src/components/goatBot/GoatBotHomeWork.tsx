@@ -184,9 +184,8 @@ export function GoatBotHomeWork({
         if (task.row.task.taskId === focusTaskId) focusRef?.(element);
       }}
       launchesTruncated={
-        history?.supported === true &&
-        !history.currentTaskIds.has(task.row.task.taskId) &&
-        history.launchesTruncated.has(task.row.task.taskId)
+        history?.launchesTruncated.has(task.row.task.taskId) === true &&
+        !(current.eligible && history.currentTaskIds.has(task.row.task.taskId))
       }
     />
   );
@@ -248,11 +247,11 @@ export function GoatBotHomeWork({
           expanded={showAll}
           label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
-            if (hidden > 0 && !showAll) {
-              onShowAllChange(true);
+            if (history?.loading) {
+              // A governed Home's links hide threads, so its held rows never wait on a server read.
+              if (current.eligible && hidden > 0 && !showAll) onShowAllChange(true);
               return;
             }
-            if (history?.loading) return;
             if (historyAvailable) {
               if (document.activeElement === showMoreRef.current)
                 pendingFocus.current = new Set(
