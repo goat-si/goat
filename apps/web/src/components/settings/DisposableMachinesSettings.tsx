@@ -29,11 +29,16 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const isMachinesError = Schema.is(HubMachinesError);
+// One line of pen identity --json: {"nodeId","signPub","noisePub"}.
+const decodeIdentity = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ signPub: Schema.String, noisePub: Schema.String })),
+);
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The hub's own refusal text; anything else (a dropped connection) gets the fixed fallback. */
 function failureText(failure: unknown, fallback: string): string {
@@ -400,25 +405,52 @@ function AttachDialog({
               )}
             </div>
           ) : (
-            <div className="space-y-2">
-              <Input
-                aria-label="Machine name"
-                placeholder="Machine name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-              <Input
-                aria-label="Signing public key"
-                placeholder="signPub"
-                value={signPub}
-                onChange={(event) => setSignPub(event.target.value)}
-              />
-              <Input
-                aria-label="Noise public key"
-                placeholder="noisePub"
-                value={noisePub}
-                onChange={(event) => setNoisePub(event.target.value)}
-              />
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label htmlFor="disposable-identity">Output of pen identity --json</Label>
+                <Textarea
+                  id="disposable-identity"
+                  rows={2}
+                  placeholder='{"nodeId":"…","signPub":"…","noisePub":"…"}'
+                  onChange={(event) => {
+                    const keys = decodeIdentity(event.target.value.trim());
+                    if (keys._tag === "Some") {
+                      setSignPub(keys.value.signPub);
+                      setNoisePub(keys.value.noisePub);
+                    }
+                  }}
+                />
+                <p className="text-muted-foreground text-xs">
+                  Paste the line it prints on the machine to fill both keys.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="disposable-name">Machine name</Label>
+                <Input
+                  id="disposable-name"
+                  placeholder="cc-1"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="disposable-sign">Signing public key</Label>
+                <Input
+                  id="disposable-sign"
+                  placeholder="signPub"
+                  value={signPub}
+                  onChange={(event) => setSignPub(event.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="disposable-noise">Noise public key</Label>
+                <Input
+                  id="disposable-noise"
+                  placeholder="noisePub"
+                  value={noisePub}
+                  onChange={(event) => setNoisePub(event.target.value)}
+                />
+              </div>
             </div>
           )}
           {error && (

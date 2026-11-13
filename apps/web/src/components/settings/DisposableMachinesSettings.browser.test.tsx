@@ -128,3 +128,23 @@ it("an expired consent offers a renewal and holds Attach until a person renews",
     input: { patch: { hub: { attachDisposableMachines: { expiresAt: expect.any(String) } } } },
   });
 });
+
+it("pasting the pen identity --json line fills both keys", async () => {
+  using fixture = setup(true);
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Attach a machine" }));
+  await userEvent.fill(
+    screen.getByRole("textbox", { name: "Output of pen identity --json" }),
+    '{"nodeId":"n","signPub":"sign-key","noisePub":"noise-key"}',
+  );
+  await userEvent.fill(screen.getByRole("textbox", { name: "Machine name" }), "cc-1");
+  await userEvent.click(screen.getByRole("button", { name: "Create invite" }));
+  expect(state.attach).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ name: "cc-1", signPub: "sign-key", noisePub: "noise-key" }),
+  });
+});
