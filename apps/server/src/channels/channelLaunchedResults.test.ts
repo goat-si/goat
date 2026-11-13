@@ -14,7 +14,15 @@ import { describe, expect } from "vite-plus/test";
 
 import { renderDigest } from "../orchestration-v2/TurnDigest.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import { launchedResultOwed, owesLaunched, type LaunchedEnd } from "./channelLaunchedResults.ts";
+import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
+import {
+  anyLaunchedResultOwed,
+  launchedResultOwed,
+  owesLaunched,
+  readLaunchedEnds,
+  settledLaunchWakes,
+  type LaunchedEnd,
+} from "./channelLaunchedResults.ts";
 
 const session = ThreadId.make("goat-bot-session:s");
 const child = ThreadId.make("channel-child-work:c");
@@ -205,6 +213,7 @@ const foldedSession = (input: {
   }>;
   readonly digest: ReadonlyArray<string>;
   readonly stored?: (thread: string) => boolean;
+  readonly digestStatus?: string;
 }) =>
   Effect.gen(function* () {
     yield* runMigrations();
@@ -248,7 +257,7 @@ const foldedSession = (input: {
       {
         id: RunId.make("digest"),
         ordinal: input.launches.length + 1,
-        status: "completed",
+        status: input.digestStatus ?? "completed",
         userMessageId: digest.id,
       },
     ];
@@ -271,7 +280,31 @@ const foldedSession = (input: {
         { taskId: ChannelTaskId.make(task), generation: 1 },
         records.filter((record) => record.taskId === task) as never,
       );
-    return { owes };
+    /** What the worker-report checks see for a task: recovery's settled wakes, then the debt. */
+    const recovered = (task: string) =>
+      Effect.gen(function* () {
+        const ref = { taskId: ChannelTaskId.make(task), generation: 1 };
+        const own = yield* sessionTaskRuns(
+          sql,
+          session,
+          { runs: sessionRuns, messages: [digest] } as never,
+          ref,
+        );
+        const ends = yield* readLaunchedEnds(
+          {
+            threads,
+            watch: () => Effect.succeed({ detached: false, skippedRuns: [], reportedEnds: {} }),
+          },
+          records.filter((record) => record.taskId === task) as never,
+          1,
+          session,
+        );
+        const runs = sessionRuns as never;
+        const settled = yield* settledLaunchWakes(sql, session, ends, own, runs, [digest]);
+        const owed = anyLaunchedResultOwed(ends, own, runs, { messages: [digest], settled });
+        return { owed, own: own.map((run) => run.id as string) };
+      });
+    return { owes, recovered };
   });
 
 const childA = "channel-child-work:a";
@@ -331,4 +364,33 @@ it.effect("invariant: a folded wake with no stored launch record stays owed", ()
     });
     expect(yield* missing.owes("task:two")).toBe(true);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+const twoTasksFolded = (digestStatus: string) =>
+  foldedSession({
+    launches: [
+      { task: "task:one", run: "launch-one", threads: [childA] },
+      { task: "task:two", run: "launch-two", threads: [childB] },
+    ],
+    digest: [childA, childB],
+    digestStatus,
+  });
+
+it.effect.each(["queued", "starting", "running"])(
+  "regression: another task's stored digest that is %s credits nothing, so this task stays owed",
+  (status) =>
+    Effect.gen(function* () {
+      const { recovered } = yield* twoTasksFolded(status);
+      expect(yield* recovered("task:two")).toEqual({ owed: true, own: ["launch-two"] });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each(["completed", "cancelled"])(
+  "contract: once another task's stored digest has ended (%s), this task's end settles, and that turn stays the other task's",
+  (status) =>
+    Effect.gen(function* () {
+      const { recovered } = yield* twoTasksFolded(status);
+      // The digest is never one of task two's runs, so its answer is not task two's result.
+      expect(yield* recovered("task:two")).toEqual({ owed: false, own: ["launch-two"] });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
