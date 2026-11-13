@@ -170,14 +170,9 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     "refreshes the probe environment after the host PATH changes while preserving instance overrides",
     () =>
       Effect.gen(function* () {
-        const original = process.env.PATH;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            if (original === undefined) delete process.env.PATH;
-            else process.env.PATH = original;
-          }),
-        );
-        process.env.PATH = "/usr/bin:/bin";
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-path-" });
+        const host = { PATH: "/usr/bin:/bin", HOME: home, XDG_DATA_HOME: home };
         const environments: NodeJS.ProcessEnv[] = [];
         const runtime = {
           ...openCode2Runtime,
@@ -199,11 +194,13 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
           }).pipe(
             Effect.provideService(HttpClient.HttpClient, noHttp),
             Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+            Effect.provideService(HostProcess.Environment, host),
+            Effect.provideService(HostProcess.HomeDirectory, home),
             Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
           );
         const inherited = yield* makeInstance(false);
         const overridden = yield* makeInstance(true);
-        process.env.PATH = "/new/bin:/usr/bin:/bin";
+        host.PATH = "/new/bin:/usr/bin:/bin";
         yield* inherited.snapshot.refresh;
         assert.strictEqual(environments.at(-1)?.PATH, "/new/bin:/usr/bin:/bin");
         assert.strictEqual(environments.at(-1)?.MISE_OFFLINE, "1");

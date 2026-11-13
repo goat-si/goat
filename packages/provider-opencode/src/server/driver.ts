@@ -240,7 +240,8 @@ export const OpenCodeDriver: ProviderDriver<
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
-    const currentEnvironment = mergeProviderInstanceEnvironment(environment).pipe(
+    const hostEnvironment = yield* HostProcess.Environment;
+    const currentEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment).pipe(
       Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
     );
     const processEnv = yield* currentEnvironment;
