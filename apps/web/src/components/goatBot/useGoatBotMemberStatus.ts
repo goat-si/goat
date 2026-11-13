@@ -14,6 +14,7 @@ import { useEnvironmentQuery } from "~/state/query";
  */
 export function useGoatBotMemberStatus(member: BotProfile | null): {
   readonly waitingCount: number;
+  readonly sidebarWaitingCount: number | undefined;
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly tasks: ChannelGetBotStatusResult["tasks"];
 } {
@@ -43,6 +44,13 @@ export function useGoatBotMemberStatus(member: BotProfile | null): {
   }, [supported, revision, refresh]);
   return {
     waitingCount: status.data?.waitingCount ?? 0,
+    sidebarWaitingCount:
+      supported &&
+      presentation?.serverConfig?.environment.capabilities.goatBotStatus === true &&
+      presentation.serverConfig.environment.capabilities.goatBotWaitingRead === true &&
+      status.isSuccess
+        ? status.data?.waitingCount
+        : undefined,
     latest: status.data?.latest,
     tasks: status.data?.tasks,
   };

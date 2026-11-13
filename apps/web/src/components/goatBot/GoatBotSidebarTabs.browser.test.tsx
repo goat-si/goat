@@ -27,6 +27,7 @@ const bots = vi.hoisted(() => ({
 }));
 const channels = vi.hoisted(() => ({
   homeCurrentOpenableWorkByEnvironment: () => "home-work",
+  homeCurrentOpenableWorkAtom: () => "current-work",
   updateTaskView: { permissionAtom: () => null },
   createBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -76,7 +77,14 @@ vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: tru
 vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 3 }));
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberWaitingCount: () => 0,
-  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, sidebarWaitingCount: 0, latest: undefined }),
+}));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironment: () => ({
+    connection: { phase: "connected" },
+    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+  }),
 }));
 vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
@@ -95,7 +103,11 @@ vi.mock("./GoatBotSidebarRow", () => ({
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: (atom: unknown) =>
-    atom === "home-work" ? { byBot: [{ eligible: bots.eligible }] } : true,
+    atom === "home-work"
+      ? { byBot: [{ eligible: bots.eligible }] }
+      : atom === "current-work"
+        ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
+        : true,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>

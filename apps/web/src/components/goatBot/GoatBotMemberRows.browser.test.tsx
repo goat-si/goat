@@ -15,14 +15,32 @@ import "~/index.css";
 
 const server = vi.hoisted(() => ({
   bots: [] as Array<unknown>,
+  version: 0,
   listeners: new Set<() => void>(),
   busy: false,
   toasts: [] as Array<{ title: string; description?: string }>,
   latest: {} as Record<string, { text: string; at: string; author: "bot" | "person" }>,
   waiting: {} as Record<string, number>,
   tasks: {} as Record<string, { active: boolean }>,
+  work: {
+    eligible: true,
+    list: "ready",
+    work: { running: [{ row: { unread: true } }], waiting: [], finished: [] },
+  } as {
+    eligible: boolean;
+    list: string;
+    work: {
+      running: Array<{ row: { unread: boolean } }>;
+      waiting: Array<{ row: { unread: boolean } }>;
+      finished: Array<{ row: { unread: boolean } }>;
+    };
+  },
+  statusAvailable: true,
+  connected: true,
+  waitingRead: true,
 }));
 const publish = () => {
+  server.version++;
   for (const listener of server.listeners) listener();
 };
 
@@ -42,12 +60,24 @@ vi.mock("@tanstack/react-router", async (original) => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) => {
+    useSyncExternalStore(
+      (listener) => {
+        server.listeners.add(listener);
+        return () => {
+          server.listeners.delete(listener);
+        };
+      },
+      () => server.version,
+    );
+    return atom === "current-work" ? server.work : true;
+  },
 }));
 vi.mock("~/state/channels", () => {
   const command = (tag: string) => ({ tag, permissionAtom: () => null });
   return {
     channelEnvironment: {
+      homeCurrentOpenableWorkAtom: () => "current-work",
       setBotHidden: command("hide"),
       deleteBot: command("delete"),
       restoreBot: command("restore"),
@@ -90,12 +120,33 @@ vi.mock("../ui/toast", () => ({
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: (bot: BotProfile) => ({
     waitingCount: server.waiting[bot.botId] ?? 0,
+    sidebarWaitingCount:
+      server.connected && server.waitingRead && server.statusAvailable
+        ? (server.waiting[bot.botId] ?? 0)
+        : undefined,
     latest: server.latest[bot.botId],
     tasks: server.tasks[bot.botId],
   }),
   useGoatBotMemberWaitingCount: (bot: BotProfile) => server.waiting[bot.botId] ?? 0,
 }));
 // The row's face reads its bot status alone: no conversation shell or items are loaded here.
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironment: () => ({
+    connection: { phase: server.connected ? "connected" : "disconnected" },
+    serverConfig: {
+      environment: {
+        capabilities: {
+          goatBotMembers: true,
+          goatBotProfiles: true,
+          goatBotProfileEdit: true,
+          goatBotStatus: true,
+          goatBotWaitingRead: server.waitingRead,
+        },
+      },
+    },
+  }),
+}));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => null,
   resolveThreadDetailRef: () => null,
@@ -148,6 +199,10 @@ function setup() {
   server.latest = {};
   server.waiting = {};
   server.tasks = {};
+  server.work = { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
+  server.statusAvailable = true;
+  server.connected = true;
+  server.waitingRead = true;
 }
 
 it("hides a member under Hidden bots and shows it again", async () => {
@@ -277,4 +332,35 @@ it("a member row stops reading once the bot answers, and once the reading limit 
   await act(() => vi.advanceTimersByTime(90_000));
   expect(named(/^Reading/)).toBeNull();
   expect(named(/^Research/)).not.toBeNull();
+});
+
+it("member row reports recent unread work and marks unavailable signals independently", async () => {
+  setup();
+  server.waiting = { research: 2 };
+  server.work = {
+    ...server.work,
+    work: { ...server.work.work, running: [{ row: { unread: true } }] },
+  };
+  await using screen = await render(<Roster />, { router: false });
+  await expect
+    .element(screen.getByLabelText(/1 unread task.*recent work only; older work may be missing/i))
+    .toBeVisible();
+  server.work = { ...server.work, list: "failed" };
+  server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
+  await act(() => publish());
+  await expect.element(screen.getByLabelText(/unread.*unavailable/i)).toBeVisible();
+  expect(screen.getByLabelText(/1 unread task/i).query()).toBeNull();
+  server.work = { ...server.work, list: "ready" };
+  server.statusAvailable = false;
+  server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
+  await act(() => publish());
+  await expect.element(screen.getByLabelText(/waiting.*unavailable/i)).toBeVisible();
+  server.statusAvailable = true;
+  server.waitingRead = false;
+  await act(() => publish());
+  await expect.element(screen.getByLabelText(/waiting.*unavailable/i)).toBeVisible();
+  server.connected = false;
+  server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
+  await act(() => publish());
+  await expect.element(screen.getByLabelText(/unread.*waiting.*unavailable/i)).toBeVisible();
 });

@@ -35,6 +35,7 @@ import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
+import { GoatBotRowSignals } from "./GoatBotRowSignals";
 
 const NO_PERMISSION = Atom.make(false);
 
@@ -163,7 +164,8 @@ function GoatBotMemberRow({
   readonly onDelete: (bot: BotProfile) => void;
 }) {
   const status = useGoatBotMemberStatus(bot);
-  const { waitingCount: count, latest } = status;
+  const { latest } = status;
+  const count = status.sidebarWaitingCount;
   // The row's second line is what the bot last said or was asked; a new bot shows its purpose.
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -196,9 +198,9 @@ function GoatBotMemberRow({
           size="md"
           place="list"
           surface="sidebar"
-          waitingCount={count}
+          waitingCount={count ?? 0}
           row={status}
-          countInLabel
+          countInLabel={count !== undefined}
           emoji={goatBotMemberPicture(bot)}
           accent={goatBotAccent(bot)}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
@@ -206,7 +208,12 @@ function GoatBotMemberRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate">{bot.name}</span>
-            {count > 0 ? (
+            <GoatBotRowSignals
+              environmentId={bot.environmentId}
+              botId={bot.botId}
+              waiting={count}
+            />
+            {count !== undefined && count > 0 ? (
               <Badge size="sm" variant="secondary" aria-hidden>
                 {count}
               </Badge>

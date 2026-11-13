@@ -56,6 +56,7 @@ const roster = vi.hoisted(() => {
 });
 const channels = vi.hoisted(() => ({
   homeCurrentOpenableWorkByEnvironment: () => "home-work",
+  homeCurrentOpenableWorkAtom: () => "current-work",
   createBot: { permissionAtom: () => null },
   updateBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -73,7 +74,12 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: (atom: unknown) => (atom === "home-work" ? { byBot: [{ eligible: false }] } : true),
+  useAtomValue: (atom: unknown) =>
+    atom === "home-work"
+      ? { byBot: [{ eligible: false }] }
+      : atom === "current-work"
+        ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
+        : true,
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
@@ -102,7 +108,7 @@ vi.mock("./GoatBotAvatar", async (original) => ({
   GoatBotSessionAvatar: () => null,
 }));
 vi.mock("./useGoatBotMemberStatus", () => ({
-  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, sidebarWaitingCount: 0, latest: undefined }),
 }));
 // The palette's New bot, against the same server and list as the roster.
 vi.mock("./goatBotPaletteItems", async (original) => ({
