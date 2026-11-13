@@ -690,10 +690,14 @@ func TestSnapshotWatchSendsCompleteLinesWhoseGenerationRisesByOnePerChange(t *te
 	a := founder(t, ctx, rs, "a", nil)
 	_, next1 := snapWatch(t, a)
 	first := next1()
-	// The relay counts the node online before the daemon reads its answer and marks the uplink up, a change
+	// The relay can count the node online before the daemon marks its uplink up (relay/uplink.go:194), a change
 	// that raises the generation; the second watcher attaches after it.
 	for len(first.Relays) != 1 || first.Relays[0].Uplink != "up" {
-		first = next1()
+		s := next1()
+		if s.Gen != first.Gen+1 {
+			t.Fatalf("generation went %d -> %d", first.Gen, s.Gen)
+		}
+		first = s
 	}
 	_, next2 := snapWatch(t, a)
 	if second := next2(); second.Gen != first.Gen {
