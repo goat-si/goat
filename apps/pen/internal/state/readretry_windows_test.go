@@ -124,7 +124,8 @@ func TestReadJSONReadsTheNewFileOnceAReplacedTargetIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No other process (an indexer, antivirus) may hold the file, or closing our handle would not remove it: an
-	// exclusive open succeeds only when no other handle exists.
+	// exclusive open fails while another handle with read, write or delete access is open (a handle that reads only
+	// attributes is not seen).
 	_, onlyOne := holdFile(t, st.Path("config.json"), windows.GENERIC_READ|windows.DELETE, 0)
 	onlyOne()
 	h, release := holdFile(t, st.Path("config.json"), windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)

@@ -287,12 +287,16 @@ these may look like success to a local program.
   - A command that has to wait for the turn says so at once, naming the holder from `start.holder`.
   - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
     `pen up` can find nothing to stop while the start completes; run `pen down` again.
-- **A pending AF_UNIX read can miss the other side's close.** A blocked read of the control socket may never return
-  after the peer half-closes or closes, so no read of a registration waits without a bound: both sides give way to a
-  fresh read every 30 s, and `pen service register` stops waiting for the node's close 30 s after its own half-close,
-  by a deadline that needs no close notice. Whether a fresh read sees a close the pending one missed is not
+- **A pending AF_UNIX read may miss the other side's close.** One Windows CI hang suggests that a blocked read of the
+  control socket may never return after the peer half-closes; 900 probe rounds on the hosted runner did not reproduce
+  it. So no read of a registration waits without a bound: both sides give way to a fresh read every 30 s, and
+  `pen service register` stops waiting for the node's close 30 s after its own half-close. That bound needs no close
+  notice: at a read's deadline Go cancels it with `CancelIoEx` and waits for the cancelled read to complete
+  (internal/poll `cancelIO`), so it ends a read the driver left pending once the driver completes the cancel, and
+  would not end one whose completion Go itself lost. Whether a fresh read sees a close the pending one missed is not
   established, so the node's end of a registration whose holder is gone may still wait for a failed write, a newer
-  registration or the daemon's stop. GOAT stops its child without a half-close, so only the node ends GOAT's.
+  registration or the daemon's stop. GOAT ends its child's stdin and kills it at once, so only the node ends GOAT's
+  registration.
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
   while a reader has `mesh.json` or `config.json` open, replacing it fails with `ERROR_ACCESS_DENIED`. Saves retry
   that error (and a sharing violation) for up to 2 s while they hold the state lock, the rule of Go's

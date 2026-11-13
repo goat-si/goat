@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -545,11 +546,17 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		t.Fatal(err)
 	}
 	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
-	// It learns of the half-close from the grace seam, which the child reaches once it half-closed: a read on Windows
-	// can miss the half-close itself. A read on Windows can miss the node's close too, so the child's grace ends once
-	// the node has closed: whichever the child sees first, its node read or the grace, it exits 1.
+	// It learns of the half-close from the grace seam, which the child reaches once it half-closed, since a read on
+	// Windows may miss the half-close itself. Off Windows the child has no grace here, so only its read of the node's
+	// close ends it, with the closed-before-answering message. On Windows that read may miss the close too, so the
+	// grace ends once the node has closed, and either message counts the op.
 	nodeClosed := make(chan time.Time)
-	halfClosed := halfCloseSeam(t, nodeClosed)
+	var grace <-chan time.Time
+	want := "before answering 1 forwarded op(s)"
+	if runtime.GOOS == "windows" {
+		grace, want = nodeClosed, "1 forwarded op(s)"
+	}
+	halfClosed := halfCloseSeam(t, grace)
 	ln, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
@@ -574,8 +581,8 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
 	defer func() { Stdin = os.Stdin }()
 	var out, errOut bytes.Buffer
-	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "1 forwarded op(s)") {
-		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op counted", rc, errOut.String())
+	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), want) {
+		t.Fatalf("exit %d, stderr %q; want 1 and %q", rc, errOut.String(), want)
 	}
 }
 
@@ -684,7 +691,7 @@ func (w *printSignal) Write(p []byte) (int, error) {
 }
 
 // Regression (a hang on goat-test-pen-windows): a node that never closes after the half-close, as one whose read
-// missed it, leaves the child waiting only until the end of its grace; then it exits 1 naming the unanswered ops, or 0
+// missed it, leaves the child waiting only until the end of its grace; then it exits 1 counting the unanswered ops, or 0
 // when every op was answered.
 func TestServiceRegisterEndsAtTheGraceWhenTheNodeMissesItsHalfClose(t *testing.T) {
 	for _, c := range []struct {

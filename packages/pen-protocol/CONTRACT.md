@@ -547,12 +547,12 @@ the connection before answering every op it forwarded (a v1.2 node does).
 After the half-close the child waits for the node's close at most 30 s, provided the program keeps reading its stdout
 and stderr (a line the child cannot write holds it): then it exits 0 when every op it forwarded was answered, and 1
 with the number of ops left unanswered otherwise. That wait ends by a deadline, which needs no notice of the close.
-While stdin is open no time limit ends the registration. On Windows a pending read of the control socket can miss the
-other side's half-close or close, so the child's reads of the node's lines and the node's reads of the holder's ops
-each give way to a fresh read every 30 s; an idle registration only reads again, and a fresh read that sees the end
-ends it. The node also ends a registration when a write to its holder fails, when a newer registration of its name
-replaces it, and when it stops. A holder that stops its child without letting stdin end (killing it) leaves the end
-to the node.
+While stdin is open no time limit ends the registration. On Windows a pending read of the control socket may miss the
+other side's half-close or close (one CI hang suggests it; not reproduced since), so the child's reads of the node's
+lines and the node's reads of the holder's ops each give way to a fresh read every 30 s; an idle registration only
+reads again, and a fresh read that sees the end ends it. The node also ends a registration when a write to its holder
+fails, when a newer registration of its name replaces it, and when it stops. A holder that kills its child, even
+right after ending its stdin, leaves the end to the node.
 
 ### Local delivery
 

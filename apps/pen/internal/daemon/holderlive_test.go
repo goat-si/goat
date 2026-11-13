@@ -79,7 +79,7 @@ func (c *missedCloseConn) RemoteAddr() net.Addr             { return &net.UnixAd
 func (c *missedCloseConn) SetDeadline(t time.Time) error    { return c.SetReadDeadline(t) }
 func (c *missedCloseConn) SetWriteDeadline(time.Time) error { return nil }
 
-// A read of a registration's ops on Windows can miss the holder's half-close and its close. The node then reads the
+// A read of a registration's ops on Windows may miss the holder's half-close and its close. The node then reads the
 // ops again after each holderRecheck: a registration whose holder is gone ends, and one that is only idle keeps
 // reading, with a line that spans a recheck read whole.
 func TestARegistrationWhoseHolderIsGoneEndsAndAnIdleOneKeepsReading(t *testing.T) {
