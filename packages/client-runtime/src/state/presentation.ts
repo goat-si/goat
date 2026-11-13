@@ -126,7 +126,7 @@ export function createEnvironmentPresentationAtoms<E>(input: {
   readonly serverConfigValueAtom: (environmentId: EnvironmentId) => Atom.Atom<ServerConfig | null>;
   readonly penHoldAtom?: (
     environmentId: EnvironmentId,
-  ) => Atom.Atom<"offline" | "waiting" | undefined>;
+  ) => Atom.Atom<EnvironmentConnectionPresentation["penHold"]>;
   readonly sshRuntimeStatusAtom?: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<SshHostStatus | undefined>;

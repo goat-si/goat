@@ -348,7 +348,14 @@ const discoveryFixture = Effect.fn(function* (
     ),
     Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
   );
-  return { latest, entries, removed, layer: layer.pipe(Layer.provideMerge(dependencies)) };
+  return {
+    latest,
+    entries,
+    removed,
+    layer: discoveryLayer.pipe(
+      Layer.provideMerge(liveSetLayer.pipe(Layer.provideMerge(dependencies))),
+    ),
+  };
 });
 
 it.effect("does not retry an identical state after existing runtime is required", () =>
@@ -406,7 +413,7 @@ it.effect("an offline to online hint allows another attempt", () =>
       const discovery = yield* PenDiscovery;
       yield* discovery.pass(readyState([{ ...member("c"), online: false }]));
       expect(calls).toBe(0);
-      expect((yield* SubscriptionRef.get(discovery.statuses))[0]?.state).toBe("offline");
+      expect((yield* SubscriptionRef.get(discovery.statuses))[0]?.state).toBe("pen-offline");
       yield* discovery.pass(readyState([{ ...member("c"), online: true }]));
       expect(calls).toBe(1);
     }).pipe(Effect.provide(h.layer));
@@ -720,4 +727,59 @@ it.effect.each(["connect", "setUp"] as const)(
         expect([...(yield* SubscriptionRef.get(liveSet.held)).values()]).toContain("waiting");
       }).pipe(Effect.provide(combined));
     }),
+);
+
+it.effect("failed onboarding releases its reservation", () =>
+  Effect.gen(function* () {
+    const h = yield* discoveryFixture(() =>
+      Effect.fail(new ConnectionBlockedError({ reason: "configuration", detail: "failed" })),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* PenDiscovery;
+      const live = yield* PenLiveSet;
+      yield* discovery.pass(readyState());
+      expect(yield* live.admitOnboarding(node("c"))).toBe(true);
+    }).pipe(Effect.provide(h.layer));
+  }),
+);
+
+it.effect("interrupted onboarding releases its reservation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const h = yield* discoveryFixture(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* PenDiscovery;
+        const live = yield* PenLiveSet;
+        const fiber = yield* discovery.pass(readyState()).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(fiber);
+        expect(yield* live.admitOnboarding(node("c"))).toBe(true);
+      }).pipe(Effect.provide(h.layer));
+    }),
+  ),
+);
+
+it.effect("duplicate setup cannot release the first setup reservation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const h = yield* discoveryFixture(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* PenDiscovery;
+        const live = yield* PenLiveSet;
+        const first = yield* discovery.setUp(node("c")).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        const second = yield* Effect.result(discovery.setUp(node("c")));
+        expect(second._tag).toBe("Failure");
+        expect(yield* live.admitOnboarding(node("c"))).toBe(false);
+        yield* Fiber.interrupt(first);
+        expect(yield* live.admitOnboarding(node("c"))).toBe(true);
+      }).pipe(Effect.provide(h.layer));
+    }),
+  ),
 );

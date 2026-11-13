@@ -80,7 +80,7 @@ it.effect("uses the main-owned name and exact argv including the compromised fla
     yield* Deferred.await(started);
     proc.stdout.write("removed\n");
     proc.emit("close", 0, null);
-    assert.deepEqual(yield* Fiber.join(fiber), { status: "revoked", output: "removed\n" });
+    assert.deepEqual(yield* Fiber.join(fiber), { status: "revoked", output: "removed" });
     assert.equal(name, "Trusted name");
     assert.equal(shell, false);
     assert.deepEqual(args, [
@@ -172,40 +172,42 @@ it.effect("reports missing binary, spawn errors and Pen exit failures", () =>
   }),
 );
 
-it.effect("caps subprocess output and reports asynchronous spawn errors", () =>
-  Effect.gen(function* () {
-    const base = {
-      member: () => Effect.succeed("name"),
-      confirm: () => Effect.succeed("remove" as const),
-      resolveBinary: () => Effect.succeed("/pen"),
-      deadline: "60 seconds" as const,
-    };
-    const first = child();
-    const ready = yield* Deferred.make<void>();
-    const service = makePenRevoke({
-      ...base,
-      spawn: () => first as never,
-      onSpawn: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
-    });
-    const fiber = yield* Effect.forkChild(service.revoke(pin));
-    yield* Deferred.await(ready);
-    first.stdout.write("x".repeat(70000));
-    first.emit("close", 0, null);
-    const result = yield* Fiber.join(fiber);
-    assert.equal(result.status, "revoked");
-    if (result.status === "revoked") assert.equal(Buffer.byteLength(result.output), 65536);
-    const second = child();
-    const next = yield* Deferred.make<void>();
-    const errorService = makePenRevoke({
-      ...base,
-      spawn: () => second as never,
-      onSpawn: Deferred.succeed(next, undefined).pipe(Effect.asVoid),
-    });
-    const failedFiber = yield* Effect.forkChild(errorService.revoke(pin));
-    yield* Deferred.await(next);
-    second.emit("error", new Error("spawn failed"));
-    const failedResult = yield* Fiber.join(failedFiber);
-    assert.equal(failedResult.status, "failed");
-    second.emit("close", null, null);
-  }),
+it.effect(
+  "keeps what it reads and what it shows of Pen's output bounded, and reports asynchronous spawn errors",
+  () =>
+    Effect.gen(function* () {
+      const base = {
+        member: () => Effect.succeed("name"),
+        confirm: () => Effect.succeed("remove" as const),
+        resolveBinary: () => Effect.succeed("/pen"),
+        deadline: "60 seconds" as const,
+      };
+      const first = child();
+      const ready = yield* Deferred.make<void>();
+      const service = makePenRevoke({
+        ...base,
+        spawn: () => first as never,
+        onSpawn: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      });
+      const fiber = yield* Effect.forkChild(service.revoke(pin));
+      yield* Deferred.await(ready);
+      first.stdout.write("x".repeat(70000));
+      first.emit("close", 0, null);
+      const result = yield* Fiber.join(fiber);
+      assert.equal(result.status, "revoked");
+      if (result.status === "revoked") assert.equal(result.output.length, 600);
+      const second = child();
+      const next = yield* Deferred.make<void>();
+      const errorService = makePenRevoke({
+        ...base,
+        spawn: () => second as never,
+        onSpawn: Deferred.succeed(next, undefined).pipe(Effect.asVoid),
+      });
+      const failedFiber = yield* Effect.forkChild(errorService.revoke(pin));
+      yield* Deferred.await(next);
+      second.emit("error", new Error("spawn failed"));
+      const failedResult = yield* Fiber.join(failedFiber);
+      assert.equal(failedResult.status, "failed");
+      second.emit("close", null, null);
+    }),
 );

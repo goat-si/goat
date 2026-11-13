@@ -1,6 +1,7 @@
 import type { DesktopPenMembersState, EnvironmentId } from "@goat/contracts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { isPenOnlyEntry } from "./penGate.ts";
+import type { PenHold } from "./presentation.ts";
 import { connectionRoutes, penRouteOwner } from "./routes.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -28,6 +29,7 @@ export function decide(input: {
   const offline = new Set<EnvironmentId>();
   const waiting = new Set<EnvironmentId>();
   const live = new Set<EnvironmentId>();
+  const known = new Set<string>();
   const online = input.entries.flatMap((entry) => {
     if (!isPenOnlyEntry(entry)) return [];
     const owners = connectionRoutes(entry).flatMap((route) =>
@@ -36,7 +38,9 @@ export function decide(input: {
     const member = membership.members.find((item) =>
       owners.some((owner) => owner?.meshId === membership.meshId && owner.nodeId === item.nodeId),
     );
-    if (!member?.online || member.route.kind !== "trusted") {
+    if (member !== undefined) known.add(member.nodeId);
+    // Only Pen's presence holds a machine: an alias GOAT could not read just now is not offline.
+    if (!member?.online) {
       offline.add(entry.target.environmentId);
       return [];
     }
@@ -47,12 +51,14 @@ export function decide(input: {
       (recentOrder.get(a.id) ?? Infinity) - (recentOrder.get(b.id) ?? Infinity) ||
       (memberOrder.get(a.nodeId) ?? Infinity) - (memberOrder.get(b.nodeId) ?? Infinity),
   );
-  const capacity = Math.max(0, input.limit - input.onboarding.size);
+  // A reservation whose environment already exists is that entry, not a second slot.
+  const pending = [...input.onboarding].filter((nodeId) => !known.has(nodeId)).length;
+  const capacity = Math.max(0, input.limit - pending);
   for (const [index, item] of online.entries()) (index < capacity ? live : waiting).add(item.id);
   return { live, offline, waiting };
 }
 
-type Hold = "offline" | "waiting";
+type Hold = PenHold;
 export class PenLiveSet extends Context.Service<
   PenLiveSet,
   {
@@ -80,8 +86,24 @@ const make = Effect.gen(function* () {
   const turn = yield* Semaphore.make(1);
   const pass = Effect.gen(function* () {
     const latest = yield* SubscriptionRef.get(membership.latest);
-    if (Option.isNone(latest) || latest.value.kind !== "ready") return;
     const entries = yield* SubscriptionRef.get(registry.entries);
+    if (Option.isNone(latest) || latest.value.kind !== "ready") {
+      // Without a list nothing is opened or closed; a held machine keeps its reason or gets this one.
+      const { live } = yield* Ref.get(state);
+      yield* SubscriptionRef.update(
+        held,
+        (current) =>
+          new Map(
+            [...entries.values()]
+              .filter((entry) => isPenOnlyEntry(entry) && !live.has(entry.target.environmentId))
+              .map((entry) => {
+                const id = entry.target.environmentId;
+                return [id, current.get(id) ?? "no-list"] as const;
+              }),
+          ),
+      );
+      return;
+    }
     const next = yield* Ref.modify(state, (current) => {
       const result = decide({
         entries: [...entries.values()],

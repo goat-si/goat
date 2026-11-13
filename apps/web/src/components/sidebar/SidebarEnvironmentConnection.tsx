@@ -71,7 +71,9 @@ export function SidebarEnvironmentConnectionStatus({
         <>
           {environment.connection.penHold === "offline"
             ? "Offline in Pen"
-            : "Not open: this computer keeps 16 Pen machines open at a time"}
+            : environment.connection.penHold === "no-list"
+              ? "Waiting for Pen on this computer"
+              : "Not open: this computer keeps 16 Pen machines open at a time"}
           {age === null ? null : ` · ${age}`}
         </>
       ) : environment.connection.phase === "connected" ? (

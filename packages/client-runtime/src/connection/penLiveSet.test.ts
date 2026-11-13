@@ -99,7 +99,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { SshConnectionProfile } from "./catalog.ts";
+import { SshConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import { PenMembership } from "./penMembership.ts";
 import { layer as liveLayer, PenLiveSet } from "./penLiveSet.ts";
 import { EnvironmentRegistry } from "./registry.ts";
@@ -223,5 +223,135 @@ it.effect(
           "waiting",
         );
       }).pipe(Effect.provide(h.combined));
+    }),
+);
+
+it("keeps an online unreadable route live and holds a trusted offline member", () => {
+  const members = membership.members.map((m, i) =>
+    i === 0
+      ? { ...m, route: { kind: "refused" as const, reason: "unreadable" as const } }
+      : i === 1
+        ? { ...m, online: false }
+        : m,
+  );
+  const result = decide({
+    entries,
+    membership: { ...membership, members },
+    recency: [],
+    onboarding: new Set(),
+    limit: 15,
+  });
+  expect(result.live.has(entries[0]!.target.environmentId)).toBe(true);
+  expect(result.offline.has(entries[0]!.target.environmentId)).toBe(false);
+  expect(result.offline.has(entries[1]!.target.environmentId)).toBe(true);
+  expect(result.live.size).toBe(15);
+  expect(result.waiting.has(entries[16]!.target.environmentId)).toBe(true);
+});
+
+it("does not count an existing environment's onboarding reservation twice", () => {
+  const result = decide({
+    entries: entries.slice(0, 16),
+    membership,
+    recency: [],
+    onboarding: new Set([node(0)]),
+    limit: 16,
+  });
+  expect(result.live.size).toBe(16);
+  expect(result.waiting.size).toBe(0);
+});
+
+it.effect(
+  "not-ready lists preserve reasons, prune removed or mixed entries, and never set live",
+  () =>
+    Effect.gen(function* () {
+      const ids = entries.map((entry) => entry.target.environmentId);
+      const extra = {
+        ...entries[0]!,
+        target: new SshConnectionTarget({
+          environmentId: EnvironmentId.make("env-17"),
+          connectionId: penRouteConnectionId(meshId, node(17)),
+          label: "env-17",
+        }),
+      };
+      const registryEntries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
+      >(new Map([...entries, extra].map((entry) => [entry.target.environmentId, entry])));
+      const calls = yield* Ref.make(0);
+      const registry = EnvironmentRegistry.of({
+        entries: registryEntries,
+        setPenLive: () => Ref.update(calls, (n) => n + 1),
+      } as unknown as typeof EnvironmentRegistry.Service);
+      const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.none());
+      const deps = Layer.mergeAll(
+        Layer.succeed(EnvironmentRegistry, registry),
+        Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
+      );
+      yield* Effect.gen(function* () {
+        const live = yield* PenLiveSet;
+        yield* live.recompute;
+        expect((yield* SubscriptionRef.get(live.held)).get(ids[0]!)).toBe("no-list");
+        expect(yield* Ref.get(calls)).toBe(0);
+        yield* SubscriptionRef.set(
+          latest,
+          Option.some({
+            ...membership,
+            members: [
+              ...membership.members.map((m, i) => (i === 0 ? { ...m, online: false } : m)),
+              { ...membership.members[0]!, nodeId: node(17) },
+            ],
+          }),
+        );
+        yield* live.recompute;
+        expect((yield* SubscriptionRef.get(live.held)).get(ids[0]!)).toBe("offline");
+        expect((yield* SubscriptionRef.get(live.held)).get(extra.target.environmentId)).toBe(
+          "waiting",
+        );
+        const newcomer = {
+          ...extra,
+          target: new SshConnectionTarget({
+            environmentId: EnvironmentId.make("env-18"),
+            connectionId: penRouteConnectionId(meshId, node(18)),
+            label: "env-18",
+          }),
+        };
+        yield* SubscriptionRef.update(registryEntries, (current) =>
+          new Map(current).set(newcomer.target.environmentId, newcomer),
+        );
+        yield* SubscriptionRef.set(
+          latest,
+          Option.some({ kind: "unavailable", seq: 2, reason: "stale" }),
+        );
+        yield* live.recompute;
+        expect((yield* SubscriptionRef.get(live.held)).get(newcomer.target.environmentId)).toBe(
+          "no-list",
+        );
+        expect((yield* SubscriptionRef.get(live.held)).get(ids[0]!)).toBe("offline");
+        expect((yield* SubscriptionRef.get(live.held)).get(extra.target.environmentId)).toBe(
+          "waiting",
+        );
+        const ordinary = new SshConnectionTarget({
+          environmentId: extra.target.environmentId,
+          connectionId: "ssh:ordinary",
+          label: "ordinary",
+        });
+        yield* SubscriptionRef.update(registryEntries, (current) => {
+          const next = new Map(current);
+          next.delete(ids[0]!);
+          next.set(extra.target.environmentId, {
+            ...extra,
+            alternateRoutes: [{ target: ordinary, profile: Option.none() }],
+          });
+          return next;
+        });
+        yield* SubscriptionRef.set(
+          latest,
+          Option.some({ kind: "unavailable", seq: 2, reason: "stale" }),
+        );
+        yield* live.recompute;
+        const held = yield* SubscriptionRef.get(live.held);
+        expect(held.has(ids[0]!)).toBe(false);
+        expect(held.has(extra.target.environmentId)).toBe(false);
+        expect(yield* Ref.get(calls)).toBe(1);
+      }).pipe(Effect.provide(liveLayer.pipe(Layer.provide(deps))));
     }),
 );

@@ -68,17 +68,19 @@ export function makePenRevoke(deps: Dependencies) {
             };
             proc.stdout?.on("data", collect);
             proc.stderr?.on("data", collect);
+            // A killed child that never closes its pipes must not latch removals off.
+            proc.once("exit", () => {
+              activeChild = undefined;
+              busy = false;
+            });
             proc.once("close", (code, signal) => {
               activeChild = undefined;
               busy = false;
               if (signal || code === null) return finish(unknown);
-              if (code === 0) return finish({ status: "revoked", output: output.toString("utf8") });
+              const text = output.toString("utf8").trim().slice(0, 600);
+              if (code === 0) return finish({ status: "revoked", output: text });
               if (code === 2) return finish(failed("Update Pen, or run pen revoke in a terminal."));
-              finish(
-                failed(
-                  `Pen could not remove the machine: ${output.toString("utf8").trim() || `exit ${code}`}`,
-                ),
-              );
+              finish(failed(`Pen could not remove the machine: ${text || `exit ${code}`}`));
             });
           } catch (error) {
             resolve(failed(`Could not run Pen: ${String(error)}`));

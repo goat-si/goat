@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { EnvironmentId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -180,6 +181,54 @@ it.effect(
         yield* registry.setPenLive(new Set());
         expect((yield* registry.state(target.environmentId)).phase).toBe("connected");
         expect(yield* Ref.get(h.disconnectedSshTargets)).toEqual([]);
+      }).pipe(Effect.provide(h.layer));
+    }),
+);
+
+it.effect.each(["reconnect", "setEnabled", "setCompatibility"] as const)(
+  "%s never dials a held Pen route",
+  (operation) =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness([target], [profile]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry;
+        yield* registry.start;
+        if (operation === "reconnect") yield* registry.reconnect(target.environmentId);
+        if (operation === "setEnabled") {
+          yield* registry.setEnabled(target.environmentId, false);
+          yield* registry.setEnabled(target.environmentId, true);
+        }
+        if (operation === "setCompatibility") {
+          yield* registry.setCompatibility(
+            target.environmentId,
+            new ConnectionBlockedError({ reason: "unsupported", detail: "incompatible" }),
+          );
+          yield* registry.setCompatibility(target.environmentId, null);
+        }
+        const ordinary = new SshConnectionTarget({
+          ...SSH_CONNECTION,
+          environmentId: EnvironmentId.make("barrier-env"),
+          connectionId: "ssh:barrier",
+        });
+        const ordinaryProfile = new SshConnectionProfile({
+          environmentId: ordinary.environmentId,
+          connectionId: ordinary.connectionId,
+          label: ordinary.label,
+          target: SSH_TARGET,
+        });
+        yield* registry.register(
+          new SshConnectionRegistration({
+            target: ordinary,
+            profile: ordinaryProfile,
+            credential: new BearerConnectionCredential({ token: "token" }),
+          }),
+        );
+        yield* awaitConnectionState(
+          registry,
+          ordinary.environmentId,
+          (state) => state.phase === "connected",
+        );
+        expect(yield* Ref.get(h.connectedRoutes)).not.toContain(target.connectionId);
       }).pipe(Effect.provide(h.layer));
     }),
 );
