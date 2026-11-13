@@ -72,10 +72,11 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	noise := ev.Member.NoisePub
-	fmt.Fprintf(stdout, "admitted %s (%s), fingerprint %s\n", ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 	if ev.Delivered != nil && !*ev.Delivered {
-		fmt.Fprintln(stderr, "pen: its join did not finish on that machine, which is now a member without a copy of the mesh")
+		fmt.Fprintf(stderr, "pen: admitted %s (%s), fingerprint %s, but its join did not finish on that machine, which is now a member without a copy of the mesh\n",
+			ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 		return 1
 	}
+	fmt.Fprintf(stdout, "admitted %s (%s), fingerprint %s\n", ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 	return 0
 }

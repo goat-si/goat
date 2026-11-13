@@ -40,3 +40,15 @@ func TestPenInviteSaysWhenAJoinDidNotFinish(t *testing.T) {
 		}
 	}
 }
+
+// A join that did not finish is never reported on stdout as a finished one: its line goes to stderr only.
+func TestPenInvitePrintsAnUnfinishedJoinOnlyToStderr(t *testing.T) {
+	st := tmpStore(t)
+	t.Setenv("PEN_HOME", st.Dir)
+	member := `{"nodeId":"n1","signPub":"s","noisePub":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","name":"j"}`
+	fakeDaemon(t, st, `{"token":"t","relay":"r","expiresAt":1,"command":"c","windowsCommand":"w"}`+"\n"+`{"t":"admitted","member":`+member+`,"delivered":false}`)
+	var out, errOut bytes.Buffer
+	if code := RunInvite(nil, &out, &errOut); code != 1 || strings.Contains(out.String(), "admitted") || !strings.Contains(errOut.String(), "admitted j") {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want exit 1 and the admission only on stderr", code, out.String(), errOut.String())
+	}
+}
