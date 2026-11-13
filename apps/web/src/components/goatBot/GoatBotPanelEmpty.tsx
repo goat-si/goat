@@ -22,14 +22,16 @@ export function GoatBotPanelFailure({
   onRetry,
 }: {
   readonly message: string;
-  readonly onRetry: () => void;
+  readonly onRetry?: (() => void) | undefined;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <p>{message}</p>
-      <Button size="xs" variant="outline" onClick={onRetry}>
-        Try again
-      </Button>
+      {onRetry === undefined ? null : (
+        <Button size="xs" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
     </div>
   );
 }

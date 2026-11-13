@@ -174,3 +174,89 @@ it.effect("carries a closed popup's opener from the host to the caller's error",
     }),
   ),
 );
+
+/** Fields only the in-process server browser reads; a remote host would drop them and still answer. */
+const SERVER_ONLY_REQUESTS = [
+  { operation: "click" as const, input: { locator: "#terms", checked: true } },
+  { operation: "click" as const, input: { locator: "#row", modifiers: ["Shift"] } },
+  { operation: "scroll" as const, input: { locator: "#footer" } },
+  { operation: "waitFor" as const, input: { urlGlob: "**/done" } },
+  { operation: "waitFor" as const, input: { download: true } },
+];
+
+const connectHost = Effect.fn("PreviewAutomationBrokerFeaturesTest.connectHost")(function* (
+  broker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  inProcess: boolean,
+) {
+  const ready = yield* Deferred.make<string>();
+  const tabId = PreviewTabId.make("tab-server-only");
+  const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+  const events = yield* broker.connect(
+    {
+      clientId,
+      environmentId: scope.environmentId,
+      ...(inProcess ? { supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS] } : {}),
+    },
+    { inProcess },
+  );
+  yield* Stream.runForEach(events, (event) =>
+    event.type === "connected"
+      ? Deferred.succeed(ready, event.connectionId)
+      : broker.respond({
+          clientId,
+          connectionId: event.connectionId,
+          requestId: event.request.requestId,
+          ok: true,
+          result: { tabId, input: event.request.input },
+        }),
+  ).pipe(Effect.forkScoped);
+  const connectionId = yield* Deferred.await(ready);
+  yield* broker.focusHost({
+    clientId,
+    connectionId,
+    environmentId: scope.environmentId,
+    focused: true,
+    liveTabs: [{ threadId: scope.thread.threadId, tabId }],
+  });
+  return { clientId, connectionId, tabId };
+});
+
+it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
+  "%s routing refuses server-only action and wait fields to a host outside the server, with nothing sent",
+  (route) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+        const { clientId, connectionId, tabId } = yield* connectHost(broker, false);
+        if (route === "assigned") yield* broker.invoke({ scope, operation: "status", input: {} });
+        const target =
+          route === "exact"
+            ? { exact: { browserInstanceId: clientId, connectionId, tabId } }
+            : route === "serverOnly"
+              ? { serverHostOnly: true }
+              : {};
+        for (const request of SERVER_ONLY_REQUESTS) {
+          const refused = yield* broker
+            .invoke<void>({ scope, ...target, ...request, updateCurrentTab: route === "assigned" })
+            .pipe(Effect.flip);
+          expect(refused._tag).toBe("PreviewAutomationNoAvailableHostError");
+        }
+        expect(
+          yield* broker.invoke({ scope, ...target, operation: "click", input: { locator: "#a" } }),
+        ).toMatchObject({ input: { locator: "#a" } });
+      }),
+    ),
+);
+
+it.effect("the in-process server browser receives server-only action and wait fields", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+      yield* connectHost(broker, true);
+      for (const request of SERVER_ONLY_REQUESTS)
+        expect(yield* broker.invoke({ scope, ...request })).toMatchObject({
+          input: request.input,
+        });
+    }),
+  ),
+);

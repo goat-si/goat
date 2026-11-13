@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -450,5 +451,333 @@ func TestCancelEndsAWaitOnAnOrdinaryInvite(t *testing.T) {
 	var ev struct{ T string }
 	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
 		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// recordsFail fails the inviter's sends once it starts sending the record set (tests).
+type recordsFail struct{ mesh.Link }
+
+func (l recordsFail) Send(p []byte) error {
+	if bytes.Contains(p, []byte(`"t":"records"`)) {
+		l.Link.Close(4400)
+		return errors.New("send failed after the admit")
+	}
+	return l.Link.Send(p)
+}
+
+// A caller waiting on an invite whose join failed after the admit was signed hears that the joiner was admitted but
+// did not receive the set, never that the invite expired; for a bound and an ordinary invite alike.
+func TestAWaitHearsAnAdmissionWhoseJoinDidNotFinish(t *testing.T) {
+	old := serveJoinLink
+	serveJoinLink = func(l mesh.Link) mesh.Link { return recordsFail{l} }
+	t.Cleanup(func() { serveJoinLink = old })
+	for _, bound := range []bool{true, false} {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		rs := relaytest.New()
+		defer rs.Close()
+		clk := &clock{}
+		clk.ms.Store(time.Now().UnixMilli())
+		a := founder(t, ctx, rs, "a", clk)
+		jst := shortDir(t)
+		jid := identity(t, jst, rs.URL, "j")
+		cl, err := Dial(a.st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		if bound {
+			fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+		} else if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+			t.Fatal(err)
+		}
+		var r InviteReply
+		if err := cl.Next(&r); err != nil {
+			t.Fatal(err)
+		}
+		tok, _ := mesh.ParseToken(r.Token)
+		if _, err := Join(ctx, jst, jid, tok, "j"); err == nil {
+			t.Fatalf("bound %v: the join finished though the set was never sent", bound)
+		}
+		var ev struct {
+			T         string
+			Member    mesh.Member
+			Delivered *bool
+		}
+		if err := cl.Next(&ev); err != nil || ev.T != "admitted" || ev.Delivered == nil || *ev.Delivered || ev.Member.NoisePub != ident.B64.EncodeToString(jid.NoisePub) {
+			t.Fatalf("bound %v: the waiting caller got %+v (%v); want admitted with delivered false naming the joiner", bound, ev, err)
+		}
+	}
+}
+
+// The answer to a join that finished is exactly what it was before: members member and t.
+func TestAFinishedJoinsWaitAnswerIsUnchanged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err := strictjson.Keys(raw); err != nil || strings.Join(keys, ",") != "member,t" {
+		t.Fatalf("admitted answer %s; want exactly the members member and t", raw)
+	}
+}
+
+// holdRecords holds the inviter's records send until release is closed, after telling entered: the invite is burned
+// and its join not finished (tests).
+type holdRecords struct {
+	mesh.Link
+	entered chan<- struct{}
+	release <-chan struct{}
+}
+
+func (l holdRecords) Send(p []byte) error {
+	if bytes.Contains(p, []byte(`"t":"records"`)) {
+		select {
+		case l.entered <- struct{}{}:
+		default:
+		}
+		<-l.release
+	}
+	return l.Link.Send(p)
+}
+
+// An invite used just before it expires is answered with its join's outcome, never expired, even when the expiry
+// comes while that join is still running.
+func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	oldLink, oldExpiry := serveJoinLink, inviteExpiry
+	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
+	// Each timer is its own: the first is the invite's expiry, the second the wait for the join once it is used.
+	timers := make(chan chan time.Time, 2)
+	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time)
+		timers <- ch
+		return ch, func() bool { return true }
+	}
+	t.Cleanup(func() { serveJoinLink, inviteExpiry = oldLink, oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	joined := make(chan error, 1)
+	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
+	<-entered
+	expiry := <-timers
+	// The burned invite's join is held, so no outcome exists yet: either the caller takes the expiry now, or it saw
+	// the burn first and has started waiting for the join.
+	select {
+	case expiry <- time.Now():
+	case <-timers:
+	}
+	close(release)
+	if err := <-joined; err != nil {
+		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "admitted" {
+		t.Fatalf("the waiting caller got %+v (%v); want admitted", ev, err)
+	}
+}
+
+// A wait on an invite whose join used it and never reports is answered burned once that join's own time is up,
+// counted from the burn, however far off the invite's expiry is.
+func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	oldLink, oldExpiry := serveJoinLink, inviteExpiry
+	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
+	timers := make(chan chan time.Time, 2)
+	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time)
+		timers <- ch
+		return ch, func() bool { return true }
+	}
+	t.Cleanup(func() { serveJoinLink, inviteExpiry = oldLink, oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	joined := make(chan error, 1)
+	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
+	// The held join is let go and drained before the test's directories are removed.
+	defer func() { close(release); <-joined }()
+	<-entered
+	<-timers                 // the invite's expiry, an hour off, never fires
+	(<-timers) <- time.Now() // the join's own time, counted from the burn, is up
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "burned" {
+		t.Fatalf("the waiting caller got %+v (%v); want burned", ev, err)
+	}
+}
+
+// A wait's expiry timer runs on the monotonic clock and the invite expires by the node's clock. When the timer fires
+// early by the node's clock (it was set back), the wait re-arms for the time left and later hears the subject's join;
+// when it fires on time, the wait writes the expired entry and answers expired.
+func TestAWaitDecidesItsExpiryByTheNodesClock(t *testing.T) {
+	type timer struct {
+		ch chan time.Time
+		d  time.Duration
+	}
+	timers := make(chan timer, 4)
+	oldExpiry := inviteExpiry
+	inviteExpiry = func(d time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time)
+		timers <- timer{ch, d}
+		return ch, func() bool { return true }
+	}
+	t.Cleanup(func() { inviteExpiry = oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	wait := func(m string) (*Client, InviteReply) {
+		t.Helper()
+		cl, err := Dial(a.st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cl.Close() })
+		fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":%q,"expiresAt":%d,"subject":%s}`, m, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")))
+		var r InviteReply
+		if err := cl.Next(&r); err != nil {
+			t.Fatal(err)
+		}
+		return cl, r
+	}
+
+	cl, r := wait("early")
+	type answer struct {
+		t   string
+		err error
+	}
+	answers := make(chan answer, 1)
+	go func() {
+		var ev struct{ T string }
+		err := cl.Next(&ev)
+		answers <- answer{ev.T, err}
+	}()
+	(<-timers).ch <- time.Now() // fires while the node's clock is still a minute short of the expiry
+	select {
+	case again := <-timers:
+		if again.d != time.Minute {
+			t.Fatalf("re-armed for %v; want the minute left by the node's clock", again.d)
+		}
+	case a := <-answers:
+		t.Fatalf("at a timer a minute early by the node's clock the waiting caller got %q (%v); want it to wait again", a.t, a.err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
+		t.Fatal(err)
+	}
+	if a := <-answers; a.err != nil || a.t != "admitted" {
+		t.Fatalf("after an early timer the waiting caller got %q (%v); want admitted", a.t, a.err)
+	}
+	var ev struct{ T string }
+
+	cl, _ = wait("late")
+	clk.advance(2 * time.Minute)
+	late := <-timers
+	for late.d == meshSessionTimeout {
+		late = <-timers // the first wait's timer for its join, which it may have started after the burn
+	}
+	late.ch <- time.Now()
+	if err := cl.Next(&ev); err != nil || ev.T != "expired" {
+		t.Fatalf("past its expiry the waiting caller got %+v (%v); want expired", ev, err)
+	}
+	var books []mesh.Invite
+	if _, err := a.st.ReadJSON("offers.json", &books); err != nil {
+		t.Fatal(err)
+	}
+	written := false
+	for _, x := range books {
+		written = written || x.MintID == "late" && x.State == "expired"
+	}
+	if !written {
+		t.Fatalf("offers.json %+v; want the late invite written as expired before the answer", books)
+	}
+}
+
+// A join outcome without a member (the invite was used and no admission can be named) is answered burned.
+func TestAWaitHearsBurnedForAnOutcomeWithoutAMember(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	a.d.tellWaiter(r.ID, joinOutcome{})
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil || string(raw) != `{"t":"burned"}` {
+		t.Fatalf("the waiting caller got %s (%v); want exactly {\"t\":\"burned\"}", raw, err)
 	}
 }

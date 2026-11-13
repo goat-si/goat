@@ -121,11 +121,12 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		fail(err)
 		return
 	}
-	var cancelled chan struct{}
+	var sig *mesh.Signals
 	if req.Wait {
-		cancelled = make(chan struct{})
+		sig = mesh.NewSignals()
 	}
-	inv, err := d.inviteBook().CreateBoundNotify(*req.Subject, req.MintID, expiresAt, d.now, cancelled)
+	book := d.inviteBook()
+	inv, err := book.CreateBoundNotify(*req.Subject, req.MintID, expiresAt, d.now, sig)
 	if err != nil {
 		fail(err)
 		return
@@ -139,7 +140,7 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		reply(r)
 		return
 	}
-	d.awaitJoin(ctx, c, r, inv.ID, cancelled, reply)
+	d.awaitJoin(ctx, c, r, book, inv.ID, sig, reply)
 }
 
 // maxBoundExpiry bounds how far ahead a caller's expiresAt may be.

@@ -7,6 +7,7 @@
 import { closedPopupMessage, type PreviewViewportSetting } from "@goat/contracts";
 import type { CDPSession, Page } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { downloadJournal } from "./downloadJournal.ts";
 
 /** How long after an agent's input a popup still counts as opened by it. */
 export const POPUP_ATTRIBUTION_MS = 2_000;
@@ -243,7 +244,7 @@ export const attributeSecretFill = async <A>(
     generation: tab.control.generation,
     authority: tab.control.authority,
   };
-  tab.popups.lastInput = attribution;
+  tab.popups.lastInput = downloadJournal(tab).input(attribution);
   tab.agentOperating = true;
   try {
     return await fill();

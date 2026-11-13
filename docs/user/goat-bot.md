@@ -64,8 +64,11 @@ move when the window is hidden or when your system asks to reduce motion.
 
 On web and desktop, the bot's name at the top of its chat opens the bot's home, where **Edit
 bot** changes its name, face, purpose and model. **Home** is one page: a status note when
-something needs fixing, the machines its work runs on, its tasks, and its routines. Selecting a
-task shows its conversation right there, beside the chat; **Go to thread** opens it in full.
+something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
+a task shows its conversation right there, beside the chat, and marks it read; **Go to thread**
+opens it in full. A task's menu pins it, marks it done or marks it read. While no Slack channel is
+connected, GOAT Bot's home also suggests connecting one; **Hide** removes the suggestion on this
+device, and **Settings → GOAT Bot → Suggestions on the bot's home** brings it back.
 **Library** holds the files the bot saved and its memory. On mobile, **Work** opens a sheet of the
 bot's tasks, and a task opens in its own view.
 

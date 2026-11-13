@@ -5,10 +5,14 @@ import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   supported: true,
+  phase: "connected",
   data: null as unknown,
   failure: null as unknown,
   refresh: vi.fn(),
   requested: vi.fn(),
+}));
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({ connection: { phase: state.phase } }),
 }));
 vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
@@ -44,6 +48,7 @@ const listing = (names: string[], truncated = false) => ({
   truncated,
 });
 function setup(options: { data?: unknown; failure?: unknown; supported?: boolean } = {}) {
+  state.phase = "connected";
   state.supported = options.supported ?? true;
   state.data =
     options.data === undefined
@@ -137,4 +142,16 @@ it("a row asks the chat to open its file and marks the open one", async () => {
   await expect
     .element(screen.getByRole("button", { name: /chart\.png/ }))
     .toHaveAttribute("aria-current", "true");
+});
+
+it("explains when files are offline without offering retry", async () => {
+  setup({ data: null, failure: new Error("socket") });
+  state.phase = "offline";
+  await using screen = await render(
+    <GoatBotLibrary environmentId={environmentId} onOpen={() => {}} />,
+  );
+  await expect
+    .element(screen.getByText("Files are unavailable while GOAT Bot's computer is offline."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
 });

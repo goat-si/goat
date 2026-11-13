@@ -1,5 +1,10 @@
 import type { BotRoutineSource } from "@goat/client-runtime/scheduledTasks";
-import { EnvironmentId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentAuthorizationError,
+  EnvironmentId,
+  ScheduledTaskId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -187,4 +192,44 @@ it("a refused Run now says why", async () => {
   await expect
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Couldn't run this routine: Busy");
+});
+
+it("explains denied and offline routine reads without offering retry", async () => {
+  setup();
+  const denied = new EnvironmentAuthorizationError({
+    message: "no",
+    requiredScope: "orchestration:read",
+  });
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={null}
+      error="denied"
+      failure={denied}
+      onRetry={() => {}}
+    />,
+  );
+  await expect
+    .element(screen.getByText("This device can't read GOAT Bot's routines."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+});
+
+it("explains offline routine reads without offering retry", async () => {
+  setup();
+  await using screen = await render(
+    <GoatBotRoutines
+      environmentId={environmentId}
+      threadId={threadId}
+      tasks={null}
+      error="offline"
+      offline
+      onRetry={() => {}}
+    />,
+  );
+  await expect
+    .element(screen.getByText("Routines are unavailable while GOAT Bot's computer is offline."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
 });

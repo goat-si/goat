@@ -1,3 +1,4 @@
+import { EnvironmentAuthorizationError } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../../test/render";
 
@@ -6,6 +7,7 @@ const state = vi.hoisted(() => ({
   listThreads: vi.fn(() => "threads"),
   refresh: vi.fn(),
   items: [] as unknown[],
+  failure: null as unknown,
 }));
 vi.mock("./useGoatBotSession", () => ({
   useGoatBotEnabled: () => ({ environment: { environmentId: "env-1" } }),
@@ -33,7 +35,13 @@ vi.mock("~/state/channels", () => ({
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (atom: string | null) => ({
-    data: atom === "threads" ? { rows: [{ kind: "task" }], mainMessageCount: 0 } : null,
+    data:
+      atom === "threads" && state.failure === null
+        ? { rows: [{ kind: "task" }], mainMessageCount: 0 }
+        : null,
+    error: atom === "threads" && state.failure !== null ? "denied" : null,
+    failure: atom === "threads" ? state.failure : null,
+    isSuccess: atom === "threads" && state.failure === null,
     refresh: state.refresh,
   }),
 }));
@@ -104,4 +112,24 @@ it("sees a question the bot asked in its chat even when the server cannot list t
   await using screen = await render(<TurnsProbe />, { router: false });
   await expect.element(screen.getByText("1 questions in the chat")).toBeVisible();
   state.items = [];
+});
+
+it("retains a denied listBotThreads read for the Work panel", async () => {
+  state.supported = true;
+  state.failure = new EnvironmentAuthorizationError({
+    message: "denied",
+    requiredScope: "orchestration:read",
+  });
+  function Probe() {
+    const threads = useBotThreads("env-1" as never, null);
+    return (
+      <span>
+        {threads.failed && threads.failure === state.failure ? "denied read" : "not denied"}
+      </span>
+    );
+  }
+  // The probe reads no route state.
+  await using screen = await render(<Probe />, { router: false });
+  await expect.element(screen.getByText("denied read")).toBeVisible();
+  state.failure = null;
 });

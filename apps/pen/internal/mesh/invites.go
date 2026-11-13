@@ -105,9 +105,9 @@ type Invites struct {
 	// byID holds live invites and bound terminal entries; fences holds cancels by mintId that no invite answered.
 	byID   map[string]Invite
 	fences map[string]Invite
-	// cancelled holds, in memory only, the channel a live invite's maker waits on: closed when that invite is
-	// cancelled, dropped when it ends otherwise. Made and closed under mu with the invite itself.
-	cancelled map[string]chan struct{}
+	// signals holds, in memory only, what a live invite's maker waits on: closed when that invite is cancelled or
+	// burned, dropped when it ends otherwise. Attached and closed under mu with the invite itself.
+	signals map[string]*Signals
 	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
 	retired bool
 	// rewrite is set while offers.json still holds a bound entry in the earlier file form; Prune saves until it is
@@ -117,7 +117,7 @@ type Invites struct {
 
 // LoadInvites reads offers.json (st may be nil for in-memory use).
 func LoadInvites(st *state.Store) (*Invites, error) {
-	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}, cancelled: map[string]chan struct{}{}}
+	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}, signals: map[string]*Signals{}}
 	if st == nil {
 		return iv, nil
 	}
@@ -177,9 +177,9 @@ func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) e
 		iv.rewrite = false
 	}
 	iv.byID, iv.fences = byID, fences
-	for id := range iv.cancelled {
+	for id := range iv.signals {
 		if x, ok := byID[id]; !ok || x.State != "" {
-			delete(iv.cancelled, id)
+			delete(iv.signals, id)
 		}
 	}
 	return nil
@@ -202,8 +202,55 @@ func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
 	return iv.CreateNotify(ttl, now, nil)
 }
 
-// CreateNotify is Create that, when cancelled is not nil, closes it if invite.cancel removes this invite.
-func (iv *Invites) CreateNotify(ttl time.Duration, now time.Time, cancelled chan struct{}) (Invite, error) {
+// Signals are the channels an invite's maker waits on, each closed once in the same hold of the book's lock that
+// commits the event: Cancelled when invite.cancel ends the invite, Burned when a join uses it.
+type Signals struct {
+	Cancelled, Burned chan struct{}
+}
+
+// WaitExpiry decides, under the book's lock and by clock, what a wait on invite id answers when its timer fires. The
+// timer runs on the monotonic clock and the invite expires by the node's clock, so: burned when a join used the
+// invite (a burn checks, saves and closes Burned in one hold of this lock, so one in progress is waited for);
+// cancelled; live with the time left while clock has not reached the expiry; otherwise expired, after the expiry is
+// written, so no burn can come after the answer. A failed write is returned, and the wait must not answer expired.
+func (iv *Invites) WaitExpiry(id string, sig *Signals, clock func() time.Time) (state string, left time.Duration, err error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	select {
+	case <-sig.Burned:
+		return InviteBurned, 0, nil
+	case <-sig.Cancelled:
+		return InviteCancelled, 0, nil
+	default:
+	}
+	now := clock()
+	x, ok := iv.byID[id]
+	switch {
+	case !ok:
+		// Neither burned nor cancelled: an ordinary invite pruned at its expiry, or dropped by a burn whose save
+		// failed. The book is written first, so offers.json no longer holds it either.
+		if err := iv.saveLocked(now); err != nil {
+			return "", 0, err
+		}
+		return InviteExpired, 0, nil
+	case x.State != "":
+		return x.State, 0, nil
+	case !expired(x, now):
+		return InviteLive, time.UnixMilli(x.ExpiresAt).Sub(now), nil
+	}
+	if err := iv.saveLocked(now); err != nil {
+		return "", 0, err
+	}
+	return InviteExpired, 0, nil
+}
+
+// NewSignals makes a fresh pair.
+func NewSignals() *Signals {
+	return &Signals{Cancelled: make(chan struct{}), Burned: make(chan struct{})}
+}
+
+// CreateNotify is Create that, when sig is not nil, attaches it to this invite.
+func (iv *Invites) CreateNotify(ttl time.Duration, now time.Time, sig *Signals) (Invite, error) {
 	x, err := newInvite(now.Add(ttl))
 	if err != nil {
 		return Invite{}, err
@@ -214,8 +261,8 @@ func (iv *Invites) CreateNotify(ttl time.Duration, now time.Time, cancelled chan
 		return Invite{}, errInviteRetired
 	}
 	iv.byID[x.ID] = x
-	if cancelled != nil {
-		iv.cancelled[x.ID] = cancelled
+	if sig != nil {
+		iv.signals[x.ID] = sig
 	}
 	return x, iv.saveLocked(now)
 }
@@ -284,13 +331,20 @@ func (iv *Invites) Burn(id string, now time.Time, cb CardBody, clock func() time
 	if !x.Subject.admits(cb) {
 		return errors.New("card does not match this invite")
 	}
+	sig := iv.signals[id]
+	var err error
 	if x.Subject == nil {
 		delete(iv.byID, id)
-		return iv.saveLocked(now)
+		err = iv.saveLocked(now)
+	} else {
+		byID := maps.Clone(iv.byID)
+		byID[id] = terminal(x, InviteBurned, now, cb.Nonce)
+		err = iv.commitLocked(now, byID, maps.Clone(iv.fences))
 	}
-	byID := maps.Clone(iv.byID)
-	byID[id] = terminal(x, InviteBurned, now, cb.Nonce)
-	return iv.commitLocked(now, byID, maps.Clone(iv.fences))
+	if err == nil && sig != nil {
+		close(sig.Burned)
+	}
+	return err
 }
 
 func terminal(x Invite, state string, now time.Time, nonce string) Invite {
@@ -324,12 +378,12 @@ func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, er
 	default:
 		byID[x.ID] = terminal(x, InviteCancelled, now, "")
 	}
-	ch := iv.cancelled[x.ID]
+	sig := iv.signals[x.ID]
 	if err := iv.commitLocked(now, byID, fences); err != nil {
 		return "", err
 	}
-	if ch != nil {
-		close(ch)
+	if sig != nil {
+		close(sig.Cancelled)
 	}
 	return InviteCancelled, nil
 }

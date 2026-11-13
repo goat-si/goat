@@ -124,6 +124,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
 function Pane({ onClose }: { onClose: () => void }) {
@@ -139,10 +140,16 @@ function Pane({ onClose }: { onClose: () => void }) {
   );
 }
 
-it("opens the scoped task and acknowledges it, then sends and closes", async () => {
+/** Resets the shared acknowledgement record and the mocks this test reads. */
+function setup() {
+  resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
   state.session.mockClear();
+}
+
+it("opens the scoped task and acknowledges it, then sends and closes", async () => {
+  setup();
   const close = vi.fn();
   await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();

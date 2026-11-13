@@ -12,3 +12,9 @@ it("defaults task threads beside chat while preserving an explicit client prefer
     goatBotTaskThreadsBesideChat: false,
   });
 });
+
+it("keeps the bot home's Suggested section shown until this device hides it", () => {
+  expect(decode({}).goatBotSuggestedHidden).toBe(false);
+  expect(decode({ goatBotSuggestedHidden: true }).goatBotSuggestedHidden).toBe(true);
+  expect(decodePatch({ goatBotSuggestedHidden: true })).toEqual({ goatBotSuggestedHidden: true });
+});

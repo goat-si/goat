@@ -83,9 +83,9 @@ func (iv *Invites) CreateBound(sub Subject, mintID string, expiresAt time.Time, 
 	return iv.CreateBoundNotify(sub, mintID, expiresAt, clock, nil)
 }
 
-// CreateBoundNotify is CreateBound that, when cancelled is not nil, closes it if this invite is cancelled. The channel
-// is attached in the same hold of the lock that makes the invite, so no cancel can come before it.
-func (iv *Invites) CreateBoundNotify(sub Subject, mintID string, expiresAt time.Time, clock func() time.Time, cancelled chan struct{}) (Invite, error) {
+// CreateBoundNotify is CreateBound that, when sig is not nil, attaches it to this invite in the same hold of the lock
+// that makes the invite, so no cancel or burn can come before it.
+func (iv *Invites) CreateBoundNotify(sub Subject, mintID string, expiresAt time.Time, clock func() time.Time, sig *Signals) (Invite, error) {
 	if err := sub.Valid(); err != nil {
 		return Invite{}, err
 	}
@@ -121,8 +121,8 @@ func (iv *Invites) CreateBoundNotify(sub Subject, mintID string, expiresAt time.
 	if err := iv.commitLocked(now, byID, maps.Clone(iv.fences)); err != nil {
 		return Invite{}, err
 	}
-	if cancelled != nil {
-		iv.cancelled[x.ID] = cancelled
+	if sig != nil {
+		iv.signals[x.ID] = sig
 	}
 	return x, nil
 }

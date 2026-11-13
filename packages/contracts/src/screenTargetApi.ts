@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/35";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/36";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some first.
@@ -58,17 +58,18 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read remain valid until rows are added, removed or renumbered; then apply diffs and use the latest observation, or diff: false for the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it; with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; checked?: boolean; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; checked (tabs only) sets a checkbox, radio or switch, clicking only when it differs; action is apps only. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it; with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: as on click
   press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number; delivery_mode?: "foreground" }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; apps only: holdMs 0..30000 (driver support), foreground after a non-menu backgroundUnavailable refusal, not with send
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;
-  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // tabs 15 s default, apps 10 s max; answers within the cell
+  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean; download?: object }>; // tabs 15 s default, apps 10 s max; answers within the cell; download: the file a tab's { download: true } took
   verify(c: Condition): Promise<{ met: boolean }> }`;
 
-const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target } | { role, name? },
+const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { download: true } | { target } | { role, name? },
 // and with target or role: enabled?, value?, checked?, selected? (true/false or exact value of the one match) and state?: "attached" | "detached" | "visible" | "hidden".
+// url: a substring, or with * a glob of the whole URL (* spans anything, / included). download: one started after this tab's latest input has saved; each wait takes the next.
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
 // Never click a file input: upload() it. Custom dropdown: click, observe(), click the option.
 // Read typed CJK or autocomplete text back before Enter.

@@ -6,6 +6,7 @@ import {
   goatBotAvatarSignal,
   goatBotFaceSpoken,
   goatBotMemberPicture,
+  goatBotWaitingDot,
   type GoatBotAccent,
   type GoatBotAvatarSignal,
   type GoatBotFaceState,
@@ -23,11 +24,35 @@ import { useGoatBotFaceMotion, useGoatBotSessionFace } from "./useGoatBotFace";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 
-const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12" } as const;
+const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12", xl: "size-18" } as const;
 // The head nearly fills its circle so its ears and eyes still read at 20 px.
-const HEAD = { sm: "size-4.5", md: "size-6", lg: "size-10" } as const;
-const DOT = { sm: "size-1.5", md: "size-2", lg: "size-3" } as const;
-const EMOJI = { sm: "text-[0.6875rem]", md: "text-sm", lg: "text-2xl" } as const;
+const HEAD = { sm: "size-4.5", md: "size-6", lg: "size-10", xl: "size-15" } as const;
+const EMOJI = {
+  sm: "text-[0.6875rem]",
+  md: "text-sm",
+  lg: "text-2xl",
+  xl: "text-4xl",
+} as const;
+/** Each size's circle diameter, which the waiting dot's geometry is measured from. */
+const CIRCLE_PX = { sm: 20, md: 28, lg: 48, xl: 72 } as const;
+/** What the avatar sits on, so the ring behind a member's colour and the dot match it. */
+const SURFACE = {
+  screen: { fill: "bg-background", dotRing: "border-background" },
+  sidebar: {
+    fill: "bg-sidebar group-hover/bot-row:bg-sidebar-row-hover group-data-[active=true]/bot-row:bg-sidebar-row-selected group-active/bot-row:bg-sidebar-row-active",
+    dotRing:
+      "border-sidebar group-hover/bot-row:border-sidebar-row-hover group-data-[active=true]/bot-row:border-sidebar-row-selected group-active/bot-row:border-sidebar-row-active",
+  },
+  popover: { fill: "bg-popover", dotRing: "border-popover" },
+  /** The chat header's name capsule, which publishes an opaque surface for rest and hover. */
+  chip: { fill: "bg-(--goat-name-avatar-surface)", dotRing: "border-(--goat-name-avatar-surface)" },
+  rail: {
+    fill: "bg-background group-hover/rail:bg-accent group-aria-[current=page]/rail:bg-accent",
+    dotRing:
+      "border-background group-hover/rail:border-accent group-aria-[current=page]/rail:border-accent",
+  },
+} as const;
+export type GoatBotAvatarSurface = keyof typeof SURFACE;
 const RING: Record<NonNullable<GoatBotAvatarSignal["ring"]>, string> = {
   active: "border-primary",
   failed: "border-destructive",
@@ -46,6 +71,7 @@ export function GoatBotAvatar({
   emoji = null,
   accent = null,
   spokenCount = 0,
+  surface = "screen",
   className,
 }: {
   readonly size?: keyof typeof CIRCLE | undefined;
@@ -58,6 +84,8 @@ export function GoatBotAvatar({
   readonly accent?: GoatBotAccent | null | undefined;
   /** The row's waiting count when the label says it, so the row says waiting once. */
   readonly spokenCount?: number | undefined;
+  /** What the avatar sits on: a member's color is parted from its ring by this, and the dot by it. */
+  readonly surface?: GoatBotAvatarSurface | undefined;
   readonly className?: string;
 }) {
   const label = state === undefined ? null : goatBotFaceSpoken(state, spokenCount);
@@ -66,6 +94,10 @@ export function GoatBotAvatar({
   const fill = picture !== null ? accent : null;
   // On a color the letter keeps its contrast, so a sleeping member dims the whole circle instead.
   const dimCircle = signal?.dimmed === true && fill !== null;
+  // A ring on a member's color is parted from the fill by a hairline of the surface behind it.
+  const parted = fill !== null && signal?.ring != null;
+  const place = SURFACE[surface];
+  const dot = signal?.waitingDot === true ? goatBotWaitingDot(CIRCLE_PX[size]) : null;
   // An emoji has no eyes to move, so it never takes the one moving face.
   const { watch, motion: eyeMotion } = useGoatBotFaceMotion(
     picture === null ? state : undefined,
@@ -76,22 +108,37 @@ export function GoatBotAvatar({
       ref={watch}
       {...(label === null ? { "aria-hidden": true } : { role: "img", "aria-label": label })}
       style={
-        fill === null ? undefined : { backgroundColor: fill.background, color: fill.foreground }
+        fill === null
+          ? undefined
+          : {
+              ...(parted ? {} : { backgroundColor: fill.background }),
+              color: fill.foreground,
+            }
       }
       className={cn(
         "relative inline-flex shrink-0 items-center justify-center rounded-full border border-goat-avatar-border bg-goat-avatar text-goat-avatar-foreground",
-        fill !== null && "border-transparent",
+        fill !== null && !parted && "border-transparent",
+        parted && place.fill,
         dimCircle && "opacity-60",
         signal?.ring && RING[signal.ring],
         CIRCLE[size],
         className,
       )}
     >
+      {parted && fill !== null ? (
+        <span
+          aria-hidden
+          data-goat-avatar-fill
+          className="absolute inset-px rounded-full"
+          style={{ backgroundColor: fill.background }}
+        />
+      ) : null}
       {picture !== null ? (
         <span
           aria-hidden
           className={cn(
-            "leading-none select-none",
+            // Above the parted fill, which is positioned like this span.
+            "relative leading-none select-none",
             EMOJI[size],
             signal?.dimmed && !dimCircle && "opacity-50",
           )}
@@ -101,8 +148,22 @@ export function GoatBotAvatar({
       ) : (
         <GoatBotFace state={state ?? "idle"} motion={eyeMotion} className={HEAD[size]} />
       )}
-      {signal?.waitingDot ? (
-        <span className={cn("absolute top-0 right-0 rounded-full bg-warning", DOT[size])} />
+      {dot !== null ? (
+        <span
+          data-goat-waiting-dot
+          aria-hidden
+          style={{
+            width: dot.box,
+            height: dot.box,
+            borderWidth: dot.ring,
+            top: dot.inset,
+            right: dot.inset,
+          }}
+          className={cn(
+            "absolute rounded-full border-solid bg-warning bg-clip-padding",
+            place.dotRing,
+          )}
+        />
       ) : null}
     </span>
   );
@@ -116,6 +177,7 @@ export function GoatBotSessionAvatar({
   threadRef,
   size,
   place = "rail",
+  surface = "screen",
   waitingCount = 0,
   activity = null,
   chatOpen = false,
@@ -127,6 +189,7 @@ export function GoatBotSessionAvatar({
   readonly threadRef: ScopedThreadRef;
   readonly size?: keyof typeof CIRCLE | undefined;
   readonly place?: "list" | "rail";
+  readonly surface?: GoatBotAvatarSurface | undefined;
   /** This bot's own count of tasks waiting on a person. */
   readonly waitingCount?: number;
   readonly activity?: { readonly state: "reading" | "working" } | null;
@@ -146,6 +209,7 @@ export function GoatBotSessionAvatar({
       state={face.state}
       emoji={emoji}
       accent={accent}
+      surface={surface}
       spokenCount={countInLabel ? waitingCount : 0}
       motion={{
         rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
@@ -183,6 +247,7 @@ export function GoatBotMainAvatar({
   activity = null,
   chatOpen = false,
   place = "rail",
+  surface = "screen",
   emoji = null,
   countInLabel = false,
 }: {
@@ -192,6 +257,7 @@ export function GoatBotMainAvatar({
   readonly chatOpen?: boolean;
   /** Where the face sits outside the chat header. */
   readonly place?: "list" | "rail";
+  readonly surface?: GoatBotAvatarSurface | undefined;
   /** The main bot's profile avatar. */
   readonly emoji?: string | null | undefined;
   /** The row hides its own waiting badge from assistive technology; the label says the count. */
@@ -203,6 +269,7 @@ export function GoatBotMainAvatar({
       size={size}
       state={face.state}
       emoji={emoji}
+      surface={surface}
       spokenCount={countInLabel ? face.waitingCount : 0}
       motion={{
         rank: chatOpen ? FACE_MOTION_RANK.header : FACE_MOTION_RANK[place],
@@ -234,11 +301,13 @@ export function GoatBotMemberAvatar({
   face,
   size,
   place = "rail",
+  surface = "screen",
 }: {
   readonly bot: BotProfile;
   readonly face: GoatBotShownFace;
   readonly size?: keyof typeof CIRCLE;
   readonly place?: "list" | "rail";
+  readonly surface?: GoatBotAvatarSurface;
 }) {
   return (
     <GoatBotAvatar
@@ -246,6 +315,7 @@ export function GoatBotMemberAvatar({
       state={face.state}
       emoji={goatBotMemberPicture(bot)}
       accent={goatBotAccent(bot)}
+      surface={surface}
       motion={{ rank: FACE_MOTION_RANK[place], since: face.since }}
     />
   );

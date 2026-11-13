@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GoatBotFaceState } from "./face.ts";
-import { goatBotHeadArt } from "./faceHead.ts";
+import { goatBotAvatarSignal } from "./avatar.ts";
+import {
+  GOAT_BOT_HEAD_SLEEP_MARK_PATH,
+  GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH,
+  goatBotHeadArt,
+} from "./faceHead.ts";
+import {
+  closest,
+  MOBILE_HEAD_RATIO,
+  rightEarAndHorn,
+  strokeOutline,
+  WEB_AVATAR_SIZES,
+  zInnerGap,
+} from "./faceGeometry.testkit.ts";
 
 const STATES: ReadonlyArray<GoatBotFaceState> = [
   "idle",
@@ -144,5 +157,46 @@ describe("goatBotHeadArt: each face state maps to its own eyes", () => {
     for (const line of strokes("sleeping")) expect(extent(line.points).height).toBe(0);
     for (const state of STATES)
       expect(goatBotHeadArt(state).sleepMark, state).toBe(state === "sleeping");
+  });
+});
+
+describe("goatBotHeadArt: the sleep mark stays in the avatar and clear of the head", () => {
+  const mark = strokeOutline(GOAT_BOT_HEAD_SLEEP_MARK_PATH, GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH);
+
+  it("keeps the z's bars apart, so it still reads as a z at 20 px", () => {
+    // 0.65 units is what the mark left open before it had to fit inside the 20 px circle.
+    expect(
+      zInnerGap(GOAT_BOT_HEAD_SLEEP_MARK_PATH, GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH),
+    ).toBeGreaterThanOrEqual(0.65);
+  });
+
+  it.each(WEB_AVATAR_SIZES)(
+    "draws its whole stroke inside the $circle px circle",
+    ({ circle, head }) => {
+      // The circle's radius in the head's 20-unit art box, around the box's centre (12, 12).
+      const radius = (10 * circle) / head;
+      const farthest = Math.max(...mark.map((point) => Math.hypot(point.x - 12, point.y - 12)));
+      expect(radius - farthest).toBeGreaterThan(0.2);
+    },
+  );
+
+  it("draws its whole stroke inside mobile's circle, where the head is 0.86 of it", () => {
+    const radius = 10 / MOBILE_HEAD_RATIO;
+    const farthest = Math.max(...mark.map((point) => Math.hypot(point.x - 12, point.y - 12)));
+    expect(radius - farthest).toBeGreaterThan(0.2);
+  });
+
+  it("keeps its stroke off the right horn and the right ear", () => {
+    const { ear, horn } = rightEarAndHorn();
+    expect(closest(mark, horn)).toBeGreaterThan(0.4);
+    expect(closest(mark, ear)).toBeGreaterThan(0.4);
+  });
+
+  it("never shares a face with the waiting dot, which sits in the same corner", () => {
+    for (const state of STATES)
+      for (const emoji of [false, true])
+        expect(
+          goatBotHeadArt(state).sleepMark && goatBotAvatarSignal(state, emoji).waitingDot,
+        ).toBe(false);
   });
 });

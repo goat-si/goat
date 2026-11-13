@@ -19,7 +19,7 @@ For text use \`goat_preview_read\`; for input targets use \`goat_preview_snapsho
 ## Act
 Prefer current refs or unique locators; use screenshot coordinates when the tree misses the target. Wait with observe or \`waitFor\`, never repeated input.
 
-With direct tools, \`goat_preview_wait_for\` waits for all supplied conditions together: a locator's \`state\`, visible \`text\`, \`urlIncludes\`, or \`loadState\`. \`state\` defaults to attached; hidden also matches absence. Text is case-sensitive; conditions share \`timeoutMs\` (default 15,000, maximum 60,000). Never sleep instead; \`networkIdle\` may time out on busy pages.
+With direct tools, \`goat_preview_wait_for\` waits for all supplied conditions together: a locator's \`state\`, visible \`text\`, \`urlIncludes\`, \`urlGlob\` (\`*\` spans anything), \`loadState\` or \`download:true\` (since your last input). \`state\` defaults to attached; hidden matches absence. Text is case-sensitive; conditions share \`timeoutMs\` (default 15,000, max 60,000). Never sleep; \`networkIdle\` may time out on busy pages.
 
 Evaluate with a known exact selector; never read cookies, tokens, storage or site-internal APIs. Page tools write only on request.
 
@@ -33,13 +33,13 @@ Site notes arrive once per origin and thread. Read with \`goat_browser_site_note
 \`\`\`js
 const tab = await screen.tab({tabId});
 await tab.claim();
-const page = await tab.observe({interactiveOnly: true});
+await tab.observe({interactiveOnly: true});
 for (let i = 0; i < 3; i++) await tab.click(0);
 await tab.click("text=Save");
 return await tab.observe();
 \`\`\`
 
-Numbers and refs stay valid until the next observe; input alone does not retire them. After the first \`observe()\` text shows changes; \`elements\` stays complete; \`{diff:false}\` shows all. Actions return \`{verdict}\` once the input is delivered; waiting belongs to \`tab.waitFor({text})\`, \`{url}\`, \`{load}\`, \`{target}\` or \`{role,name}\`; \`tab.verify(...)\` checks once. Stop where a result decides the next step. Do not put sends, purchases or deletes in an unchecked batch.
+Numbers and refs stay valid until the next observe; input alone does not retire them. After the first \`observe()\` text shows changes; \`elements\` stays complete; \`{diff:false}\` shows all. Actions return \`{verdict}\` once the input is delivered; waiting belongs to \`tab.waitFor({text})\`, \`{url}\` (a glob), \`{load}\`, \`{download:true}\`, \`{target}\` or \`{role,name}\`; \`tab.verify(...)\` checks once. Stop where a result decides the next step. Do not put sends, purchases or deletes in an unchecked batch.
 
 A refused or failed call throws \`ScreenError\` with \`code\`, \`message\` and \`nothingSent\`; the cell's later calls are then refused, so observe in a new cell. An uncaught host failure comes back as that call's receipt; a cell that fails in its own code also returns \`value.partial\`, what each call returned before the failure.
 
@@ -72,28 +72,28 @@ Set \`includeImage:true\` only for visual inspection: inline images remain in to
 ## Forms
 \`goat_preview_type\` inserts literal \`text\` at the caret or selection; \`clear:true\` replaces existing text. Without a \`locator\` or \`selector\`, it types into the focused editable element. Read the committed value before submitting, above all Korean/CJK or autocomplete text. \`goat_preview_press\` sends \`key\` to current focus, with optional \`modifiers\`; Enter may submit. In screen code use \`tab.type(text, target?)\`, \`tab.setValue(target, value)\` or \`tab.press(key, target?)\`.
 
-\`goat_preview_select\` selects native HTML options by \`values\`, matching option values before trimmed labels; an empty list clears selection. For a custom dropdown or combobox, open it, observe its options, click one, then observe that it stuck. Hover may reveal menus; the page decides.
+\`goat_preview_click\` \`checked\` sets a box only when it differs; \`modifiers\` holds keys. \`goat_preview_select\` selects native HTML options by \`values\`, matching option values before trimmed labels; an empty list clears selection. For a custom dropdown or combobox, open it, observe its options, click one, then observe that it stuck. Hover may reveal menus; the page decides.
 
 ## Dialogs
 A browser alert, confirmation or prompt can block snapshots and waits. Read the pending \`dialog\` in status, then use \`goat_preview_dialog\` with \`accept\` and optional \`promptText\`. Resolving it invalidates snapshot refs: observe again. Apply the person's confirmation authority to the action the dialog would commit.
 
 ## Popups and new tabs
-After a popup opens, list tabs and select its exact \`tabId\`; \`openerTabId\` identifies its opener. \`goat_preview_open\` with \`reuseExistingTab:false\` creates a tab; retry the same \`clientRequestId\` to avoid duplicates. \`profileId\` accepts an id or name from status for new tabs; reused tabs retain their profile.
+After a popup opens, list tabs and select its exact \`tabId\`; \`openerTabId\` identifies its opener. \`goat_preview_open\` with \`reuseExistingTab:false\` creates a tab; retry with the same \`clientRequestId\`. \`profileId\` accepts an id or name from status for new tabs; reused tabs retain their profile.
 
 ## Uploads
-Never click a file input; it opens a native picker. After a picker opens, check \`fileChooser\` in status. \`goat_preview_upload\` takes absolute environment \`paths\`; an empty list cancels the pending picker. A \`locator\` for an input of type file sets its files directly; an empty list with that locator clears that input instead. Upload only the files authorized for the task, then observe whether the page accepted them.
+Never click a file input; it opens a native picker. After a picker opens, check \`fileChooser\` in status. \`goat_preview_upload\` takes absolute environment \`paths\`; an empty list cancels the pending picker. A \`locator\` for an input of type file sets its files directly; an empty list with it clears that input. Upload only the files authorized for the task, then observe whether the page accepted them.
 
 ## Downloads
-Status reports completed \`downloads\` with environment-local \`path\`, name, size and URL. Use that path after completion. \`goat_preview_fetch\` can fetch a known HTTP(S) URL without navigating, sending cookies only to the same origin; binary bodies up to 25 MiB return \`savedPath\`. If a larger body is not saved and reports \`truncated\`, navigate to its URL to download it.
+After the input that starts one, \`goat_preview_wait_for\` \`download:true\` returns its environment-local \`path\`; status lists completed \`downloads\`. \`goat_preview_fetch\` can fetch a known HTTP(S) URL without navigating, sending cookies only to the same origin; binary bodies up to 25 MiB return \`savedPath\`. A larger body reports \`truncated\`; navigate to its URL to download it.
 
 ## Dev servers and environment ports
-Loopback addresses name the machine running GOAT, not the person's device or another environment. Use the dev server's actual reported port. With \`preview.navigate\`, supply \`target:{kind:"environment-port",port:5173}\`, optionally \`protocol\` and \`path\`, instead of \`url\`. This environment-port target resolves to localhost on the browser host. \`preview.open\` opens a tab; then navigate it to that target.
+Loopback addresses name the machine running GOAT, not the person's device or another environment. Use the dev server's actual reported port. With \`preview.navigate\`, supply \`target:{kind:"environment-port",port:5173}\`, optionally \`protocol\` and \`path\`, instead of \`url\`. \`preview.open\` opens a tab; then navigate it to that target.
 
 ## Mobile and viewport presets
-\`preview.resize\` changes CSS layout dimensions while retaining the desktop browser user agent. Use \`mode:"fill"\` to follow the preview panel, \`mode:"freeform",width:1024,height:768\` for explicit dimensions, or \`mode:"preset",preset:"iphone-12-pro",orientation:"portrait"\` for a named size. Inspect the resulting viewport and page; this verifies responsive layout, not native mobile behavior.
+\`preview.resize\` changes CSS layout dimensions while retaining the desktop browser user agent. Use \`mode:"fill"\` to follow the preview panel, \`mode:"freeform",width:1024,height:768\` for explicit dimensions, or \`mode:"preset",preset:"iphone-12-pro",orientation:"portrait"\` for a named size. This checks responsive layout, not native mobile behavior.
 
 ## Recording
-Use \`preview.recording_start\` before motion or timing evidence and \`preview.recording_stop\` to obtain the saved compressed video. Select its \`tabId\`. Never record private fields.
+Use \`preview.recording_start\` before motion or timing evidence and \`preview.recording_stop\` to get the saved video. Select its \`tabId\`. Never record private fields.
 
 ## Evidence screenshots
 Use \`goat_preview_snapshot\` with \`save:true\` and embed \`screenshotPath\` as \`![evidence](screenshotPath)\`. Check clipping and exclude private content.

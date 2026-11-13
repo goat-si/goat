@@ -52,10 +52,10 @@ vi.mock("./GoatBotMemberModelPicker", () => ({ GoatBotMemberModelPicker: () => n
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
-vi.mock("./GoatBotAvatar", () => ({
-  GoatBotAvatar: () => null,
+// The name chip draws the real member avatar, so its picture is what a person sees.
+vi.mock("./GoatBotAvatar", async (original) => ({
+  ...(await original<typeof import("./GoatBotAvatar")>()),
   GoatBotMainAvatar: () => null,
-  GoatBotSessionAvatar: () => null,
 }));
 // The timeline renders Markdown through ChatMarkdown, which reads other settings exports.
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -181,6 +181,14 @@ it("puts a colored member's accent on its chat, and nowhere for a member without
   expect(
     getComputedStyle(neutral.container.querySelector(".goat-person-pill")!).backgroundColor,
   ).not.toBe("rgb(47, 111, 237)");
+});
+
+it("shows a member's own initial in the name chip, not the main bot's face", async () => {
+  setup(true);
+  await using screen = await render(chat(member("#2F6FED")));
+  const chip = screen.getByRole("button", { name: "Docs home" });
+  await expect.element(chip).toBeVisible();
+  await expect.element(chip.getByText("D", { exact: true })).toBeVisible();
 });
 
 it("accented Send appears only once the box has something to send", async () => {

@@ -43,6 +43,7 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { usesServerOnlyInput } from "./previewServerOnlyInput.ts";
 import * as BoundPreviewTabs from "../screenCode/BoundPreviewTabs.ts";
 
 const HOST_RESPONSE_GRACE_MS = 1_000;
@@ -211,6 +212,7 @@ const supportsRequest = (
   const input = request.input;
   return (
     supportsOperation(connection, request.operation) &&
+    (connection.inProcess || !usesServerOnlyInput(request.operation, input)) &&
     (request.operation !== "snapshot" ||
       typeof input !== "object" ||
       input === null ||

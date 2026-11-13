@@ -211,6 +211,7 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	// The membership check, the burn and the signature hold the store's lock together: an
 	// inviter that is no longer a member keeps the invite unused.
 	errBurn := errors.New("burn")
+	burned := false
 	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func(*View) error {
 		if a.Store.burnGate != nil {
 			a.Store.burnGate()
@@ -218,9 +219,21 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 		if err := a.Invites.Burn(a.InviteID, now, cb, a.Now); err != nil {
 			return errBurn
 		}
+		burned = true
 		return nil
 	})
+	// From here on the invite is used up: every failure says so and names the joiner if the view admitted it.
+	afterBurn := func(err error) error {
+		if m, ok := a.Store.View().Members[cb.SignPub]; ok {
+			return &BurnedError{Member: &m, Err: err}
+		}
+		return &BurnedError{Err: err}
+	}
 	switch {
+	case err != nil && burned && errors.Is(err, ErrNotMember):
+		return nil, afterBurn(refuseNotMember(c))
+	case err != nil && burned:
+		return nil, afterBurn(refuse(c, "could not sign the admit"))
 	case errors.Is(err, ErrNotMember):
 		return nil, refuseNotMember(c)
 	case errors.Is(err, errBurn):
@@ -231,19 +244,36 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	}
 	member, ok := a.Store.View().Members[cb.SignPub]
 	if !ok {
-		return nil, refuse(c, "admit had no effect")
+		return nil, afterBurn(refuse(c, "admit had no effect"))
 	}
 	if a.OnAdmit != nil {
 		a.OnAdmit(admit)
 	}
 	if err := c.writeRecords(a.Store.Records()); err != nil {
-		return nil, err
+		return nil, afterBurn(err)
 	}
 	if err := c.Write(Msg{T: "done", Mesh: a.Store.MeshID}); err != nil {
-		return nil, err
+		return nil, afterBurn(err)
 	}
 	return &member, nil
 }
+
+// BurnedError is a join that failed after its burn committed: the invite admits nobody else. Member is the joiner
+// when this node's view makes it a member (its admit was signed, though the joiner may not have received the set),
+// nil when no admit took effect.
+type BurnedError struct {
+	Member *Member
+	Err    error
+}
+
+func (e *BurnedError) Error() string {
+	if e.Member != nil {
+		return fmt.Sprintf("invite used: %s admitted, but the join did not finish: %v", e.Member.NodeID, e.Err)
+	}
+	return fmt.Sprintf("invite used, nobody admitted: %v", e.Err)
+}
+
+func (e *BurnedError) Unwrap() error { return e.Err }
 
 // RefusedError is the inviter's refusal; NotMember says the inviter is not a member of its mesh.
 type RefusedError struct {
