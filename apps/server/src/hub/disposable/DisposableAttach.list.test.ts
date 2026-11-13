@@ -33,15 +33,13 @@ it.effect("lists that arrive while a pass runs share it, so Pen is asked once", 
       pen.control.statusStarted = yield* Deferred.make<void>();
       const a = yield* list().pipe(Effect.forkChild);
       yield* Deferred.await(pen.control.statusStarted);
-      const b = yield* list().pipe(Effect.forkChild);
-      yield* TestClock.adjust(Attach.LIST_WAIT);
+      // Started at once, the second list reaches the running pass before the gate opens.
+      const b = yield* list().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(pen.control.statusGate, undefined);
+      // Both answer only once that one pass has finished.
       yield* Fiber.join(a);
       yield* Fiber.join(b);
-      pen.control.statusStarted = undefined;
-      yield* Deferred.succeed(pen.control.statusGate, undefined);
-      yield* Attach.DisposableAttach.pipe(Effect.flatMap((service) => service.reconcile));
-      // The reconcile above starts a fresh pass once the shared one ends: two asks in all.
-      expect(pen.control.statusAsked).toHaveLength(2);
+      expect(pen.control.statusAsked).toHaveLength(1);
     }),
   ),
 );
