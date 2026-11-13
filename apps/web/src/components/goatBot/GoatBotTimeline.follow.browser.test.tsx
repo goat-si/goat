@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { useState, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -22,6 +22,18 @@ vi.mock("./GoatBotAvatar", () => ({
   GoatBotAvatar: () => null,
   GoatBotMainAvatar: () => null,
   GoatBotSessionAvatar: () => null,
+}));
+const projection = vi.hoisted(() => ({
+  statuses: {} as Record<string, string>,
+  reads: [] as string[],
+}));
+vi.mock("~/state/entities", async (original) => ({
+  ...(await original<typeof import("~/state/entities")>()),
+  useThreadStatus: (ref: { threadId: string } | null) => {
+    if (ref === null) return "empty";
+    projection.reads.push(ref.threadId);
+    return projection.statuses[ref.threadId] ?? "live";
+  },
 }));
 
 import { GoatBotTimeline } from "./GoatBotTimeline";
@@ -596,4 +608,95 @@ it("failing-first: manually returning to bottom clears a cue permanently", async
       button.textContent?.includes("Jump to latest"),
     ),
   ).toBe(false);
+});
+
+const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>
+  shown.map(
+    (row) =>
+      ({
+        item: { id: row.id, type: "assistant_message" },
+      }) as unknown as OrchestrationV2ProjectedTurnItem,
+  );
+
+it("failing-first: the viewed thread, not the current bot, owns the live baseline", async () => {
+  projection.reads = [];
+  projection.statuses = { old: "empty", current: "live" };
+  const environmentId = EnvironmentId.make("env");
+  const ref = { environmentId, threadId: ThreadId.make("old") };
+  const bot = { environmentId, threadId: ThreadId.make("current") };
+  const view = (shown: ReadonlyArray<GoatBotRow>) => (
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <GoatBotChatView
+        projectionRef={ref}
+        visibleTurnItems={projectedItems(shown)}
+        environmentId={environmentId}
+        availability={{ kind: "ready", bot }}
+        canOperate
+        rows={shown}
+        onSend={() => true}
+        onRetryInput={() => {}}
+        legacyAgentRoute={null}
+      />
+    </div>
+  );
+  await using screen = await render(view(rows));
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const loaded = [...rows, reply("old-history")];
+  await screen.rerender(view(loaded));
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  projection.statuses.old = "live";
+  await screen.rerender(view(loaded));
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  await screen.rerender(view([...loaded, reply("old-new-reply")]));
+  expect(screen.container.textContent).toContain("Jump to latest");
+  expect(projection.reads).toContain("old");
+  expect(projection.reads).not.toContain("current");
+});
+
+it("failing-first: the cue survives temporary offline readiness and resets for another thread", async () => {
+  projection.statuses = { old: "live", other: "live" };
+  const environmentId = EnvironmentId.make("env");
+  const view = (thread: string, offline: boolean, shown: ReadonlyArray<GoatBotRow>) => (
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <GoatBotChatView
+        projectionRef={{ environmentId, threadId: ThreadId.make(thread) }}
+        visibleTurnItems={projectedItems(shown)}
+        environmentId={environmentId}
+        availability={
+          offline
+            ? { kind: "offline", environmentId }
+            : { kind: "ready", bot: { environmentId, threadId: ThreadId.make(thread) } }
+        }
+        canOperate
+        rows={shown}
+        onSend={() => true}
+        onRetryInput={() => {}}
+        legacyAgentRoute={null}
+      />
+    </div>
+  );
+  await using screen = await render(view("old", false, rows));
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const next = [...rows, reply("while-reading")];
+  await screen.rerender(view("old", false, next));
+  expect(screen.container.textContent).toContain("Jump to latest");
+  projection.statuses.old = "empty";
+  await screen.rerender(view("old", true, next));
+  expect(scroller(screen.container)).toBe(element);
+  expect(element.scrollTop).toBe(0);
+  expect(screen.container.textContent).toContain("Jump to latest");
+  projection.statuses.old = "live";
+  await screen.rerender(view("old", false, next));
+  expect(screen.container.textContent).toContain("Jump to latest");
+  await screen.rerender(view("other", false, next));
+  expect(scroller(screen.container)).not.toBe(element);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
 });
