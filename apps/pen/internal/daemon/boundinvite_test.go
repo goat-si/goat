@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -105,7 +106,7 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	jst := shortDir(t)
 	jid := identity(t, jst, rs.URL, "j")
 	var r InviteReply
-	if err := rawCall(t, a.st, `{"op":"invite","ttlMs":60000,"mintId":"m1","subject":`+subjectLine(jid, "j")+`}`, &r); err != nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
 		t.Fatal(err)
 	}
 	if r.MintID != "m1" || r.ID == "" {
@@ -132,7 +133,7 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	if c := cancelOp(`{"op":"invite.cancel","mintId":"m2"}`); c.State != "cancelled" {
 		t.Fatalf("cancel of an unmade mint: %+v", c)
 	}
-	if err := rawCall(t, a.st, `{"op":"invite","mintId":"m2","subject":`+subjectLine(jid, "j")+`}`, &r); err == nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m2","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err == nil {
 		t.Fatalf("the fenced mint made an invite: %+v", r)
 	}
 	if c := cancelOp(`{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA"}`); c.State != "absent" {
@@ -141,5 +142,85 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	var c InviteCancelReply
 	if err := rawCall(t, a.st, `{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA","mintId":"m3"}`, &c); err == nil {
 		t.Fatalf("a cancel naming both an id and a mintId answered %+v", c)
+	}
+}
+
+// statusOp sends invite.status for ref (an inviteId or mintId line fragment) and decodes the answer.
+func statusOp(t *testing.T, st *state.Store, ref string) mesh.InviteStatus {
+	t.Helper()
+	var s mesh.InviteStatus
+	if err := rawCall(t, st, `{"op":"invite.status",`+ref+`}`, &s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// Over the control socket a minted invite (mintId and an absolute expiresAt) is followed by invite.status from live to
+// burned, naming the admit and that the subject is a member, until invite.ack forgets it; another one expires on the
+// node's clock; and a mint whose expiresAt passed, is too far ahead, or lacks its mintId makes nothing.
+func TestInviteStatusOpFollowsAMintToItsAdmitAndAck(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	mint := func(m string, expiresAt time.Time) (InviteReply, error) {
+		var r InviteReply
+		err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":%q,"expiresAt":%d,"subject":%s}`, m, expiresAt.UnixMilli(), subjectLine(jid, "j")), &r)
+		return r, err
+	}
+	r, err := mint("m1", clk.now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ExpiresAt != clk.now().Add(time.Minute).UnixMilli() {
+		t.Fatalf("expiresAt %d; want the caller's %d", r.ExpiresAt, clk.now().Add(time.Minute).UnixMilli())
+	}
+	if s := statusOp(t, a.st, `"mintId":"m1"`); s.State != "live" || s.InviteID != r.ID {
+		t.Fatalf("before the join: %+v", s)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
+		t.Fatal(err)
+	}
+	s := statusOp(t, a.st, `"inviteId":"`+r.ID+`"`)
+	if s.State != "burned" || s.Nonce == "" || s.Admit == "" || s.Member == nil || !*s.Member || s.MintID != "m1" {
+		t.Fatalf("after the join: %+v; want burned with nonce, admit and member", s)
+	}
+	var ack InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.ack","mintId":"m1"}`, &ack); err != nil || ack.State != "acked" {
+		t.Fatalf("ack: %+v, %v", ack, err)
+	}
+	if s := statusOp(t, a.st, `"mintId":"m1"`); s.State != "absent" {
+		t.Fatalf("after the ack: %+v", s)
+	}
+
+	if _, err := mint("m2", clk.now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(2 * time.Minute)
+	if s := statusOp(t, a.st, `"mintId":"m2"`); s.State != "expired" {
+		t.Fatalf("past its expiresAt: %+v", s)
+	}
+	for _, line := range []string{
+		fmt.Sprintf(`{"op":"invite","mintId":"m3","expiresAt":%d,"subject":%s}`, clk.now().UnixMilli(), subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m4","expiresAt":%d,"subject":%s}`, clk.now().Add(25*time.Hour).UnixMilli(), subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m5","subject":%s}`, subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m6","expiresAt":%d,"ttlMs":60000,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m7","expiresAt":%d}`, clk.now().Add(time.Minute).UnixMilli()),
+	} {
+		var r InviteReply
+		if err := rawCall(t, a.st, line, &r); err == nil {
+			t.Fatalf("%s: made %+v; want a refusal", line, r)
+		}
+	}
+	for _, m := range []string{"m3", "m4", "m5", "m6", "m7"} {
+		if s := statusOp(t, a.st, `"mintId":"`+m+`"`); s.State != "absent" {
+			t.Fatalf("refused mint %s left %+v", m, s)
+		}
 	}
 }

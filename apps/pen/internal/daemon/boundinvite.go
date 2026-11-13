@@ -19,6 +19,8 @@ type boundInviteRequest struct {
 	Wait    bool          `json:"wait,omitempty"`
 	Subject *mesh.Subject `json:"subject"`
 	MintID  string        `json:"mintId,omitempty"`
+	// ExpiresAt is an absolute expiry in Unix milliseconds; it comes with MintID and replaces TTLMs.
+	ExpiresAt int64 `json:"expiresAt,omitempty"`
 }
 
 // inviteRef names one bound invite by its id or by the mintId that made it, exactly one of them.
@@ -28,7 +30,7 @@ type inviteRef struct {
 	MintID   string `json:"mintId,omitempty"`
 }
 
-// InviteCancelReply answers invite.cancel.
+// InviteCancelReply answers invite.cancel, and invite.ack with T "invite-ack".
 type InviteCancelReply struct {
 	T        string `json:"t"`
 	InviteID string `json:"inviteId,omitempty"`
@@ -41,18 +43,19 @@ type InviteCancelReply struct {
 // makes nothing, and it answers the other ops "unknown op".
 func boundOp(line []byte) bool {
 	var head struct {
-		Op      string          `json:"op"`
-		Subject json.RawMessage `json:"subject"`
-		MintID  json.RawMessage `json:"mintId"`
+		Op        string          `json:"op"`
+		Subject   json.RawMessage `json:"subject"`
+		MintID    json.RawMessage `json:"mintId"`
+		ExpiresAt json.RawMessage `json:"expiresAt"`
 	}
 	if json.Unmarshal(line, &head) != nil {
 		return false
 	}
 	switch head.Op {
-	case "invite.cancel":
+	case "invite.cancel", "invite.status", "invite.ack":
 		return true
 	case "invite":
-		return len(head.MintID) > 0 || len(head.Subject) > 0 && head.Subject[0] == '{'
+		return len(head.MintID) > 0 || len(head.ExpiresAt) > 0 || len(head.Subject) > 0 && head.Subject[0] == '{'
 	}
 	return false
 }
@@ -70,12 +73,20 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			fail(errBadRequest)
 			return
 		}
-		state, err := d.inviteBook().Cancel(ref.InviteID, ref.MintID, d.now())
+		if head.Op == "invite.status" {
+			reply(mesh.StatusOf(d.mesh(), d.inviteBook(), ref.InviteID, ref.MintID, d.now()))
+			return
+		}
+		do, t := d.inviteBook().Cancel, "invite-cancel"
+		if head.Op == "invite.ack" {
+			do, t = d.inviteBook().Ack, "invite-ack"
+		}
+		state, err := do(ref.InviteID, ref.MintID, d.now())
 		if err != nil {
 			fail(err)
 			return
 		}
-		reply(InviteCancelReply{T: "invite-cancel", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
+		reply(InviteCancelReply{T: t, InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		return
 	}
 	var req boundInviteRequest
@@ -83,12 +94,13 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		fail(errBadRequest)
 		return
 	}
-	ttl := time.Duration(req.TTLMs) * time.Millisecond
-	if ttl <= 0 {
-		ttl = 10 * time.Minute
-	}
 	now := d.now()
-	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, now.Add(ttl), now)
+	expiresAt, err := boundExpiry(req, now)
+	if err != nil {
+		fail(err)
+		return
+	}
+	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, expiresAt, now)
 	if err != nil {
 		fail(err)
 		return
@@ -100,6 +112,33 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		return
 	}
 	d.awaitJoin(ctx, c, r, inv.ID, reply)
+}
+
+// maxBoundExpiry bounds how far ahead a caller's expiresAt may be.
+const maxBoundExpiry = 24 * time.Hour
+
+// boundExpiry is the invite's expiry: the caller's absolute expiresAt, which comes with a mintId and without ttlMs
+// and is at most maxBoundExpiry ahead, or ttlMs (10 minutes when absent). A passed expiresAt is refused under the
+// invite book's lock (CreateBound).
+func boundExpiry(req boundInviteRequest, now time.Time) (time.Time, error) {
+	if (req.MintID == "") != (req.ExpiresAt == 0) {
+		return time.Time{}, errors.New("mintId and expiresAt go together")
+	}
+	if req.ExpiresAt != 0 {
+		if req.TTLMs != 0 {
+			return time.Time{}, errors.New("expiresAt replaces ttlMs; send one of them")
+		}
+		t := time.UnixMilli(req.ExpiresAt)
+		if t.After(now.Add(maxBoundExpiry)) {
+			return time.Time{}, errors.New("expiresAt is more than 24 hours ahead")
+		}
+		return t, nil
+	}
+	ttl := time.Duration(req.TTLMs) * time.Millisecond
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	return now.Add(ttl), nil
 }
 
 // validRef checks that exactly one of the invite id (12 bytes in canonical base64url) and a valid mintId is set.

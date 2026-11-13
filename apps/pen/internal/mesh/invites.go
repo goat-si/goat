@@ -20,7 +20,7 @@ type Invite struct {
 	Subject *Subject `json:"subject,omitempty"`
 	// MintID is the caller's name for the request that made a bound invite, or for a cancel that came first.
 	MintID string `json:"mintId,omitempty"`
-	// State is empty for a live invite, else burned or cancelled. A terminal entry keeps no secret and no
+	// State is empty for a live invite, else burned, cancelled or expired. A terminal entry keeps no secret and no
 	// expiresAt, so a node older than bound invites reads it as expired and prunes it.
 	State string `json:"state,omitempty"`
 	// Nonce is a burned invite's offer nonce, which the admitted card repeats; At is when it reached State.
@@ -78,14 +78,19 @@ func LoadInvites(st *state.Store) (*Invites, error) {
 
 func expired(x Invite, now time.Time) bool { return x.State == "" && x.ExpiresAt <= now.UnixMilli() }
 
-// commitLocked drops expired live invites from byID and fences, writes both, and makes them the book. A failed write
-// leaves the book as it was; an ordinary invite's burn changes the book before, as it always did.
+// commitLocked settles expired live invites in byID (an ordinary one is dropped, a bound one becomes an expired entry),
+// writes byID and fences, and makes them the book. A failed write leaves the book as it was; an ordinary invite's
+// burn changes the book before, as it always did.
 func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) error {
 	list := []Invite{}
 	for id, x := range byID {
 		if expired(x, now) {
-			delete(byID, id)
-			continue
+			if x.Subject == nil {
+				delete(byID, id)
+				continue
+			}
+			x = terminal(x, InviteExpired, time.UnixMilli(x.ExpiresAt), "")
+			byID[id] = x
 		}
 		list = append(list, x)
 	}
@@ -143,7 +148,7 @@ func newInvite(expiresAt time.Time) (Invite, error) {
 	return Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: expiresAt.UnixMilli()}, nil
 }
 
-// Prune drops expired invites from memory and offers.json.
+// Prune drops expired ordinary invites from memory and offers.json and keeps expired bound ones as expired entries.
 func (iv *Invites) Prune(now time.Time) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
@@ -256,4 +261,28 @@ func (iv *Invites) boundLocked() int {
 		}
 	}
 	return n
+}
+
+// Ack forgets the terminal entry or fence named by id or mintID once its caller has read it, and answers acked, or
+// absent when there is none. A live invite is refused: cancel it first.
+func (iv *Invites) Ack(id, mintID string, now time.Time) (string, error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	x, ok := iv.findLocked(id, mintID)
+	if !ok {
+		return InviteAbsent, nil
+	}
+	if x.State == "" && !expired(x, now) {
+		return "", errors.New("the invite is live; cancel it first")
+	}
+	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
+	if x.ID == "" {
+		delete(fences, x.MintID)
+	} else {
+		delete(byID, x.ID)
+	}
+	if err := iv.commitLocked(now, byID, fences); err != nil {
+		return "", err
+	}
+	return "acked", nil
 }
