@@ -369,6 +369,8 @@ working on the box from GOAT does the same.
 
 - Direct connections between machines: all traffic goes through a relay.
 - Running Pen on Windows before anyone signs in: it runs as the signed-in user.
+- Seeing your Pen machines in the GOAT desktop app on Windows. A Windows machine can be a member
+  the others see; GOAT on Windows cannot read Pen's machine list yet.
 - Managing Pen from GOAT's settings, apart from removing a machine; use the `pen` command or its
   dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is
