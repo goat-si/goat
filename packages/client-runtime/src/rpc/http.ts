@@ -9,6 +9,7 @@ import {
   type EnvironmentScopeRequiredError,
 } from "@goat/contracts";
 import * as HttpObservability from "@goat/shared/httpObservability";
+import { isPenRouteUrl, redactPenRouteUrl } from "@goat/shared/penRouteUrl";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -43,6 +44,7 @@ export class RemoteEnvironmentAuthUndeclaredStatusError extends Data.TaggedError
   readonly requestUrl: string;
 }> {
   constructor(requestUrl: string, status: number) {
+    requestUrl = redactPenRouteUrl(requestUrl);
     super({
       message: `Remote environment endpoint ${requestUrl} returned undeclared status ${status}.`,
       requestUrl,
@@ -59,6 +61,7 @@ export class RemoteEnvironmentAuthTimeoutError extends Data.TaggedError(
   readonly timeoutMs: number;
 }> {
   constructor(requestUrl: string, timeoutMs: number) {
+    requestUrl = redactPenRouteUrl(requestUrl);
     super({
       message: `Remote environment endpoint ${requestUrl} timed out after ${timeoutMs}ms.`,
       requestUrl,
@@ -83,8 +86,23 @@ export const layerRemoteHttpClient = (
   fetchFn: typeof globalThis.fetch,
 ): Layer.Layer<HttpClient.HttpClient> =>
   Layer.merge(
-    FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
+    Layer.effect(
+      HttpClient.HttpClient,
+      Effect.map(HttpClient.HttpClient, withoutPenRouteSpans),
+    ).pipe(
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
+    ),
     HttpObservability.layer,
+  );
+
+// The client span records the request URL, and a Pen route's URL carries this app's capability.
+// Decided per request, so it holds whatever tracing predicate the caller's context provides.
+const withoutPenRouteSpans = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+  HttpClient.transform(client, (effect, request) =>
+    isPenRouteUrl(request.url)
+      ? Effect.provideService(effect, HttpClient.TracerDisabledWhen, () => true)
+      : effect,
   );
 
 const remoteApiBaseUrl = (httpBaseUrl: string): string => {
@@ -129,11 +147,13 @@ const failRemoteRequest = (
   if (isEnvironmentHttpCommonError(cause)) {
     return Effect.fail(cause);
   }
+  const safeCause = isPenRouteUrl(requestUrl) ? redactPenRouteUrl(String(cause)) : cause;
+  requestUrl = redactPenRouteUrl(requestUrl);
   if (Schema.isSchemaError(cause)) {
     return Effect.fail(
       new RemoteEnvironmentAuthInvalidJsonError({
         message: `Remote environment endpoint returned an invalid response from ${requestUrl}.`,
-        cause,
+        cause: safeCause,
       }),
     );
   }
@@ -147,14 +167,14 @@ const failRemoteRequest = (
     return Effect.fail(
       new RemoteEnvironmentAuthInvalidJsonError({
         message: `Remote environment endpoint returned an invalid response from ${requestUrl}.`,
-        cause,
+        cause: safeCause,
       }),
     );
   }
   return Effect.fail(
     new RemoteEnvironmentAuthFetchError({
-      message: `Failed to fetch remote environment endpoint ${requestUrl} (${String(cause)}).`,
-      cause,
+      message: `Failed to fetch remote environment endpoint ${requestUrl} (${redactPenRouteUrl(String(cause))}).`,
+      cause: safeCause,
     }),
   );
 };

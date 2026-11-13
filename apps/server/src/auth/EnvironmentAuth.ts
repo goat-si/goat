@@ -542,6 +542,7 @@ export const make = Effect.gen(function* () {
             auth: descriptor,
             ...authScopeResponse(session.scopes),
             sessionMethod: session.method,
+            ...(session.principalKind === "proxied_person" ? { proxiedByHub: true } : {}),
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
             ...(canDelegateHubProxy({
               subject: session.subject,

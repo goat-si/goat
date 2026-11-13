@@ -72,6 +72,28 @@ export type DesktopPenEnsureOptions = {
   installation?: "existing-only";
   penNodeId?: typeof PenId.Type;
 };
+
+/** What a Pen-native route pins: the mesh, the member and the Noise key the dial must reach. */
+export const DesktopPenPinSchema = Schema.Struct({
+  meshId: PenId,
+  nodeId: PenId,
+  noisePub: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/u)),
+});
+export type DesktopPenPin = typeof DesktopPenPinSchema.Type;
+
+export const DesktopPenRouteResultSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("open"),
+    httpBaseUrl: Schema.String,
+    socketUrl: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("refused"),
+    reason: Schema.Literals(["not-member", "unavailable", "no-pen-binary", "busy"]),
+  }),
+]);
+export type DesktopPenRouteResult = typeof DesktopPenRouteResultSchema.Type;
+
 export interface DesktopPenBridge {
   getPenMembers?: () => Promise<DesktopPenMembersState>;
   onPenMembersChanged?: (listener: (state: DesktopPenMembersState) => void) => () => void;
@@ -79,4 +101,7 @@ export interface DesktopPenBridge {
     target: DesktopSshEnvironmentTarget,
     penNodeId: typeof PenId.Type,
   ) => Promise<DesktopPenMemberSessionResult>;
+  /** Opens, or returns, this computer's loopback route to a member's GOAT. One route per pin. */
+  openPenRoute?: (pin: DesktopPenPin) => Promise<DesktopPenRouteResult>;
+  closePenRoute?: (pin: DesktopPenPin) => Promise<void>;
 }

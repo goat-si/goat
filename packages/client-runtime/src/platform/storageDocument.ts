@@ -7,9 +7,11 @@ import {
   ConnectionCredential,
   ConnectionProfile,
   HubProxyConnectionProfile,
+  PenConnectionProfile,
 } from "../connection/catalog.ts";
 import {
   HubProxyConnectionTarget,
+  PenConnectionTarget,
   type ConnectionTarget,
   PersistedConnectionTarget,
 } from "../connection/model.ts";
@@ -113,6 +115,7 @@ function connectionIdOf(target: ConnectionTarget): string | null {
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
     case "HubProxyConnectionTarget":
+    case "PenConnectionTarget":
       return target.connectionId;
   }
 }
@@ -183,6 +186,7 @@ export function registerConnectionInCatalog(
     case "RelayConnectionRegistration":
       return next;
     case "HubProxyConnectionRegistration":
+    case "PenConnectionRegistration":
       return {
         ...next,
         profiles: replaceCatalogValue(
@@ -279,6 +283,12 @@ export function putRemoteDpopTokenInCatalog(
 // them discard the entire catalog, including unrelated pairing credentials.
 const ConnectionCatalogStorageDocument = Schema.Struct({
   ...ConnectionCatalogDocument.fields,
+  penTargets: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ index: Schema.Number, value: PenConnectionTarget })),
+  ),
+  penProfiles: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ index: Schema.Number, value: PenConnectionProfile })),
+  ),
   hubProxyTargets: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -300,14 +310,39 @@ const ConnectionCatalogStorageJson = Schema.fromJsonString(ConnectionCatalogStor
 const decodeStorageDocument = Schema.decodeUnknownEffect(ConnectionCatalogStorageJson);
 const encodeStorageDocument = Schema.encodeEffect(ConnectionCatalogStorageJson);
 
+// Hub and Pen records are rediscovered, so one with an unusable position is dropped: failing the
+// decode instead would discard the pairing credentials stored beside it.
+function mergeExtensions<A>(
+  legacy: ReadonlyArray<A>,
+  extensions: ReadonlyArray<{ readonly index: number; readonly value: A }>,
+): ReadonlyArray<A> {
+  const total = legacy.length + extensions.length;
+  const seen = new Set<number>();
+  const placed = extensions
+    .filter(({ index }) => {
+      if (!Number.isSafeInteger(index) || index < 0 || index >= total || seen.has(index))
+        return false;
+      seen.add(index);
+      return true;
+    })
+    .sort((a, b) => a.index - b.index);
+  const result = [...legacy];
+  for (const entry of placed) result.splice(entry.index, 0, entry.value);
+  return result;
+}
+
 export const decodeConnectionCatalogStorage = (raw: string) =>
   decodeStorageDocument(raw).pipe(
     Effect.map((stored) => {
-      const { hubProxyTargets, hubProxyProfiles, ...document } = stored;
-      const targets = [...document.targets];
-      const profiles = [...document.profiles];
-      for (const entry of hubProxyTargets ?? []) targets.splice(entry.index, 0, entry.value);
-      for (const entry of hubProxyProfiles ?? []) profiles.splice(entry.index, 0, entry.value);
+      const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
+      const targets = mergeExtensions(document.targets, [
+        ...(hubProxyTargets ?? []),
+        ...(penTargets ?? []),
+      ]);
+      const profiles = mergeExtensions(document.profiles, [
+        ...(hubProxyProfiles ?? []),
+        ...(penProfiles ?? []),
+      ]);
       return { ...document, targets, profiles } satisfies ConnectionCatalogDocument;
     }),
   );
@@ -315,13 +350,25 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
 export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocument) =>
   encodeStorageDocument({
     ...document,
-    targets: document.targets.filter((target) => target._tag !== "HubProxyConnectionTarget"),
-    profiles: document.profiles.filter((profile) => profile._tag !== "HubProxyConnectionProfile"),
+    targets: document.targets.filter(
+      (target) =>
+        target._tag !== "HubProxyConnectionTarget" && target._tag !== "PenConnectionTarget",
+    ),
+    profiles: document.profiles.filter(
+      (profile) =>
+        profile._tag !== "HubProxyConnectionProfile" && profile._tag !== "PenConnectionProfile",
+    ),
     hubProxyTargets: document.targets.flatMap((value, index) =>
       value._tag === "HubProxyConnectionTarget" ? [{ index, value }] : [],
     ),
     hubProxyProfiles: document.profiles.flatMap((value, index) =>
       value._tag === "HubProxyConnectionProfile" ? [{ index, value }] : [],
+    ),
+    penTargets: document.targets.flatMap((value, index) =>
+      value._tag === "PenConnectionTarget" ? [{ index, value }] : [],
+    ),
+    penProfiles: document.profiles.flatMap((value, index) =>
+      value._tag === "PenConnectionProfile" ? [{ index, value }] : [],
     ),
   });
 

@@ -221,6 +221,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
   getPenMembers: () => ipcRenderer.invoke(IpcChannels.GET_PEN_MEMBERS_CHANNEL),
+  openPenRoute: (pin) => ipcRenderer.invoke(IpcChannels.OPEN_PEN_ROUTE_CHANNEL, pin),
+  closePenRoute: (pin) => ipcRenderer.invoke(IpcChannels.CLOSE_PEN_ROUTE_CHANNEL, pin),
   onPenMembersChanged: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, raw: unknown) => {
       const state = decodePenMembersState(raw);

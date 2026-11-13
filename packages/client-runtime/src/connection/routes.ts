@@ -14,6 +14,7 @@ import {
   type ConnectionRoute,
 } from "./catalog.ts";
 import { BearerConnectionTarget, type ConnectionTarget } from "./model.ts";
+import { PEN_VIEWER_ENABLED, type PenViewerPolicy } from "@goat/shared/penViewerGate";
 
 export type ConnectionRouteKind =
   | "relay"
@@ -23,7 +24,8 @@ export type ConnectionRouteKind =
   | "vpn"
   | "public"
   | "ssh"
-  | "hub-proxy";
+  | "hub-proxy"
+  | "pen";
 
 export const RELAY_ROUTE_ID = "relay";
 
@@ -46,6 +48,7 @@ export function connectionRouteId(target: ConnectionTarget): string {
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
     case "HubProxyConnectionTarget":
+    case "PenConnectionTarget":
       return target.connectionId;
   }
 }
@@ -102,6 +105,8 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
       return "ssh";
     case "HubProxyConnectionTarget":
       return "hub-proxy";
+    case "PenConnectionTarget":
+      return "pen";
     case "PrimaryConnectionTarget":
     case "BearerConnectionTarget": {
       const hostname = routeHostname(route);
@@ -124,8 +129,9 @@ const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   vpn: 2,
   public: 3,
   ssh: 4,
-  "hub-proxy": 5,
-  relay: 6,
+  pen: 5,
+  "hub-proxy": 6,
+  relay: 7,
 };
 
 export function insertRoute(
@@ -199,6 +205,8 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
         ? `SSH ${profile.target.username ? `${profile.target.username}@` : ""}${profile.target.hostname}`
         : "SSH";
     }
+    case "pen":
+      return "Pen";
     case "hub-proxy": {
       const profile = Option.getOrNull(route.profile);
       return profile?._tag === "HubProxyConnectionProfile" && profile.hubLabel
@@ -378,14 +386,21 @@ export function sendsTokenInClear(
   );
 }
 
-export function isConnectionRouteEnabled(route: ConnectionRoute): boolean {
-  const profile = Option.getOrNull(route.profile);
-  return (
-    isGoatConnectEnabled() ||
-    (route.target._tag !== "RelayConnectionTarget" &&
-      !(profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect"))
-  );
+export function makeConnectionRouteEnablement(policy: PenViewerPolicy) {
+  return (route: ConnectionRoute): boolean => {
+    if (route.target._tag === "PenConnectionTarget") return policy.enabled;
+    const profile = Option.getOrNull(route.profile);
+    return (
+      isGoatConnectEnabled() ||
+      (route.target._tag !== "RelayConnectionTarget" &&
+        !(profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect"))
+    );
+  };
 }
+
+export const isConnectionRouteEnabled = makeConnectionRouteEnablement({
+  enabled: PEN_VIEWER_ENABLED,
+});
 
 /** Routes a connect may use without sending a paired token over unintended plain HTTP. */
 export function usableRoutes(entry: ConnectionCatalogEntry): ReadonlyArray<ConnectionRoute> {

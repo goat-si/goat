@@ -9,9 +9,36 @@ import type {
   DesktopPenMembersState,
   DesktopSshEnvironmentTarget,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+
+function penRouteGateway(
+  bridge: DesktopBridge | undefined,
+): (typeof ClientCapabilities.PenRouteGateway)["Service"] {
+  const open = bridge?.openPenRoute;
+  const close = bridge?.closePenRoute;
+  if (open === undefined || close === undefined) return Option.none();
+  const failure = () =>
+    new ConnectionTransientError({
+      reason: "remote-unavailable",
+      detail: "Pen route gateway is unavailable.",
+    });
+  return Option.some({
+    open: (pin) => Effect.tryPromise({ try: () => open(pin), catch: failure }),
+    close: (pin) => Effect.tryPromise({ try: () => close(pin), catch: failure }),
+  });
+}
+
+export const addPenCapabilities =
+  (bridge: DesktopBridge | undefined) =>
+  <R>(context: Context.Context<R>) =>
+    context.pipe(
+      Context.add(ClientCapabilities.PenMembersGateway, penMembersGateway(bridge)),
+      Context.add(ClientCapabilities.PenRouteGateway, penRouteGateway(bridge)),
+    );
 
 /** The bearer desktop main issues for this computer on a Pen member; the token is its only output. */
 export const issuePenBearer = Effect.fn("web.connectionPlatform.pen.issueBearer")(function* (

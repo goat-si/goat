@@ -1,6 +1,8 @@
 import {
   type AuthClientPresentationMetadata,
   type DesktopPenMembersState,
+  type DesktopPenPin,
+  type DesktopPenRouteResult,
   type DesktopSshEnvironmentBootstrap,
   type DesktopSshPreparationProgress,
   type DesktopSshAttemptContext,
@@ -10,13 +12,14 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import type { ConnectionAttemptError } from "../connection/model.ts";
 import type { AuthorizedRemoteEnvironment } from "../authorization/service.ts";
 import type { VerifiedSshEndpoint } from "../environment/descriptor.ts";
 import type { SshPairingGrant } from "../connection/catalog.ts";
+import { PEN_VIEWER_ENABLED } from "@goat/shared/penViewerGate";
 
 export interface PreparedSshEnvironment {
   readonly bootstrap: DesktopSshEnvironmentBootstrap;
@@ -63,6 +66,20 @@ export class AnalyticsDevice extends Context.Reference<{
 }) {}
 
 export type PenMembersInput = { readonly kind: "disabled" } | DesktopPenMembersState;
+export class PenViewerPolicy extends Context.Reference<{ readonly enabled: boolean }>(
+  "@goat/client-runtime/platform/capabilities/PenViewerPolicy",
+  { defaultValue: () => ({ enabled: PEN_VIEWER_ENABLED }) },
+) {}
+export class PenRouteGateway extends Context.Reference<
+  Option.Option<{
+    readonly open: (
+      pin: DesktopPenPin,
+    ) => Effect.Effect<DesktopPenRouteResult, ConnectionAttemptError>;
+    readonly close: (pin: DesktopPenPin) => Effect.Effect<void, ConnectionAttemptError>;
+  }>
+>("@goat/client-runtime/platform/capabilities/PenRouteGateway", {
+  defaultValue: () => Option.none(),
+}) {}
 export class PenMembersGateway extends Context.Reference<{
   readonly desktop: Stream.Stream<DesktopPenMembersState>;
   readonly enabled: Stream.Stream<boolean>;

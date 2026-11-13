@@ -97,7 +97,9 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   const routes = usableRoutes(entry);
   if (
     routes.length === 0 &&
-    connectionRoutes(entry).some((route) => !isConnectionRouteEnabled(route))
+    connectionRoutes(entry).some(
+      (route) => route.target._tag !== "PenConnectionTarget" && !isConnectionRouteEnabled(route),
+    )
   ) {
     return yield* new ConnectionBlockedError({
       reason: "configuration",

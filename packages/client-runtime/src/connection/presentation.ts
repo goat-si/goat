@@ -379,6 +379,7 @@ export function connectionCatalogDisplayUrl(entry: ConnectionCatalogEntry): stri
       return entry.target.httpBaseUrl;
     case "RelayConnectionTarget":
     case "HubProxyConnectionTarget":
+    case "PenConnectionTarget":
       return null;
     case "BearerConnectionTarget":
       return Option.isSome(entry.profile) && entry.profile.value._tag === "BearerConnectionProfile"
