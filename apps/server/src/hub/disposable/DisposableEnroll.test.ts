@@ -14,6 +14,7 @@ import {
   makeHold,
   penRouteOf,
 } from "./DisposableEnroll.testkit.ts";
+import { reachAnswerOf } from "./EnrollHost.ts";
 import { LINK_CONTRACTS, LINK_IDENTITY_CONTRACT } from "./enrollModel.ts";
 import { HOME_ATTACH_CONTRACTS } from "./features.ts";
 
@@ -523,3 +524,47 @@ it.effect("a known_hosts GOAT cannot write waits; it is not read as a changed ho
     }),
   ),
 );
+
+it.effect("reach tells a refused key, a changed host key and an unusable key apart", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const first = yield* joined(pen, host, 1);
+      yield* enroll; // route
+      host.control.reachAnswers.set(first.nodeId, "key_refused");
+      yield* enroll;
+      expect(yield* listed(first.attachId)).toMatchObject({
+        state: "attaching",
+        message: expect.stringContaining("refused this hub's machine key"),
+      });
+      host.control.reachAnswers.set(first.nodeId, "unreachable");
+      yield* enroll;
+      expect(yield* listed(first.attachId)).toMatchObject({
+        message: expect.stringContaining("through Pen"),
+      });
+      host.control.reachAnswers.set(first.nodeId, "host_key_changed");
+      yield* enroll;
+      expect(yield* listed(first.attachId)).toMatchObject({ class: "conflict", state: "paused" });
+      // A key Pen changed before the reach is a conflict too, before any ssh.
+      const second = yield* joined(pen, host, 2);
+      yield* enroll; // route
+      host.control.routes.set(
+        second.nodeId,
+        penRouteOf({ nodeId: second.nodeId, noisePub: key(102) }, "ssh-ed25519 " + "Y".repeat(68)),
+      );
+      const reachesBefore = host.control.reached.length;
+      yield* enroll;
+      expect(host.control.reached).toHaveLength(reachesBefore);
+      expect(yield* listed(second.attachId)).toMatchObject({ class: "conflict" });
+    }),
+  ),
+);
+
+it("ssh's own refusal lines decide how a reach ended", () => {
+  expect(reachAnswerOf(0, "")).toBe("ok");
+  expect(reachAnswerOf(255, "runner@pen-x: Permission denied (publickey).")).toBe("key_refused");
+  expect(reachAnswerOf(255, "Host key verification failed.")).toBe("host_key_changed");
+  expect(reachAnswerOf(255, "kex_exchange_identification: Connection closed by remote host")).toBe(
+    "unreachable",
+  );
+});

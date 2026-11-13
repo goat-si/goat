@@ -235,21 +235,26 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     enroll: Enroll,
     route: StoredRoute,
   ) {
+    // The design's pin check: a key Pen changed since the route step is a conflict before any ssh.
+    if ((yield* pinHolds(row, route)) === "changed")
+      return yield* conflict(row, enroll, "pin_changed");
     const key = yield* machineKey.identity.pipe(Effect.option);
     const reached =
-      key._tag === "Some" &&
-      (yield* host.reach({
-        nodeId: row.node_id,
-        noisePub: row.expected_noise_pub,
-        proxyCommand: route.proxyCommand,
-        user: route.user,
-        knownHostsFile: route.knownHostsFile,
-        identityFile: key.value.privateKeyFile,
-      }));
+      key._tag === "None"
+        ? "machine_key_unusable"
+        : yield* host.reach({
+            nodeId: row.node_id,
+            noisePub: row.expected_noise_pub,
+            proxyCommand: route.proxyCommand,
+            user: route.user,
+            knownHostsFile: route.knownHostsFile,
+            identityFile: key.value.privateKeyFile,
+          });
     const at = yield* nowIso;
-    if (!reached) {
-      if (enroll.reach?.outcome !== "unreachable")
-        yield* note(row, { ...enroll, reach: { outcome: "unreachable", at } });
+    if (reached === "host_key_changed") return yield* conflict(row, enroll, "host_key_changed");
+    if (reached !== "ok") {
+      if (enroll.reach?.outcome !== reached)
+        yield* note(row, { ...enroll, reach: { outcome: reached, at } });
       return;
     }
     yield* forward(row, before, { ...enroll, reach: { outcome: "ok", at } }, { step: "link" });

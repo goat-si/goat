@@ -214,6 +214,7 @@ const STOPS: Record<string, string> = {
   sshd_pin_shared:
     "Another disposable machine presents the same SSH host key, so GOAT cannot tell them apart.",
   pin_changed: "Pen now advertises another SSH host key for this machine than GOAT recorded.",
+  host_key_changed: "The machine presented another SSH host key than the one Pen recorded for it.",
   route_other_pen: "Pen's route for this machine names another Pen than the one confirmed here.",
   route_unsafe_pen_path: "The confirmed Pen's path cannot be passed to ssh unchanged.",
   route_several_keys: "Pen recorded more than one ed25519 host key for this machine.",
@@ -243,7 +244,12 @@ const WAITING: Record<string, string> = {
   no_key: "Pen has not recorded this machine's SSH host key yet.",
   known_hosts_unwritable:
     "GOAT could not write the machine's known_hosts file in its state folder; it tries again on the next pass.",
-  unreachable: "GOAT cannot reach the machine with this hub's machine key yet.",
+  unreachable: "GOAT cannot reach the machine through Pen yet; it tries again on the next pass.",
+  key_refused: "The machine refused this hub's machine key.",
+  unusable:
+    "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
+  machine_key_unusable:
+    "This hub's machine key cannot be used: GOAT cannot read it, or others can.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:

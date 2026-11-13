@@ -14,6 +14,17 @@ import type { PenNode } from "../penSshRoute.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
 /** The machine's known_hosts holds another key (changed), or could not be written (unwritable). */
+/** How a reach ended; ssh's own lines decide it, and none of them is kept. */
+export type ReachAnswer = "ok" | "key_refused" | "host_key_changed" | "unreachable" | "unusable";
+export const reachAnswerOf = (code: number | null, stderr: string): ReachAnswer =>
+  code === 0
+    ? "ok"
+    : /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/u.test(stderr)
+      ? "host_key_changed"
+      : /Permission denied \(/u.test(stderr)
+        ? "key_refused"
+        : "unreachable";
+
 export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
   readonly reason: "changed" | "unwritable";
 }> {}
@@ -30,8 +41,8 @@ export class EnrollHost extends Context.Service<
     readonly route: (node: PenNode) => Effect.Effect<PenExactRoute | undefined>;
     /** Writes the machine's one-line known_hosts once; a different line later fails. */
     readonly knownHosts: (attachId: string, line: string) => Effect.Effect<string, KnownHostsError>;
-    /** Whether `true` runs on the machine over the route contract within 30 s. */
-    readonly reach: (route: DisposableRoute) => Effect.Effect<boolean>;
+    /** Runs `true` on the machine over the route contract within 30 s. */
+    readonly reach: (route: DisposableRoute) => Effect.Effect<ReachAnswer>;
     /** ocx on this Home; undefined when it could not be run. */
     readonly ocx: (
       args: ReadonlyArray<string>,
@@ -79,7 +90,7 @@ export const layer = Layer.effect(
       reach: Effect.fn("EnrollHost.reach")(
         function* (route) {
           const options = disposableSshExecOptions(route);
-          if (options === undefined) return false;
+          if (options === undefined) return "unusable" as const;
           const ran = yield* runner.run({
             command: yield* resolveSshCommand,
             args: [...options, `pen-${route.nodeId}`, "true"],
@@ -87,9 +98,9 @@ export const layer = Layer.effect(
             timeoutBehavior: "timedOutResult",
             maxOutputBytes: 64 * 1024,
           });
-          return ran.code === 0;
+          return ran.timedOut ? ("unreachable" as const) : reachAnswerOf(ran.code, ran.stderr);
         },
-        Effect.orElseSucceed(() => false),
+        Effect.orElseSucceed(() => "unreachable" as const),
       ),
       ocx: Effect.fn("EnrollHost.ocx")(
         function* (args, timeoutMs) {
