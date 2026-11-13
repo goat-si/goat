@@ -145,9 +145,10 @@ until the invite is used or expires.
 
 Once the machine joins, the hub checks the route Pen recorded for it, reaches
 it with the machine key alone, and links it to OpenCodex as a lightweight Child
-on that route only. The machine list shows each step. The link needs an
-OpenCodex on the hub that can use the machine key; until then the machine waits
-at the link step. A machine with a full OpenCodex install, or one that shares its
+on that route only. The machine list says where each machine is, and a machine
+GOAT cannot reach yet shows the machine key with **Copy machine key**. The link
+needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
+release can yet; until one can, the machine waits at the link step. A machine with a full OpenCodex install, or one that shares its
 SSH host key with another disposable machine, stops for you to decide.
 
 Each machine is a full Pen member and can reach services on your machines'

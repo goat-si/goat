@@ -469,7 +469,8 @@ function AttachDialog({
                   />
                   <p className="text-muted-foreground text-xs">
                     Add this line to authorized_keys of the machine's SSH user. After the machine
-                    joins Pen, this hub reaches it with this key alone and links it to OpenCodex.
+                    joins Pen, this hub reaches it with this key alone, and links it to OpenCodex
+                    once this hub's OpenCodex can use the key.
                   </p>
                 </div>
               )}
