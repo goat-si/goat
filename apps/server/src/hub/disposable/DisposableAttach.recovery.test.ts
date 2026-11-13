@@ -318,3 +318,22 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a settlement whose fence moved stores nothing and acks nothing", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      yield* attach(1);
+      yield* TestClock.adjust(INVITE_MS + 1);
+      pen.control.statusGate = yield* Deferred.make<void>();
+      pen.control.statusStarted = yield* Deferred.make<void>();
+      const settling = yield* reconcile.pipe(Effect.forkChild);
+      yield* Deferred.await(pen.control.statusStarted);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE disposable_machines SET fence = fence + 1`;
+      yield* Deferred.succeed(pen.control.statusGate, undefined);
+      yield* Fiber.join(settling);
+      expect(pen.control.acked).toEqual([]);
+      expect((yield* rows)[0]?.state).toBe("invited");
+    }),
+  ),
+);

@@ -213,29 +213,30 @@ export const make = Effect.gen(function* () {
    * Stores a record's mints with the state they give it, under its fence and with no switch
    * needed: these are facts Pen reported. An admitted record keeps its state unless told.
    */
-  const save = Effect.fn("DisposableAttach.save")(function* (
-    row: Row,
-    effects: ReadonlyArray<AttachEffect>,
-    extra: Columns = {},
-  ) {
-    const now = yield* nowIso;
-    const state =
-      typeof extra.state === "string"
-        ? extra.state
-        : row.pen_admitted_at === null
-          ? stateFromEffects(effects)
-          : row.state;
-    yield* sql`UPDATE disposable_machines SET ${sql.update({
-      ...extra,
-      effects_json: encodeEffects(effects),
-      state,
-      ...(state === row.state ? {} : { state_since: now }),
-      ...(state === "failed" && row.final_at === null ? { final_at: now } : {}),
-      updated_at: now,
-    })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence}`;
-    const fresh = yield* read(row.attach_id);
-    return fresh ?? row;
-  }, Effect.mapError(storageFailed));
+  const save = Effect.fn("DisposableAttach.save")(
+    function* (row: Row, effects: ReadonlyArray<AttachEffect>, extra: Columns = {}) {
+      const now = yield* nowIso;
+      const state =
+        typeof extra.state === "string"
+          ? extra.state
+          : row.pen_admitted_at === null
+            ? stateFromEffects(effects)
+            : row.state;
+      const saved = yield* sql`UPDATE disposable_machines SET ${sql.update({
+        ...extra,
+        effects_json: encodeEffects(effects),
+        state,
+        ...(state === row.state ? {} : { state_since: now }),
+        ...(state === "failed" && row.final_at === null ? { final_at: now } : {}),
+        updated_at: now,
+      })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} RETURNING attach_id`;
+      // A moved fence means another step owns the record now; nothing may follow from this save.
+      if (saved.length !== 1) return yield* fail("conflict", refusalText.conflict);
+      const fresh = yield* read(row.attach_id);
+      return fresh ?? row;
+    },
+    Effect.catchTags({ SqlError: () => Effect.fail(storageFailed()) }),
+  );
 
   const status = (
     row: Row,
