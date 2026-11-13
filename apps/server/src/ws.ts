@@ -1481,7 +1481,7 @@ export const layerWsRpc = (
       const memorySource = memoryPermit(["memory:read", "orchestration:read"]);
       const memorySettings = memoryPermit(["settings:write"]);
       const ownerSettings = memorySettings.pipe(Effect.mapError(memoryError));
-      const hubNodesHandlers = yield* makeHubNodesHandlers;
+      const hubNodesHandlers = yield* makeHubNodesHandlers(currentSession);
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
         [WS_METHODS.siteNotesList]: () =>
           memoryRead.pipe(

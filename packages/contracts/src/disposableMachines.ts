@@ -168,6 +168,7 @@ export const patchDisposableMachines = (
  * shows the node.
  */
 export const DISPOSABLE_MACHINE_STATES = [
+  "reserved",
   "invited",
   "admitted",
   "attaching",
@@ -219,3 +220,105 @@ export const HubNodeMachineClass = Schema.Struct({
   ),
 });
 export type HubNodeMachineClass = typeof HubNodeMachineClass.Type;
+
+/** A Pen key as the protocol writes it: 43 base64url characters for 32 bytes. */
+export const DisposablePenKey = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/u));
+/** A Pen member name; the switch's name rule narrows it further. */
+export const DisposableMachineName = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/u),
+);
+const RequestKey = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+export const DisposableAttachId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
+/**
+ * Starts one attach: GOAT mints a Pen invite bound to these keys and name, and carries the machine
+ * through linking once it joins. An agent caller must be a thread the switch names.
+ */
+export const HubMachineAttachInput = Schema.Struct({
+  name: DisposableMachineName,
+  signPub: DisposablePenKey,
+  noisePub: DisposablePenKey,
+  label: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
+  /** The cloud run that built the machine, kept for the record only. */
+  cloudRunId: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+  clientRequestId: RequestKey,
+});
+export type HubMachineAttachInput = typeof HubMachineAttachInput.Type;
+
+/** Cancels the open invite and mints another for the same keys, when the first admitted nobody. */
+export const HubMachineReissueInput = Schema.Struct({
+  attachId: DisposableAttachId,
+  clientRequestId: RequestKey,
+});
+export type HubMachineReissueInput = typeof HubMachineReissueInput.Type;
+
+export const HubMachineListInput = Schema.Struct({
+  attachId: Schema.optionalKey(DisposableAttachId),
+});
+export type HubMachineListInput = typeof HubMachineListInput.Type;
+
+/** One attach step as the caller sees it; texts are GOAT's own, never a machine's output. */
+export const HubMachineStep = Schema.Struct({
+  step: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
+  outcome: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
+  detail: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type HubMachineStep = typeof HubMachineStep.Type;
+
+export const HubMachineStatus = Schema.Struct({
+  attachId: DisposableAttachId,
+  name: DisposableMachineName,
+  nodeId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  state: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
+  step: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(40))),
+  steps: Schema.Array(HubMachineStep).check(Schema.isMaxLength(32)),
+  message: Schema.String.check(Schema.isMaxLength(500)),
+  nextAction: Schema.NullOr(Schema.String.check(Schema.isMaxLength(300))),
+  class: Schema.Literals(["disposable", "conflict", "kept"]),
+  /** The admitted key has not been confirmed gone from the hub's Pen view. */
+  penMember: Schema.Boolean,
+  provisioner: DisposableMachineProvisioner,
+  stateSince: IsoDateTime,
+  /**
+   * Only in the answer that minted it: the token the machine joins with. GOAT never stores or
+   * logs it, and a replay of the same request answers without it.
+   */
+  invite: Schema.optionalKey(
+    Schema.Struct({
+      token: Schema.String.check(Schema.isMaxLength(4096)),
+      expiresAt: IsoDateTime,
+    }),
+  ),
+});
+export type HubMachineStatus = typeof HubMachineStatus.Type;
+
+export const HubMachineList = Schema.Struct({ machines: Schema.Array(HubMachineStatus) });
+export type HubMachineList = typeof HubMachineList.Type;
+
+export const HubMachinesErrorReason = Schema.Literals([
+  "invalid_request",
+  "not_found",
+  "switch_off",
+  "switch_expired",
+  "provisioner_refused",
+  "delegation_lost",
+  "cap_reached",
+  "name_rule",
+  "key_in_use",
+  "pen_unsupported",
+  "opencodex_unsupported",
+  "conflict",
+  "unknown_outcome",
+  "storage_failed",
+]);
+export type HubMachinesErrorReason = typeof HubMachinesErrorReason.Type;
+
+/** Safe to show: fixed texts only, never a token or a machine's output. */
+export class HubMachinesError extends Schema.TaggedError<HubMachinesError>()("HubMachinesError", {
+  reason: HubMachinesErrorReason,
+  detail: Schema.String.check(Schema.isMaxLength(1000)),
+}) {
+  override get message(): string {
+    return this.detail;
+  }
+}
