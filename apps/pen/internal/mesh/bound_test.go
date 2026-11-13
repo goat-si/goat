@@ -836,15 +836,15 @@ func TestACancelSignalsOnlyItsOwnInvite(t *testing.T) {
 	f, s, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	j := detID(3)
-	closed := func(ch chan struct{}) bool {
+	closed := func(sig *Signals) bool {
 		select {
-		case <-ch:
+		case <-sig.Cancelled:
 			return true
 		default:
 			return false
 		}
 	}
-	first, second, burned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	first, second, burned := NewSignals(), NewSignals(), NewSignals()
 	x, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), first)
 	if err != nil {
 		t.Fatal(err)

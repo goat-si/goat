@@ -543,3 +543,65 @@ func TestAFinishedJoinsWaitAnswerIsUnchanged(t *testing.T) {
 		t.Fatalf("admitted answer %s; want exactly the members member and t", raw)
 	}
 }
+
+// holdRecords holds the inviter's records send until release is closed, after telling entered: the invite is burned
+// and its join not finished (tests).
+type holdRecords struct {
+	mesh.Link
+	entered chan<- struct{}
+	release <-chan struct{}
+}
+
+func (l holdRecords) Send(p []byte) error {
+	if bytes.Contains(p, []byte(`"t":"records"`)) {
+		select {
+		case l.entered <- struct{}{}:
+		default:
+		}
+		<-l.release
+	}
+	return l.Link.Send(p)
+}
+
+// An invite used just before it expires is answered with its join's outcome, never expired, even when the expiry
+// comes while that join is still running.
+func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	oldLink, oldExpiry := serveJoinLink, inviteExpiry
+	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
+	fire := make(chan time.Time)
+	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) { return fire, func() bool { return true } }
+	t.Cleanup(func() { serveJoinLink, inviteExpiry = oldLink, oldExpiry })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	joined := make(chan error, 1)
+	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
+	<-entered
+	fire <- time.Now() // taken by the waiting caller while the burned invite's join is held
+	close(release)
+	if err := <-joined; err != nil {
+		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "admitted" {
+		t.Fatalf("the waiting caller got %+v (%v); want admitted", ev, err)
+	}
+}

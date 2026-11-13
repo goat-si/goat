@@ -451,12 +451,12 @@ func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
 	return d.createInviteNotify(ttlMs, nil)
 }
 
-func (d *Daemon) createInviteNotify(ttlMs int64, cancelled chan struct{}) (InviteReply, string, error) {
+func (d *Daemon) createInviteNotify(ttlMs int64, sig *mesh.Signals) (InviteReply, string, error) {
 	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), cancelled)
+	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), sig)
 	if err != nil {
 		return InviteReply{}, "", err
 	}
@@ -471,19 +471,19 @@ func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	cancelled := make(chan struct{})
-	r, id, err := d.createInviteNotify(req.TTLMs, cancelled)
+	sig := mesh.NewSignals()
+	r, id, err := d.createInviteNotify(req.TTLMs, sig)
 	if err != nil {
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, cancelled, reply)
+	d.awaitJoin(ctx, c, r, id, sig, reply)
 }
 
 // awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
 // the invite's cancel signal, attached when the invite was made. Admission needs no
 // such care: nobody holds the token before r is answered, after the waiter is registered.
-func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, sig *mesh.Signals, reply func(any)) {
 	wait := make(chan joinOutcome, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
@@ -495,10 +495,9 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	}()
 	reply(r)
 	gone := clientGone(c)
-	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))
-	defer t.Stop()
-	select {
-	case o := <-wait:
+	expiry, stop := inviteExpiry(time.Until(time.UnixMilli(r.ExpiresAt)))
+	defer stop()
+	outcome := func(o joinOutcome) {
 		switch {
 		case o.delivered:
 			reply(map[string]any{"t": "admitted", "member": *o.member})
@@ -507,13 +506,35 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 		default:
 			reply(map[string]any{"t": "burned"})
 		}
-	case <-cancelled:
+	}
+	select {
+	case o := <-wait:
+		outcome(o)
+	case <-sig.Cancelled:
 		reply(map[string]any{"t": "cancelled"})
-	case <-t.C:
-		reply(map[string]any{"t": "expired"})
+	case <-expiry:
+		select {
+		case <-sig.Burned:
+			// Used before it expired (a burn after the expiry is refused under the book's lock): its join's outcome
+			// comes, whatever it is, and is the answer.
+			select {
+			case o := <-wait:
+				outcome(o)
+			case <-gone:
+			case <-ctx.Done():
+			}
+		default:
+			reply(map[string]any{"t": "expired"})
+		}
 	case <-gone:
 	case <-ctx.Done():
 	}
+}
+
+// inviteExpiry is the timer of a wait on an invite; tests fire it by hand.
+var inviteExpiry = func(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
 }
 
 // clientGone closes when the control client hangs up.
