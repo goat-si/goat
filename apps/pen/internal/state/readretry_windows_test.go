@@ -112,8 +112,9 @@ func TestReadJSONReadsAFileOnceAWriterHoldingItWithoutSharingCloses(t *testing.T
 	}
 }
 
-// A replace holds its target open for deletion until the new file takes its name; a read meanwhile is denied. Once the
-// old file is gone and the new one is in place, ReadJSON reads the new one.
+// A target marked for deletion, as a replace leaves it while the new file takes its name, denies a read. This
+// simulates that: the file is marked delete-pending, and once the read was denied its last handle closes and a new
+// file is created at the path; ReadJSON then reads the new one.
 func TestReadJSONReadsTheNewFileOnceAReplacedTargetIsGone(t *testing.T) {
 	st, err := OpenDir(t.TempDir())
 	if err != nil {
@@ -122,6 +123,10 @@ func TestReadJSONReadsTheNewFileOnceAReplacedTargetIsGone(t *testing.T) {
 	if err := st.WriteAtomic("config.json", []byte(`{"name":"old"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// No other process (an indexer, antivirus) may hold the file, or closing our handle would not remove it: an
+	// exclusive open succeeds only when no other handle exists.
+	_, onlyOne := holdFile(t, st.Path("config.json"), windows.GENERIC_READ|windows.DELETE, 0)
+	onlyOne()
 	h, release := holdFile(t, st.Path("config.json"), windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
 	del := byte(1)
 	if err := windows.SetFileInformationByHandle(h, windows.FileDispositionInfo, &del, uint32(unsafe.Sizeof(del))); err != nil {
