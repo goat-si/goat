@@ -924,3 +924,86 @@ func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadlin
 		t.Fatal("the end of the session took more than one shutdown deadline")
 	}
 }
+
+// reportOnly drives one session's reporter directly against a fake daemon that answers each report with answer(n),
+// n counting from 1, and returns the session, the clock and the reports the daemon received.
+func reportOnly(t *testing.T, answer func(n int) string) (s *sessionTraffic, set func(time.Time, time.Duration), got func() []daemon.TrafficReport) {
+	t.Helper()
+	st := tmpStore(t)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, st, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		return answer(len(reports))
+	})
+	set = testClock(t)
+	set(time.Unix(1_800_000_000, 0), 0)
+	s = &sessionTraffic{st: st, node: "n", relay: "r", lastTry: trafficNow()}
+	return s, set, func() []daemon.TrafficReport {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]daemon.TrafficReport(nil), reports...)
+	}
+}
+
+func counted(int) string { return `{"t":"counted"}` }
+
+// The node buckets a report when it handles it, normally within trafficWithin of the reporter's reading. Bytes
+// pending since a report the wall clock puts keepFor or more ago are dropped, even when the monotonic gap is shorter
+// than keepFor and the step is within clockStep: counted at arrival they could land two buckets after they began.
+func TestPipeDropsPendingBytesTheWallClockPutsABucketBack(t *testing.T) {
+	s, set, got := reportOnly(t, counted)
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(traffic.Span-500*time.Millisecond), traffic.Span-1500*time.Millisecond)
+	s.report(context.Background())
+	if r := got(); len(r) != 0 {
+		t.Fatalf("reports %+v; want the bytes pending across a bucket dropped, never sent", r)
+	}
+}
+
+// Refused bytes wait less than a bucket minus the report bound: counted at arrival, a batch that began a bucket minus
+// half a second ago could land two buckets after it began.
+func TestPipeDropsRefusedBytesWhoseReportWouldArriveABucketLate(t *testing.T) {
+	s, set, got := reportOnly(t, func(n int) string {
+		if n == 1 {
+			return `{"error":"unknown op \"traffic.report\""}`
+		}
+		return `{"t":"counted"}`
+	})
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(2*time.Minute), 2*time.Minute)
+	s.report(context.Background()) // refused: those 100 bytes wait, from the start
+	s.in.Store(150)
+	s.out.Store(150)
+	set(start.Add(traffic.Span-500*time.Millisecond), traffic.Span-500*time.Millisecond)
+	s.report(context.Background())
+	if r := got(); len(r) != 2 || r[1].In != 50 || r[1].Out != 50 {
+		t.Fatalf("reports %+v; want the second report to carry only the 50 bytes from +2 min", r)
+	}
+}
+
+// Ordinary clock slew keeps bytes: a wall clock that moves 500 ms ahead of the monotonic one between two reports, and
+// then 500 ms back, is under clockStep, so every report is counted. Guards a later tightening of clockStep.
+func TestPipeKeepsBytesWhenTheWallClockSlewsHalfASecond(t *testing.T) {
+	s, set, got := reportOnly(t, counted)
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(2*time.Minute+500*time.Millisecond), 2*time.Minute)
+	s.report(context.Background())
+	s.in.Store(150)
+	s.out.Store(150)
+	set(start.Add(4*time.Minute), 4*time.Minute)
+	s.report(context.Background())
+	if r := got(); len(r) != 2 || r[0].In != 100 || r[0].Out != 100 || r[1].In != 50 || r[1].Out != 50 {
+		t.Fatalf("reports %+v; want 100 then 50 bytes each way counted across a 500 ms slew", r)
+	}
+}

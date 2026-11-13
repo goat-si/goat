@@ -38,6 +38,8 @@ import {
   THREAD_ID,
 } from "./AgentAwarenessRelay.testkit.ts";
 
+const publishedThreadId = (url: string | undefined) => url?.match(/\/threads\/([^/?]+)/)?.[1];
+
 describe("AgentAwarenessRelay", () => {
   it.effect.each(["command", "user_input"] as const)(
     "notifies the parent once when a child waits for %s",
@@ -357,6 +359,109 @@ describe("AgentAwarenessRelay", () => {
         publications.map((publication) => publication.state?.phase ?? null),
         ["running", "completed", null],
       );
+    }),
+  );
+
+  it.effect(
+    "publishes an archived or deleted thread's tombstone once, skips later events while it stays gone, and republishes one that comes back",
+    () =>
+      Effect.gen(function* () {
+        const shells = new Map([
+          [THREAD_ID, shell()],
+          [SECOND_THREAD_ID, shell({ id: SECOND_THREAD_ID })],
+        ]);
+        const { relay, publications } = yield* makeTestRelay({
+          readShell: (id) => Effect.sync(() => shells.get(id) ?? null),
+        });
+        const phases = () => publications.map((publication) => publication.state?.phase ?? null);
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+
+        shells.set(THREAD_ID, shell({ archivedAt: DateTime.makeUnsafe(NOW) }));
+        shells.delete(SECOND_THREAD_ID);
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.deepEqual(phases(), ["running", "running", null, null]);
+
+        // A rename or pull request sync on a thread that stays archived or deleted.
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.deepEqual(phases(), ["running", "running", null, null]);
+
+        shells.set(THREAD_ID, shell());
+        yield* relay.publishThread(THREAD_ID);
+        assert.deepEqual(phases(), ["running", "running", null, null, "running"]);
+        assert.equal(publishedThreadId(publications[4]?.url), THREAD_ID);
+      }),
+  );
+
+  it.effect(
+    "bound: past the cap evicts the least recently published idle threads, never one with a pending confirmation",
+    () =>
+      Effect.gen(function* () {
+        const third = ThreadId.make("relay-thread-3");
+        const fourth = ThreadId.make("relay-thread-4");
+        const shells = new Map(
+          [THREAD_ID, SECOND_THREAD_ID, third, fourth].map((id) => [id, shell({ id })]),
+        );
+        const { relay, publications, publishedStates } = yield* makeTestRelay({
+          readShell: (id) => Effect.sync(() => shells.get(id) ?? null),
+          maxPublishedThreads: 2,
+        });
+        const remembered = Effect.map(Ref.get(publishedStates), (states) => [...states.keys()]);
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(SECOND_THREAD_ID);
+        // The oldest thread now waits on its tombstone's confirmation window.
+        shells.set(THREAD_ID, shell({ archivedAt: DateTime.makeUnsafe(NOW) }));
+        yield* relay.publishThread(THREAD_ID);
+        yield* relay.publishThread(third);
+        assert.deepEqual(yield* remembered, [THREAD_ID, third]);
+        yield* relay.publishThread(fourth);
+        assert.deepEqual(yield* remembered, [THREAD_ID, fourth]);
+
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.deepEqual(yield* remembered, [fourth, THREAD_ID]);
+        assert.deepEqual(
+          publications.map((publication) => [
+            publishedThreadId(publication.url),
+            publication.state?.phase ?? null,
+          ]),
+          [
+            [THREAD_ID, "running"],
+            [SECOND_THREAD_ID, "running"],
+            [third, "running"],
+            [fourth, "running"],
+            [THREAD_ID, null],
+          ],
+        );
+      }),
+  );
+
+  it.effect("bound: an evicted thread republishes once on its next event, then skips repeats", () =>
+    Effect.gen(function* () {
+      const third = ThreadId.make("relay-thread-3");
+      const shells = new Map([THREAD_ID, SECOND_THREAD_ID, third].map((id) => [id, shell({ id })]));
+      const { relay, publications, publishedStates } = yield* makeTestRelay({
+        readShell: (id) => Effect.sync(() => shells.get(id) ?? null),
+        maxPublishedThreads: 2,
+      });
+      yield* relay.publishThread(THREAD_ID);
+      yield* relay.publishThread(SECOND_THREAD_ID);
+      yield* relay.publishThread(third);
+      assert.isFalse((yield* Ref.get(publishedStates)).has(THREAD_ID));
+
+      yield* relay.publishThread(THREAD_ID);
+      yield* relay.publishThread(THREAD_ID);
+      assert.deepEqual(
+        publications.map((publication) => publishedThreadId(publication.url)),
+        [THREAD_ID, SECOND_THREAD_ID, third, THREAD_ID],
+      );
+      assert.deepEqual([...(yield* Ref.get(publishedStates)).keys()], [third, THREAD_ID]);
     }),
   );
 

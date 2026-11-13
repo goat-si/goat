@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -137,17 +138,20 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	return ln, nil
 }
 
-// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
-// included; controlRequestTimeout bounds the wait for a connection's request line, and controlWriteTimeout
-// each write to a client, so one that stops reading frees its slot (variables for tests).
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations) and ended
+// registrations still draining included; controlRequestTimeout bounds the wait for a connection's request line, and
+// controlWriteTimeout each write to a client, so one that stops reading frees its slot (variables for tests).
 var (
 	controlConnCap        = 512
 	controlRequestTimeout = 10 * time.Second
 	controlWriteTimeout   = 5 * time.Second
 )
 
-// boundedConn gives every write its own deadline.
-type boundedConn struct{ net.Conn }
+// boundedConn gives every write its own deadline; closed runs after its Close and frees its control slot.
+type boundedConn struct {
+	net.Conn
+	closed func()
+}
 
 func (b boundedConn) Write(p []byte) (int, error) {
 	if err := b.Conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
@@ -156,8 +160,23 @@ func (b boundedConn) Write(p []byte) (int, error) {
 	return b.Conn.Write(p)
 }
 
+// CloseWrite half-closes the connection when the one it wraps can.
+func (b boundedConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
+func (b boundedConn) Close() error {
+	err := b.Conn.Close()
+	b.closed()
+	return err
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 	slots := make(chan struct{}, controlConnCap)
+	d.controlSlots = slots
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -169,15 +188,20 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 			c.Close()
 			continue
 		}
-		d.spawn(func() {
-			defer func() { <-slots }()
-			d.handleControl(ctx, boundedConn{c})
-		})
+		// The slot is freed when the connection closes, which for a registration's holder may be after
+		// handleControl returns (holderQueue.failWith).
+		d.spawn(func() { d.handleControl(ctx, boundedConn{c, sync.OnceFunc(func() { <-slots })}) })
 	}
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
-	defer c.Close()
+	// A registration's holder queue ends its connection itself, after its last line (holderQueue.failWith).
+	owned := false
+	defer func() {
+		if !owned {
+			c.Close()
+		}
+	}()
 	lr := &io.LimitedReader{R: c, N: 64 << 10}
 	r := bufio.NewReader(lr)
 	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
@@ -206,7 +230,7 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 		return
 	// These two run on the control socket only: the dashboard reaches do, never handleControl.
 	case "service.register":
-		d.controlRegister(ctx, c, r, lr, req, reply, fail)
+		owned = d.controlRegister(ctx, c, r, lr, req, reply, fail)
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)

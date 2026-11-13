@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"reflect"
 	"strings"
@@ -38,6 +40,10 @@ func opsOnce(t *testing.T, n *node, name string, ops ...string) []map[string]any
 	for first := true; ; first = false {
 		line, err := r.ReadBytes('\n')
 		if err != nil {
+			// The registration ends with a clean EOF: a reset can discard answers the holder has not read yet.
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("after %d answer(s) the registration ended with %v, want EOF", len(out), err)
+			}
 			return out
 		}
 		var m map[string]any

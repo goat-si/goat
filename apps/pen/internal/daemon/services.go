@@ -449,25 +449,26 @@ func validID(s string) bool {
 
 // controlRegister runs op service.register on the control socket (never on the dashboard path): the
 // registration lives until c closes, the daemon stops, or a newer registration replaces it. r continues the
-// connection's reader, so ops sent with the request are not lost, and lr is lifted for the ops that follow.
-func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reader, lr *io.LimitedReader, req Request, reply func(any), fail func(error)) {
+// connection's reader, so ops sent with the request are not lost, and lr is lifted for the ops that follow. It
+// reports whether the registration's holder queue took c, and so ends it.
+func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reader, lr *io.LimitedReader, req Request, reply func(any), fail func(error)) bool {
 	if !ValidServiceName(req.Name) {
 		fail(errors.New("a service name is 1 to 32 of a-z 0-9 -, starts with a letter, and is not pen"))
-		return
+		return false
 	}
 	if req.Port < 1 || req.Port > 65535 {
 		fail(errors.New("the port must be 1 to 65535"))
-		return
+		return false
 	}
 	key, ok := decodeKey32(req.Key)
 	if !ok {
 		fail(errors.New("the key must be 32 bytes, base64url without padding"))
-		return
+		return false
 	}
 	idb := make([]byte, 16)
 	rand.Read(idb)
 	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
-		out: newHolderQueue(c), endDone: make(chan struct{})}
+		out: newHolderQueue(c, func(c net.Conn) { d.spawn(func() { discardAndClose(ctx, c) }) }), endDone: make(chan struct{})}
 	reg.out.whileWriting = d.opt.HolderWriting
 	reg.out.whileFilling = d.opt.HolderFilling
 	reg.wmu.Lock()
@@ -475,7 +476,7 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	if err != nil {
 		reg.wmu.Unlock()
 		fail(err)
-		return
+		return false
 	}
 	if old != nil {
 		// The old registration's sessions and deliveries start closing before anything is written to either holder,
@@ -504,4 +505,5 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	}()
 	liftOpLimit(lr)
 	d.serveOps(ctx, reg, r)
+	return true
 }
