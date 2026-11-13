@@ -14,7 +14,7 @@ it("does not focus the composer when touch closes a nested menu and picker", asy
     .mockImplementation((query) => matchMedia(query === "(pointer: coarse)" ? "all" : query));
   const focusAtEnd = vi.fn();
   function Picker() {
-    const ref = useRef({ focusAtEnd }) as ComposerHandleRef;
+    const ref = useRef({ focusAtEnd }) as unknown as ComposerHandleRef;
     return (
       <ComposerHandleContext value={ref}>
         <Nested />

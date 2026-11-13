@@ -219,7 +219,7 @@ it("tells the user when an option click moves their typed answer into the hidden
     <PendingRequestsProbe
       environmentId={environmentId}
       projection={questionProjection(threadId)}
-      draftTarget={draftTarget}
+      {...(draftTarget ? { draftTarget } : {})}
       onState={(next) => {
         requests = next;
       }}

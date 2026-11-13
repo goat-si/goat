@@ -6,8 +6,13 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerProvider,
 } from "@goat/contracts";
-import { DEFAULT_CLIENT_SETTINGS, DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_UNIFIED_SETTINGS,
+  type UnifiedSettings,
+} from "@goat/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "@goat/shared/model";
 import { deriveEffectiveComposerModelState } from "./composerDraftStore";
@@ -545,6 +550,7 @@ describe("instance-scoped model selection", () => {
       model: state.selectedModel,
       models: providers[0]!.models,
       modelOptions: state.modelOptions?.[instanceId],
+      planModeEnabled: false,
     });
 
     expect(

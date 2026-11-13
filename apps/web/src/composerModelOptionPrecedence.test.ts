@@ -51,6 +51,7 @@ describe("composer model option precedence", () => {
       model: state.selectedModel,
       models: providers[0]!.models,
       modelOptions: state.modelOptions?.[instanceId],
+      planModeEnabled: false,
     });
     return createModelSelection(instanceId, state.selectedModel, dispatch.modelOptionsForDispatch);
   };
