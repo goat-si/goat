@@ -49,6 +49,49 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history", () => {
+  it.effect("does not reveal a task to another owner or bot", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("scoped", { status: "running", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const taskId = ChannelTaskId.make("scoped");
+        for (const [id, botId, requestOwner] of [
+          [taskId, BotId.make("other"), owner],
+          [taskId, BotId.make("main"), { ...owner, ownerId: "other-owner" }],
+          [ChannelTaskId.make("missing"), BotId.make("main"), owner],
+        ] as const) {
+          const error = yield* Effect.flip(service.getBotTask({ taskId: id, botId }, requestOwner));
+          assert.strictEqual(error.reason, "not_found");
+        }
+      }),
+    ),
+  );
+
+  it.effect("searches literal title characters within the selected bot", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("literal%_\\value", { status: "completed", createdAt: at(1) });
+        yield* insertTask("literal-other-value", { status: "completed", createdAt: at(2) });
+        yield* insertTask("other%_\\value", {
+          status: "completed",
+          createdAt: at(3),
+          botId: "other",
+        });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "%_\\" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          result.tasks.map((task) => String(task.taskId)),
+          ["literal%_\\value"],
+        );
+      }),
+    ),
+  );
+
   it.effect("looks up an owner and bot scoped task without exposing its instruction", () =>
     provide(
       Effect.gen(function* () {
