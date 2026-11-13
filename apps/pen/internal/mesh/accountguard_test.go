@@ -28,12 +28,18 @@ func pipe() (*pipeEnd, *pipeEnd) {
 	return &pipeEnd{in: a, out: b, done: done, once: once, code: code}, &pipeEnd{in: b, out: a, done: done, once: once, code: code}
 }
 
+// Send on a closed link fails with the close code, as a relay client link's does (relay.clientConn).
 func (p *pipeEnd) Send(b []byte) error {
+	select {
+	case <-p.done:
+		return p.closedErr()
+	default:
+	}
 	select {
 	case p.out <- append([]byte(nil), b...):
 		return nil
 	case <-p.done:
-		return errors.New("closed")
+		return p.closedErr()
 	}
 }
 
@@ -47,13 +53,17 @@ func (p *pipeEnd) Recv(ctx context.Context) ([]byte, error) {
 			return b, nil
 		default:
 		}
-		if *p.code != 0 {
-			return nil, &relay.CloseError{Code: *p.code}
-		}
-		return nil, errors.New("closed")
+		return nil, p.closedErr()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (p *pipeEnd) closedErr() error {
+	if *p.code != 0 {
+		return &relay.CloseError{Code: *p.code}
+	}
+	return errors.New("closed")
 }
 
 func (p *pipeEnd) Close(code uint16) error {
