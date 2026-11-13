@@ -262,8 +262,9 @@ const RequestKey = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export const DisposableAttachId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 
 /**
- * Starts one attach: GOAT mints a Pen invite bound to these keys and name, and the attach ends when
- * Pen admits the machine. An agent caller must be a thread the switch names.
+ * Starts one attach: GOAT mints a Pen invite bound to these keys and name. Once Pen admits the
+ * machine, GOAT checks its route, reaches it with the hub machine key and links it to OpenCodex as a
+ * lightweight Child. An agent caller must be a thread the switch names.
  */
 export const HubMachineAttachInput = Schema.Struct({
   name: DisposableMachineName,
