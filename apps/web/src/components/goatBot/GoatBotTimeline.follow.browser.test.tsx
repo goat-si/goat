@@ -610,6 +610,34 @@ it("failing-first: manually returning to bottom clears a cue permanently", async
   ).toBe(false);
 });
 
+it("failing-first: sending after jumping keeps the sent row visible", async () => {
+  await using screen = await render(<ChatFixture />);
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const deliver = [...screen.container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Deliver remote reply",
+  )!;
+  await act(() => deliver.click());
+  const jump = [...screen.container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Jump to latest"),
+  );
+  expect(jump).toBeDefined();
+  await act(() => jump!.click());
+  await userEvent.type(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "hello{Enter}");
+  const sent = [...element.querySelectorAll("li")].find((row) =>
+    row.textContent?.includes("hello"),
+  )!;
+  expect(sent.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    element.getBoundingClientRect().bottom + 1,
+  );
+  expect(sent.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    element.getBoundingClientRect().top - 1,
+  );
+});
+
 const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>
   shown.map(
     (row) =>

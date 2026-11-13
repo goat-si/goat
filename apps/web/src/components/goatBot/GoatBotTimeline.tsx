@@ -199,7 +199,7 @@ export function GoatBotTimeline({
     } else if (top !== lastScrollTopRef.current) {
       follow.readerMoved();
     }
-    lastScrollTopRef.current = top;
+    lastScrollTopRef.current = element.scrollTop;
     updateEdges();
   };
   // Messages finish laying out after they render (Markdown, highlighting, images), and the

@@ -94,20 +94,20 @@ export function useGoatBotFollow({
     for (const row of rows) seen.current.add(row.id);
     setCue([]);
   };
-  const reachedBottom = () => {
-    anchor.current = null;
+  const clearJumpPadding = () => {
     if (jumpPadding.current !== null && listRef.current) {
       listRef.current.style.paddingBottom = jumpPadding.current;
       jumpPadding.current = null;
     }
+  };
+  const reachedBottom = () => {
+    anchor.current = null;
+    clearJumpPadding();
     clear();
   };
   const readerMoved = () => {
     anchor.current = null;
-    if (jumpPadding.current !== null && listRef.current) {
-      listRef.current.style.paddingBottom = jumpPadding.current;
-      jumpPadding.current = null;
-    }
+    clearJumpPadding();
   };
   // oxlint-disable-next-line goat/react-effect-budget -- Reconcile projected arrivals and local sends with the transcript after layout.
   useLayoutEffect(() => {
@@ -136,6 +136,7 @@ export function useGoatBotFollow({
             );
       if (!sent && !question) continue;
       pending.current.delete(key);
+      clearJumpPadding();
       if (question) {
         setCue([]);
         setFollowing(false);
@@ -175,7 +176,12 @@ export function useGoatBotFollow({
   const jump = () => {
     const scroll = scrollRef.current;
     const first = cueRef.current.map(rowElement).find((row) => row !== undefined);
-    if (!scroll || !first) return;
+    if (!scroll) return;
+    if (!first) {
+      scroll.focus({ preventScroll: true });
+      clear();
+      return;
+    }
     const target =
       scroll.scrollTop + first.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
     const extra = Math.max(0, target - (scroll.scrollHeight - scroll.clientHeight));
