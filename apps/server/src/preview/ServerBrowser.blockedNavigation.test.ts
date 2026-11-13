@@ -31,7 +31,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
-import { cutBlockedUrlObserved } from "./SessionControl.testkit.ts";
+import { cutBlockedUrlObserved, popupClosedBeforeAdoption } from "./SessionControl.testkit.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -511,6 +511,7 @@ it.effect("a blocked popup at the tab limit still fences its opener", () =>
         popup.isClosed() ? Effect.void : Effect.promise(() => popup.waitForEvent("close")),
       );
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
+      expect(yield* popupClosedBeforeAdoption(popup, f.service, 8)).toBe("closed");
     }),
   ).pipe(Effect.provide(layer)),
 );

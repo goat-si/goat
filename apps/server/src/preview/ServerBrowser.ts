@@ -1129,7 +1129,7 @@ const make = Effect.gen(function* () {
       },
       async () => {
         release();
-        await close().catch(constVoid);
+        await close().catch(closeUnadoptedPopup(popup, runFork));
       },
     );
   };
