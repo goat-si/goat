@@ -280,7 +280,7 @@ it.effect("onSubscribed runs after acquisition and retains replay/live overlap",
 );
 
 it.effect(
-  "invariant #2552: a bounded subscription loses no event committed during its catch-up read and delivers strictly increasing sequences",
+  "invariant #2552: the bounded event sink preserves commit order during catch-up and delivers strictly increasing sequences",
   () =>
     Effect.gen(function* () {
       const sink = yield* EventSink.EventSinkV2;
