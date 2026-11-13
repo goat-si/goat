@@ -430,6 +430,7 @@ it("cues a genuinely new row in the peek, but not an older one a card change exp
   );
   // The chat's displayed thread went live holding "old"; "new" arrived afterwards.
   const source = {
+    identity: "bot:env:thread",
     baselineIds: new Set([...history.map((row) => row.id), "old"]),
     sourceIds: new Set([...history.map((row) => row.id), "old", "new"]),
   };
@@ -462,4 +463,57 @@ it("cues a genuinely new row in the peek, but not an older one a card change exp
   await expect
     .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
     .toBeVisible();
+});
+
+it("starts a fresh peek timeline when the same bot changes thread", async () => {
+  setup();
+  const reply = (id: string): GoatBotRow => ({
+    kind: "bot",
+    id,
+    text: `Earlier message ${id}`,
+    createdAt: at,
+    tone: "reply",
+    proactive: false,
+    replyTo: null,
+    options: [],
+    firstInGroup: true,
+    groupPosition: "single",
+  });
+  const history = Array.from({ length: 40 }, (_, i) => reply(`h${i}`));
+  const baselineIds = new Set(history.map((row) => row.id));
+  const view = (identity: string, shown: ReadonlyArray<GoatBotRow>) => (
+    <GoatBotWorkPeek
+      taskId={ChannelTaskId.make("task-a")}
+      title="Count the stars"
+      statusLabel="Done"
+      rows={shown}
+      source={{ identity, baselineIds, sourceIds: new Set([...baselineIds, "new"]) }}
+      environmentId={EnvironmentId.make("bot-home")}
+      onBack={() => {}}
+    />
+  );
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  await using screen = await render(view("bot:env:old", history), { container: host });
+  const oldScroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    oldScroll.scrollTop = 0;
+    oldScroll.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(view("bot:env:old", [...history, reply("new")]));
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
+    .toBeVisible();
+  await screen.rerender(view("bot:env:new", history));
+  const newScroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  expect(newScroll).not.toBe(oldScroll);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  expect(newScroll.scrollHeight - newScroll.scrollTop - newScroll.clientHeight).toBeLessThanOrEqual(
+    1,
+  );
+  await screen.rerender(view("bot:env:new", [...history, reply("new")]));
+  expect(newScroll.scrollHeight - newScroll.scrollTop - newScroll.clientHeight).toBeLessThanOrEqual(
+    1,
+  );
+  expect(screen.container.textContent).not.toContain("Jump to latest");
 });

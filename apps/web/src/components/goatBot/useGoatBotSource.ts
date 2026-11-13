@@ -5,6 +5,7 @@ import { localSendRows } from "./useGoatBotFollow";
 
 /** What decides which rows are new: the displayed thread's first-live history and its items. */
 export interface GoatBotSourceIds {
+  readonly identity: string | null;
   readonly baselineIds: ReadonlySet<string> | null | undefined;
   readonly sourceIds: ReadonlySet<string> | undefined;
 }
@@ -24,7 +25,8 @@ export function useGoatBotSource(
     null,
   );
   if (identity !== null && status === "live" && snapshot?.identity !== identity) {
-    setSnapshot({ identity, ids: new Set(items.map(({ item }) => item.id)) });
+    // The baseline comes from the projection that reports readiness.
+    setSnapshot({ identity, ids: new Set(membership.map(({ item }) => item.id)) });
   }
   return {
     identity,

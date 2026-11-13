@@ -83,6 +83,7 @@ export function GoatBotWorkPeek({
           <GoatBotTaskTargetHidden value>
             {rows.length > 0 ? (
               <GoatBotTimeline
+                key={`${source?.identity ?? ""}:${taskId}`}
                 taskDetails
                 rows={rows}
                 baselineIds={source?.baselineIds}
