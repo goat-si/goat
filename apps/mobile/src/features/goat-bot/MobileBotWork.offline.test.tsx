@@ -758,14 +758,19 @@ it("keeps an offline task listed, but it neither opens nor offers task actions",
   expect(reads()).toHaveLength(sent);
 });
 
-it("with no bot computer saved, keeps the last computer's work listed and closed while none is connected", async () => {
+it("with no bot computer saved, keeps nothing once that computer disconnects and none is connected", async () => {
   state.botRef = null;
   state.rows = [task("t1", "Fix the build")];
   await open();
+  expect(button("Fix the build")).toBeDefined();
   const listReads = state.taskKeys.length;
   state.connected = false;
   await open();
-  expect(button("Fix the build")?.hasAttribute("disabled")).toBe(true);
+  // Home follows the selector, as on dev: no computer is selected, so nothing is kept or read.
+  expect(home()?.textContent).toContain(
+    "GOAT Bot's tasks are unavailable while the computer is offline.",
+  );
+  expect(button("Fix the build")).toBeUndefined();
   expect(state.taskKeys).toHaveLength(listReads);
   state.connected = true;
   await open();
