@@ -11,19 +11,16 @@ import {
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
-  BotId,
   BotProfile,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { CHANNEL_LIST_CHILD_WORK_MAX_TASKS, ChannelTaskId } from "@goat/contracts";
+import { BotId, CHANNEL_LIST_CHILD_WORK_MAX_TASKS, ChannelTaskId } from "@goat/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  Alert,
   FlatList,
   Modal,
   Platform,
@@ -34,7 +31,6 @@ import {
   View,
 } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -56,6 +52,10 @@ import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 import { useMobileHistoryAnnouncements } from "./useMobileHistoryAnnouncements";
 import { useAfterSheetGone } from "./useAfterSheetGone";
+import { useMobileBotTaskLookup } from "./useMobileBotTaskLookup";
+import { MobileBotTaskSearch } from "./MobileBotTaskSearch";
+import { MobileBotHomeChip } from "./MobileBotHomeChip";
+import { updateMobileTaskView } from "./mobileTaskViewUpdate";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
@@ -212,6 +212,24 @@ export function MobileBotWork(props: {
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
   );
+  const botId = member?.botId ?? BotId.make("main");
+  const older = !task && listData !== null && (offline || threads.successResult !== null);
+  const lookup = useMobileBotTaskLookup({
+    environmentId,
+    botId: botId,
+    taskId: props.taskId ?? null,
+    needed: older && enabled,
+    supported: capabilities?.goatBotTaskLookupSearch === true,
+    childGroups: childData?.groups ?? [],
+  });
+  const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
+    closeSheet();
+    props.onOpenTask(id, title);
+  };
+  const reread = () => {
+    threads.refresh();
+    if (lookup.state === "known" || lookup.state === "unavailable") lookup.reload();
+  };
   // What the work list says about each task and thread; the machines follow its changes.
   const workKey = rows
     .map((row) =>
@@ -386,30 +404,22 @@ export function MobileBotWork(props: {
     else closeSheet();
   };
   const update = async (input: ChannelUpdateTaskViewInput) => {
-    if (!environmentId || !enabled) return;
-    const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateTaskView, {
-      environmentId,
-      input,
-    });
-    if (result._tag === "Failure") {
-      const error = squashAtomCommandFailure(result);
-      Alert.alert(
-        "Could not update task",
-        error instanceof Error ? error.message : "Please try again.",
-      );
-      return;
-    }
-    threads.refresh();
+    const ok =
+      environmentId !== null && enabled && (await updateMobileTaskView(environmentId, input));
+    if (ok) reread();
+    return ok;
   };
   useMobileHomeTaskReads({
     environmentId,
     seen: (props.seen ?? props.visible) && enabled && canUpdate,
-    task: task?.row ?? null,
+    task: (task ?? (lookup.state === "known" ? lookup.task : undefined))?.row ?? null,
     peek: open ? (peekEntry?.row ?? null) : null,
     scope: workOwner,
     // A mark reaches the walk showing its computer and bot; only a sent one on this Home rereads.
     onAcknowledged: (taskId, through, scope, sent) => {
       if (history.markRead(scope, taskId, through) && sent) threads.refresh();
+      if (sent && lookup.state === "known" && lookup.task.row.task.taskId === taskId)
+        lookup.reload();
     },
   });
   const now = useNowMinuteMs();
@@ -522,6 +532,18 @@ export function MobileBotWork(props: {
     });
     homeItems.push(sectionLabel("work-label", "Work", true));
     const workStart = homeItems.length;
+    if (environmentId && enabled && capabilities?.goatBotTaskLookupSearch === true)
+      homeItems.push(
+        message(
+          "task-search",
+          <MobileBotTaskSearch
+            environmentId={environmentId}
+            botId={botId}
+            botName={botName}
+            onOpenTask={openTaskFromHome}
+          />,
+        ),
+      );
     if (goatBotTurnsOutsideList(props.turnsWaiting ?? [], rows).length > 0) {
       homeItems.push(
         message(
@@ -644,10 +666,7 @@ export function MobileBotWork(props: {
               setReturnKey(null);
               setPeekTaskId(id);
             },
-            onOpenTask: (id, title) => {
-              closeSheet();
-              props.onOpenTask(id, title);
-            },
+            onOpenTask: openTaskFromHome,
             onOpenThread: (thread) => {
               closeSheet();
               props.onOpenThread(thread);
@@ -814,42 +833,26 @@ export function MobileBotWork(props: {
       {props.taskId ? (
         <MobileTaskHeader
           task={task}
+          lookup={lookup}
           title={props.taskTitle ?? props.taskCardInfo?.title ?? null}
           botName={botName}
           environmentId={environmentId ?? null}
           enabled={enabled}
           canRetry={capabilities?.goatBotTaskRetry === true}
-          older={!task && listData !== null && (offline || threads.successResult !== null)}
+          older={older}
           loading={threads.data === null}
           failed={threads.error !== null}
           childError={children.error !== null}
           onRetryRead={threads.refresh}
           onUpdate={(input) => void update(input)}
-          onRetried={threads.refresh}
+          onRetried={reread}
           onOpenThread={props.onOpenThread}
           onOpenHome={() => setOlderHome("open")}
           taskCard={props.taskCard}
           card={props.taskCardInfo ?? null}
         />
       ) : props.sheetOnly ? null : Platform.OS === "android" ? (
-        // Android hides the native header, so the chip that opens the home sits above the chat.
-        <View className="flex-row items-center px-4">
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={botName}
-            accessibilityHint={`Opens ${botName}'s home`}
-            onPress={() => setOpen(true)}
-            className="min-h-[44px] justify-center"
-          >
-            <View className="flex-row items-center gap-1.5 rounded-full bg-goat-bot-message py-1 pl-1 pr-3">
-              <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                {props.chipFace}
-              </View>
-              <Text className="font-semibold text-foreground">{botName}</Text>
-              <SymbolView name="chevron.down" size={11} tintColorClassName="accent-icon-muted" />
-            </View>
-          </Pressable>
-        </View>
+        <MobileBotHomeChip botName={botName} face={props.chipFace} onOpen={() => setOpen(true)} />
       ) : null}
       {/* Open Home on an older task's screen opens this bot's Home right here, as one more sheet. */}
       {olderHome ? (

@@ -10,13 +10,19 @@ import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
+import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
+import type { MobileTaskLookup } from "./useMobileBotTaskLookup";
+import { lookedUpTitle } from "./lookedUpTitle";
 
 /**
- * A task's own screen header: its title and state with its actions, or, for older work the
- * current list does not hold, where its status and actions are and a way to open Home here.
+ * A task's own screen header: its title and state with its actions. For older work the current
+ * list does not hold, a server that looks tasks up by id supplies them; otherwise the header says
+ * where its status and actions are and opens Home here.
  */
 export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
+  /** The by-id read for a task the current list does not hold. */
+  readonly lookup: MobileTaskLookup;
   /** The title the opener carried, else the conversation card's. */
   readonly title: string | null;
   readonly botName: string;
@@ -37,18 +43,37 @@ export function MobileTaskHeader(props: {
   /** The conversation's card, drawn without the status it may no longer hold for older work. */
   readonly card: GoatBotTaskCard | null;
 }) {
-  const { task } = props;
+  const { lookup } = props;
+  const found =
+    props.task === undefined && (lookup.state === "known" || lookup.state === "unavailable");
+  const task = props.task ?? (lookup.state === "known" ? lookup.task : undefined);
+  const unavailable = props.task === undefined && lookup.state === "unavailable" ? lookup : null;
+  const title =
+    props.task !== undefined
+      ? props.task.row.task.title
+      : lookup.state === "known"
+        ? lookedUpTitle(
+            lookup.task.row.task.title,
+            lookup.result.task.state === "known"
+              ? lookup.result.task.row.task.titleTruncated
+              : undefined,
+          )
+        : unavailable
+          ? lookedUpTitle(unavailable.task.task.title, unavailable.task.task.titleTruncated)
+          : (props.title ?? "Task thread");
+  const status = task
+    ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label
+    : unavailable
+      ? presentTaskStatus(unavailable.task.task.status).label
+      : null;
+  const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
   return (
     <View className="gap-2 border-b border-border px-4 py-3">
-      <Text className="font-semibold text-foreground">
-        {task?.row.task.title ?? props.title ?? "Task thread"}
-      </Text>
-      {task ? (
+      <Text className="font-semibold text-foreground">{title}</Text>
+      {status !== null ? (
         <Text className="text-foreground-muted">
-          {presentTaskStatus(task.row.task.status, task.row.view.doneAt).label}
-          {taskAttemptLabel(task.row.task.generation)
-            ? ` · ${taskAttemptLabel(task.row.task.generation)}`
-            : null}
+          {status}
+          {taskAttemptLabel(generation) ? ` · ${taskAttemptLabel(generation)}` : null}
         </Text>
       ) : null}
       {!props.enabled ? (
@@ -66,7 +91,14 @@ export function MobileTaskHeader(props: {
       ) : props.loading ? (
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
-      {props.older ? (
+      {props.older && lookup.state === "loading" ? (
+        <Text className="text-foreground-muted">Loading task…</Text>
+      ) : null}
+      {props.older && lookup.state === "missing" ? (
+        <Text className="text-foreground-muted">This task isn't available.</Text>
+      ) : null}
+      {props.older &&
+      (lookup.state === "off" || lookup.state === "denied" || lookup.state === "failed") ? (
         <View className="flex-row flex-wrap items-center gap-3">
           <Text className="text-foreground-muted">
             Status and actions for older work are in {props.botName}'s Home.
@@ -84,6 +116,21 @@ export function MobileTaskHeader(props: {
           </Pressable>
         </View>
       ) : null}
+      {props.older && lookup.state === "denied" ? (
+        <Text className="text-foreground-muted">This connection can't look up older tasks.</Text>
+      ) : null}
+      {props.older && lookup.state === "failed" ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={lookup.reload}
+          className="min-h-[44px] justify-center"
+        >
+          <Text className="text-danger-foreground">Couldn't load this task. Try again</Text>
+        </Pressable>
+      ) : null}
+      {found && (lookup.state === "known" || lookup.state === "unavailable") ? (
+        <MobileTaskLookupNotices result={lookup.result} />
+      ) : null}
       {task ? (
         <MobileTaskActions
           task={task}
@@ -96,8 +143,19 @@ export function MobileTaskHeader(props: {
           onOpenThread={props.onOpenThread}
         />
       ) : null}
+      {unavailable ? (
+        <MobileTaskUnavailable
+          task={unavailable.task}
+          result={unavailable.result}
+          environmentId={props.environmentId}
+          enabled={props.enabled}
+          canRetry={props.canRetry}
+          onRetried={props.onRetried}
+          onOpenThread={props.onOpenThread}
+        />
+      ) : null}
       {/* Without a current task, its status is unknown here: the chat card is drawn without it. */}
-      {task ? (
+      {props.task ? (
         props.taskCard
       ) : props.card ? (
         <GoatBotTaskRow

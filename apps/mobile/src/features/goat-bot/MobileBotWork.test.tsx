@@ -3,7 +3,8 @@ import { useState } from "react";
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { BotId, BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { resetTaskReadAcknowledgementsForTests } from "@goat/client-runtime/goatBot";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -58,6 +59,9 @@ vi.mock("react-native", () => ({
     </div>
   ),
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  TextInput: (props: { accessibilityLabel?: string }) => (
+    <input aria-label={props.accessibilityLabel} />
+  ),
   FlatList: (
     props: {
       data: ReadonlyArray<{ key: string }>;
@@ -133,6 +137,10 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
+  // A server that looks tasks up by id and searches their titles.
+  lookupCapable: false,
+  lookup: vi.fn(),
+  update: vi.fn(),
 }));
 
 // The real face module draws the chip's face; only its native drawing and styling stand in.
@@ -190,8 +198,10 @@ vi.mock("../../state/channels", () => ({
     listBotArtifacts: () => "artifacts",
     readBotArtifact: {},
     listTasks: () => "computer",
-    updateTaskView: { permissionAtom: () => "permission" },
+    updateTaskView: { label: "update", permissionAtom: () => "permission", run: state.update },
     retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
+    getBotTask: { label: "lookup", permissionAtom: () => "permission", run: state.lookup },
+    searchBotTasks: { label: "search", permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/server", () => ({
@@ -222,6 +232,7 @@ vi.mock("../../state/environments", () => ({
                 goatBotTaskRetry: true,
                 goatBotChildWork: true,
                 goatBotMembers: true,
+                goatBotTaskLookupSearch: state.lookupCapable,
               },
             },
           },
@@ -299,6 +310,9 @@ function reset() {
   state.setEnabled.mockReset();
   state.runNow.mockReset();
   state.retry.mockReset();
+  state.lookupCapable = false;
+  state.lookup.mockReset();
+  state.update.mockReset();
 }
 async function render(
   taskId?: ChannelTaskId,
@@ -761,4 +775,130 @@ it("draws the bot's face in the chip Android shows above the chat: its initial, 
   } finally {
     nativePlatform.OS = "ios";
   }
+});
+
+const lookedUp = (status: "completed" | "running") => ({
+  task: {
+    state: "known",
+    row: {
+      kind: "task",
+      task: {
+        taskId: "task-old",
+        title: "Summarize the README",
+        status,
+        updatedAt: "2026-11-01T00:00:00.000Z",
+      },
+      view: { taskId: "task-old", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: "2026-11-01T00:00:00.000Z",
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    },
+  },
+  codingRows: [],
+  remoteWork: [],
+  launchesTruncated: false,
+  partial: false,
+});
+
+it("looks up a task the current list does not hold, shows its status and actions, and reads it again after a change", async () => {
+  reset();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  state.update.mockResolvedValue(AsyncResult.success({}));
+  await render(ChannelTaskId.make("task-old"));
+  expect(state.lookup).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { taskId: "task-old", botId: "main" },
+  });
+  expect(container.textContent).toContain("Summarize the README");
+  expect(container.textContent).toContain("Done");
+  expect(container.textContent).not.toContain("Status and actions for older work");
+  await press("Pin");
+  expect(state.update).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { taskId: "task-old", pinned: true },
+  });
+  expect(state.task.refresh).toHaveBeenCalledOnce();
+  expect(state.lookup).toHaveBeenCalledTimes(2);
+});
+
+it("offers task search on Home only while the computer can search and is connected", async () => {
+  reset();
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  const field = () => container.querySelector('input[aria-label="Search GOAT Bot\'s tasks"]');
+  await render();
+  await press("Work");
+  expect(field()).toBeNull();
+  state.lookupCapable = true;
+  await render();
+  expect(field()).not.toBeNull();
+  state.connected = false;
+  await render();
+  expect(field()).toBeNull();
+});
+
+it("a task the current list already holds shows its current row and is not looked up", async () => {
+  reset();
+  state.lookupCapable = true;
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: { taskId: "task", title: "Review", status: "running", updatedAt: at },
+    view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [row] } });
+  await render(ChannelTaskId.make("task"));
+  expect(container.textContent).toContain("Review");
+  expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("a member's older task is looked up as that member's", async () => {
+  reset();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  if (!root) root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <WorkWithChip
+        visible
+        taskId={ChannelTaskId.make("task-old")}
+        member={{
+          botId: BotId.make("scout"),
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("scout-thread"),
+          name: "Scout",
+          defaultModelSelection: null,
+        }}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
+    ),
+  );
+  expect(state.lookup).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { taskId: "task-old", botId: "scout" },
+  });
+});
+
+it("an older task marked read on its screen is read again, so it no longer shows as unread", async () => {
+  reset();
+  resetTaskReadAcknowledgementsForTests();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  const unread = lookedUp("completed");
+  Object.assign(unread.task.row, { unread: true, lastActivityAt: "2026-11-02T00:00:00.000Z" });
+  state.lookup.mockResolvedValueOnce(AsyncResult.success(unread));
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  state.update.mockResolvedValue(AsyncResult.success({}));
+  await render(ChannelTaskId.make("task-old"));
+  expect(state.update).toHaveBeenCalledWith(expect.anything(), {
+    environmentId: "env",
+    input: { taskId: "task-old", readThrough: "2026-11-02T00:00:00.000Z" },
+  });
+  expect(state.lookup).toHaveBeenCalledTimes(2);
 });
