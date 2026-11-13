@@ -85,8 +85,12 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
    * Stores what GOAT observed, under the record's fence and with no switch needed: these are facts
    * (a step's outcome, a stop, a link OpenCodex committed). False when another step moved the fence.
    */
-  const note = (row: Row, enroll: Enroll, columns: Columns = {}) =>
-    exclusive(
+  const note = Effect.fn("DisposableEnroll.note")(function* (
+    row: Row,
+    enroll: Enroll,
+    columns: Columns = {},
+  ) {
+    return yield* exclusive(
       Effect.gen(function* () {
         const now = yield* nowIso;
         const state = typeof columns.state === "string" ? columns.state : row.state;
@@ -99,13 +103,17 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         return saved.length === 1;
       }),
     );
+  });
   // The audit row follows only a stop the record kept; a moved fence means another step decided.
-  const stop = (row: Row, enroll: Enroll, code: string, columns: Columns = {}) =>
-    Effect.flatMap(
-      note(row, { ...enroll, stop: code }, { state: "paused", ...columns }),
-      (saved) =>
-        saved ? audit(row.attach_id, "hub.machine_enroll", "stopped:" + code) : Effect.void,
-    );
+  const stop = Effect.fn("DisposableEnroll.stop")(function* (
+    row: Row,
+    enroll: Enroll,
+    code: string,
+    columns: Columns = {},
+  ) {
+    if (yield* note(row, { ...enroll, stop: code }, { state: "paused", ...columns }))
+      yield* audit(row.attach_id, "hub.machine_enroll", "stopped:" + code);
+  });
   /** Lost authority stops the record before any further effect; a person resumes it. */
   const pause = Effect.fn("DisposableEnroll.pause")(function* (row: Row, reason: string) {
     const paused = yield* sql`UPDATE disposable_machines SET state = 'paused',
@@ -120,8 +128,13 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     row.pen_removed_at === null &&
     DUE_STATES.has(row.state) &&
     conflictCount(row.conflicts_json) === 0;
-  const conflict = (row: Row, enroll: Enroll, code: string) =>
-    stop(row, enroll, code, { conflicts_json: encodeConflicts([code]) });
+  const conflict = Effect.fn("DisposableEnroll.conflict")(function* (
+    row: Row,
+    enroll: Enroll,
+    code: string,
+  ) {
+    yield* stop(row, enroll, code, { conflicts_json: encodeConflicts([code]) });
+  });
 
   /**
    * A forward commit (design section 2, Ordering and fences): under the settings write lock, only
@@ -129,14 +142,14 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
    * its grant came from is unchanged and the record is still due; advances the fence. Lost
    * authority pauses the record. A pin is checked unique in the same transaction that stores it.
    */
-  const forward = (
+  const forward = Effect.fn("DisposableEnroll.forward")(function* (
     row: Row,
     before: ServerSettings,
     enroll: Enroll,
     columns: Columns,
     pin?: string,
-  ) =>
-    exclusive(
+  ) {
+    return yield* exclusive(
       Effect.gen(function* () {
         const committed = yield* store
           .commitForward({ attachId: row.attach_id, fence: row.fence }, (current) =>
@@ -184,6 +197,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         return "refused" as const;
       }),
     );
+  });
 
   const routeStep = Effect.fn("DisposableEnroll.route")(function* (
     row: Row,
