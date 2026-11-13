@@ -940,13 +940,13 @@ export function MobileBotWork(props: {
             // A routine row far down Home may not be measured yet: land near it, then try again.
             onScrollToIndexFailed={(info) => {
               const scroll = lastScroll.current;
-              const retry =
+              const current =
                 scroll !== null &&
-                homeItems.findIndex((item) => item.key === scroll.key) === info.index &&
-                scrollAttempts.current < SCROLL_RETRIES;
+                homeItems.findIndex((item) => item.key === scroll.key) === info.index;
+              const retry = current && scrollAttempts.current < SCROLL_RETRIES;
               if (retry) scrollAttempts.current += 1;
               scrollRetry.current = retry ? scroll : null;
-              if (retry)
+              if (current)
                 listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
             }}
             onContentSizeChange={() => {
