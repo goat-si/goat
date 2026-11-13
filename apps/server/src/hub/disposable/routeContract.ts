@@ -19,9 +19,9 @@ const ED25519_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/u;
 
 /**
  * The arguments every SSH command GOAT runs for a disposable machine starts with. `-F none` reads
- * no ssh_config, so no config can add forwards, environment, identities or credential delegation,
- * which accumulate instead of yielding to the command line; the options below then name the route.
- * Undefined when a value could not be passed unchanged.
+ * no ssh_config, so no config adds forwards, environment or identities; the options name the route.
+ * No identity is pinned yet: ssh offers its default key files and SSH_AUTH_SOCK's agent until the
+ * attach slice pins the machine's key. Undefined when a value could not be passed unchanged.
  */
 const sharedOptions = (route: DisposableRoute) => {
   if (
