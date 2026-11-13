@@ -612,6 +612,7 @@ function GoatBotChatViewContent({
             onOpenFile={openFile}
             routineLanding={routineLanding.landing}
             homeReturn={homeReturn}
+            onHomeReturnConsumed={() => setHomeReturn(null)}
           />
         </aside>
       )}
@@ -647,6 +648,7 @@ function GoatBotChatViewContent({
               onOpenFile={openFile}
               routineLanding={routineLanding.landing}
               homeReturn={homeReturn}
+              onHomeReturnConsumed={() => setHomeReturn(null)}
             />
           </SheetPopup>
         </Sheet>
