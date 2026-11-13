@@ -37,6 +37,7 @@ const state = vi.hoisted(() => ({
   lists: [] as Array<string | null>,
   rows: [] as ReadonlyArray<GoatBotRow>,
   realTimeline: false,
+  sourceIdentity: "first" as string | null,
   baseline: new Set<string>(),
   sources: new Set<string>(),
 }));
@@ -93,11 +94,12 @@ vi.mock("./GoatBotTimeline", async (original) => {
     GoatBotTimeline: (props: {
       readonly rows: ReadonlyArray<GoatBotRow>;
       readonly onPick?: (answer: string, taskId?: string, questionId?: string) => void;
+      readonly submissions?: ReadonlyArray<{ readonly key: string }>;
     }) =>
       state.realTimeline ? (
         <actual.GoatBotTimeline {...props} onRetry={() => {}} />
       ) : (
-        <div>
+        <div data-submissions={props.submissions?.map((send) => send.key).join(",")}>
           Task timeline
           {props.rows.map((row) =>
             row.kind === "bot" ? (
@@ -144,7 +146,11 @@ vi.mock("./useGoatBotSession", () => ({
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
-      source: { baselineIds: state.baseline, sourceIds: state.sources },
+      source: {
+        identity: state.sourceIdentity,
+        baselineIds: state.baseline,
+        sourceIds: state.sources,
+      },
       rowsForTask: (id: string) => {
         state.session(id);
         return state.rows;
@@ -175,6 +181,81 @@ function Pane({ onClose }: { onClose: () => void }) {
     />
   );
 }
+
+it("does not pass an earlier source's submission to the same task in a new source", async () => {
+  state.sourceIdentity = "first";
+  state.send.mockReturnValueOnce("old-key" as never);
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      state.sourceIdentity = "first";
+    },
+  };
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await userEvent.type(screen.getByPlaceholder("Message GOAT Bot"), "hello{Enter}");
+  expect(
+    screen.container.querySelector("[data-submissions]")?.getAttribute("data-submissions"),
+  ).toBe("old-key");
+  state.sourceIdentity = "second";
+  await screen.rerender(<Pane onClose={() => {}} />);
+  expect(
+    screen.container.querySelector("[data-submissions]")?.getAttribute("data-submissions"),
+  ).toBe("");
+});
+
+it("does not jump a new source when an earlier task submission appears later", async () => {
+  state.sourceIdentity = "first";
+  state.realTimeline = true;
+  state.send.mockReturnValueOnce("old-key" as never);
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      state.sourceIdentity = "first";
+      state.realTimeline = false;
+      state.rows = [];
+    },
+  };
+  const rows: GoatBotRow[] = Array.from({ length: 40 }, (_, i) => ({
+    kind: "user",
+    id: `history-${i}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${i}`,
+    createdAt: "2026-11-04T10:00:00.000Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  state.rows = rows;
+  const view = () => (
+    <div style={{ display: "flex", height: 400, width: 360 }}>
+      <Pane onClose={() => {}} />
+    </div>
+  );
+  await using screen = await render(view());
+  await userEvent.type(screen.getByPlaceholder("Message GOAT Bot"), "hello{Enter}");
+  state.sourceIdentity = "second";
+  await screen.rerender(view());
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  state.rows = [
+    ...rows,
+    {
+      ...rows[0]!,
+      kind: "user",
+      id: "pending:old-key",
+      sendKey: "old-key",
+      requestKey: null,
+      text: "hello",
+      delivery: { state: "sending" },
+      showReceipt: false,
+    },
+  ];
+  await screen.rerender(view());
+  expect(scroll.scrollTop).toBe(0);
+});
 
 it("does not cue a historical result revealed in a task pane, but cues a new result", async () => {
   state.realTimeline = true;

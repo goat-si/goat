@@ -69,11 +69,14 @@ export function GoatBotTaskPane({
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);
+  const sourceIdentity = session.source?.identity ?? null;
   const [local, setLocal] = useState<{
     taskId: ChannelTaskId;
+    sourceIdentity: string | null;
     submissions: ReadonlyArray<GoatBotLocalSubmission>;
-  }>({ taskId, submissions: [] });
-  if (local.taskId !== taskId) setLocal({ taskId, submissions: [] });
+  }>({ taskId, sourceIdentity, submissions: [] });
+  if (local.taskId !== taskId || local.sourceIdentity !== sourceIdentity)
+    setLocal({ taskId, sourceIdentity, submissions: [] });
   const send = (
     text: string,
     attachments: Parameters<typeof session.onSendToTask>[2] = [],
@@ -87,7 +90,13 @@ export function GoatBotTaskPane({
       const submission = { key: result };
       setLocal((previous) => ({
         taskId,
-        submissions: [...(previous.taskId === taskId ? previous.submissions : []), submission],
+        sourceIdentity,
+        submissions: [
+          ...(previous.taskId === taskId && previous.sourceIdentity === sourceIdentity
+            ? previous.submissions
+            : []),
+          submission,
+        ],
       }));
     }
     return result !== false;
@@ -232,7 +241,11 @@ export function GoatBotTaskPane({
             rows={timelineRows}
             baselineIds={session.source?.baselineIds}
             sourceIds={session.source?.sourceIds}
-            submissions={local.taskId === taskId ? local.submissions : []}
+            submissions={
+              local.taskId === taskId && local.sourceIdentity === sourceIdentity
+                ? local.submissions
+                : []
+            }
             committedSends={session.source?.committedSends}
             environmentId={environmentId}
             onRetry={session.onRetryInput}

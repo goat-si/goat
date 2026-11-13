@@ -37,12 +37,20 @@ export function useGoatBotFollow({
   readonly followingRef: RefObject<boolean>;
   readonly lastScrollTopRef: RefObject<number>;
 }) {
-  const [membership, setMembership] = useState({ rows, version: 0 });
+  const [membership, setMembership] = useState(() => ({
+    rows,
+    version: 0,
+    ids: new Set(rows.map((row) => row.id)),
+  }));
   if (
     rows.length !== membership.rows.length ||
     rows.some((row, i) => row.id !== membership.rows[i]?.id)
   )
-    setMembership({ rows, version: membership.version + 1 });
+    setMembership({
+      rows,
+      version: membership.version + 1,
+      ids: new Set(rows.map((row) => row.id)),
+    });
   // These sets live in this keyed timeline and hold its row IDs plus this sitting's sends.
   const initialized = useRef(baselineIds === undefined);
   const seen = useRef(new Set(baselineIds === undefined ? rows.map((row) => row.id) : []));
@@ -156,8 +164,7 @@ export function useGoatBotFollow({
     if (baselineIds !== undefined && sourceIds !== undefined) {
       for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.current.add(id);
     }
-    const displayed = new Set(rows.map((row) => row.id));
-    const next = cueRef.current.filter((id) => displayed.has(id));
+    const next = cueRef.current.filter((id) => membership.ids.has(id));
     for (const row of rows) {
       if (seen.current.has(row.id)) continue;
       if (row.kind !== "bot" && row.kind !== "task") {
@@ -194,8 +201,7 @@ export function useGoatBotFollow({
     first.focus({ preventScroll: true });
     clear();
   };
-  const displayedIds = new Set(rows.map((row) => row.id));
-  const visibleCueIds = cueIds.filter((id) => displayedIds.has(id));
+  const visibleCueIds = cueIds.filter((id) => membership.ids.has(id));
   return {
     cueIds: visibleCueIds,
     following,

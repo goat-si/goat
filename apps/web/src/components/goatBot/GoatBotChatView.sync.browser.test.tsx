@@ -392,6 +392,69 @@ it.each(["above", "following"] as const)(
   },
 );
 
+it("keeps a new-reply cue while a live projected reply streams, then counts a new reply", async () => {
+  const threadId = ThreadId.make("member-stream");
+  const history = [
+    turnItem(
+      threadId,
+      "history",
+      "user",
+      Array.from({ length: 80 }, (_, i) => `History ${i}`).join("\n"),
+      1,
+    ),
+  ];
+  const threadRef = setup(threadId, history);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <MemberChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { socket, details } = await synchronized(threadRef);
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  const item = turnItem(threadRef.threadId, "stream", "assistant", "Alpha", 2);
+  if (item.type !== "assistant_message") throw new Error("expected assistant message");
+  await deliver(socket, details, threadRef, { ...item, streaming: true }, 2);
+  await expect.element(screen.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  using writes = vi.spyOn(scroll, "scrollTop", "set");
+  await act(async () => {
+    Queue.offerUnsafe(socket, {
+      kind: "event",
+      sequence: 3,
+      event: {
+        id: EventId.make("stream-text"),
+        type: "turn-item.updated",
+        threadId: threadRef.threadId,
+        occurredAt: at,
+        payload: { ...item, text: "Bravo", streaming: true },
+      },
+    });
+    await nextAtom(details.visibleTurnItemsAtom(threadRef), (items) =>
+      items.some(
+        ({ item: next }) =>
+          next.type === "assistant_message" && next.id === item.id && next.text === "Bravo",
+      ),
+    );
+  });
+  expect(screen.container.textContent).toContain("Bravo");
+  expect(screen.container.textContent).not.toContain("Alpha");
+  expect(writes).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  await deliver(
+    socket,
+    details,
+    threadRef,
+    turnItem(threadRef.threadId, "second", "assistant", "Next reply", 3),
+    4,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest (2 new)" }))
+    .toBeVisible();
+});
+
 it("a reply after a member snapshot's history is new", async () => {
   const threadId = ThreadId.make("member-history");
   const history = [
