@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isGoatBotSessionThreadId,
   EnvironmentId,
   MessageId,
   type OrchestrationV2Notification,
@@ -17,6 +18,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
+import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
 import { suggestedAction } from "./launchWatchText.ts";
 
 /**
@@ -86,6 +88,7 @@ export const LaunchWatch = Schema.Struct({
   detached: Schema.optional(Schema.Boolean),
   /** Null for a launch from outside any thread, whose reports go only to the completion webhook. */
   launcherThreadId: Schema.NullOr(ThreadId),
+  launcherRunId: Schema.optional(RunId),
   /**
    * The outside caller a launcherless watch belongs to (its MCP request namespace),
    * so another outside caller cannot see or re-arm it. Null for a thread launcher's
@@ -290,6 +293,7 @@ export function launchWatchId(input: {
 
 export function newLaunchWatch(input: {
   readonly launcherThreadId: ThreadId | null;
+  readonly launcherRunId?: RunId;
   readonly owner?: string | null;
   readonly ceiling?: RuntimeMode | null;
   readonly host: string | null;
@@ -306,6 +310,7 @@ export function newLaunchWatch(input: {
     id: launchWatchId(input),
     incarnation: input.incarnation,
     launcherThreadId: input.launcherThreadId,
+    ...(input.launcherRunId === undefined ? {} : { launcherRunId: input.launcherRunId }),
     owner: input.launcherThreadId === null ? (input.owner ?? null) : null,
     ceiling: input.ceiling ?? null,
     host: input.host,
@@ -776,6 +781,15 @@ const runWakeIds = (watch: LaunchWatch, runId: RunId, end: string | null | undef
       : `run:${runId}:end:${end ?? unreadEnd(watch, runId)}`,
   );
 
+const launchingRunNotification = (watch: LaunchWatch) =>
+  watch.launcherRunId !== undefined &&
+  watch.host === null &&
+  watch.launcherThreadId !== null &&
+  (isGoatBotSessionThreadId(watch.launcherThreadId) ||
+    isChannelWorkerThreadId(watch.launcherThreadId))
+    ? { aboutRunId: watch.launcherRunId }
+    : {};
+
 export function finishedWake(input: {
   readonly watch: LaunchWatch;
   readonly runId: RunId;
@@ -811,6 +825,7 @@ export function finishedWake(input: {
     ...runWakeIds(watch, input.runId, input.end),
     text: lines.join("\n"),
     notification: {
+      ...launchingRunNotification(watch),
       source: { kind: "background_task" },
       outcome: notificationOutcome(input.status),
       summary: truncate(`${name} ${input.status.replace("_", " ")}`, SUMMARY_MAX_CHARS),
@@ -903,6 +918,7 @@ function launchFailedWake(input: {
     ...runWakeIds(watch, input.runId, input.end),
     text: lines.join("\n"),
     notification: {
+      ...launchingRunNotification(watch),
       source: { kind: "background_task" },
       outcome: "failed",
       summary: truncate(
