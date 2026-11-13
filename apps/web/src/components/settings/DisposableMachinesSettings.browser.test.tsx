@@ -1,6 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId } from "@goat/contracts";
-import { AtomRegistry } from "effect/reactivity";
+import * as Cause from "effect/Cause";
+import { Atom, AsyncResult, AtomRegistry } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -12,6 +13,8 @@ const state = vi.hoisted(() => ({
   attach: vi.fn(),
   reissue: vi.fn(),
   hub: undefined as unknown,
+  // When set, the machine list answers with this atom instead of an empty list.
+  list: undefined as unknown,
 }));
 vi.mock("~/hooks/useSettings", () => ({ useEnvironmentSettings: () => state.hub }));
 vi.mock("~/state/server", async () => {
@@ -23,7 +26,7 @@ vi.mock("~/state/server", async () => {
       updateSettings: { label: "settings", run: state.save, permissionAtom },
       hubMachinesAttach: { label: "attach", run: state.attach, permissionAtom },
       hubMachinesReissue: { label: "reissue", run: state.reissue, permissionAtom },
-      hubMachinesList: () => machines,
+      hubMachinesList: () => state.list ?? machines,
     },
   };
 });
@@ -61,6 +64,7 @@ const NOW = Date.parse("2026-11-14T00:00:00.000Z");
 const OPEN_UNTIL = new Date(NOW + 10 * 86_400_000).toISOString();
 function setup(enabled: boolean, expiresAt: string | null = enabled ? OPEN_UNTIL : null) {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+  state.list = undefined;
   state.hub = {
     ...DEFAULT_SERVER_SETTINGS.hub,
     enabled: true,
@@ -171,4 +175,21 @@ it("a consent that ends while the page is open shows as ended on the next refres
   await userEvent.click(screen.getByRole("button", { name: "Refresh machines" }));
   await expect.element(screen.getByText(/Consent ended/)).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Attach a machine" })).toBeDisabled();
+});
+
+// What an older hub's unknown request becomes once the client maps it (rpc/client.ts).
+it("an older hub without disposable machines shows Update GOAT instead of the settings", async () => {
+  using fixture = setup(false);
+  state.list = Atom.make(
+    AsyncResult.failure(Cause.fail(new Error("Unknown request tag: hub.machines.list"))),
+  );
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await expect
+    .element(screen.getByText("Update GOAT on this hub to attach disposable machines."))
+    .toBeVisible();
+  await expect.element(screen.getByRole("switch")).not.toBeInTheDocument();
 });
