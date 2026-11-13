@@ -4,6 +4,8 @@ import type {
   GoatHubOpenCodexSyncInput,
   HubDeviceMoveInput,
   HubDeviceOperationInput,
+  HubDeviceRoutesInput,
+  HubDeviceRoutesUpdateInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
@@ -103,6 +105,18 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
     ),
   ),
   goat_hub_opencodex_sync: openCodexSync,
+  goat_hub_device_routes: McpToolAccess.reads((input: HubDeviceRoutesInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* HubMembership.HubMembership).routes(scope, input);
+    }),
+  ),
+  goat_hub_device_routes_update: McpToolAccess.writes((input: HubDeviceRoutesUpdateInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* HubMembership.HubMembership).updateRoutes(scope, input);
+    }),
+  ),
   goat_hub_device_verify: McpToolAccess.readsOrReachesHost(
     () => true,
     (input) =>

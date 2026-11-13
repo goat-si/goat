@@ -107,6 +107,21 @@ once, for both aliases, the machine, the old link and the new host key, and GOAT
 leaves the old alias and links the new one. If the new link fails, the same
 approval finishes the move later. Aliases that name different machines are refused.
 
+**Routes** on a Remote Link Child's row, in the web and desktop apps, lists the
+SSH aliases the hub tries for its link, in order, and marks the pinned one. Add
+another alias of the same machine, such as a LAN or Tailscale alias ahead of its
+`pen-<name>` alias, to keep its traffic off the Pen relay: the hub stores a new
+route only after it proves that machine's pinned host key over it. Move a route
+up or down, or remove one; the pinned alias stays. A link created with one
+exclusive route keeps that route and cannot be edited, and a Child that opened
+its own link to the hub has no routes to change. When you cannot answer hub
+decisions yourself, a change waits in the decision inbox; continue it from the
+row once it is approved, until the page reloads. If the hub does not answer
+within 2 minutes, the change may still finish there, so open the routes again
+before you retry. Agents use `goat_hub_device_routes_update`, and a profile
+other than owner asks you first. Routes need an OpenCodex release with link
+routes on the hub; an older one says so.
+
 ## Sync OpenCodex models
 
 **Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first
@@ -190,7 +205,16 @@ measurement says how long it covers. Bytes whose route GOAT could not confirm
 are shown apart from relay and direct ones. A row says **not measured** when the
 hub's OpenCodex does not report a number yet.
 
+GOAT keeps these counts in memory, so they start over when GOAT restarts on the
+hub, and the hub-wide warning covers only what it counted since then. GOAT reads
+the numbers only while someone has Hub or Fleet open or an agent reads host
+status: bytes across a longer gap are spread evenly over it, and the row says
+**averaged**. A row says the figures are a lower bound when some requests to the
+hub carried no length, and for 24 hours after a link WebSocket was open, since
+WebSocket traffic is not counted.
+
 GOAT warns in Hub and Fleet when one Child sends more than 5 GB through the relay
 in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
-turn a warning off, in **Settings → Hub → Relay traffic warning**. A warning
-never stops a turn or a link.
+turn a warning off, in **Settings → Hub → Relay traffic warning** on the web or
+desktop app, or ask an agent to change them. A warning never stops a turn or a
+link.

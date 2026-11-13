@@ -17,6 +17,9 @@ import { hubLinkFacts, hubLinkWarningLabel, type HubLinkView } from "./hubLinkTr
 
 export type HubTransport = "remote-link" | "hub-client" | "standalone";
 export type HubLinkState = OpenCodexInventorySnapshot["link"]["links"][number]["state"];
+export type HubLinkDirection = NonNullable<
+  OpenCodexInventorySnapshot["link"]["links"][number]["direction"]
+>;
 export type HubVersionVerdict = "compatible" | "degraded" | "incompatible";
 
 export interface HubDevice extends HubLinkView {
@@ -26,6 +29,8 @@ export interface HubDevice extends HubLinkView {
   readonly reachability: HostStatusEntry["reachability"] | "not-connected";
   /** The Home's tunnel for this link; null for devices that are not Remote Link Children. */
   readonly tunnel: HubLinkState | null;
+  /** Who opens the link's SSH; only a hub-initiated link has routes the Home can change. */
+  readonly linkDirection: HubLinkDirection | null;
   readonly parity: HubParityResult | null;
   /** The running service's version, else the one `ocx --version` printed. */
   readonly version: string | null;
@@ -91,6 +96,7 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
       transport,
       reachability: source?.entry?.reachability ?? "not-connected",
       tunnel,
+      linkDirection: link?.direction ?? null,
       parity: source?.entry?.parity ?? null,
       version: remote?.runtime.version ?? remote?.binaries[0]?.version ?? null,
       ...(remote?.slow ? { slow: true as const } : {}),

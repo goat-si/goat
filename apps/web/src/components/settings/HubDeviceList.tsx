@@ -27,6 +27,7 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { HubChildSetup } from "./HubChildSetup";
 import { HubDeviceLinkLines } from "./HubLinkLines";
+import { HubDeviceRoutes } from "./HubDeviceRoutes";
 import {
   AddHubDevice,
   HubActionResult,
@@ -262,6 +263,13 @@ function HubDeviceListRow({
         </p>
       )}
       {device === null ? null : <HubDeviceLinkLines device={device} />}
+      {device?.transport === "remote-link" ? (
+        <HubDeviceRoutes
+          environmentId={environmentId}
+          alias={device.alias}
+          direction={device.linkDirection}
+        />
+      ) : null}
       {row.missingClis === null ? null : (
         <p className="text-xs text-warning-foreground">
           {row.missingClis}. Install from Settings → Connections → Providers on your machines.

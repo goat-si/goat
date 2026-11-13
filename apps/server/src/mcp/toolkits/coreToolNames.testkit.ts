@@ -75,7 +75,9 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_host_uncordon",
   "goat_html_list",
   ...["connection", "prepare", "status"].map((verb) => `goat_hub_child_${verb}`),
-  ...["join", "leave", "move", "repair", "setup", "verify"].map((v) => `goat_hub_device_${v}`),
+  ...["join", "leave", "move", "repair", "routes", "routes_update", "setup", "verify"].map(
+    (v) => `goat_hub_device_${v}`,
+  ),
   "goat_hub_opencodex_sync",
   "goat_origin_bound_delete",
   "goat_origin_bound_delete_receipt",

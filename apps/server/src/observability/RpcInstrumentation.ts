@@ -158,6 +158,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hubDeviceJoin]: "server",
   [WS_METHODS.hubDeviceLeave]: "server",
   [WS_METHODS.hubDeviceRepair]: "server",
+  [WS_METHODS.hubDeviceRoutes]: "server",
+  [WS_METHODS.hubDeviceRoutesUpdate]: "server",
   [WS_METHODS.hubDeviceChildOptIn]: "server",
   [WS_METHODS.hubDeviceSetup]: "server",
   [WS_METHODS.serverGetProcessResourceHistory]: "server",

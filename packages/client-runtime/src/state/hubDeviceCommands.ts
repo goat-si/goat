@@ -35,5 +35,15 @@ export function createHubDeviceCommands<R, E>(
       label: "environment-data:hub:device-setup",
       tag: WS_METHODS.hubDeviceSetup,
     }),
+    /** A Remote Link Child's SSH routes on the Home, read when a person opens them. */
+    listHubDeviceRoutes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-routes",
+      tag: WS_METHODS.hubDeviceRoutes,
+    }),
+    /** A person adds, removes or reorders those routes; the Home proves a new one first. */
+    updateHubDeviceRoutes: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-routes-update",
+      tag: WS_METHODS.hubDeviceRoutesUpdate,
+    }),
   };
 }
