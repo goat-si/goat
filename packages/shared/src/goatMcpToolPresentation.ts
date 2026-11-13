@@ -445,6 +445,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Move", "Moving", "Moved", "a hub device to another alias"],
     "environment-update",
   ),
+  goat_hub_device_routes: tool(["List", "Listing", "Listed", "a Child's routes"], "host-status"),
+  goat_hub_device_routes_update: tool(
+    ["Change", "Changing", "Changed", "a Child's routes"],
+    "environment-update",
+  ),
   goat_hub_opencodex_sync: tool(
     ["Sync", "Syncing", "Synced", "OpenCodex models"],
     "environment-update",
