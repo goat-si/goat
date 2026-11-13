@@ -392,6 +392,11 @@ export const make = Effect.gen(function* () {
       "connection.environment.id": target.environmentId,
       "connection.target.kind": target._tag,
     });
+    if (target._tag === "PenConnectionTarget")
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "Pen routes are not available in this build.",
+      });
     if (target._tag === "HubProxyConnectionTarget")
       return yield* hubProxy(entry).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     const { prepared, verifiedEndpoint } = yield* (() => {

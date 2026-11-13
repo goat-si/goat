@@ -202,12 +202,17 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
           case "BearerConnectionRegistration":
           case "SshConnectionRegistration":
           case "HubProxyConnectionRegistration":
+          case "PenConnectionRegistration":
             yield* Ref.update(storedProfiles, (current) => {
               const next = new Map(current);
               next.set(registration.profile.connectionId, registration.profile);
               return next;
             });
-            if (registration._tag === "HubProxyConnectionRegistration") return;
+            if (
+              registration._tag === "HubProxyConnectionRegistration" ||
+              registration._tag === "PenConnectionRegistration"
+            )
+              return;
             yield* Ref.update(storedCredentials, (current) => {
               const next = new Map(current);
               next.set(registration.target.connectionId, registration.credential);

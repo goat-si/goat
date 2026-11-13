@@ -216,7 +216,8 @@ export const make = Effect.gen(function* () {
     const profile: Option.Option<ConnectionProfile> =
       target._tag === "BearerConnectionTarget" ||
       target._tag === "SshConnectionTarget" ||
-      target._tag === "HubProxyConnectionTarget"
+      target._tag === "HubProxyConnectionTarget" ||
+      target._tag === "PenConnectionTarget"
         ? yield* profiles.get(target.connectionId)
         : Option.none();
     return { target, profile } satisfies ConnectionRoute;

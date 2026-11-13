@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as TokenStore from "../authorization/tokenStore.ts";
+import { usableRoutes } from "../connection/routes.ts";
 import {
   BearerConnectionCredential,
   BearerConnectionProfile,
@@ -26,6 +27,8 @@ import {
 } from "../connection/pullRequestRoutingPermissions.ts";
 import {
   ConnectionCatalogDocument,
+  decodeConnectionCatalogStorage,
+  encodeConnectionCatalogStorage,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   catalogRoutes,
   readCatalogHub,
@@ -508,4 +511,111 @@ describe("ConnectionCatalogDocument", () => {
       setRoutesInCatalog(document, ENVIRONMENT_ID, [BEARER_TARGET, RELAY_TARGET]).targets,
     ).toEqual([BEARER_TARGET, RELAY_TARGET, other]);
   });
+});
+
+describe("Pen storage compatibility", () => {
+  const legacy = {
+    ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+    targets: [BEARER_TARGET],
+    profiles: [BEARER_PROFILE],
+    credentials: [{ connectionId: BEARER_TARGET.connectionId, credential: BEARER_CREDENTIAL }],
+  };
+  const penTarget = {
+    _tag: "PenConnectionTarget",
+    environmentId: ENVIRONMENT_ID,
+    label: "Pen",
+    connectionId: "pen:m:n",
+  };
+  const penProfile = {
+    _tag: "PenConnectionProfile",
+    environmentId: ENVIRONMENT_ID,
+    label: "Pen",
+    connectionId: "pen:m:n",
+    meshId: "m",
+    nodeId: "n",
+    noisePub: "key",
+  };
+  const hubTarget = {
+    _tag: "HubProxyConnectionTarget",
+    environmentId: ENVIRONMENT_ID,
+    label: "Hub",
+    connectionId: "hub:x:n",
+  };
+  const hubProfile = {
+    _tag: "HubProxyConnectionProfile",
+    environmentId: ENVIRONMENT_ID,
+    label: "Hub",
+    connectionId: "hub:x:n",
+    hubEnvironmentId: ENVIRONMENT_ID,
+    hubConnectionId: "primary",
+    nodeId: "n",
+  };
+  const raw = () =>
+    JSON.stringify({
+      ...legacy,
+      penTargets: [{ index: 0, value: penTarget }],
+      penProfiles: [{ index: 2, value: penProfile }],
+      hubProxyTargets: [{ index: 2, value: hubTarget }],
+      hubProxyProfiles: [{ index: 0, value: hubProfile }],
+    });
+
+  it.effect("interleaved hub and Pen extensions round-trip in original order", () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeConnectionCatalogStorage(raw());
+      expect(decoded.targets.map((v) => v._tag)).toEqual([
+        "PenConnectionTarget",
+        "BearerConnectionTarget",
+        "HubProxyConnectionTarget",
+      ]);
+      expect(decoded.profiles.map((v) => v._tag)).toEqual([
+        "HubProxyConnectionProfile",
+        "BearerConnectionProfile",
+        "PenConnectionProfile",
+      ]);
+      const encoded = yield* encodeConnectionCatalogStorage(decoded);
+      expect(yield* decodeConnectionCatalogStorage(encoded)).toEqual(decoded);
+    }),
+  );
+  it.effect("closed viewer gate excludes persisted Pen routes", () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeConnectionCatalogStorage(raw());
+      const target = decoded.targets[0];
+      expect(target?._tag).toBe("PenConnectionTarget");
+      if (!target) throw new Error("Missing Pen target");
+      const profile = decoded.profiles.find((value) => value.connectionId === "pen:m:n");
+      expect(
+        usableRoutes({ target, profile: Option.fromNullishOr(profile), enabled: true }),
+      ).toEqual([]);
+    }),
+  );
+  it("legacy reader retains credentials when Pen arrays are unknown and older writer drops only unknown extensions", () => {
+    const oldSchema = Schema.fromJsonString(
+      Schema.Struct({
+        ...ConnectionCatalogDocument.fields,
+        hubProxyTargets: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+        hubProxyProfiles: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+      }),
+    );
+    const old = Schema.decodeSync(oldSchema)(raw());
+    expect(old.credentials).toEqual(legacy.credentials);
+    const rewritten = JSON.parse(Schema.encodeSync(oldSchema)(old));
+    expect(rewritten.penTargets).toBeUndefined();
+    expect(rewritten.hubProxyTargets).toHaveLength(1);
+  });
+  it.effect(
+    "a Pen record with an unusable or duplicate index is dropped and the paired records stay",
+    () =>
+      Effect.gen(function* () {
+        for (const index of [-1, 1.5, 4, 2]) {
+          const bad = JSON.parse(raw());
+          bad.penTargets[0].index = index;
+          const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
+          expect(decoded.targets.map((value) => value._tag)).toEqual([
+            "BearerConnectionTarget",
+            "HubProxyConnectionTarget",
+          ]);
+          expect(decoded.credentials).toEqual(legacy.credentials);
+        }
+      }),
+  );
 });

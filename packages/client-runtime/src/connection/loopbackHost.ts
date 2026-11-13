@@ -32,7 +32,11 @@ function isLoopbackHttpBaseUrl(httpBaseUrl: string): boolean {
  * silence can be a lost network, so it keeps the remote budgets.
  */
 export function isLocalServerConnection(target: ConnectionTarget, httpBaseUrl: string): boolean {
-  return target._tag !== "SshConnectionTarget" && isLoopbackHttpBaseUrl(httpBaseUrl);
+  return (
+    target._tag !== "SshConnectionTarget" &&
+    target._tag !== "PenConnectionTarget" &&
+    isLoopbackHttpBaseUrl(httpBaseUrl)
+  );
 }
 
 /** A request budget override for a direct connection to this device's own server; SSH forwards keep the default. */
