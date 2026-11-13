@@ -2,9 +2,12 @@ import type {
   HostPressureLevel,
   HostStatusEntry,
   HubParityResult,
+  OpenCodexHubRelayWarning,
   OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import { homeLocalFallback, openCodexPairVerdict } from "@goat/shared/opencodexCompat";
+
+import { hubLinkFacts, hubLinkWarningLabel, type HubLinkView } from "./hubLinkTraffic.ts";
 
 /**
  * The goatclaw hub as Fleet and Settings → Hub show it: the OpenCodex Home among the hosts a
@@ -16,7 +19,7 @@ export type HubTransport = "remote-link" | "hub-client" | "standalone";
 export type HubLinkState = OpenCodexInventorySnapshot["link"]["links"][number]["state"];
 export type HubVersionVerdict = "compatible" | "degraded" | "incompatible";
 
-export interface HubDevice {
+export interface HubDevice extends HubLinkView {
   readonly alias: string;
   readonly transport: HubTransport;
   /** Whether the device's own host status answered; `not-connected` when GOAT here has no connection to it. */
@@ -72,7 +75,9 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
       if (alias && !byAlias.has(alias)) byAlias.set(alias, source);
     }
   }
-  const device = (alias: string, source: HubSource | undefined, tunnel: HubLinkState | null) => {
+  type LinkRow = (typeof inventory.link.links)[number];
+  const device = (alias: string, source: HubSource | undefined, link: LinkRow | null) => {
+    const tunnel = link?.state ?? null;
     const remote = opencodexOf(source?.entry);
     const transport: HubTransport =
       tunnel !== null
@@ -97,10 +102,13 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
             ]),
       fallback: permission === undefined ? "unknown" : permission ? "on" : "off",
       pressure: source?.entry?.pressure?.level ?? null,
+      traffic: link?.traffic ?? null,
+      route: link?.route ?? null,
+      linkTransport: link?.transport ?? null,
     } satisfies HubDevice;
   };
   const linked = inventory.link.links.map((link) =>
-    device(link.alias, byAlias.get(link.alias), link.state),
+    device(link.alias, byAlias.get(link.alias), link),
   );
   const seen = new Set<HubSource>(linked.flatMap((entry) => byAlias.get(entry.alias) ?? []));
   // Only machines that answered: a device that cannot be read cannot be joined either.
@@ -116,6 +124,25 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
     homeKey: home.key,
     devices: [...linked, ...others],
   };
+}
+
+export interface HubRelayWarningSource {
+  readonly key: string;
+  readonly label: string;
+  readonly warning: OpenCodexHubRelayWarning;
+}
+
+/**
+ * Each machine's own relay warning: its Children together passed its threshold in 24 hours. A
+ * Home whose last link went reads standalone and keeps it for that day, whichever machine is Home.
+ */
+export function hubRelayWarnings(
+  sources: ReadonlyArray<HubSource>,
+): ReadonlyArray<HubRelayWarningSource> {
+  return sources.flatMap((source) => {
+    const warning = opencodexOf(source.entry)?.link.relayWarning;
+    return warning === undefined ? [] : [{ key: source.key, label: source.label, warning }];
+  });
 }
 
 /** "degraded (P5, P6)", "not verified", or "unproven". */
@@ -153,6 +180,8 @@ export function hubDeviceFacts(device: HubDevice): ReadonlyArray<string> {
     hubVersionLabel(device),
     `OpenCodex fallback ${device.fallback}`,
     device.pressure === null ? null : `pressure ${device.pressure}`,
+    hubLinkWarningLabel(device.traffic),
+    ...hubLinkFacts(device, device.tunnel === "connected"),
   ].filter((part) => part !== null);
 }
 
@@ -166,7 +195,8 @@ export function hubDeviceSeverity(device: HubDevice): "destructive" | "warning" 
     return "destructive";
   if (
     device.parity?.verdict === "degraded" ||
-    (device.tunnel !== null && device.tunnel !== "connected")
+    (device.tunnel !== null && device.tunnel !== "connected") ||
+    device.traffic?.warning !== undefined
   )
     return "warning";
   return null;

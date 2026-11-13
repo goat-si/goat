@@ -866,10 +866,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent);
 }
 
-/* With the bot's face inside, the capsule hugs it like a chip: 28px tall, round on the left. */
+/* With the bot's face inside, the capsule hugs it like a chip: 28px tall, round on the left. The
+   face parts its colour from an opaque surface, so the translucent capsule is not painted twice. */
 .goat-name-capsule:has(> .goat-name-avatar) {
   gap: 6px;
   padding: 4px 10px 4px 4px;
+  --goat-name-avatar-surface: var(--background);
+}
+
+.goat-name-capsule:has(> .goat-name-avatar):hover {
+  --goat-name-avatar-surface: var(--accent-opaque);
 }
 
 @utility goat-message-row {
@@ -1357,6 +1363,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --message-action-foreground: var(--primary-foreground);
   --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
   --accent: #f3f3f3;
+  --accent-opaque: var(--accent);
   --accent-foreground: var(--foreground);
   --error: var(--color-red-500);
   --error-foreground: var(--color-red-700);
@@ -1434,6 +1441,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --muted: --alpha(var(--color-white) / 5%);
     --muted-foreground: #afafaf;
     --accent: --alpha(var(--color-white) / 6%);
+    /* --accent over the background as one colour, for surfaces that cannot stack. */
+    --accent-opaque: color-mix(in srgb, var(--color-white) 6%, var(--background));
     --accent-foreground: var(--foreground);
     --message-surface: --alpha(var(--color-white) / 8%);
     --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
@@ -1476,6 +1485,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --card: var(--color-white);
   --card-foreground: var(--foreground);
   --accent: #f3f3f3;
+  --accent-opaque: var(--accent);
   --accent-foreground: var(--foreground);
   --muted: #f9f9f9;
   --muted-foreground: #5d5d5d;
@@ -1500,6 +1510,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     --card: #141414;
     --card-foreground: var(--foreground);
     --accent: #242424;
+    --accent-opaque: var(--accent);
     --accent-foreground: var(--foreground);
     --muted: #1c1c1c;
     --muted-foreground: #afafaf;
@@ -1591,6 +1602,8 @@ html[data-theme-id]:not([data-theme-id=""]) {
   --secondary-label: var(--app-theme-secondary-label);
   --icon-muted: var(--app-theme-icon-muted);
   --accent: var(--app-theme-accent-surface);
+  /* Opaque for the built-in themes only; an imported theme may keep alpha here. */
+  --accent-opaque: var(--accent);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --message-surface: var(--app-theme-message-surface);
   --message-foreground: var(--app-theme-message-foreground);
@@ -1807,6 +1820,8 @@ html[data-theme-id] [data-app-sidebar] {
   --card: var(--app-theme-surface);
   --card-foreground: var(--app-theme-text);
   --accent: var(--app-theme-accent-surface);
+  /* Opaque for the built-in themes only; an imported theme may keep alpha here. */
+  --accent-opaque: var(--accent);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --muted: var(--app-theme-muted);
   --muted-foreground: var(--app-theme-muted-foreground);

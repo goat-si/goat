@@ -79,36 +79,11 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		return die(fmt.Errorf("unexpected answer %q", reg.T))
 	}
 	fmt.Fprintf(stdout, "pen-service v1 registered %s %s\n", name, reg.ID)
-	// The node answers every op once, in order; events (invite-burned, invite-exhausted) are not answers. Counting
-	// both sides lets the end of stdin succeed only once every forwarded op was answered.
-	var released, noHalfClose atomic.Bool
-	var forwarded, answered atomic.Int64
-	allAnswered := func() bool { return answered.Load() == forwarded.Load() }
+	var s serviceCount
 	ended := make(chan int, 3)
 	go func() {
-		for {
-			op, err := readCappedLine(stdin, serviceOpCap)
-			if errors.Is(err, io.EOF) {
-				// Released: the node answers what it was sent, then ends the registration and closes.
-				released.Store(true)
-				if cl.CloseWrite() != nil {
-					// Without a half-close the node cannot end the registration for us: stop at the last answer.
-					noHalfClose.Store(true)
-					if allAnswered() {
-						ended <- serviceReleased
-					}
-				}
-				return
-			}
-			if err != nil {
-				fmt.Fprintln(stderr, "pen service:", err)
-				ended <- serviceFailed
-				return
-			}
-			forwarded.Add(1)
-			if _, err := cl.Write(op); err != nil {
-				return
-			}
+		if code, ok := forwardOps(stdin, cl, &s, stderr); ok {
+			ended <- code
 		}
 	}()
 	go func() {
@@ -116,13 +91,13 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		for {
 			b, err := readCappedLine(node, serviceAnswerCap)
 			if err != nil {
-				if released.Load() && allAnswered() {
+				if s.released.Load() && s.allAnswered() {
 					ended <- serviceReleased
 					return
 				}
-				if released.Load() {
+				if s.released.Load() {
 					fmt.Fprintf(stderr, "pen service: the pen daemon closed the registration of %s before answering %d forwarded op(s)\n",
-						name, forwarded.Load()-answered.Load())
+						name, s.forwarded.Load()-s.answered.Load())
 					ended <- serviceDaemonGone
 					return
 				}
@@ -142,15 +117,56 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 			stdout.Write(b)
 			switch notice.T {
 			case "clients", "refused", "invite", "invite-cancelled":
-				answered.Add(1)
-				if released.Load() && noHalfClose.Load() && allAnswered() {
-					ended <- serviceReleased
-					return
-				}
+				s.answered.Add(1)
 			}
 		}
 	}()
 	return <-ended
+}
+
+// serviceCount counts both sides: the node answers every op once, in order, and events (invite-burned,
+// invite-exhausted) are not answers, so the end of stdin succeeds only once every forwarded op was answered.
+type serviceCount struct {
+	released            atomic.Bool
+	forwarded, answered atomic.Int64
+}
+
+func (s *serviceCount) allAnswered() bool { return s.answered.Load() == s.forwarded.Load() }
+
+// opSink is the side of the node's connection the ops go to.
+type opSink interface {
+	Write(p []byte) (int, error)
+	CloseWrite() error
+}
+
+// forwardOps forwards each stdin line to the node until stdin ends, then half-closes. It returns the exit code when
+// it decides how the registration ends, and ok false when the node's answers decide it. An op it cannot write, or a
+// half-close that fails with an op unanswered, ends the child: the node could not answer it or end the registration.
+func forwardOps(stdin *bufio.Reader, node opSink, s *serviceCount, stderr io.Writer) (int, bool) {
+	for {
+		op, err := readCappedLine(stdin, serviceOpCap)
+		if errors.Is(err, io.EOF) {
+			// Released: the node answers what it was sent, then ends the registration and closes.
+			s.released.Store(true)
+			if err := node.CloseWrite(); err != nil {
+				if s.allAnswered() {
+					return serviceReleased, true
+				}
+				fmt.Fprintf(stderr, "pen service: could not end the ops with %d unanswered: %v\n", s.forwarded.Load()-s.answered.Load(), err)
+				return serviceFailed, true
+			}
+			return 0, false
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "pen service:", err)
+			return serviceFailed, true
+		}
+		s.forwarded.Add(1)
+		if _, err := node.Write(op); err != nil {
+			fmt.Fprintln(stderr, "pen service: could not forward an op:", err)
+			return serviceFailed, true
+		}
+	}
 }
 
 // readCappedLine reads one line with its LF, at most limit bytes; io.EOF means the input ended (a partial last line is

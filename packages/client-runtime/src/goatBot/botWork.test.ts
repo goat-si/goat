@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { BotRemoteWork, BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { groupBotWork } from "./botWork.ts";
+import { botHomeWork, groupBotWork } from "./botWork.ts";
 
 const row = Schema.decodeUnknownSync(BotThreadRow);
 const group = Schema.decodeUnknownSync(ChannelChildWorkGroup);
@@ -114,5 +114,56 @@ describe("groupBotWork", () => {
     expect(result.inProgress[0]?.remote).toEqual([onBox]);
     // A remote thread is never opened in the bot's own environment.
     expect(result.inProgress[0]?.threads).toEqual([]);
+  });
+});
+
+const statusRow = (
+  id: string,
+  status: string,
+  lastActivityAt: string,
+  doneAt: string | null = null,
+) =>
+  row({
+    kind: "task",
+    task: { taskId: id, title: id, status, updatedAt: lastActivityAt },
+    view: { taskId: id, doneAt, pinnedAt: null, readThrough: null },
+    lastActivityAt,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+
+describe("botHomeWork", () => {
+  it("orders the bot's work running, then waiting, then recently finished", () => {
+    const home = botHomeWork(
+      [
+        statusRow("done-new", "completed", "2026-11-04T05:00:00.000Z"),
+        statusRow("waiting-old", "waiting_input", "2026-11-04T01:00:00.000Z"),
+        statusRow("running-old", "running", "2026-11-04T02:00:00.000Z"),
+        statusRow("running-new", "running", "2026-11-04T04:00:00.000Z"),
+        statusRow("done-old", "failed", "2026-11-04T03:00:00.000Z"),
+      ],
+      [],
+      EnvironmentId.make("env"),
+    );
+    const ids = (tasks: ReadonlyArray<{ row: { task: { taskId: string } } }>) =>
+      tasks.map((task) => task.row.task.taskId);
+    expect(ids(home.running)).toEqual(["running-new", "running-old"]);
+    expect(ids(home.waiting)).toEqual(["waiting-old"]);
+    expect(ids(home.finished)).toEqual(["done-new", "done-old"]);
+  });
+
+  it("keeps a task a person marked done out of the running group", () => {
+    const home = botHomeWork(
+      [statusRow("marked", "running", "2026-11-04T02:00:00.000Z", "2026-11-04T03:00:00.000Z")],
+      [],
+      EnvironmentId.make("env"),
+    );
+    expect(home.running).toEqual([]);
+    expect(home.finished).toHaveLength(1);
+  });
+
+  it("leaves coding rows to their task, as the work groups do", () => {
+    const home = botHomeWork([coding], [], EnvironmentId.make("env"));
+    expect([...home.running, ...home.waiting, ...home.finished]).toEqual([]);
   });
 });

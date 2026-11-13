@@ -2,8 +2,10 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  PreviewAutomationClickInput,
   PreviewAutomationHistoryInput,
   PreviewAutomationReloadInput,
+  PreviewAutomationScrollInput,
   PreviewAutomationWaitForInput,
 } from "./previewAutomation.ts";
 
@@ -63,5 +65,62 @@ describe("PreviewAutomationWaitForInput", () => {
     ])
       expect(() => decode(input)).toThrow();
     expect(decode({ loadState: "networkIdle", timeoutMs: 60_000 }).timeoutMs).toBe(60_000);
+  });
+
+  it("takes a URL glob or a download alone, as conditions on the tab", () => {
+    expect(decode({ urlGlob: "**/done*" })).toEqual({ urlGlob: "**/done*" });
+    expect(decode({ download: true })).toEqual({ download: true });
+    const both = { urlIncludes: "/done", urlGlob: "https://app.test/*", download: true };
+    expect(decode(both)).toEqual(both);
+    for (const input of [{ download: false }, { urlGlob: " " }, { urlGlob: "x".repeat(2049) }])
+      expect(() => decode(input)).toThrow();
+  });
+});
+
+describe("PreviewAutomationClickInput", () => {
+  const decode = Schema.decodeUnknownSync(PreviewAutomationClickInput);
+
+  it("takes a wanted checked state and held modifier keys on an element click", () => {
+    const input = { locator: "#terms", checked: true, modifiers: ["Shift", "Meta"] };
+    expect(decode(input)).toEqual(input);
+    expect(decode({ x: 4, y: 8, modifiers: ["Control"] })).toEqual({
+      x: 4,
+      y: 8,
+      modifiers: ["Control"],
+    });
+  });
+
+  it("refuses checked without an element or with anything but one left click", () => {
+    for (const input of [
+      { x: 4, y: 8, checked: true },
+      { locator: "#terms", checked: false, button: "right" },
+      { locator: "#terms", checked: true, clickCount: 2 },
+      { locator: "#terms", checked: "yes" },
+      { locator: "#terms", modifiers: ["Super"] },
+    ])
+      expect(() => decode(input)).toThrow();
+  });
+});
+
+describe("PreviewAutomationScrollInput", () => {
+  const decode = Schema.decodeUnknownSync(PreviewAutomationScrollInput);
+
+  it("takes a locator alone, to bring that element into view", () => {
+    expect(decode({ locator: "#footer" })).toEqual({ locator: "#footer" });
+    expect(decode({ selector: "#footer", deltaY: 200 })).toEqual({
+      selector: "#footer",
+      deltaY: 200,
+    });
+  });
+
+  it("still needs a delta for the page or a point, and one target kind", () => {
+    for (const input of [
+      {},
+      { x: 10, y: 10 },
+      { x: 10, deltaY: 5 },
+      { locator: "#a", selector: "#b" },
+      { locator: "#a", x: 1, y: 2, deltaY: 5 },
+    ])
+      expect(() => decode(input)).toThrow();
   });
 });

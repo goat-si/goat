@@ -80,8 +80,8 @@ export interface RetirableSession {
   >;
 }
 
-/** An unconfirmed model never refuses or restarts: when GOAT cannot ask, the turn runs as before. */
-type ModelRefusal = Exclude<ProviderAdapter.ProviderModelStatus, "ready" | "unconfirmed">;
+/** Only a model the process cannot run refuses; an outdated one runs and restarts the idle process. */
+type ModelRefusal = Extract<ProviderAdapter.ProviderModelStatus, "predated" | "missing">;
 
 /** A model state refuses the turn without marking the session; nothing is drained for it. */
 export type Retirement = "current" | "released" | "retiring" | ModelRefusal;
@@ -128,7 +128,8 @@ export const refuseUnready = Effect.fnUntraced(function* <E>(
 /**
  * Settings changed: an idle session is released; a busy one is marked to stop within a probe after
  * its work ends, and the caller refuses turns that would add work. A process that predates the
- * requested model is released when idle; otherwise only that turn is refused.
+ * requested model is released when idle; otherwise only that turn is refused. A process whose
+ * catalog details for the model are outdated is released when idle; otherwise the turn runs on it.
  */
 export const make = <
   Entry extends RetirableSession,
@@ -204,7 +205,9 @@ export const make = <
     // The model check below waits on the process; an idle deadline must not fall inside it.
     if (turn !== undefined)
       yield* input.reschedule(providerSessionId).pipe(logged(providerSessionId));
-    const releaseIdle = Effect.fnUntraced(function* (busy: "retiring" | "predated") {
+    const releaseIdle = Effect.fnUntraced(function* <
+      Busy extends "retiring" | "predated" | "outdated",
+    >(busy: Busy) {
       const latest = yield* read;
       if (latest === undefined) return "released" as Retirement;
       if (latest.busyTurns.size > 0) return busy;
@@ -249,7 +252,9 @@ export const make = <
     if (model === undefined || marked.runtime.modelStatus === undefined) return "current";
     const status = yield* marked.runtime.modelStatus(model, { since: turn?.since });
     if (status === "ready" || status === "unconfirmed") return "current";
-    return status === "missing" ? status : yield* releaseIdle(status);
+    if (status === "missing") return status;
+    const released = yield* releaseIdle(status);
+    return released === "outdated" ? "current" : released;
   });
 
   /** Rechecks every live session whenever provider instances change. */

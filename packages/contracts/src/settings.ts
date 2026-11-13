@@ -5,6 +5,7 @@ import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
 import { PenTrustRoot } from "./penSettings.ts";
+import { FirstRunPrompts } from "./settingsFirstRun.ts";
 import {
   SidebarProjectSortOrder,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -85,7 +86,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { FleetSettings } from "./fleetResources.ts";
 import { GoatclawSettings, GoatclawSettingsPatch } from "./permissionProfiles.ts";
-import { HubSettings, HubSettingsPatch } from "./hubSettings.ts";
+import { HubServerSettingsFields, HubServerSettingsPatchFields } from "./hubSettings.ts";
 import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
@@ -286,25 +287,7 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
-/** "later" was closed without an answer; neither it nor "answered" is asked again. */
-export const FirstRunPromptState = Schema.Literals(["pending", "answered", "later"]);
-export type FirstRunPromptState = typeof FirstRunPromptState.Type;
-
-const firstRunPrompt = FirstRunPromptState.pipe(
-  Schema.withDecodingDefault(Effect.succeed("pending" as const)),
-);
-
-/**
- * Questions the desktop asks once per profile. Only the record is shared: each answer lives in
- * the setting its prompt changes, and each prompt stays independent of the others.
- */
-export const FirstRunPrompts = Schema.Struct({
-  computerUse: firstRunPrompt,
-  opencodex: firstRunPrompt,
-  goatclaw: firstRunPrompt,
-});
-export type FirstRunPrompts = typeof FirstRunPrompts.Type;
-export type FirstRunPromptId = keyof FirstRunPrompts;
+export { FirstRunPromptState, FirstRunPrompts, type FirstRunPromptId } from "./settingsFirstRun.ts";
 
 /**
  * Which destination-rail items a person showed, hid, or reordered. Ids are plain strings,
@@ -322,6 +305,8 @@ export const ClientSettingsSchema = Schema.Struct({
   goatBotTaskThreadsBesideChat: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  /** A person hid the bot home's Suggested section on this device. */
+  goatBotSuggestedHidden: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
   ),
@@ -1383,7 +1368,7 @@ export const ServerSettings = Schema.Struct({
   ...SnoozeSettingsFields,
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  ...HubServerSettingsFields,
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   pen: Schema.NullOr(PenTrustRoot).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
@@ -1830,7 +1815,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   /** Each top-level key it names replaces the stored one (see FleetSettings). */
   fleet: Schema.optionalKey(FleetSettings),
   goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
-  hub: Schema.optionalKey(HubSettingsPatch),
+  ...HubServerSettingsPatchFields,
   pen: Schema.optionalKey(Schema.NullOr(PenTrustRoot)),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
@@ -1973,6 +1958,7 @@ export function requiredScopesForProjectMutation(
 
 export const ClientSettingsPatch = Schema.Struct({
   goatBotTaskThreadsBesideChat: Schema.optionalKey(Schema.Boolean),
+  goatBotSuggestedHidden: Schema.optionalKey(Schema.Boolean),
   notificationMode: Schema.optionalKey(NotificationMode),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),

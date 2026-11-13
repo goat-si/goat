@@ -31,6 +31,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
 import { useHubActions } from "./HubDeviceActions";
 import { HubDeviceListSection } from "./HubDeviceList";
+import { HubRelayWarningRow } from "./HubRelayWarningSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -299,6 +300,10 @@ function HubControls({
               onCheckedChange={(checked) => void hub.saveCloudAutoJoin(checked)}
             />
           }
+        />
+        <HubRelayWarningRow
+          environmentId={environmentId}
+          warning={home?.link.relayWarning ?? null}
         />
         <SettingsRow
           {...searchableSetting("hub-permission-profiles")}

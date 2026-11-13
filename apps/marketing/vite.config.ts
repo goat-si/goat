@@ -5,7 +5,9 @@ import "vite-plus/test/config";
 
 // Astro and Vite+ resolve separate Vite type copies; keep their recursive plugin types apart.
 const config: Pick<ViteUserConfig, "root" | "test" | "run"> = defineConfig({
-  test: { name: "marketing", include: ["src/**/*.test.ts"] },
+  // This config does not inherit the root testTimeout, and userDocs.test builds the site twice,
+  // which can exceed vitest's 5s default on a busy machine.
+  test: { name: "marketing", include: ["src/**/*.test.ts"], testTimeout: 60_000 },
   run: {
     tasks: {
       // `astro check` regenerates .astro/*.d.ts and then reads them, which

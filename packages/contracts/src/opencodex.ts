@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HubParityEvidence } from "./hubParity.ts";
+import { OpenCodexHubRelayWarning, OpenCodexLinkTrafficFields } from "./opencodexLinkTraffic.ts";
 import {
   ChildReadyFailure,
   ChildReadyNextAction,
@@ -33,6 +34,16 @@ export const OpenCodexDeviceFallback = Schema.Struct({
 });
 export type OpenCodexDeviceFallback = typeof OpenCodexDeviceFallback.Type;
 
+/** A link row as `ocx link status --json` prints it, before GOAT adds what it derived. */
+export const OpenCodexLinkRowFields = {
+  id: Schema.String,
+  alias: Schema.String,
+  tunnelPort: Port,
+  state: Schema.Literals(["connecting", "connected", "reconnecting", "failed", "idle", "unknown"]),
+  lastApplyAt: ForwardCompatibleOptional(Schema.Number),
+  apiKeyId: Schema.optional(Schema.String),
+};
+
 export const OpenCodexInventorySnapshot = Schema.Struct({
   installed: Schema.Boolean,
   binaries: Schema.Array(Schema.Struct({ path: Schema.String, version: Schema.String })),
@@ -55,22 +66,9 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
     role: Schema.Literals(["home", "child", "none"]),
     available: Schema.Boolean,
     links: Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        alias: Schema.String,
-        tunnelPort: Port,
-        state: Schema.Literals([
-          "connecting",
-          "connected",
-          "reconnecting",
-          "failed",
-          "idle",
-          "unknown",
-        ]),
-        lastApplyAt: ForwardCompatibleOptional(Schema.Number),
-        apiKeyId: Schema.optional(Schema.String),
-      }),
+      Schema.Struct({ ...OpenCodexLinkRowFields, ...OpenCodexLinkTrafficFields }),
     ),
+    relayWarning: ForwardCompatibleOptional(OpenCodexHubRelayWarning),
     childSettingsApplied: Schema.NullOr(Schema.Boolean),
     /** The Home's name: its host name on the Home, the name it published on a Child. */
     homeName: ForwardCompatibleOptional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),

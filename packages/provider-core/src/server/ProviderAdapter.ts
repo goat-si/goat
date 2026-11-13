@@ -624,7 +624,7 @@ export type ProviderAdapterV2SubagentOutcome = {
   readonly result: OrchestrationV2Subagent["result"];
 };
 
-export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed";
+export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed" | "outdated";
 
 export interface ProviderAdapterV2SessionRuntime {
   readonly instanceId: ProviderInstanceId;
@@ -641,10 +641,10 @@ export interface ProviderAdapterV2SessionRuntime {
    */
   readonly holdsLiveWork?: (input: { readonly pastPinCeiling: boolean }) => Effect.Effect<boolean>;
   /**
-   * Whether this process can run a model GOAT offers from the provider's catalog: `predated` when it
-   * started before the model was added, so a new process would know it; `missing` when it does not
-   * list a model GOAT already offered when it started; `unconfirmed` when GOAT cannot tell, and
-   * the turn runs as it would without the check.
+   * Whether this process can run a model from the provider's catalog: `predated` when the model was
+   * added after it started; `missing` when it does not list a model offered at its start;
+   * `unconfirmed` when GOAT cannot tell, so the turn runs unchecked; `outdated` when it runs the
+   * model with catalog details, such as the context window, that changed after it started.
    */
   readonly modelStatus?: (
     model: string,

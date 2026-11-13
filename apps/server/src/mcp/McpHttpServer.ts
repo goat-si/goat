@@ -94,6 +94,7 @@ import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import { layerDisposableAttach } from "../hub/disposable/layer.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
+import * as HubLinkTraffic from "../hub/HubLinkTraffic.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
 import * as OpenCodexUpdateHost from "../hub/OpenCodexUpdateHost.ts";
@@ -1112,8 +1113,13 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(OpenCodexSync.layer.pipe(Layer.provide(HubOcx.layer))),
   Layer.provide(OpenCodexUpdateHost.layerHost),
   Layer.provideMerge(HubParity.layer),
-  // Shared with the hub-down policy, so both read one inventory cache.
-  Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
+  // Shared with the hub-down policy, so both read one inventory cache and one link traffic book.
+  Layer.provideMerge(
+    OpenCodexInventory.layer.pipe(
+      Layer.provide(ProcessRunner.layer),
+      Layer.provide(HubLinkTraffic.layer),
+    ),
+  ),
   // One installer for inventory ownership and managed updates, so its lock is shared too.
   Layer.provideMerge(OpenCodexInstallation.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),

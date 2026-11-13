@@ -30,7 +30,7 @@ func TestAnExpiredInviteIsRemovedFromDiskWhenAJoinAsksForIt(t *testing.T) {
 				if _, ok := iv.Lookup(x.ID, later); ok {
 					t.Fatal("expired invite found")
 				}
-			} else if err := iv.Burn(x.ID, later); err == nil {
+			} else if err := iv.Burn(x.ID, later, CardBody{}, at(later)); err == nil {
 				t.Fatal("expired invite burned")
 			}
 			var onDisk []Invite

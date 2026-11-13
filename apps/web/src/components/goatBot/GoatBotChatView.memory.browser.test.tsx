@@ -63,7 +63,11 @@ vi.mock("~/state/channels", async (original) => {
   const real = await original<typeof import("~/state/channels")>();
   return {
     ...real,
-    channelEnvironment: { ...real.channelEnvironment, listBotNotes: () => "notes" },
+    channelEnvironment: {
+      ...real.channelEnvironment,
+      listBotNotes: () => "notes",
+      slackSettings: () => "slack",
+    },
   };
 });
 vi.mock("~/state/entities", async (original) => ({
@@ -74,23 +78,41 @@ vi.mock("~/state/entities", async (original) => ({
 vi.mock("~/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
   useEnvironmentQuery: (atom: unknown) =>
-    atom === "notes"
+    atom === null
       ? {
-          data: { revision: "r", notes: state.notes, truncated: false },
+          data: null,
           failure: null,
           error: null,
           isPending: false,
-          isSuccess: true,
-          refresh: state.refresh,
-        }
-      : {
-          data: { tasks: [] },
-          failure: null,
-          error: null,
-          isPending: false,
-          isSuccess: true,
+          isSuccess: false,
           refresh: () => {},
-        },
+        }
+      : atom === "notes"
+        ? {
+            data: { revision: "r", notes: state.notes, truncated: false },
+            failure: null,
+            error: null,
+            isPending: false,
+            isSuccess: true,
+            refresh: state.refresh,
+          }
+        : atom === "slack" || atom === "settings"
+          ? {
+              data: [],
+              failure: null,
+              error: null,
+              isPending: false,
+              isSuccess: true,
+              refresh: () => {},
+            }
+          : {
+              data: { tasks: [] },
+              failure: null,
+              error: null,
+              isPending: false,
+              isSuccess: true,
+              refresh: () => {},
+            },
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
@@ -254,7 +276,7 @@ it("in the narrow sheet Escape steps from a task back to Home, then closes the s
   await userEvent.type(field, "Half a thought");
   await userEvent.click(chip);
   await expect.element(page.getByRole("tab", { name: "Home" })).toBeVisible();
-  await userEvent.click(page.getByRole("button", { name: /Stop the port 3774 server/ }));
+  await userEvent.click(page.getByRole("button", { name: /^Stop the port 3774 server/ }));
   await expect.element(page.getByText("Go to thread")).toBeVisible();
   await userEvent.keyboard("{Escape}");
   // The first Escape leaves the task; the sheet stays open on Home.

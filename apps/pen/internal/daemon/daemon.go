@@ -148,9 +148,12 @@ type Daemon struct {
 	// versions.json so an offline member's last announcement still counts.
 	versions map[string]string
 	// acct are the running kind 0x04 sessions, oldest first.
-	acct       []*acctSlot
-	inviteWait map[string]chan mesh.Member
-	lastView   *mesh.View
+	acct []*acctSlot
+	// inviteWait holds the callers waiting on an invite's join.
+	inviteWait map[string]chan joinOutcome
+	// boundCreated, when set, runs after a bound invite is made and before its waiter is registered (tests).
+	boundCreated func(id string)
+	lastView     *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
 	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.
@@ -160,6 +163,9 @@ type Daemon struct {
 
 	// svc holds the registered local services (services.go).
 	svc serviceBook
+
+	// controlSlots holds one token per open control connection (serveControl).
+	controlSlots chan struct{}
 
 	khMu sync.Mutex
 	// sshUser is published in this node's hostkeys records.
@@ -302,7 +308,7 @@ func New(opt Options) (*Daemon, error) {
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, snapWatchers: map[chan []byte]struct{}{}, snapGen: 1,
 		seen:     map[string]seenInfo{},
-		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+		versions: versions, inviteWait: map[string]chan joinOutcome{}, stopCh: make(chan struct{}),
 	}
 	d.svc.onPhones = opt.PhoneSlots
 	switch opt.SSHUser {
@@ -328,6 +334,13 @@ func (d *Daemon) mesh() *mesh.Store {
 	d.meshMu.RLock()
 	defer d.meshMu.RUnlock()
 	return d.store
+}
+
+// meshAndBook is the current store and invite book, read together so a mesh replacement cannot come between them.
+func (d *Daemon) meshAndBook() (*mesh.Store, *mesh.Invites) {
+	d.meshMu.RLock()
+	defer d.meshMu.RUnlock()
+	return d.store, d.invites
 }
 
 func (d *Daemon) view() *mesh.View { return d.mesh().View() }

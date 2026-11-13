@@ -66,6 +66,7 @@ export function useBotThreads(
     supported,
     loaded: threads.isSuccess,
     failed: threads.error !== null,
+    failure: threads.failure,
     /** The bot's own turns asking a question in its chat, which the rows never list. */
     turnsWaiting: goatBotTurnsWaiting(items),
     refresh: threads.refresh,

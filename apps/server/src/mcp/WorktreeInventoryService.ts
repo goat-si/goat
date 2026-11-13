@@ -36,6 +36,7 @@ import {
   makeIsManagedWorktreePath,
   managedWorktreesDirectories,
 } from "../worktreesDirectory.ts";
+import { makeSweepRounds, type SweepRound, takeRemovingTurn } from "./WorktreeSweepRounds.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 type LocalInput<A> = Omit<A, "host">;
@@ -222,9 +223,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   let checkSequence = 0;
-  // Per repo scope: when each worktree's check last started (least recent goes first), and the
-  // worktrees decided since remaining last reached 0 (a repeat skips counting them, so it ends).
-  const scopes = new Map<string, { lastStart: Map<string, number>; decided: Set<string> }>();
+  const scopeOf = makeSweepRounds();
 
   const real = (target: string) =>
     fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
@@ -825,32 +824,35 @@ const make = Effect.gen(function* () {
     return null;
   };
 
-  const cleanup: WorktreeInventoryService["Service"]["cleanup"] = Effect.fn(
-    "WorktreeInventory.cleanup",
-  )(function* (input) {
+  // Untraced: it runs inside cleanup's span.
+  const sweep = Effect.fnUntraced(function* (
+    input: Parameters<WorktreeInventoryService["Service"]["cleanup"]>[0],
+    deadline: number,
+    scope: SweepRound,
+    waited: boolean,
+  ) {
     const dryRun = input.dryRun !== false;
-    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
     const facts = yield* scan(input.repo);
-    const scopeKey = input.repo ?? "";
-    const scope = scopes.get(scopeKey) ?? { lastStart: new Map(), decided: new Set<string>() };
-    scopes.set(scopeKey, scope);
-    if (!dryRun)
+    if (!dryRun) {
+      scope.listed = facts.filter((fact) => !fact.entry.main).map((fact) => fact.entry.path);
       facts.sort((a, b) => {
         const order =
           (scope.lastStart.get(a.entry.path) ?? 0) - (scope.lastStart.get(b.entry.path) ?? 0);
         return order || a.entry.path.localeCompare(b.entry.path);
       });
+    }
     const removed: Array<WorktreeMcpCleanupEntry> = [];
     const kept: Array<WorktreeMcpCleanupEntry> = [];
     let remaining = 0;
-    let checked = false;
+    let checked = waited;
     // A worktree counts as decided only once its check finished, so an interrupted call leaves it.
     let deciding: string | null = null;
     for (const fact of facts) {
       if (deciding !== null) scope.decided.add(deciding);
       deciding = null;
       if (fact.entry.main) continue;
-      // Every removing call checks at least one worktree, so a slow scan cannot stall repeats.
+      // A call that did not wait checks at least one worktree, so a slow scan cannot stall repeats;
+      // one that waited follows a sweep that made progress.
       if (!dryRun && checked && (yield* Clock.currentTimeMillis) >= deadline) {
         if (!scope.decided.has(fact.entry.path)) remaining++;
         continue;
@@ -890,6 +892,23 @@ const make = Effect.gen(function* () {
     if (deciding !== null) scope.decided.add(deciding);
     if (!dryRun && remaining === 0) scope.decided.clear();
     return { dryRun, removed, kept, remaining };
+  });
+
+  const cleanup: WorktreeInventoryService["Service"]["cleanup"] = Effect.fn(
+    "WorktreeInventory.cleanup",
+  )(function* (input) {
+    const dryRun = input.dryRun !== false;
+    const deadline = (yield* Clock.currentTimeMillis) + CLEANUP_SWEEP_BUDGET_MS;
+    const scope = scopeOf(input.repo ?? "");
+    if (dryRun) return yield* sweep(input, deadline, scope, false);
+    const result = yield* takeRemovingTurn(scope, deadline, (waited) =>
+      sweep(input, deadline, scope, waited),
+    );
+    if (Option.isSome(result)) return result.value;
+    return yield* failure(
+      "orchestration_error",
+      "Other removing sweeps of these worktrees are running or waiting. Call again when one returns.",
+    );
   });
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(

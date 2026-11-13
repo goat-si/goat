@@ -21,6 +21,9 @@ import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
 import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
+import { clickToState, heldKeys, type ClickReport } from "./clickState.ts";
+import type { DownloadWait } from "./downloadJournal.ts";
+import { extraWaits } from "./waitExtras.ts";
 import { evaluateWithTimeout, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
@@ -641,14 +644,18 @@ const clickTarget = async (
   const { point } = aimed;
   await pointer(point, "click");
   const button = input.button ?? "left";
+  const keys = heldKeys(page, gate, input.modifiers);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
   // Listening first: a dialog that opens while the watch installs still ends the wait.
   let dialogBeforePress = false;
+  let dialogShown = false;
+  let clicked = false;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => {
       dialogBeforePress = !sent;
+      dialogShown = true;
       resolve("dialog");
     };
     page.once("dialog", onDialog);
@@ -679,6 +686,10 @@ const clickTarget = async (
     await gate();
     gate.signal?.throwIfAborted();
     sent = true;
+    if (count === 1) await keys.press();
+    // A dialog a key-down opened holds the page; once it is answered, the click stays unsent.
+    if (dialogShown) return undefined;
+    clicked = true;
     if (count === 1)
       return locator === null
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
@@ -711,11 +722,12 @@ const clickTarget = async (
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
+    await keys.release(dialog, gate.linger);
   }
   if (!sent) watch.cancel();
   const outcome = await watch.settle(dialog).finally(() => releaseAim(aim, gate));
-  // A dialog that stopped a multi-press click leaves it short of what was asked.
-  const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
+  // A dialog that stopped a multi-press click, or a held key's dialog before any press, leaves it short.
+  const short = (input.clickCount ?? 1) > presses && ((input.clickCount ?? 1) > 1 || !clicked);
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
 export const click = async (
@@ -723,9 +735,13 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): ReturnType<typeof clickTarget> => {
+): Promise<ClickReport> => {
   try {
-    return await clickTarget(page, input, pointer, gate);
+    if (input.checked === undefined) return await clickTarget(page, input, pointer, gate);
+    const timeout = remaining(actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline));
+    return await clickToState(targetLocator(page, input), input.checked, gate, timeout, () =>
+      clickTarget(page, input, pointer, gate),
+    );
   } catch (cause) {
     const timedOut =
       (cause instanceof ServerBrowserOperationError &&
@@ -955,7 +971,9 @@ export const scroll = async (
     await gate();
     gate.signal?.throwIfAborted();
     await actionCall(gate, () =>
-      handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
+      input.deltaX === undefined && input.deltaY === undefined
+        ? handle.scrollIntoViewIfNeeded({ timeout: DISPATCH_TIMEOUT_MS })
+        : handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
     );
     return {
       settled: await settleScroll(
@@ -1020,6 +1038,7 @@ export const waitFor = async (
   page: Page,
   input: PreviewAutomationWaitForInput,
   signal?: AbortSignal,
+  downloads?: DownloadWait,
 ) => {
   signal?.throwIfAborted();
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1041,12 +1060,14 @@ export const waitFor = async (
     ${input.text === undefined ? "true" : `(document.body?.innerText ?? "").includes(${JSON.stringify(input.text)})`}
     && ${input.urlIncludes === undefined ? "true" : `location.href.includes(${JSON.stringify(input.urlIncludes)})`}
   ))()`;
+  const extras = extraWaits(page, input, downloads);
   const conditions = [
     ...(locator ? [`locator:${state}`] : []),
     ...elementConditions,
     ...(input.text === undefined ? [] : ["text"]),
     ...(input.urlIncludes === undefined ? [] : ["url"]),
     ...(input.loadState === undefined ? [] : [`load:${input.loadState}`]),
+    ...extras.names,
   ];
   const timeout = () =>
     new ServerBrowserOperationError(
@@ -1073,16 +1094,18 @@ export const waitFor = async (
   });
   const wait = async () => {
     for (;;) {
-      remaining();
+      // One budget per pass: a deadline passing while the list is built would leave a started wait unobserved.
+      const left = remaining();
       await Promise.all([
-        locator?.waitFor({ state, timeout: remaining() }),
+        locator?.waitFor({ state, timeout: left }),
         ...(input.text === undefined && input.urlIncludes === undefined
           ? []
           : [
               page
-                .waitForFunction(documentCondition, undefined, { timeout: remaining() })
+                .waitForFunction(documentCondition, undefined, { timeout: left })
                 .then((handle) => handle.dispose()),
             ]),
+        ...extras.pending(left),
       ]);
       remaining();
       const version = documentVersion;
@@ -1113,16 +1136,17 @@ export const waitFor = async (
       // Revalidate snapshot refs after a navigation even if the native locator happened to settle.
       if (target) targetLocator(page, input);
       const held =
-        locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
+        (locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
           ? await matchesState(locator, input, remaining())
-          : true;
-      if (version === documentVersion && locatorMatches && documentMatches === true && held) return;
+          : true) && extras.held();
+      if (version === documentVersion && locatorMatches && documentMatches === true && held)
+        return extras.finish();
       // An element condition has no event to wait on: look again shortly, within the deadline.
       if (!held) await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining())));
     }
   };
   try {
-    await Promise.race([wait(), interrupted]);
+    return await Promise.race([wait(), interrupted]);
   } catch (cause) {
     signal?.throwIfAborted();
     if (cause instanceof Error && cause.name === "TimeoutError") throw timeout();
@@ -1131,6 +1155,7 @@ export const waitFor = async (
     // Playwright's read-only wait has no AbortSignal API. It may settle until its deadline,
     // but cannot start another check or hold the control queue after takeover/timeout.
     stopped = true;
+    extras.end();
     clearTimeout(timer);
     if (abort) signal?.removeEventListener("abort", abort);
     page.off("framenavigated", navigated);

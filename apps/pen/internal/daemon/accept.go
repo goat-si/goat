@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"time"
@@ -56,7 +57,7 @@ func (d *Daemon) admit(kind byte, remote []byte, p session.Payload) ([]byte, err
 			return nil, errNotAdmitted
 		}
 		inv, ok := d.inviteBook().Lookup(p.Invite, d.now())
-		if !ok {
+		if !ok || !inv.Subject.AdmitsNoise(remote) {
 			return nil, errNotAdmitted
 		}
 		return session.JoinPSK(inv.Secret, d.nodeID, d.id.NoisePub)
@@ -210,12 +211,15 @@ func (d *Daemon) serveMesh(ctx context.Context, sec *session.Secure, l *live) {
 	sec.Close(code)
 }
 
+// serveJoinLink wraps the link a join is served on; tests make it fail after the admit.
+var serveJoinLink = func(l mesh.Link) mesh.Link { return l }
+
 func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	ctx, cancel := context.WithTimeout(ctx, meshSessionTimeout)
 	defer cancel()
 	inviteID := sec.Payload.Invite
 	joiner := ident.B64.EncodeToString(sec.RemoteStatic)
-	member, err := mesh.ServeJoin(ctx, sec, sec.RemoteStatic, mesh.Admission{
+	member, err := mesh.ServeJoin(ctx, serveJoinLink(sec), sec.RemoteStatic, mesh.Admission{
 		ID: d.id, Store: d.mesh(), Invites: d.inviteBook(), InviteID: inviteID, Now: d.now,
 		// The other members hear of the joiner before its join returns.
 		OnAdmit: func(*mesh.Record) {
@@ -229,18 +233,38 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 			d.pushTo(ctx, others)
 		},
 	})
-	if err != nil {
+	var burned *mesh.BurnedError
+	switch {
+	case err == nil:
+		d.opt.Logf("admitted %s (%s)", member.Name, member.NodeID)
+		d.tellWaiter(inviteID, joinOutcome{member: member, delivered: true})
+		sec.Close(wire.CodeNormal)
+	case errors.As(err, &burned):
+		// The invite is used up: its waiter hears whom it admitted, or that it admitted nobody, never that it expired.
 		d.opt.Logf("join: %v", err)
-		return
+		d.tellWaiter(inviteID, joinOutcome{member: burned.Member})
+	default:
+		d.opt.Logf("join: %v", err)
 	}
-	d.opt.Logf("admitted %s (%s)", member.Name, member.NodeID)
+}
+
+// joinOutcome is what a join tells the caller waiting on its invite: delivered when the joiner got the set; otherwise
+// the invite was burned and member, when not nil, was admitted all the same.
+type joinOutcome struct {
+	member    *mesh.Member
+	delivered bool
+}
+
+func (d *Daemon) tellWaiter(inviteID string, o joinOutcome) {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if ch := d.inviteWait[inviteID]; ch != nil {
-		ch <- *member
+		select {
+		case ch <- o:
+		default:
+		}
 		delete(d.inviteWait, inviteID)
 	}
-	d.mu.Unlock()
-	sec.Close(wire.CodeNormal)
 }
 
 // carriesPeerRevoke reports whether a batch merged on a peer's own session holds that peer's revoke:

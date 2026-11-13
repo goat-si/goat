@@ -21,8 +21,8 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 
 /**
  * Decides which provider session a new provider thread lands on. A new Codex thread whose shared
- * process started before its model was added to Codex's catalog opens its own process instead, so
- * the shared one keeps its running work.
+ * process started before its model was added to Codex's catalog, or before its catalog entry
+ * changed, opens its own process instead, so the shared one keeps its running work.
  */
 export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.make")(function* <
   E,
@@ -48,7 +48,8 @@ export const makeProviderSessionPlacement = Effect.fn("ProviderSessionPlacement.
     if (model === undefined || input.sessions === undefined) return false;
     const live = yield* input.sessions.get(shared).pipe(Effect.orElseSucceed(Option.none));
     if (Option.isNone(live) || live.value.modelStatus === undefined) return false;
-    return (yield* live.value.modelStatus(model, { cachedOnly: true })) === "predated";
+    const status = yield* live.value.modelStatus(model, { cachedOnly: true });
+    return status === "predated" || status === "outdated";
   });
   const providerSessionIdFor = Effect.fn("ProviderSessionPlacement.providerSessionIdFor")(
     function* (placement: {

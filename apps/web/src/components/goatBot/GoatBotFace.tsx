@@ -2,6 +2,7 @@ import {
   GOAT_BOT_HEAD_EYES_ORIGIN,
   GOAT_BOT_HEAD_PATH,
   GOAT_BOT_HEAD_SLEEP_MARK_PATH,
+  GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH,
   GOAT_BOT_HEAD_STROKE_WIDTH,
   GOAT_BOT_HEAD_VIEWBOX,
   goatBotHeadArt,
@@ -71,7 +72,7 @@ export function GoatBotFace({
           <path
             d={GOAT_BOT_HEAD_SLEEP_MARK_PATH}
             stroke="currentColor"
-            strokeWidth={GOAT_BOT_HEAD_STROKE_WIDTH}
+            strokeWidth={GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH}
             strokeLinecap="round"
             strokeLinejoin="round"
           />

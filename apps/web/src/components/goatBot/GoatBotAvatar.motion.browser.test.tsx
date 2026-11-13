@@ -112,3 +112,50 @@ it("draws an emoji avatar in place of the face, keeps its state, and leaves the 
   expect(header?.querySelector("[data-face]")).toBeNull();
   await vi.waitFor(() => expect(movingEyes("list")).toBe(1));
 });
+
+it("separates an accent from its status ring and outlines the waiting dot on the surface", async () => {
+  const accent = { background: "#2F6FED", foreground: "#FFFFFF" } as const;
+  // The avatars do not use a router. The popover surface they declare is drawn behind them.
+  await using screen = await render(
+    <div data-surface className="bg-popover p-2">
+      <div data-avatar="accent">
+        <GoatBotAvatar state="failed" emoji="R" accent={accent} surface="popover" />
+      </div>
+      <div data-avatar="neutral">
+        <GoatBotAvatar state="failed" />
+      </div>
+      <div data-avatar="waiting">
+        <GoatBotAvatar state="waiting" emoji="R" accent={accent} surface="popover" />
+      </div>
+    </div>,
+    { router: false },
+  );
+  const surfaceElement = screen.container.querySelector<HTMLElement>("[data-surface]");
+  const colored = screen.container.querySelector('[data-avatar="accent"] [role="img"]');
+  const fill = colored?.querySelector<HTMLElement>("[data-goat-avatar-fill]");
+  if (!surfaceElement || !(colored instanceof HTMLElement) || !fill)
+    throw new Error("Expected the surface and the accent avatar");
+  const surface = getComputedStyle(surfaceElement).backgroundColor;
+  const ring = getComputedStyle(colored);
+  expect(surface).not.toBe("rgba(0, 0, 0, 0)");
+  // The ring: a 1 px border in the failed colour.
+  expect(Number.parseFloat(ring.borderLeftWidth)).toBeCloseTo(1, 1);
+  expect(ring.borderLeftColor).not.toBe(surface);
+  // The gap: 1 px between the ring and the colour, showing the surface behind the avatar.
+  const outer = colored.getBoundingClientRect();
+  const inner = fill.getBoundingClientRect();
+  expect(inner.left - outer.left - Number.parseFloat(ring.borderLeftWidth)).toBeCloseTo(1, 1);
+  expect(outer.right - inner.right - Number.parseFloat(ring.borderRightWidth)).toBeCloseTo(1, 1);
+  expect(ring.backgroundColor).toBe(surface);
+  expect(getComputedStyle(fill).backgroundColor).toBe("rgb(47, 111, 237)");
+  expect(
+    screen.container.querySelector('[data-avatar="neutral"] [data-goat-avatar-fill]'),
+  ).toBeNull();
+  const dot = screen.container.querySelector<HTMLElement>(
+    '[data-avatar="waiting"] [data-goat-waiting-dot]',
+  );
+  if (!dot) throw new Error("Expected the waiting dot");
+  // The dot's ring is the surface behind the avatar.
+  expect(Number.parseFloat(getComputedStyle(dot).borderTopWidth)).toBeGreaterThan(0);
+  expect(getComputedStyle(dot).borderTopColor).toBe(surface);
+});

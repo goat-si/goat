@@ -3,6 +3,7 @@ import type { BotProfile } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { useContext, useState } from "react";
 
+import { PencilIcon } from "../solar";
 import { Button } from "../ui/button";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
@@ -27,8 +28,14 @@ export function GoatBotEditBotButton() {
   if (bot === null || !canEdit) return null;
   return (
     <>
-      <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(bot)}>
-        Edit bot
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Edit bot"
+        onClick={() => setEditing(bot)}
+      >
+        <PencilIcon aria-hidden />
       </Button>
       {editing !== null ? (
         <GoatBotEditBotDialog bot={editing} canSubmit onClose={() => setEditing(null)} />

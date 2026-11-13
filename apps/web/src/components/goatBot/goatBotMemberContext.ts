@@ -1,4 +1,9 @@
-import { goatBotAccent, goatBotName } from "@goat/client-runtime/goatBot";
+import {
+  goatBotAccent,
+  goatBotMemberPicture,
+  goatBotName,
+  type GoatBotAccent,
+} from "@goat/client-runtime/goatBot";
 import type { BotProfile } from "@goat/contracts";
 import { createContext, useContext, type CSSProperties } from "react";
 
@@ -24,11 +29,19 @@ export function useGoatBotMainName(): string {
   return goatBotName(useContext(GoatBotMainProfileContext));
 }
 
-/** The open chat's bot avatar: the member's, else the main bot's; null draws the face. */
-export function useGoatBotAvatar(): string | null {
+/**
+ * The open chat's bot as its avatar draws it: a member's emoji or initial on its colour, as in
+ * the roster, else the main bot's avatar (null draws the face) with no colour.
+ */
+export function useGoatBotPicture(): {
+  readonly emoji: string | null;
+  readonly accent: GoatBotAccent | null;
+} {
   const member = useContext(GoatBotMemberContext);
   const main = useContext(GoatBotMainProfileContext);
-  return (member ?? main)?.avatar ?? null;
+  return member === null
+    ? { emoji: main?.avatar ?? null, accent: null }
+    : { emoji: goatBotMemberPicture(member), accent: goatBotAccent(member) };
 }
 
 /**

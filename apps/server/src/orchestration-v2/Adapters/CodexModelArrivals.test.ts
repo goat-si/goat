@@ -1,8 +1,12 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ServerProviderModel } from "@goat/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Test fixture paths.
+import * as NodePath from "node:path";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
@@ -266,4 +270,364 @@ it.effect("an answer taken before GOAT's catalog changed is listed again before 
     assert.strictEqual(yield* modelStatus(added, { since }), "ready");
     assert.strictEqual(yield* Ref.get(lists), 2);
   }),
+);
+
+/** A Codex catalog file as `model_catalog_json` points at it, last written at `writtenAtMs`. */
+const writeCatalog = (
+  filename: string,
+  windows: Readonly<Record<string, number>>,
+  writtenAtMs: number,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const models = Object.entries(windows).map(([slug, contextWindow]) => ({
+      slug,
+      context_window: contextWindow,
+    }));
+    yield* fs.writeFileString(filename, JSON.stringify({ models }));
+    yield* fs.utimes(filename, writtenAtMs / 1000, writtenAtMs / 1000);
+  });
+
+/** A process started at `startedAtMs` that lists both models and reads its catalog from `filename`. */
+const catalogArrivals = (filename: string, startedAtMs: number) =>
+  Effect.gen(function* () {
+    const configReads = yield* Ref.make(0);
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known), model(added)],
+      offered: Effect.succeed([model(known), model(added)]),
+      listServed: Effect.succeed([known, added]),
+      startedAtMs,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Ref.update(configReads, (count) => count + 1).pipe(
+          Effect.as({ config: { model_catalog_json: filename } }),
+        ),
+      },
+    });
+    return { modelStatus, configReads: Ref.get(configReads) };
+  });
+
+it.effect(
+  "a model whose catalog entry changed after the process started is outdated; others stay ready",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000, [added]: 400_000 }, 1_000);
+      const { modelStatus, configReads } = yield* catalogArrivals(filename, 2_000);
+      assert.strictEqual(yield* modelStatus(known), "ready");
+
+      // The catalog sync raised one model's window while the process kept its startup copy.
+      yield* writeCatalog(filename, { [known]: 1_048_576, [added]: 400_000 }, 3_000);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+      assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+      assert.strictEqual(yield* modelStatus(added), "ready");
+      assert.strictEqual(yield* modelStatus("not/in-the-catalog"), "missing");
+      assert.strictEqual(yield* configReads, 1);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a catalog changed before GOAT first read it leaves every catalogued model outdated",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      // As for a kept process: the file changed after it started and before GOAT looked.
+      yield* writeCatalog(filename, { [known]: 1_048_576, [added]: 400_000 }, 3_000);
+      const { modelStatus } = yield* catalogArrivals(filename, 2_000);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+      assert.strictEqual(yield* modelStatus(added), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a catalog rewritten while GOAT reads it never becomes what the process started with",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+      let rewrites = 0;
+      const rewrite = writeCatalog(filename, { [known]: 1_048_576 }, 3_000).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
+      // The sync replaces the file after GOAT's stat and before its read.
+      const racingFs: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (path, encoding) =>
+          (rewrites++ === 0 ? rewrite : Effect.void).pipe(
+            Effect.andThen(fs.readFileString(path, encoding)),
+          ),
+      };
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known)]),
+        listServed: Effect.succeed([known]),
+        startedAtMs: 2_000,
+        catalog: {
+          cwd: "/",
+          home: undefined,
+          fileSystem: racingFs,
+          readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+        },
+      });
+      yield* modelStatus(known);
+      assert.strictEqual(yield* modelStatus(known), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a process that could not say where its catalog is is asked again a minute later", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    const answers = [false, true];
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: fs,
+        readConfig: Effect.suspend(() =>
+          answers.shift() === true
+            ? Effect.succeed({ config: { model_catalog_json: filename } })
+            : Effect.fail("busy"),
+        ),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    yield* TestClock.adjust("1 minute");
+    assert.strictEqual(yield* modelStatus(known), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a catalog file that does not answer placement in a moment counts as changed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    let stuck = false;
+    // A slow or hung file system, as a network mount can be.
+    const stuckFs: FileSystem.FileSystem = {
+      ...fs,
+      stat: (path) => (stuck ? Effect.never : fs.stat(path)),
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: stuckFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    stuck = true;
+    // Placement holds dispatch, so it waits only briefly, and an unconfirmed file may have changed.
+    const placed = yield* modelStatus(known, { cachedOnly: true }).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* TestClock.adjust("50 millis");
+    assert.strictEqual(yield* Fiber.join(placed), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("placement sees a catalog change before GOAT has read the new file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    let reading = true;
+    // The background read cannot land before placement answers.
+    const slowFs: FileSystem.FileSystem = {
+      ...fs,
+      readFileString: (path, encoding) =>
+        reading ? fs.readFileString(path, encoding) : Effect.never,
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: slowFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    reading = false;
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("placement treats a catalog GOAT could never read as changed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    let reads = 0;
+    // The first read never finishes, as on a briefly hung file system.
+    const flakyFs: FileSystem.FileSystem = {
+      ...fs,
+      readFileString: (path, encoding) =>
+        reads++ === 0 ? Effect.never : fs.readFileString(path, encoding),
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: flakyFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    const first = yield* modelStatus(known).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* TestClock.adjust("2 seconds");
+    assert.strictEqual(yield* Fiber.join(first), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "placement isolates a new thread while the process has not said where its catalog is",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+      yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+      const modelStatus = makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known)]),
+        listServed: Effect.succeed([known]),
+        startedAtMs: 2_000,
+        catalog: {
+          cwd: "/",
+          home: undefined,
+          fileSystem: fs,
+          // The busy process does not answer config/read during this retry window.
+          readConfig: Effect.fail("busy"),
+        },
+      });
+      assert.strictEqual(yield* modelStatus(known), "ready");
+      yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+      assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("placement isolates a new thread while the first catalog lookup is still pending", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    const answer = yield* Deferred.make<void>();
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: fs,
+        readConfig: Deferred.await(answer).pipe(
+          Effect.as({ config: { model_catalog_json: filename } }),
+        ),
+      },
+    });
+    // The turn's own check is still waiting for config/read when the next thread is placed.
+    const opening = yield* modelStatus(known).pipe(Effect.forkChild({ startImmediately: true }));
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+    yield* Deferred.succeed(answer, undefined);
+    assert.strictEqual(yield* Fiber.join(opening), "ready");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a process with no catalog configured never isolates new threads once it says so", () =>
+  Effect.gen(function* () {
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Effect.succeed({ config: {} }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "ready");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a catalog that changed into something GOAT cannot parse still counts as changed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    const { modelStatus } = yield* catalogArrivals(filename, 2_000);
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    // The sync is midway through writing it, or wrote something that is not a catalog.
+    yield* fs.writeFileString(filename, "{ not json");
+    yield* fs.utimes(filename, 3, 3);
+    yield* modelStatus(known);
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a home-relative catalog path GOAT cannot resolve is not taken for no catalog", () =>
+  Effect.gen(function* () {
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Effect.succeed({ config: { model_catalog_json: "~/catalog.json" } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("custom models stay GOAT's own and skip the catalog check", () =>
+  Effect.gen(function* () {
+    const custom = "custom/my-model";
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known), model(custom, true)],
+      offered: Effect.succeed([model(known), model(custom, true)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        // Codex has not answered yet, so every catalog model counts as unconfirmed.
+        readConfig: Effect.never,
+      },
+    });
+    assert.strictEqual(yield* modelStatus(custom, { cachedOnly: true }), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

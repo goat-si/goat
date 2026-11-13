@@ -20,6 +20,7 @@ import { BoatIcon } from "../Icons";
 import { FleetCloudAgents } from "./FleetCloudAgents";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
+import { FleetMachineLink } from "./FleetMachineLink";
 import {
   fleetMachineSubtitle,
   fleetMachineWork,
@@ -183,6 +184,7 @@ export function FleetPage() {
                 </Button>
               </div>
             ) : null}
+            {selectedMachine ? <FleetMachineLink machine={selectedMachine} /> : null}
 
             {listed.map((machine) => {
               const subtitle = fleetMachineSubtitle(machine);

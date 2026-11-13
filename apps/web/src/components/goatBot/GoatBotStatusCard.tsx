@@ -29,6 +29,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMainName, useGoatBotName } from "./goatBotMemberContext";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
+import { GoatBotSectionCard } from "./GoatBotSectionCard";
 
 const NO_PERMISSION = Atom.make(false);
 const NO_SETTINGS = Atom.make<ServerSettings | null>(null);
@@ -136,7 +137,7 @@ export function GoatBotStatusCard({
     now,
   });
   if (quietWhenReady && diagnostics.lines.every((line) => line.tone === "ok")) return null;
-  return (
+  const content = (
     <section aria-label={`${name} status`} className={cn("space-y-2 text-sm", className)}>
       <p className="font-semibold">{diagnostics.title}</p>
       <ul className="space-y-1.5">
@@ -161,6 +162,13 @@ export function GoatBotStatusCard({
       </ul>
       {home.error ? <p className="text-xs text-destructive-foreground">{home.error}</p> : null}
     </section>
+  );
+  return quietWhenReady ? (
+    <GoatBotSectionCard title="Status">
+      <div className="px-3 py-3">{content}</div>
+    </GoatBotSectionCard>
+  ) : (
+    content
   );
 }
 

@@ -3,18 +3,15 @@ package mesh
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/relay"
-	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/wire"
 )
@@ -136,127 +133,6 @@ func loopback(host string) bool {
 // NodeID is the inviter's nodeId.
 func (t Token) NodeID() string { return ident.NodeID(t.SignPub) }
 
-// Invite is a live single-use invite.
-type Invite struct {
-	ID        string `json:"id"`
-	Secret    []byte `json:"secret"`
-	ExpiresAt int64  `json:"expiresAt"`
-}
-
-// Invites are the node's live invites, persisted in offers.json.
-type Invites struct {
-	st   *state.Store
-	mu   sync.Mutex
-	live map[string]Invite
-	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
-	retired bool
-}
-
-// LoadInvites reads offers.json (st may be nil for in-memory use).
-func LoadInvites(st *state.Store) (*Invites, error) {
-	iv := &Invites{st: st, live: map[string]Invite{}}
-	if st == nil {
-		return iv, nil
-	}
-	var list []Invite
-	if _, err := st.ReadJSON("offers.json", &list); err != nil {
-		return nil, err
-	}
-	for _, x := range list {
-		iv.live[x.ID] = x
-	}
-	return iv, nil
-}
-
-func (iv *Invites) saveLocked(now time.Time) error {
-	list := []Invite{}
-	for id, x := range iv.live {
-		if x.ExpiresAt <= now.UnixMilli() {
-			delete(iv.live, id)
-			continue
-		}
-		list = append(list, x)
-	}
-	if iv.st == nil || iv.retired {
-		return nil
-	}
-	unlock, err := iv.st.Lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return iv.st.WriteJSON("offers.json", list, 0o600)
-}
-
-// Retire stops this book from writing offers.json; a save already running finishes first.
-func (iv *Invites) Retire() {
-	iv.mu.Lock()
-	iv.retired = true
-	iv.mu.Unlock()
-}
-
-// Create makes an invite valid for ttl.
-func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return Invite{}, err
-	}
-	x := Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: now.Add(ttl).UnixMilli()}
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	if iv.retired {
-		return Invite{}, errors.New("this node's mesh changed while the invite was made; run pen invite again")
-	}
-	iv.live[x.ID] = x
-	return x, iv.saveLocked(now)
-}
-
-// Prune drops expired invites from memory and offers.json.
-func (iv *Invites) Prune(now time.Time) error {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	for _, x := range iv.live {
-		if x.ExpiresAt <= now.UnixMilli() {
-			return iv.saveLocked(now)
-		}
-	}
-	return nil
-}
-
-// Lookup finds a live (unexpired, unused) invite.
-func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	x, ok := iv.live[id]
-	if !ok {
-		return Invite{}, false
-	}
-	if x.ExpiresAt <= now.UnixMilli() {
-		// The join is refused either way; a failed write leaves the secret for the next save.
-		_ = iv.saveLocked(now)
-		return Invite{}, false
-	}
-	return x, true
-}
-
-// Burn atomically uses an invite; only one caller ever succeeds.
-func (iv *Invites) Burn(id string, now time.Time) error {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	x, ok := iv.live[id]
-	if !ok {
-		return errors.New("invite already used or expired")
-	}
-	if x.ExpiresAt <= now.UnixMilli() {
-		if err := iv.saveLocked(now); err != nil {
-			return err
-		}
-		return errors.New("invite already used or expired")
-	}
-	delete(iv.live, id)
-	return iv.saveLocked(now)
-}
-
 // Admission is what an inviter needs to serve one join.
 type Admission struct {
 	ID       *ident.Identity
@@ -318,6 +194,10 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	if noise, _ := ident.DecodeKey(cb.NoisePub); !bytes.Equal(noise, remoteStatic) {
 		return nil, refuse(c, "card noisePub is not the session key")
 	}
+	// A bound invite stays usable when another machine answers it: the refusal comes before the burn.
+	if inv, ok := a.Invites.Lookup(a.InviteID, a.Now()); ok && !inv.Subject.admits(cb) {
+		return nil, refuse(c, "card does not match this invite")
+	}
 	v := a.Store.View()
 	if _, gone := v.Revoked[cb.SignPub]; gone {
 		return nil, refuse(c, "this key was revoked")
@@ -331,16 +211,29 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	// The membership check, the burn and the signature hold the store's lock together: an
 	// inviter that is no longer a member keeps the invite unused.
 	errBurn := errors.New("burn")
+	burned := false
 	admit, err := a.Store.AppendAsMember(a.ID, TypeAdmit, now.UnixMilli(), Fields{Card: m.Card}, func(*View) error {
 		if a.Store.burnGate != nil {
 			a.Store.burnGate()
 		}
-		if err := a.Invites.Burn(a.InviteID, now); err != nil {
+		if err := a.Invites.Burn(a.InviteID, now, cb, a.Now); err != nil {
 			return errBurn
 		}
+		burned = true
 		return nil
 	})
+	// From here on the invite is used up: every failure says so and names the joiner if the view admitted it.
+	afterBurn := func(err error) error {
+		if m, ok := a.Store.View().Members[cb.SignPub]; ok {
+			return &BurnedError{Member: &m, Err: err}
+		}
+		return &BurnedError{Err: err}
+	}
 	switch {
+	case err != nil && burned && errors.Is(err, ErrNotMember):
+		return nil, afterBurn(refuseNotMember(c))
+	case err != nil && burned:
+		return nil, afterBurn(refuse(c, "could not sign the admit"))
 	case errors.Is(err, ErrNotMember):
 		return nil, refuseNotMember(c)
 	case errors.Is(err, errBurn):
@@ -351,19 +244,36 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 	}
 	member, ok := a.Store.View().Members[cb.SignPub]
 	if !ok {
-		return nil, refuse(c, "admit had no effect")
+		return nil, afterBurn(refuse(c, "admit had no effect"))
 	}
 	if a.OnAdmit != nil {
 		a.OnAdmit(admit)
 	}
 	if err := c.writeRecords(a.Store.Records()); err != nil {
-		return nil, err
+		return nil, afterBurn(err)
 	}
 	if err := c.Write(Msg{T: "done", Mesh: a.Store.MeshID}); err != nil {
-		return nil, err
+		return nil, afterBurn(err)
 	}
 	return &member, nil
 }
+
+// BurnedError is a join that failed after its burn committed: the invite admits nobody else. Member is the joiner
+// when this node's view makes it a member (its admit was signed, though the joiner may not have received the set),
+// nil when no admit took effect.
+type BurnedError struct {
+	Member *Member
+	Err    error
+}
+
+func (e *BurnedError) Error() string {
+	if e.Member != nil {
+		return fmt.Sprintf("invite used: %s admitted, but the join did not finish: %v", e.Member.NodeID, e.Err)
+	}
+	return fmt.Sprintf("invite used, nobody admitted: %v", e.Err)
+}
+
+func (e *BurnedError) Unwrap() error { return e.Err }
 
 // RefusedError is the inviter's refusal; NotMember says the inviter is not a member of its mesh.
 type RefusedError struct {

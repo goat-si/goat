@@ -49,6 +49,8 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 	var ev struct {
 		T      string      `json:"t"`
 		Member mesh.Member `json:"member"`
+		// Delivered is false when the joiner was admitted but its join did not finish.
+		Delivered *bool `json:"delivered"`
 	}
 	if err := cl.Next(&ev); err != nil {
 		return fail(stderr, err)
@@ -57,7 +59,24 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pen: the invite expired unused")
 		return 1
 	}
+	if ev.T == "cancelled" {
+		fmt.Fprintln(stderr, "pen: the invite was cancelled")
+		return 1
+	}
+	if ev.T == "burned" {
+		fmt.Fprintln(stderr, "pen: the invite was used, but no admission was reported (pen ls shows whether the machine joined)")
+		return 1
+	}
+	if ev.T != "admitted" {
+		fmt.Fprintf(stderr, "pen: the invite ended with %q, not a join\n", ev.T)
+		return 1
+	}
 	noise := ev.Member.NoisePub
+	if ev.Delivered != nil && !*ev.Delivered {
+		fmt.Fprintf(stderr, "pen: admitted %s (%s), fingerprint %s, but its join did not finish on that machine, which is now a member without a copy of the mesh\n",
+			ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
+		return 1
+	}
 	fmt.Fprintf(stdout, "admitted %s (%s), fingerprint %s\n", ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 	return 0
 }

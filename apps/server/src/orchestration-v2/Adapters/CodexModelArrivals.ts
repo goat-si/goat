@@ -12,6 +12,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import type { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import type * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
+import { makeCodexCatalogFreshness } from "./CodexCatalogFreshness.ts";
 
 const offeredFromCatalog = (models: ReadonlyArray<ServerProviderModel>) =>
   new Set(models.flatMap((model) => (model.isCustom ? [] : [model.slug])));
@@ -19,24 +20,38 @@ const offeredFromCatalog = (models: ReadonlyArray<ServerProviderModel>) =>
 /** A process is not asked again this soon for an answer that lets the turn run. */
 const LISTING_QUIET_MS = 60_000;
 
-/** Whether this open reconnects a process kept from an earlier GOAT run, as the client factory does. */
-export const reconnectsKeptProcess = Effect.fn("CodexModelArrivals.reconnectsKeptProcess")(
+/**
+ * What the process this open reaches read at startup: the models GOAT offered then and when it
+ * started. A process kept from an earlier GOAT run is found as the client factory finds it; what
+ * GOAT offers now says nothing about it, and an unknown start counts as before any catalog change.
+ * Undefined when GOAT offers no catalog to check against.
+ */
+export const codexProcessStart = Effect.fn("CodexModelArrivals.codexProcessStart")(
   function* (input: {
     readonly detached: Option.Option<CodexDetachedAppServers["Service"]>;
     readonly survivors: Option.Option<CodexSurvivors.CodexSurvivors["Service"]>;
     readonly instanceId: ProviderInstanceId;
     readonly providerSessionId: ProviderSessionId;
     readonly threadId: ThreadId;
+    readonly offeredModels?: Effect.Effect<ReadonlyArray<ServerProviderModel>> | undefined;
   }) {
-    if (Option.isSome(input.detached)) {
-      const kept = yield* input.detached.value.listPreservedForSession(
-        input.instanceId,
-        input.providerSessionId,
-      );
-      if (kept.length > 0) return true;
-    }
-    if (Option.isNone(input.survivors)) return false;
-    return (yield* input.survivors.value.get(input.instanceId, input.threadId)) !== undefined;
+    const offered = input.offeredModels;
+    if (offered === undefined) return undefined;
+    const detached = Option.getOrUndefined(input.detached);
+    const kept =
+      (detached === undefined
+        ? undefined
+        : (yield* detached.listPreservedForSession(
+            input.instanceId,
+            input.providerSessionId,
+          ))[0]) ??
+      (Option.isNone(input.survivors)
+        ? undefined
+        : (yield* input.survivors.value.get(input.instanceId, input.threadId))?.recordName);
+    if (kept === undefined)
+      return { offered, atStart: yield* offered, startedAtMs: yield* Clock.currentTimeMillis };
+    const startedAtMs = detached === undefined ? undefined : yield* detached.keptStartedAt(kept);
+    return { offered, atStart: [], startedAtMs: startedAtMs ?? 0 };
   },
 );
 
@@ -67,9 +82,9 @@ export const listCodexModelSlugs = Effect.fn("CodexModelArrivals.listCodexModelS
 
 /**
  * Codex's app-server reads its catalog only at startup and runs a model it cannot resolve with every
- * MCP tool inline. Otherwise a model is predated (offered only after the process started), missing
- * (offered then too, or absent from GOAT's catalog) or unconfirmed (no answer, or no catalog yet).
- * Custom models are GOAT's and never checked.
+ * MCP tool inline. A model is predated (offered only after start), missing (offered then too, or not
+ * in GOAT's catalog), unconfirmed (no answer or catalog yet), or outdated (its catalog entry changed
+ * since start). Custom models are GOAT's and never checked.
  */
 export const makeCodexModelArrivals = <E>(input: {
   /** The models GOAT offered just before this process started; empty when that is unknown. */
@@ -78,8 +93,15 @@ export const makeCodexModelArrivals = <E>(input: {
   readonly offered: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   /** The slugs the process serving this session lists. */
   readonly listServed: Effect.Effect<ReadonlyArray<string>, E>;
+  /** When the process started; with `catalog`, models whose catalog entry changed since are outdated. */
+  readonly startedAtMs?: number;
+  readonly catalog?: Omit<Parameters<typeof makeCodexCatalogFreshness>[0], "startedAtMs">;
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
+  const outdated =
+    input.catalog &&
+    input.startedAtMs !== undefined &&
+    makeCodexCatalogFreshness({ ...input.catalog, startedAtMs: input.startedAtMs });
   let served: ReadonlySet<string> | undefined;
   /** The last listing: when it ended, whether the process answered, and GOAT's catalog then. */
   let asked:
@@ -101,7 +123,7 @@ export const makeCodexModelArrivals = <E>(input: {
         }),
       ),
     );
-  return Effect.fn("CodexModelArrivals.modelStatus")(function* (
+  const arrival = Effect.fnUntraced(function* (
     model: string,
     options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
   ) {
@@ -151,5 +173,15 @@ export const makeCodexModelArrivals = <E>(input: {
     // A pending or failed probe publishes no catalog, so GOAT cannot tell what a new process knows.
     if (entry === undefined) return catalogued ? "missing" : "unconfirmed";
     return atStart.has(model) ? "missing" : "predated";
+  });
+  return Effect.fn("CodexModelArrivals.modelStatus")(function* (
+    model: string,
+    options?: { readonly cachedOnly?: boolean; readonly since?: number | undefined },
+  ) {
+    const status = yield* arrival(model, options);
+    if (status !== "ready" && status !== "unconfirmed") return status;
+    if (!outdated || (yield* input.offered).some((entry) => entry.slug === model && entry.isCustom))
+      return status;
+    return (yield* outdated(model, options)) ? "outdated" : status;
   });
 };

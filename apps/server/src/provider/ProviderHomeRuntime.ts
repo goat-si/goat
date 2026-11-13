@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- names a published Pi directory by its content digest.
 import * as NodeCrypto from "node:crypto";
 import * as Config from "../config.ts";
+import * as HubLinkTraffic from "../hub/HubLinkTraffic.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as Runner from "../processRunner.ts";
@@ -67,7 +68,11 @@ export type ProviderHomeRuntimeEnv =
   | FileSystem.FileSystem
   | Path.Path;
 /** Routed drivers and their approvals read this machine's selected OpenCodex executable. */
-export const layerProviderHomeInventory = Inventory.layer.pipe(Layer.provide(Installation.layer));
+// Layers memoize by reference: whichever site builds Inventory.layer first must give it the book too.
+export const layerProviderHomeInventory = Inventory.layer.pipe(
+  Layer.provide(Installation.layer),
+  Layer.provide(HubLinkTraffic.layer),
+);
 export type ProviderHomeRuntime = {
   readonly baseUrl: string;
   readonly environment: ProviderInstanceEnvironment;
