@@ -215,13 +215,11 @@ const authorizeRequest = Effect.fn("EnvironmentRpc.authorize")(function* (
 ) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
   const required = clientRpcRequiredScopes(method, input);
-  const prepared = yield* SubscriptionRef.get(supervisor.prepared);
   // On a node reached through a hub, fail at once with the reason instead of after the hub refuses.
   // The route decides, not cached session state, so a stale answer cannot mislead; a node whose
   // preferred route is direct still meets the hub's own refusal if it falls back to the hub.
   if (
-    (supervisor.target._tag === "HubProxyConnectionTarget" ||
-      (Option.isSome(prepared) && prepared.value.target._tag === "PenConnectionTarget")) &&
+    supervisor.target._tag === "HubProxyConnectionTarget" &&
     hubProxyHidesClientCall(method, input, required)
   )
     return yield* new EnvironmentAuthorizationError({
