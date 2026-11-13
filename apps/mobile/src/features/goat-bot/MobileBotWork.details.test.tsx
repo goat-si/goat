@@ -759,7 +759,10 @@ it("marks a shown task read again when newer activity arrives, on its screen and
     { taskId: "t1", readThrough: at },
     { taskId: "t1", readThrough: later },
   ]);
-  // The task's own screen, left open while the task moves on, reads the newer activity once.
+  // The task's own screen, mounted fresh with no sheet or peek, reads newer activity once while
+  // it stays open.
+  await act(async () => root?.unmount());
+  root = undefined;
   await open("t1");
   expect(reads()).toHaveLength(2);
   const evenLater = "2026-11-11T04:00:00.000Z";

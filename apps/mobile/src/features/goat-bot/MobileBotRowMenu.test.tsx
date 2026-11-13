@@ -12,11 +12,24 @@ const native = vi.hoisted(() => ({
   platform: { OS: "ios" as "ios" | "android" },
   menus: [] as Array<{ kind: string; actions: ReadonlyArray<Action> }>,
   press: null as null | ((id: string) => void),
+  shown: 0,
 }));
 vi.mock("react-native", () => ({
   Platform: native.platform,
-  View: (props: { accessibilityLabel?: string; children?: ReactNode }) => (
-    <button aria-label={props.accessibilityLabel}>{props.children}</button>
+  // A click stands for a screen reader activating the control.
+  View: (props: {
+    accessibilityLabel?: string;
+    accessibilityActions?: ReadonlyArray<{ name: string }>;
+    onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
+    children?: ReactNode;
+  }) => (
+    <button
+      aria-label={props.accessibilityLabel}
+      data-actions={props.accessibilityActions?.map((action) => action.name).join(",")}
+      onClick={() => props.onAccessibilityAction?.({ nativeEvent: { actionName: "activate" } })}
+    >
+      {props.children}
+    </button>
   ),
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
 }));
@@ -27,8 +40,16 @@ const menu = vi.hoisted(() => (kind: string) => (props: MenuProps) => {
     <div>{typeof props.children === "function" ? props.children(() => {}) : props.children}</div>
   );
 });
-// Android uses the native menu view, which opens above the Home sheet's modal.
-vi.mock("@react-native-menu/menu", () => ({ MenuView: menu("android") }));
+// Android uses the native menu view, which opens above the Home sheet's modal; show() opens it.
+vi.mock("@react-native-menu/menu", async () => {
+  const React = await import("react");
+  return {
+    MenuView: React.forwardRef((props: MenuProps, ref) => {
+      React.useImperativeHandle(ref, () => ({ show: () => (native.shown += 1) }));
+      return menu("android")(props);
+    }),
+  };
+});
 vi.mock("../../components/ui/Menu", () => ({ Menu: menu("ios") }));
 
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
@@ -69,7 +90,12 @@ it("hands every row action to Android's native menu view, which opens above the 
     "Mark done",
     "Mark read",
   ]);
-  expect(view.container.querySelector('[aria-label="Actions for Task"]')).not.toBeNull();
+  // TalkBack's activation opens the native menu, which otherwise opens on touch only.
+  const control = view.container.querySelector('[aria-label="Actions for Task"]');
+  expect(control?.getAttribute("data-actions")).toBe("activate");
+  native.shown = 0;
+  await act(async () => (control as HTMLButtonElement).click());
+  expect(native.shown).toBe(1);
   await act(async () => native.press?.("read"));
   expect(view.onSelect).toHaveBeenCalledWith("read");
   await view.unmount();
