@@ -6,11 +6,12 @@ import {
   EnvironmentId,
 } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
+import "~/index.css";
 
 const state = vi.hoisted(() => ({
   noRows: false,
@@ -34,6 +35,7 @@ const state = vi.hoisted(() => ({
   session: vi.fn(),
   lists: [] as Array<string | null>,
   rows: [] as ReadonlyArray<GoatBotRow>,
+  realTimeline: false,
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
@@ -50,7 +52,8 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.update }));
-vi.mock("~/state/entities", () => ({
+vi.mock("~/state/entities", async (original) => ({
+  ...(await original<typeof import("~/state/entities")>()),
   useThreadShell: () => ({}),
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
@@ -66,22 +69,26 @@ vi.mock("./GoatBotStepsProvider", () => ({
 }));
 const decodeBotThreadRow = Schema.decodeSync(BotThreadRow);
 // The task's questions keep their real card, so a pick goes through the pane's send.
-vi.mock("./GoatBotTimeline", async () => {
+vi.mock("./GoatBotTimeline", async (original) => {
   const { GoatBotQuestionCard } = await import("./GoatBotQuestionCard");
+  const actual = await original<typeof import("./GoatBotTimeline")>();
   return {
     GoatBotTimeline: (props: {
       readonly rows: ReadonlyArray<GoatBotRow>;
       readonly onPick?: (answer: string, taskId?: string, questionId?: string) => void;
-    }) => (
-      <div>
-        Task timeline
-        {props.rows.map((row) =>
-          row.kind === "bot" ? (
-            <GoatBotQuestionCard key={row.id} row={row} body={row.text} onPick={props.onPick} />
-          ) : null,
-        )}
-      </div>
-    ),
+    }) =>
+      state.realTimeline ? (
+        <actual.GoatBotTimeline {...props} onRetry={() => {}} />
+      ) : (
+        <div>
+          Task timeline
+          {props.rows.map((row) =>
+            row.kind === "bot" ? (
+              <GoatBotQuestionCard key={row.id} row={row} body={row.text} onPick={props.onPick} />
+            ) : null,
+          )}
+        </div>
+      ),
   };
 });
 // Each bot's own task list: main's, or the member's when a member's pane is open.
@@ -149,6 +156,96 @@ function Pane({ onClose }: { onClose: () => void }) {
     />
   );
 }
+
+function TwoTaskPanes() {
+  const [answered, setAnswered] = useState(false);
+  const original = useGoatBotSession();
+  const question: Extract<GoatBotRow, { kind: "bot" }> = {
+    kind: "bot",
+    id: "question",
+    text: "Which option?",
+    createdAt: "2026-11-04T10:00:00.000Z",
+    tone: "question",
+    proactive: false,
+    replyTo: null,
+    options: answered ? [] : ["Keep", "Change"],
+    choices: ["Keep", "Change"],
+    answerTaskId: "task-1",
+    answerQuestionId: "q1",
+    firstInGroup: true,
+    groupPosition: "single",
+    ...(answered ? { answer: "Keep", answerIndex: 0, answerSending: true } : {}),
+  };
+  const messages: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `message-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-11-04T10:00:00.000Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const shown = [...messages.slice(0, 10), question, ...messages.slice(10)];
+  const session = {
+    ...original,
+    rowsForTask: () => shown,
+    onSendToTask: () => {
+      setAnswered(true);
+      return "pane-send";
+    },
+  } as unknown as ReturnType<typeof useGoatBotSession>;
+  return (
+    <div style={{ display: "flex", height: 400, width: 720 }}>
+      <GoatBotTaskPane
+        environmentId={EnvironmentId.make("env")}
+        session={session}
+        taskId={ChannelTaskId.make("task-1")}
+        narrow
+        onClose={() => {}}
+      />
+      <GoatBotTaskPane
+        environmentId={EnvironmentId.make("env")}
+        session={session}
+        taskId={ChannelTaskId.make("task-1")}
+        narrow
+        onClose={() => {}}
+      />
+    </div>
+  );
+}
+
+it("failing-first: a task-pane answer follows its own folded question without moving another pane", async () => {
+  setup();
+  state.realTimeline = true;
+  using _timeline = {
+    [Symbol.dispose]: () => {
+      state.realTimeline = false;
+    },
+  };
+  await using screen = await render(<TwoTaskPanes />);
+  const panes = [...screen.container.querySelectorAll<HTMLElement>('[data-task-pane="task-1"]')];
+  expect(panes).toHaveLength(2);
+  const scrollers = panes.map((pane) => pane.querySelector<HTMLElement>(".goat-timeline > div")!);
+  await act(() => {
+    for (const scroll of scrollers) {
+      scroll.scrollTop = 0;
+      scroll.dispatchEvent(new Event("scroll"));
+    }
+  });
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Message GOAT Bot" }).nth(0),
+    "Keep{Enter}",
+  );
+  const anchor = panes[0]!.querySelector<HTMLElement>('[data-bot-row="question"]')!;
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    scrollers[0]!.getBoundingClientRect().bottom + 1,
+  );
+  expect(scrollers[1]!.scrollTop).toBe(0);
+  expect(document.activeElement).toBe(panes[0]!.querySelector("textarea"));
+});
 
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
