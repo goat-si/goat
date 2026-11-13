@@ -177,8 +177,7 @@ const make = Effect.gen(function* () {
   const hostname = yield* HostProcess.Hostname;
   const installation = yield* Installation.OpenCodexInstallation;
   const runner = yield* ProcessRunner.ProcessRunner;
-  // Host status provides it on the Home; other readers of the inventory skip the derivation.
-  const linkTraffic = yield* Effect.serviceOption(HubLinkTraffic.HubLinkTraffic);
+  const linkTraffic = yield* HubLinkTraffic.HubLinkTraffic;
   const http = HttpClient.withScope(yield* HttpClient.HttpClient);
   const crypto = yield* Crypto.Crypto;
   const digest = (value: unknown) =>
@@ -387,9 +386,7 @@ const make = Effect.gen(function* () {
       .slice(0, 255);
     const homeRows = linkRole === "home" ? (link?.links ?? []) : [];
     const observed =
-      linkTraffic._tag === "Some" && link !== undefined && linkRole === "home"
-        ? yield* linkTraffic.value.observe(homeRows)
-        : undefined;
+      link !== undefined && linkRole === "home" ? yield* linkTraffic.observe(homeRows) : undefined;
     let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
     if (parity) {
       const observedAt = yield* Clock.currentTimeMillis;

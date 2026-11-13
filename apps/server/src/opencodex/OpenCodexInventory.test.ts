@@ -157,7 +157,10 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
       Layer.provide(
         options.linkTraffic
           ? Layer.succeed(HubLinkTraffic.HubLinkTraffic, options.linkTraffic)
-          : Layer.empty,
+          : Layer.effect(
+              HubLinkTraffic.HubLinkTraffic,
+              HubLinkTraffic.make(Effect.sync((): ReadonlySet<string> | undefined => undefined)),
+            ).pipe(Layer.provide(Settings.ServerSettingsService.layerTest())),
       ),
       Layer.provide(
         FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetcher))),
