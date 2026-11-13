@@ -293,6 +293,8 @@ these may look like success to a local program.
   `cmd/internal/robustio`; past that the save fails and the file keeps its old content whole. A stale writer cannot
   win meanwhile: every write of those files reads the current file under the state lock (`LockFileEx`, which a
   second handle in the same process also waits for) and decides from it.
+  Readers such as `pen pipe` and `pen forward` take no lock, so parallel ProxyCommands never queue; an open that
+  lands during a replace can fail the same way, and `ReadJSON` retries it by the same rule (a missing file at once).
 - **Win32-OpenSSH starts ProxyCommand without a shell.** The command is quoted for CreateProcess, the state
   directory travels as `pen pipe --home`, and the config has no ControlMaster, which that ssh lacks.
 - **An sshd session's job ends its processes.** A `--no-service` daemon started over SSH tries to leave the job
