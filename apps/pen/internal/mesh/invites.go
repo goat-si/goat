@@ -96,7 +96,7 @@ type Invites struct {
 	// byID holds live invites and bound terminal entries; fences holds cancels by mintId that no invite answered.
 	byID   map[string]Invite
 	fences map[string]Invite
-	// cancelled holds, in memory only, the channel a live bound invite's maker waits on: closed when that invite is
+	// cancelled holds, in memory only, the channel a live invite's maker waits on: closed when that invite is
 	// cancelled, dropped when it ends otherwise. Made and closed under mu with the invite itself.
 	cancelled map[string]chan struct{}
 	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
@@ -178,6 +178,11 @@ func (iv *Invites) Retire() {
 
 // Create makes an invite valid for ttl.
 func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
+	return iv.CreateNotify(ttl, now, nil)
+}
+
+// CreateNotify is Create that, when cancelled is not nil, closes it if invite.cancel removes this invite.
+func (iv *Invites) CreateNotify(ttl time.Duration, now time.Time, cancelled chan struct{}) (Invite, error) {
 	x, err := newInvite(now.Add(ttl))
 	if err != nil {
 		return Invite{}, err
@@ -188,6 +193,9 @@ func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
 		return Invite{}, errInviteRetired
 	}
 	iv.byID[x.ID] = x
+	if cancelled != nil {
+		iv.cancelled[x.ID] = cancelled
+	}
 	return x, iv.saveLocked(now)
 }
 

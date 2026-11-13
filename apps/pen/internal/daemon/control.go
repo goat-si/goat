@@ -424,11 +424,15 @@ type InviteReply struct {
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
+	return d.createInviteNotify(ttlMs, nil)
+}
+
+func (d *Daemon) createInviteNotify(ttlMs int64, cancelled chan struct{}) (InviteReply, string, error) {
 	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.inviteBook().Create(ttl, d.now())
+	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), cancelled)
 	if err != nil {
 		return InviteReply{}, "", err
 	}
@@ -443,16 +447,17 @@ func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	r, id, err := d.createInvite(req.TTLMs)
+	cancelled := make(chan struct{})
+	r, id, err := d.createInviteNotify(req.TTLMs, cancelled)
 	if err != nil {
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, nil, reply)
+	d.awaitJoin(ctx, c, r, id, cancelled, reply)
 }
 
 // awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
-// the bound invite's cancel signal, attached when the invite was made (nil for an ordinary invite). Admission needs no
+// the invite's cancel signal, attached when the invite was made. Admission needs no
 // such care: nobody holds the token before r is answered, after the waiter is registered.
 func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
 	wait := make(chan *mesh.Member, 1)

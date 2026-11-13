@@ -12,6 +12,7 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
 	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
@@ -412,6 +413,39 @@ func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
 	var r InviteReply
 	if err := cl.Next(&r); err != nil {
 		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// A caller waiting on an ordinary invite (pen invite) is told when invite.cancel removes it by id.
+func TestCancelEndsAWaitOnAnOrdinaryInvite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := mesh.ParseToken(r.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.cancel","inviteId":"`+session.InviteID(tok.Secret)+`"}`, &c); err != nil || c.State != "cancelled" {
+		t.Fatalf("cancel: %+v, %v", c, err)
 	}
 	var ev struct{ T string }
 	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
