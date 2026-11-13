@@ -191,6 +191,7 @@ function GoatBotThreadSession({
       >
         <GoatBotChatView
           {...session}
+          projectionRef={threadRef}
           environmentId={environmentId}
           unreadSince={unreadSince}
           openHome={openHome}

@@ -4,6 +4,8 @@ import {
   ChannelQuestionId,
   ChannelTaskId,
   type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
@@ -47,6 +49,8 @@ import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
+import { localSendRows, questionForSend, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -63,6 +67,8 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  readonly projectionRef?: ScopedThreadRef | null | undefined;
+  readonly visibleTurnItems?: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
   readonly unreadSince?: string | null | undefined;
   /** History state naming a Home to open, with its entry's key; each entry opens Home once. */
   readonly openHome?: { readonly key: string; readonly entry: string } | null | undefined;
@@ -84,7 +90,7 @@ export interface GoatBotChatViewProps {
   readonly onSend: (
     text: string,
     attachments?: ReadonlyArray<GoatBotDraftAttachment>,
-  ) => boolean | void;
+  ) => boolean | string | void;
   /** Sends an answer to the task whose question offered it. */
   readonly onSendToTask?:
     | ((
@@ -92,7 +98,7 @@ export interface GoatBotChatViewProps {
         text: string,
         attachments?: ReadonlyArray<never>,
         questionId?: ChannelQuestionId,
-      ) => boolean | void)
+      ) => boolean | string | void)
     | undefined;
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
@@ -118,6 +124,8 @@ export interface GoatBotChatViewProps {
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
 export function GoatBotChatView({
+  projectionRef,
+  visibleTurnItems = [],
   unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
@@ -179,6 +187,37 @@ export function GoatBotChatView({
     setOpenedHomeEntry(openHome.entry);
     setPanelOpen(true);
   }
+  const source = useGoatBotSource(projectionRef, member?.botId ?? "main", visibleTurnItems);
+  const [lastSourceIdentity, setLastSourceIdentity] = useState<string | null>(source.identity);
+  if (source.identity !== null && source.identity !== lastSourceIdentity)
+    setLastSourceIdentity(source.identity);
+  const timelineIdentity =
+    source.identity ??
+    (projectionRef === null && rows.length > 0 ? lastSourceIdentity : null) ??
+    botIdentity;
+  const [local, setLocal] = useState<{
+    identity: string;
+    submissions: ReadonlyArray<GoatBotLocalSubmission>;
+  }>({ identity: timelineIdentity, submissions: [] });
+  if (local.identity !== timelineIdentity)
+    setLocal({ identity: timelineIdentity, submissions: [] });
+  const recordSubmission = (result: boolean | string | void, text: string, questionId?: string) => {
+    if (typeof result === "string") {
+      const submission = {
+        key: result,
+        text,
+        questionRowId: questionForSend(rows, text, questionId),
+      };
+      setLocal((previous) => ({
+        identity: timelineIdentity,
+        submissions: [
+          ...(previous.identity === timelineIdentity ? previous.submissions : []),
+          submission,
+        ],
+      }));
+    }
+    return result !== false;
+  };
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
@@ -379,7 +418,7 @@ export function GoatBotChatView({
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
             {/* Mounted before the first message, so the chat's first status is heard. */}
             <GoatBotActivityStatus
-              key={botIdentity}
+              key={timelineIdentity}
               replyingSince={removed ? null : replyingSince}
             />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
@@ -388,7 +427,12 @@ export function GoatBotChatView({
                 {rows.length > 0 ? (
                   // History stays readable while the bot is unavailable; only sending stops.
                   <GoatBotTimeline
+                    key={timelineIdentity}
                     rows={rows}
+                    baselineIds={source.baselineIds}
+                    sourceIds={source.sourceIds}
+                    committedSends={localSendRows(visibleTurnItems)}
+                    submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}
                     onReply={
                       canSend
@@ -407,17 +451,20 @@ export function GoatBotChatView({
                     onDiscard={onDiscardInput}
                     onPick={
                       canSend
-                        ? (answer, taskId, questionId) =>
-                            taskId !== undefined && onSendToTask !== undefined
-                              ? onSendToTask(
-                                  ChannelTaskId.make(taskId),
-                                  answer,
-                                  [],
-                                  questionId === undefined
-                                    ? undefined
-                                    : ChannelQuestionId.make(questionId),
-                                )
-                              : onSend(answer)
+                        ? (answer, taskId, questionId) => {
+                            const result =
+                              taskId !== undefined && onSendToTask !== undefined
+                                ? onSendToTask(
+                                    ChannelTaskId.make(taskId),
+                                    answer,
+                                    [],
+                                    questionId === undefined
+                                      ? undefined
+                                      : ChannelQuestionId.make(questionId),
+                                  )
+                                : onSend(answer);
+                            recordSubmission(result, answer, questionId);
+                          }
                         : undefined
                     }
                   />
@@ -478,7 +525,7 @@ export function GoatBotChatView({
                 attachments,
               );
               if (result !== false) setReplyState(null);
-              return result;
+              return recordSubmission(result, text);
             }}
           />
         </div>

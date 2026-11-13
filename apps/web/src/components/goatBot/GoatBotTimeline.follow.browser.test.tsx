@@ -197,9 +197,13 @@ function ChatFixture({ folded = false, sibling = false }: { folded?: boolean; si
         ]
       : [...rows, sentRow];
   return (
-    <div style={{ display: "flex", height: 400, width: 360 }}>
-      <button onClick={() => setExtra(true)}>Deliver remote reply</button>
-      <button onClick={() => setConfirmed(true)}>Confirm answer</button>
+    <div style={{ display: "flex", height: 400, width: sibling ? 720 : 360 }}>
+      <button style={{ position: "absolute" }} onClick={() => setExtra(true)}>
+        Deliver remote reply
+      </button>
+      <button style={{ position: "absolute" }} onClick={() => setConfirmed(true)}>
+        Confirm answer
+      </button>
       {sibling ? (
         <div style={{ display: "flex", width: 360, height: 400 }}>
           <GoatBotTimeline rows={display} onRetry={() => {}} />
@@ -281,7 +285,10 @@ it("failing-first: a reply below a folded-answer anchor still raises the cue", a
     element.getBoundingClientRect().bottom + 1,
   );
   expect(distanceFromBottom(element)).toBeGreaterThan(48);
-  await userEvent.click(screen.getByRole("button", { name: "Deliver remote reply" }));
+  const deliver = [...screen.container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Deliver remote reply",
+  )!;
+  await act(() => deliver.click());
   expect(
     [...screen.container.querySelectorAll("button")].some((button) =>
       button.textContent?.includes("Jump to latest"),
@@ -312,9 +319,10 @@ it("failing-first: a folded answer stays anchored across confirmation and resize
     element.getBoundingClientRect().bottom + 1,
   );
   const list = element.querySelector("ol")!;
+  const first = list.querySelector<HTMLElement>("li")!;
   await afterResize(list, () =>
     act(() => {
-      list.style.paddingTop = "100px";
+      first.style.paddingBottom = "100px";
     }),
   );
   expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
@@ -327,7 +335,7 @@ it("failing-first: a folded answer stays anchored across confirmation and resize
   });
   await afterResize(list, () =>
     act(() => {
-      list.style.paddingTop = "200px";
+      first.style.paddingBottom = "200px";
     }),
   );
   expect(element.scrollTop).toBe(0);

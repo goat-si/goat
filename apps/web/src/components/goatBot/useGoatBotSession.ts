@@ -561,6 +561,11 @@ export function useGoatBotSession(
       : null;
   return {
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
+    projectionRef: member
+      ? scopeThreadRef(member.environmentId, member.sessionThreadId)
+      : botRef
+        ? scopeThreadRef(botRef.environmentId, botRef.threadId)
+        : null,
     availability,
     canOperate,
     visibleTurnItems,
@@ -579,14 +584,12 @@ export function useGoatBotSession(
     ) => {
       if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, selectedTask, questionId);
-      return true;
+      return queue.submit(text, availability.bot, attachments, selectedTask, questionId);
     },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, taskId ?? undefined);
-      return true;
+      return queue.submit(text, availability.bot, attachments, taskId ?? undefined);
     },
     onRetryInput: (key: string) => {
       if (sendable) queue?.retry(key);
