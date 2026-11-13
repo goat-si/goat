@@ -7,6 +7,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
+import { OPENCODEX_NOT_READ } from "./hostStatusOpenCodex.ts";
+import { HOST_STATUS_REMOTE_TIMEOUT_MS } from "./HostStatusMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { now, scope, remoteOk, run, staleCodex } from "./HostStatusMcpService.testkit.ts";
 
@@ -272,6 +274,179 @@ it.effect("stopping the server interrupts a provider probe a status read started
       { providers: staleCodex(), probe: () => Effect.sleep("1 hour") },
       (service, probes) =>
         service.read(scope, { local: true }).pipe(Effect.andThen(Queue.take(probes.started))),
+    );
+    expect(value._tag).toBe("Success");
+    expect(interrupted).toBe(true);
+  }),
+);
+
+const installed = {
+  installed: true,
+  binaries: [{ path: "/fixture/ocx", version: "2.86.0" }],
+  ownership: "none" as const,
+  service: { available: false },
+  runtime: { port: 10100, healthy: false, ready: false },
+  link: { role: "none" as const, available: false, links: [], childSettingsApplied: null },
+};
+
+it.effect(
+  "regression #3029: host status answers before the hub's deadline while OpenCodex takes its worst case, and the late answer serves the next read",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Queue.unbounded<void>();
+      let calls = 0;
+      const { value } = yield* run(
+        {
+          opencodexRead: Effect.suspend(() =>
+            ++calls === 1
+              ? Queue.offer(started, undefined).pipe(
+                  Effect.andThen(Effect.sleep("27 seconds")),
+                  Effect.as(installed),
+                )
+              : Effect.succeed(installed),
+          ),
+        },
+        (service) =>
+          Effect.gen(function* () {
+            const read = yield* service.read(scope, { local: true }).pipe(
+              Effect.flatMap((result) =>
+                Clock.currentTimeMillis.pipe(Effect.map((answeredAt) => ({ result, answeredAt }))),
+              ),
+              Effect.forkChild,
+            );
+            yield* Queue.take(started);
+            yield* TestClock.adjust("27 seconds");
+            const first = yield* Fiber.join(read);
+            const second = yield* service.read(scope, { local: true });
+            return { first, second };
+          }),
+      );
+      expect(value._tag).toBe("Success");
+      if (value._tag !== "Success") return;
+      const { first, second } = value.success;
+      expect(first.answeredAt - now).toBeLessThan(HOST_STATUS_REMOTE_TIMEOUT_MS);
+      expect(first.result.hosts[0]?.reachability).toBe("ok");
+      expect(first.result.hosts[0]?.metrics?.opencodex).toMatchObject({
+        installed: false,
+        slow: true,
+      });
+      expect(second.hosts[0]?.metrics?.opencodex).toMatchObject({ installed: true });
+      expect(second.hosts[0]?.metrics?.opencodex?.slow).toBeUndefined();
+    }),
+);
+
+it.effect("concurrent host status reads start one OpenCodex inventory read", () =>
+  Effect.gen(function* () {
+    const started = yield* Queue.unbounded<void>();
+    let calls = 0;
+    const { value } = yield* run(
+      {
+        opencodexRead: Effect.suspend(() => {
+          calls++;
+          return Queue.offer(started, undefined).pipe(
+            Effect.andThen(Effect.sleep("27 seconds")),
+            Effect.as(installed),
+          );
+        }),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const reads = yield* Effect.all(
+            [service.read(scope, { local: true }), service.read(scope, { local: true })],
+            { concurrency: "unbounded" },
+          ).pipe(Effect.forkChild);
+          yield* Queue.take(started);
+          yield* TestClock.adjust("2 seconds");
+          return yield* Fiber.join(reads);
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    expect(calls).toBe(1);
+  }),
+);
+
+it.effect(
+  "a failed OpenCodex read is not remembered and the next status read starts a new one",
+  () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const { value } = yield* run(
+        {
+          opencodexRead: Effect.suspend(() =>
+            ++calls === 1 ? Effect.die("failed") : Effect.succeed(installed),
+          ),
+        },
+        (service) =>
+          Effect.gen(function* () {
+            const first = yield* service.read(scope, { local: true });
+            const second = yield* service.read(scope, { local: true });
+            return { first, second };
+          }),
+      );
+      expect(value._tag).toBe("Success");
+      if (value._tag !== "Success") return;
+      expect(value.success.first.hosts[0]?.metrics?.opencodex).toEqual(OPENCODEX_NOT_READ);
+      expect(value.success.second.hosts[0]?.metrics?.opencodex).toEqual(installed);
+      expect(calls).toBe(2);
+    }),
+);
+
+it.effect("a cancelled status read leaves the inventory read running for the next one", () =>
+  Effect.gen(function* () {
+    const started = yield* Queue.unbounded<void>();
+    let calls = 0;
+    const { value } = yield* run(
+      {
+        opencodexRead: Effect.suspend(() => {
+          calls++;
+          return calls === 1
+            ? Queue.offer(started, undefined).pipe(
+                Effect.andThen(Effect.sleep("27 seconds")),
+                Effect.as(installed),
+              )
+            : Queue.offer(started, undefined).pipe(Effect.andThen(Effect.never));
+        }),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const first = yield* Effect.forkChild(service.read(scope, { local: true }));
+          yield* Queue.take(started);
+          yield* Fiber.interrupt(first);
+          yield* TestClock.adjust("27 seconds");
+          const second = yield* Effect.forkChild(service.read(scope, { local: true }));
+          yield* Queue.take(started);
+          yield* TestClock.adjust("2 seconds");
+          return yield* Fiber.join(second);
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts[0]?.metrics?.opencodex).toEqual({ ...installed, slow: true });
+    expect(calls).toBe(2);
+  }),
+);
+
+it.effect("stopping the service interrupts an inventory read in flight", () =>
+  Effect.gen(function* () {
+    const started = yield* Queue.unbounded<void>();
+    let interrupted = false;
+    const { value } = yield* run(
+      {
+        opencodexRead: Queue.offer(started, undefined).pipe(
+          Effect.andThen(Effect.sleep("1 hour")),
+          Effect.as(installed),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              interrupted = true;
+            }),
+          ),
+        ),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          yield* Effect.forkChild(service.read(scope, { local: true }));
+          yield* Queue.take(started);
+        }),
     );
     expect(value._tag).toBe("Success");
     expect(interrupted).toBe(true);
