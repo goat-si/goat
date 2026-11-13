@@ -1222,6 +1222,7 @@ const make = Effect.gen(function* () {
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         dispatchMode,
+        ...(input.mode === "auto" ? { deliveryIntent: "auto" } : {}),
         createdBy: input.createdBy,
         creationSource: input.creationSource,
       });
