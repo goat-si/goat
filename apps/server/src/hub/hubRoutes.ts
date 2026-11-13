@@ -312,12 +312,12 @@ export const makeRoutes = (deps: RoutesDeps) => {
           const ran = yield* restore(
             deps.ocx.homeAdmitted(routesArgs(link.linkId, change), ROUTES_TIMEOUT_MS, admit),
           ).pipe(
-            Effect.map((output) => ({ output: output ?? null })),
+            Effect.map((output) => ({ output: output ?? null, spawned: true })),
             Effect.catchTags({
               HubOcxError: (error) =>
                 error.reason === "ocx_missing"
                   ? Effect.fail(error)
-                  : Effect.succeed({ output: null }),
+                  : Effect.succeed({ output: null, spawned: error.reason !== "ocx_unstartable" }),
             }),
             Effect.onInterrupt(() =>
               Effect.flatMap(Ref.get(started), (ran) =>
@@ -325,8 +325,14 @@ export const makeRoutes = (deps: RoutesDeps) => {
               ),
             ),
           );
-          const answer: HubDeviceRoutesResult =
-            ran.output === null
+          const answer: HubDeviceRoutesResult = !ran.spawned
+            ? {
+                deviceAlias: alias,
+                linkId: link.linkId,
+                state: "failed",
+                message: "ocx could not be started on this hub, so nothing changed.",
+              }
+            : ran.output === null
               ? {
                   deviceAlias: alias,
                   linkId: link.linkId,
@@ -335,8 +341,9 @@ export const makeRoutes = (deps: RoutesDeps) => {
                     "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
                 }
               : routesAnswer(alias, link.linkId, ran.output, true);
-          // Only a fixed refusal proves nothing changed; any other outcome spends the approval.
+          // A spawn failure or a fixed refusal proves nothing changed; any other outcome spends it.
           const refused =
+            !ran.spawned ||
             answer.state === "unsupported" ||
             (answer.state === "failed" && answer.code !== undefined);
           if (!refused) yield* deps.used(caller, input.decisionId);

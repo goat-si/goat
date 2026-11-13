@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
@@ -22,8 +23,14 @@ const output = (stdout: string, stderr: string, code: number) => ({
   stderrInvalidUtf8: false,
 });
 
+const isSpawnError = Schema.is(ProcessRunner.ProcessSpawnError);
+
 /** HubOcx over a runner that answers `answer` and, like ProcessRunner, fails past its byte cap. */
-const hubOcx = (answer: (input: ProcessRunner.ProcessRunInput) => ReturnType<typeof output>) =>
+const hubOcx = (
+  answer: (
+    input: ProcessRunner.ProcessRunInput,
+  ) => ReturnType<typeof output> | ProcessRunner.ProcessSpawnError,
+) =>
   HubOcx.pipe(
     Effect.provide(
       hubOcxLayer.pipe(
@@ -34,6 +41,7 @@ const hubOcx = (answer: (input: ProcessRunner.ProcessRunInput) => ReturnType<typ
               input,
             ): Effect.Effect<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError> => {
               const result = answer(input);
+              if (isSpawnError(result)) return Effect.fail(result);
               const bytes = Buffer.byteLength(result.stdout);
               return input.maxOutputBytes !== undefined && bytes > input.maxOutputBytes
                 ? Effect.fail(
@@ -130,4 +138,22 @@ it.effect("a ps listing over 256 KiB still counts this Home's link tunnels", () 
     const ocx = yield* hubOcx(() => output(listing, "", 0));
     expect(yield* ocx.homeTunnels("lidge", 42255)).toBe(1);
   }),
+);
+it.effect(
+  "an ocx that cannot be started is its own failure, apart from one that stopped after it ran",
+  () =>
+    Effect.gen(function* () {
+      const ocx = yield* hubOcx(
+        (input) =>
+          new ProcessRunner.ProcessSpawnError({
+            command: input.command,
+            argumentCount: input.args.length,
+            cwd: input.cwd,
+            spawnCwd: undefined,
+            cause: new Error("ENOENT"),
+          }),
+      );
+      const failed = yield* Effect.flip(ocx.home(["link", "routes", "--json"], 1_000));
+      expect(failed).toMatchObject({ reason: "ocx_unstartable" });
+    }),
 );

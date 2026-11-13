@@ -84,7 +84,8 @@ export interface OcxOutput {
 }
 
 export class HubOcxError extends Data.TaggedError("HubOcxError")<{
-  readonly reason: "ocx_missing" | "unreachable";
+  /** ocx_unstartable: the process could not be spawned, so nothing reached the Home. */
+  readonly reason: "ocx_missing" | "ocx_unstartable" | "unreachable";
   readonly message: string;
 }> {}
 
@@ -395,8 +396,13 @@ const make = Effect.gen(function* () {
     workingDirectory: string | null = cwd,
   ) {
     const output = yield* run(binary, args, timeoutMs, workingDirectory).pipe(
-      Effect.mapError(
-        () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+      Effect.mapError((error) =>
+        error._tag === "ProcessSpawnError"
+          ? new HubOcxError({
+              reason: "ocx_unstartable",
+              message: "ocx could not be started on this hub.",
+            })
+          : new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       ),
     );
     const phase = phaseOf(output.stderr);

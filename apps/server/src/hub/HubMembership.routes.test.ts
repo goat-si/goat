@@ -378,3 +378,25 @@ it.effect(
       expect(yield* missing.hub.consumed).toEqual([]);
     }),
 );
+it.effect(
+  "an approved change whose ocx could not be started keeps the approval and says nothing changed",
+  () =>
+    Effect.gen(function* () {
+      const { hub, decisionId } = yield* approvedChange(routesHome(), (args) =>
+        args[2] === "add"
+          ? Effect.fail(
+              new HubOcxError({
+                reason: "ocx_unstartable",
+                message: "ocx could not be started on this hub.",
+              }),
+            )
+          : undefined,
+      );
+      const refused = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+      expect(refused).toMatchObject({
+        state: "failed",
+        message: "ocx could not be started on this hub, so nothing changed.",
+      });
+      expect(yield* hub.consumed).toEqual([]);
+    }),
+);
