@@ -456,10 +456,16 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const link = { attempt: 0, intentAtMs: 0, ...enroll.link };
     const outcome =
       answer.kind === "directory"
-        ? "key_dir_unsafe"
-        : answer.kind === "symlink"
-          ? "key_symlink_foreign"
-          : "machine_key_unusable";
+        ? answer.chmod
+          ? "key_dir_unsafe"
+          : answer.problem === "writable"
+            ? "key_dir_shared"
+            : "key_dir_foreign"
+        : answer.kind === "unreadable"
+          ? "key_dir_unreadable"
+          : answer.kind === "symlink"
+            ? "key_symlink_foreign"
+            : "machine_key_unusable";
     const keyDir =
       answer.kind === "directory"
         ? answer.directory

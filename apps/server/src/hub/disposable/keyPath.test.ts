@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeFSP from "node:fs/promises";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -10,6 +11,15 @@ import * as Path from "effect/Path";
 import { keyPathFor } from "./keyPath.ts";
 
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
+
+/** A folder of the user running the test that its group or others can write. */
+const writable = (directory: string, chmod: boolean) => ({
+  kind: "directory",
+  directory,
+  problem: "writable",
+  owner: process.getuid?.() ?? -1,
+  chmod,
+});
 
 /** shared/base/userdata/disposable/machine_ed25519 in a private temporary folder. */
 const layout = (modes: { readonly shared: number; readonly base: number }) =>
@@ -55,8 +65,78 @@ it.live.skipIf(WINDOWS)("GOAT's own base folder left 0775 by a umask of 002 is t
 it.live.skipIf(WINDOWS)("a group-writable folder above GOAT's own is named and never changed", () =>
   Effect.gen(function* () {
     const at = yield* layout({ shared: 0o775, base: 0o755 });
-    expect(yield* keyPathFor(at.key, at.own)).toEqual({ kind: "directory", directory: at.shared });
+    expect(yield* keyPathFor(at.key, at.own)).toEqual(writable(at.shared, true));
     expect(yield* at.mode(at.shared)).toBe(0o775);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+/** The real lstat, with the owner of the named entries rewritten as a test cannot chown. */
+const ownedBy = (owners: ReadonlyMap<string, number>) => (target: string) =>
+  Effect.map(
+    Effect.promise(() => NodeFSP.lstat(target)),
+    (stat) => {
+      const owner = owners.get(target);
+      return owner === undefined ? stat : Object.assign(stat, { uid: owner });
+    },
+  );
+
+it.live.skipIf(WINDOWS)(
+  "a shared folder owned by root or a folder of another user is named with why, and chmod is never offered",
+  () =>
+    Effect.gen(function* () {
+      const at = yield* layout({ shared: 0o775, base: 0o755 });
+      // A team share such as /srv/team (2775 root:team): writable, but not this user's to change.
+      expect(
+        yield* keyPathFor(at.key, at.own, { lstat: ownedBy(new Map([[at.shared, 0]])) }),
+      ).toEqual({
+        kind: "directory",
+        directory: at.shared,
+        problem: "writable",
+        owner: 0,
+        chmod: false,
+      });
+      yield* Effect.promise(() => NodeFSP.chmod(at.shared, 0o755));
+      expect(
+        yield* keyPathFor(at.key, at.own, { lstat: ownedBy(new Map([[at.shared, 4242]])) }),
+      ).toEqual({
+        kind: "directory",
+        directory: at.shared,
+        problem: "owner",
+        owner: 4242,
+        chmod: false,
+      });
+      expect(yield* at.mode(at.shared)).toBe(0o755);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)("GOAT running as root is never told to chmod a folder", () =>
+  Effect.gen(function* () {
+    const at = yield* layout({ shared: 0o775, base: 0o755 });
+    // Every entry reads as root's, as on a hub where GOAT runs as root.
+    const asRoot = (target: string) =>
+      Effect.map(
+        Effect.promise(() => NodeFSP.lstat(target)),
+        (stat) => Object.assign(stat, { uid: 0 }),
+      );
+    expect(yield* keyPathFor(at.key, at.own, { lstat: asRoot, uid: 0 })).toEqual({
+      kind: "directory",
+      directory: at.shared,
+      problem: "writable",
+      owner: 0,
+      chmod: false,
+    });
+    expect(yield* at.mode(at.shared)).toBe(0o775);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)("a folder on the way that cannot be read answers unreadable", () =>
+  Effect.gen(function* () {
+    const at = yield* layout({ shared: 0o755, base: 0o755 });
+    const failing = (target: string) =>
+      target === at.base
+        ? Effect.fail(new Cause.UnknownError(new Error("EACCES")))
+        : Effect.promise(() => NodeFSP.lstat(target));
+    expect(yield* keyPathFor(at.key, at.own, { lstat: failing })).toEqual({ kind: "unreadable" });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
@@ -75,7 +155,7 @@ it.live.skipIf(WINDOWS)(
       yield* fs.chmod(links, 0o755);
       expect(yield* keyPathFor(linked, at.own)).toEqual({ kind: "ok" });
       yield* fs.chmod(links, 0o775);
-      expect(yield* keyPathFor(linked, at.own)).toEqual({ kind: "directory", directory: links });
+      expect(yield* keyPathFor(linked, at.own)).toEqual(writable(links, true));
       expect(yield* at.mode(links)).toBe(0o775);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -115,7 +195,10 @@ it.live.skipIf(WINDOWS)(
           Effect.promise(() => NodeFSP.lstat(target)),
           (stat) => (target === link ? Object.assign(stat, { uid: 4242 }) : stat),
         );
-      expect(yield* keyPathFor(linked, at.own, foreign)).toEqual({ kind: "symlink", path: link });
+      expect(yield* keyPathFor(linked, at.own, { lstat: foreign })).toEqual({
+        kind: "symlink",
+        path: link,
+      });
       expect(yield* keyPathFor(linked, at.own)).toEqual({ kind: "ok" });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -135,7 +218,7 @@ it.live.skipIf(WINDOWS)(
       yield* fs.symlink(home, at.base);
       const key = path.join(at.base, "goat-real", "userdata", "disposable", "machine_ed25519");
       const own = [at.base, path.join(at.base, "goat-real", "userdata")];
-      expect(yield* keyPathFor(key, own)).toEqual({ kind: "directory", directory: home });
+      expect(yield* keyPathFor(key, own)).toEqual(writable(home, true));
       expect(yield* at.mode(home)).toBe(0o775);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -152,6 +235,6 @@ it.live.skipIf(WINDOWS)("the key's own folder is judged strictly however the pat
     yield* fs.writeFileString(path.join(sticky, "machine_ed25519"), "key", { mode: 0o600 });
     yield* fs.symlink(path.join(sticky, "sub") + "/..", path.join(at.disposable, "via"));
     const key = path.join(at.disposable, "via", "machine_ed25519");
-    expect(yield* keyPathFor(key, at.own)).toEqual({ kind: "directory", directory: sticky });
+    expect(yield* keyPathFor(key, at.own)).toEqual(writable(sticky, true));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

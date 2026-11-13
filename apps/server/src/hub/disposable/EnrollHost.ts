@@ -174,12 +174,8 @@ export const layer = Layer.effect(
         Effect.orElseSucceed(() => undefined),
       ),
       keyPath: Effect.fn("EnrollHost.keyPath")(function* (keyFile) {
-        // A walk that fails names the key's own folder, which a person can check.
         return yield* keyPathFor(keyFile, own).pipe(
-          Effect.orElseSucceed((): KeyPathAnswer => ({
-            kind: "directory",
-            directory: path.dirname(keyFile),
-          })),
+          Effect.orElseSucceed((): KeyPathAnswer => ({ kind: "unreadable" })),
         );
       }),
       knownHosts: Effect.fn("EnrollHost.knownHosts")(function* (attachId, line) {

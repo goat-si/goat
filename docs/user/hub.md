@@ -152,8 +152,10 @@ with **Copy machine key**; on mobile its text says where to find the key. The li
 needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
 release can yet; until one can, the machine waits at the link step. OpenCodex
 also refuses the key while a folder on its path can be written by its group or
-others: GOAT tightens its own folders, and for any other the machine list names
-the folder and the `chmod go-w` that fixes it. A machine with a full OpenCodex
+others or belongs to another user. The machine list names the folder and what
+to do: `chmod go-w` only for a folder of yours, otherwise moving GOAT's home
+(`GOAT_HOME` or `--home-dir`) to a path whose folders pass. Never change a
+shared or system folder or another user's folder or symlink, even as root. A machine with a full OpenCodex
 install, or one that shares its SSH host key with another disposable machine,
 stops for you to decide.
 

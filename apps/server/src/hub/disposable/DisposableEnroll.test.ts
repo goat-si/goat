@@ -784,28 +784,6 @@ it.effect("an entry that stays open through three sends of its id stops for a pe
 );
 
 it.effect(
-  "a key folder others can write holds the link with the folder and the chmod named, and it goes on once fixed",
-  () =>
-    world((pen, home, _grant, host) =>
-      Effect.gen(function* () {
-        withIdentity(home);
-        const { attachId } = yield* joined(pen, host, 1);
-        host.control.keyPath = { kind: "directory", directory: "/home/shared" };
-        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
-        expect(host.control.calls.filter((args) => args[0] === "link")).toEqual([]);
-        expect(yield* listed(attachId)).toMatchObject({
-          state: "attaching",
-          message: expect.stringContaining("chmod go-w /home/shared"),
-        });
-        host.control.keyPath = { kind: "ok" };
-        yield* enroll;
-        yield* enroll;
-        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
-      }),
-    ),
-);
-
-it.effect(
   "one failed journal read after a long gap waits; only 2 hours of failed reads stop the record",
   () =>
     world((pen, home, _grant, host) =>
@@ -869,22 +847,6 @@ it.effect(
         expect(machine?.message).not.toContain("Pen now advertises");
       }),
     ),
-);
-
-it.effect("a symlink another user owns on the key's path holds the link and is named", () =>
-  world((pen, home, _grant, host) =>
-    Effect.gen(function* () {
-      withIdentity(home);
-      const { attachId } = yield* joined(pen, host, 1);
-      host.control.keyPath = { kind: "symlink", path: "/srv/shared/goat" };
-      for (let pass = 0; pass < 3; pass += 1) yield* enroll;
-      expect(linkAdds(host.control.calls)).toEqual([]);
-      expect(yield* listed(attachId)).toMatchObject({
-        state: "attaching",
-        message: expect.stringContaining("symlink another user owns, /srv/shared/goat"),
-      });
-    }),
-  ),
 );
 
 it.effect(

@@ -26,7 +26,7 @@ const Enroll = Schema.Struct({
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),
-  /** The folder others can write that holds the link (key_dir_unsafe), for the person's chmod. */
+  /** The folder or symlink on the key's path that holds the link (key_dir_*, key_symlink_foreign). */
   keyDir: Schema.optionalKey(Schema.String),
   /** Why the attach stopped and only a person can move it on. */
   stop: Schema.optionalKey(Schema.String),
@@ -229,9 +229,9 @@ const STOPS: Record<string, string> = {
   identity_file_permissions:
     "OpenCodex refused this hub's machine key file's owner or permissions; OpenCodex on this hub may run as another user than GOAT.",
   identity_file_directory:
-    "OpenCodex refused this hub's machine key file: its folder is not private to this user (chmod g-w,o-w on it).",
+    "OpenCodex refused this hub's machine key file: the folder holding it is not private to the user OpenCodex runs as, which may not be GOAT's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
   identity_file_ancestor:
-    "OpenCodex refused this hub's machine key file: a folder above it can be written by its group or others or belongs to another user, or a symlink on its path does (chmod g-w on that folder).",
+    "OpenCodex refused this hub's machine key file: a folder above it or a symlink on its path is writable by others or belongs to another user than OpenCodex's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --home-dir) to a path that passes; never change a shared or system folder or another user's symlink, even as root.",
   identity_file_unreadable:
     "OpenCodex refused this hub's machine key file: it cannot read it or a folder on its path; OpenCodex on this hub may run as another user than GOAT.",
   identity_file_unsupported_platform:
@@ -279,9 +279,15 @@ const WAITING: Record<string, string> = {
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
   key_symlink_foreign:
-    "OpenCodex refuses a key whose path passes a symlink another user owns; GOAT tries again on the next pass.",
+    "OpenCodex refuses a key whose path passes a symlink another user owns. Move GOAT's home (GOAT_HOME or --home-dir) to a path without it; never change another user's symlink, even as root.",
   key_dir_unsafe:
-    "OpenCodex refuses a key under a folder others can write; GOAT tries again on the next pass.",
+    "A folder of yours on the path of this hub's machine key can be written by its group or others, and its path is too long to show here. Move GOAT's home (GOAT_HOME or --home-dir) to a shorter path whose folders pass.",
+  key_dir_shared:
+    "A folder on the path of this hub's machine key can be written by its group or others, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
+  key_dir_foreign:
+    "A folder on the path of this hub's machine key belongs to another user, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change another user's folder, even as root.",
+  key_dir_unreadable:
+    "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --home-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
   machine_key_unusable:
     "This hub's machine key cannot be used: GOAT cannot read it, or others can.",
   opencodex_unsupported:
@@ -295,6 +301,47 @@ const WAITING: Record<string, string> = {
 };
 const waitingText = (outcome: string | undefined) =>
   outcome === undefined ? undefined : WAITING[outcome];
+
+/**
+ * Texts naming the folder or symlink on the key's path, with the longest path each can carry within
+ * the wire's 500 characters. chmod is offered only for the user's own folder (key_dir_unsafe).
+ */
+const PATH_TEXTS: Record<string, { readonly cap: number; readonly text: (at: string) => string }> =
+  {
+    key_dir_unsafe: {
+      cap: 140,
+      text: (at) =>
+        at +
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. It is your folder: run chmod go-w " +
+        at +
+        " on the hub, or move GOAT's home (GOAT_HOME or --home-dir) if you share it on purpose.",
+    },
+    key_dir_shared: {
+      cap: 240,
+      text: (at) =>
+        at +
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root. GOAT tries again on the next pass.",
+    },
+    key_dir_foreign: {
+      cap: 240,
+      text: (at) =>
+        at +
+        " belongs to another user, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change another user's folder, even as root. GOAT tries again on the next pass.",
+    },
+    key_symlink_foreign: {
+      cap: 240,
+      text: (at) =>
+        "OpenCodex refuses a key whose path passes a symlink another user owns, " +
+        at +
+        ", who could point it elsewhere. Move GOAT's home (GOAT_HOME or --home-dir) to a path without it; never change another user's symlink, even as root.",
+    },
+  };
+const pathText = (outcome: string | undefined, at: string | undefined) => {
+  const entry = outcome === undefined ? undefined : PATH_TEXTS[outcome];
+  return entry === undefined || at === undefined || at.length > entry.cap
+    ? undefined
+    : entry.text(at);
+};
 
 /** A machine that left Pen while this hub's OpenCodex held, or was making, a link for it. */
 export const leftPenMessage = (
@@ -396,35 +443,9 @@ export const enrollMessage = (
             keyStep,
           nextAction: null,
         };
-      // The folder is named twice; a longer path than this would pass the wire's 500 characters.
-      if (
-        enroll.link?.outcome === "key_dir_unsafe" &&
-        enroll.keyDir !== undefined &&
-        enroll.keyDir.length <= 160
-      )
-        return {
-          message:
-            "OpenCodex refuses a key under a folder others can write, and " +
-            enroll.keyDir +
-            " can be written by its group or others. Run chmod go-w " +
-            enroll.keyDir +
-            " on the hub; GOAT tries again on the next pass.",
-          nextAction: null,
-        };
-      if (
-        enroll.link?.outcome === "key_symlink_foreign" &&
-        enroll.keyDir !== undefined &&
-        enroll.keyDir.length <= 300
-      )
-        return {
-          message:
-            "OpenCodex refuses a key whose path passes a symlink another user owns, " +
-            enroll.keyDir +
-            ", who could point it elsewhere. Keep GOAT's state folder on a path without it; GOAT tries again on the next pass.",
-          nextAction: null,
-        };
       return {
         message:
+          pathText(enroll.link?.outcome, enroll.keyDir) ??
           waitingText(enroll.link?.outcome) ??
           "Linking " + name + " to this hub's OpenCodex as a lightweight Child.",
         nextAction: null,
