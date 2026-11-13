@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { penExactRoute, penHostUser, penKnownHostsFile, sshSettings } from "./penSshRoute.ts";
+import {
+  penExactCommands,
+  penExactRoute,
+  penHostOption,
+  penKnownHostsFile,
+  sshSettings,
+} from "./penSshRoute.ts";
 
 const NODE = "abcdefghijklmnopqrstuvwxyz";
 const NOISE = "N".repeat(42) + "_";
@@ -74,8 +80,21 @@ describe("Pen's exact per-node route", () => {
       "Host pen-*",
       "    ProxyCommand '/p/pen' pipe %n 22",
     ].join("\n");
-    expect(penHostUser(config, "pen-" + NODE)).toBe("runner");
-    expect(penHostUser(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz")).toBeUndefined();
-    expect(penHostUser(config, "pen-missing")).toBeUndefined();
+    expect(penHostOption(config, "pen-" + NODE, "User")).toBe("runner");
+    expect(penHostOption(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz", "User")).toBeUndefined();
+    expect(penHostOption(config, "pen-missing", "User")).toBeUndefined();
+  });
+  it("names the commands the confirmed Pen writes, as ssh -G prints them", () => {
+    const pen = { executablePath: "/opt/it's/pen", stateDir: "/home/u/.pen" };
+    const tail = " pipe --node " + NODE + " --noise " + NOISE + " 22";
+    expect(penExactCommands(node, pen, "/home/u/.pen")).toEqual([
+      "env PEN_HOME='/home/u/.pen' '/opt/it'\\''s/pen'" + tail,
+      "'/opt/it'\\''s/pen'" + tail,
+    ]);
+    // Without PEN_HOME, Pen runs on ~/.pen, so a confirmed Pen elsewhere must name its folder.
+    expect(penExactCommands(node, { ...pen, stateDir: "/srv/p%n" }, "/home/u/.pen")).toEqual([
+      "env PEN_HOME='/srv/p%%n' '/opt/it'\\''s/pen'" + tail,
+    ]);
+    expect(penExactCommands({ ...node, nodeId: "pen-box" }, pen, "/home/u/.pen")).toEqual([]);
   });
 });

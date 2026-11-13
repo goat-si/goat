@@ -694,13 +694,14 @@ const exactMachine = Effect.fn("HubOcxPenTest.exactMachine")(function* (
   };
   const { ocx, home } = yield* penHome(machine);
   machine.sshG = penSshG(home, { proxycommand: proxy, user: "runner" });
-  return { ocx, machine };
+  const pen = { executablePath: "/home/u/.local/bin/pen", stateDir: home + "/.pen" };
+  return { ocx, machine, home, pen, node: { nodeId: EXACT_NODE, noisePub: EXACT_NOISE } };
 });
 
 it.effect("Pen's exact block for a node is a route only with the Noise key GOAT recorded", () =>
   Effect.gen(function* () {
-    const { ocx } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
-    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual({
+    const { ocx, pen, node } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    expect(yield* ocx.penExactRoute(node, pen)).toEqual({
       kind: "route",
       alias: EXACT_ALIAS,
       proxyCommand: EXACT_PROXY,
@@ -708,7 +709,7 @@ it.effect("Pen's exact block for a node is a route only with the Noise key GOAT 
       hostKey: "ssh-ed25519 " + ED_KEY,
       fingerprint: "SHA256:nz9cVTpQx8PimslFh9CITEcWGb7QKBXpUlHyEaSApSw",
     });
-    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: "M".repeat(43) })).toEqual({
+    expect(yield* ocx.penExactRoute({ ...node, noisePub: "M".repeat(43) }, pen)).toEqual({
       kind: "refused",
       reason: "no_exact_block",
     });
@@ -718,11 +719,11 @@ it.effect("Pen's exact block for a node is a route only with the Noise key GOAT 
 // Pen gives an id another member uses as a name only that member's name block.
 it.effect("a node id another member uses as its name stays refused", () =>
   Effect.gen(function* () {
-    const { ocx } = yield* exactMachine(
+    const { ocx, pen, node } = yield* exactMachine(
       PEN_BLOCK(EXACT_ALIAS),
       "'/home/u/.local/bin/pen' pipe %n 22",
     );
-    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual({
+    expect(yield* ocx.penExactRoute(node, pen)).toEqual({
       kind: "refused",
       reason: "no_exact_block",
     });
@@ -731,8 +732,11 @@ it.effect("a node id another member uses as its name stays refused", () =>
 
 it.effect("an exact block with two ed25519 keys, none, or no User of Pen's names no route", () =>
   Effect.gen(function* () {
-    const { ocx, machine } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
-    const read = ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE });
+    const { ocx, machine, pen, node } = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK,
+      EXACT_PROXY,
+    );
+    const read = ocx.penExactRoute(node, pen);
     machine.keys = exactKeys(
       "pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY,
       EXACT_ALIAS + ",pen-other ssh-ed25519 " + ED_KEY.replace("IFc", "IGc"),
@@ -742,9 +746,43 @@ it.effect("an exact block with two ed25519 keys, none, or no User of Pen's names
     expect(yield* read).toEqual({ kind: "refused", reason: "no_key" });
     machine.keys = exactKeys("pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY);
     machine.config = PEN_BLOCK("pen-box") + EXACT_BLOCK.replace("    User runner\n", "");
-    const { ocx: withoutUser } = yield* exactMachine(machine.config, EXACT_PROXY);
-    expect(yield* withoutUser.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual(
-      { kind: "refused", reason: "no_user" },
+    const withoutUser = yield* exactMachine(machine.config, EXACT_PROXY);
+    expect(yield* withoutUser.ocx.penExactRoute(node, withoutUser.pen)).toEqual({
+      kind: "refused",
+      reason: "no_user",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// ssh keeps the first value it reads, so an entry above Pen's Include wins over Pen's block.
+it.effect("an exact route run by any pen or Pen home but the confirmed one is refused", () =>
+  Effect.gen(function* () {
+    const other = EXACT_PROXY.replace("/home/u/.local/bin/pen", "/tmp/x/pen");
+    const overridden = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, other);
+    expect(yield* overridden.ocx.penExactRoute(overridden.node, overridden.pen)).toEqual({
+      kind: "refused",
+      reason: "other_pen",
+    });
+    const ownHome = "env PEN_HOME='/tmp/other' " + EXACT_PROXY;
+    const otherHome = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, ownHome),
+      ownHome,
     );
+    expect(yield* otherHome.ocx.penExactRoute(otherHome.node, otherHome.pen)).toEqual({
+      kind: "refused",
+      reason: "other_pen",
+    });
+    // The same pen under the confirmed state folder, named explicitly, is that Pen.
+    const confirmed = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    const named = "env PEN_HOME='" + confirmed.pen.stateDir + "' " + EXACT_PROXY;
+    const explicit = yield* exactMachine(
+      PEN_BLOCK("pen-box") + EXACT_BLOCK.replace(EXACT_PROXY, named),
+      named,
+    );
+    const route = yield* explicit.ocx.penExactRoute(explicit.node, {
+      ...explicit.pen,
+      stateDir: confirmed.pen.stateDir,
+    });
+    expect(route).toMatchObject({ kind: "route", proxyCommand: named });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

@@ -83,7 +83,7 @@ import {
   type HubConsentGenerations,
   makeHubConsentGenerations,
 } from "./hub/hubConsentGenerations.ts";
-import { alsoStampDisposableSwitch } from "./hub/disposable/disposableSwitch.ts";
+import { withDisposableStamp } from "./hub/disposable/disposableSwitch.ts";
 import {
   agentWorkspaceTerminalSettingsMethods,
   rejectAgentWorkspaceTerminalPolicyChange,
@@ -869,7 +869,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     beforeCommit?: Effect.Effect<void, E | ServerSettingsError, R>,
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Ref.get(currentSettingsRef).pipe(
-      Effect.flatMap(update),
+      Effect.flatMap(withDisposableStamp(update)),
       Effect.flatMap(normalizeServerSettings),
       Effect.tap(() => beforeCommit ?? Effect.void),
       Effect.tap((nextSettings) =>
@@ -959,7 +959,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       updateTestSettings,
       "test settings",
       rejectMemoryHubSettingsPatch,
-      stampSettings,
+      stampGoatclaw,
     ),
     updateProviderInstance: (mutation, patch = {}, _approval, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
@@ -1127,7 +1127,6 @@ const stampGoatclaw = (current: ServerSettings, next: ServerSettings) =>
           goatclaw: { ...next.goatclaw, updatedAt: DateTime.formatIso(now) },
         })),
       );
-const stampSettings = alsoStampDisposableSwitch(stampGoatclaw);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -1925,7 +1924,7 @@ const make = Effect.gen(function* () {
           cause: parseFailure.value,
         });
       }
-      const updated = yield* update(current);
+      const updated = yield* withDisposableStamp(update)(current);
       for (const [id, provider] of Object.entries(updated.secretProviders)) {
         if (
           !NodeUtil.isDeepStrictEqual(
@@ -2151,7 +2150,7 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings,
       settingsPath,
       rejectMemoryHubSettingsPatch,
-      stampSettings,
+      stampGoatclaw,
     ),
     updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
       updateAndPersistSettings(

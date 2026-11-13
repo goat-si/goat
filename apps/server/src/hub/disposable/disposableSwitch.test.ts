@@ -2,6 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   DISPOSABLE_NAME_RULE_DEFAULT,
+  ProviderDriverKind,
+  ProviderInstanceId,
   HubSettings,
   type ServerSettingsPatch,
 } from "@goat/contracts";
@@ -72,6 +74,35 @@ it.effect("every change to the switch writes a new grant to disk; other changes 
     // A patch cannot name the grant; only the server writes one.
     const forged = { hub: { attachDisposableMachines: { grantId: "chosen" } } };
     expect((yield* grantOf(forged as ServerSettingsPatch)).grantId).toBe(before);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+// A provider change carries any settings patch; it must end a grant like any other write.
+it.effect("turning the hub off and on through provider changes still ends the old grant", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    yield* service.start;
+    const grant = service.getSettings.pipe(
+      Effect.map((settings) => settings.hub.attachDisposableMachines.grantId),
+    );
+    yield* service.updateSettings({
+      hub: { enabled: true, attachDisposableMachines: { enabled: true } },
+    });
+    const before = yield* grant;
+    const instanceId = ProviderInstanceId.make("kilo-disposable");
+    const upsert = (displayName: string) =>
+      ({
+        operation: "upsert",
+        instanceId,
+        instance: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          displayName,
+          config: { agentId: "kilo", distribution: "auto" },
+        },
+      }) as const;
+    yield* service.updateProviderInstance(upsert("Kilo"), { hub: { enabled: false } });
+    yield* service.updateProviderInstance(upsert("Kilo 2"), { hub: { enabled: true } });
+    expect(yield* grant).not.toBe(before);
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 

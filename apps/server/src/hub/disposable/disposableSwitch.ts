@@ -13,7 +13,7 @@ const consent = (hub: HubSettings) => {
 
 /**
  * Gives the switch a new grantId whenever the person's consent changes, and an expiry 30 days
- * ahead when it is on without a future one. Every settings write that applies a patch runs it.
+ * ahead when it is on without a future one.
  */
 const stampDisposableSwitch = (
   current: ServerSettings,
@@ -40,11 +40,11 @@ const stampDisposableSwitch = (
         }),
       );
 
-/** Runs `stamp`, then stamps the disposable machines switch on its result. */
-export const alsoStampDisposableSwitch =
-  (stamp: (current: ServerSettings, next: ServerSettings) => Effect.Effect<ServerSettings>) =>
-  (current: ServerSettings, next: ServerSettings) =>
-    stamp(current, next).pipe(Effect.flatMap((stamped) => stampDisposableSwitch(current, stamped)));
+/** Wraps a settings commit's update so every write path, patch or not, stamps the switch. */
+export const withDisposableStamp =
+  <E, R>(update: (current: ServerSettings) => Effect.Effect<ServerSettings, E, R>) =>
+  (current: ServerSettings) =>
+    update(current).pipe(Effect.flatMap((next) => stampDisposableSwitch(current, next)));
 
 export type DisposableSwitch =
   | { readonly open: true; readonly grant: string }

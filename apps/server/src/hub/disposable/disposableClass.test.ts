@@ -1,11 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, type HubNode } from "@goat/contracts";
 
-import {
-  type DisposableRecord,
-  disposableActionAllowed,
-  disposableClasses,
-} from "./disposableClass.ts";
+import { type DisposableRecord, disposableClasses } from "./disposableClass.ts";
 
 const NODE_A = "a".repeat(26);
 const NODE_B = "b".repeat(26);
@@ -81,9 +77,7 @@ describe("disposable machine class", () => {
       ] as const) {
         expect(classes.forNode(node(environmentId, [ssh(alias)]))?.class).toBe("conflict");
         const own = records.find((entry) => entry.attachId === attachId);
-        expect(
-          own && disposableActionAllowed(own, environmentId, classes.conflictsOf(attachId)),
-        ).toBe(false);
+        expect(own && classes.actionAllowed(own, node(environmentId, [ssh(alias)]))).toBe(false);
       }
     }
   });
@@ -93,7 +87,6 @@ describe("disposable machine class", () => {
       record({ attachId: "a1" }),
       record({ attachId: "a0", nodeId: NODE_B, final: true, state: "purged" }),
     ]);
-    expect(classes.conflictsOf("a1")).toEqual([]);
     expect(classes.forNode(node("env-a", [ssh("pen-" + NODE_A)]))?.class).toBe("disposable");
   });
 
@@ -110,12 +103,28 @@ describe("disposable machine class", () => {
     ]);
   });
 
-  it("an automatic action needs the record's own environment and no conflict", () => {
+  it("an automatic action needs the machine as observed now to project as its record, unconflicted", () => {
     const own = record({ attachId: "a1" });
-    expect(disposableActionAllowed(own, "env-a", [])).toBe(true);
-    expect(disposableActionAllowed(own, "env-b", [])).toBe(false);
-    expect(disposableActionAllowed({ ...own, environmentId: null }, null, [])).toBe(false);
-    expect(disposableActionAllowed({ ...own, final: true }, "env-a", [])).toBe(false);
-    expect(disposableActionAllowed(own, "env-a", ["pin_changed"])).toBe(false);
+    const route = ssh("pen-" + NODE_A);
+    const classes = disposableClasses([own]);
+    expect(classes.actionAllowed(own, node("env-a", [route]))).toBe(true);
+    expect(classes.actionAllowed(own, node("env-b", [route]))).toBe(false);
+    // A route a person registered to the same machine makes it a conflict.
+    expect(classes.actionAllowed(own, node("env-a", [ssh("cc-04"), route]))).toBe(false);
+    const unknown = record({ attachId: "a1", environmentId: null });
+    expect(disposableClasses([unknown]).actionAllowed(unknown, node(null, [route]))).toBe(false);
+    const final = record({ attachId: "a1", final: true });
+    expect(disposableClasses([final]).actionAllowed(final, node("env-a", [route]))).toBe(false);
+    const changed = record({ attachId: "a1", conflicts: ["pin_changed"] });
+    expect(disposableClasses([changed]).actionAllowed(changed, node("env-a", [route]))).toBe(false);
+    const twin = record({
+      attachId: "a2",
+      nodeId: NODE_B,
+      sshdPin: "SHA256:pin-b",
+      linkId: "lnk_b",
+      machineInstallId: "install-b",
+    });
+    // Another open record claiming the same environment is a conflict for both.
+    expect(disposableClasses([own, twin]).actionAllowed(own, node("env-a", [route]))).toBe(false);
   });
 });

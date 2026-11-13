@@ -85,20 +85,23 @@ export const disposableClasses = (records: ReadonlyArray<DisposableRecord>) => {
       conflicts: [...new Set(reasons)].slice(0, 16),
     };
   };
-  return { conflictsOf, forNode };
+  /**
+   * Whether GOAT may act on the record's machine without a person (retire, compensate, detach as
+   * the system): the machine as observed now, its environment and routes, projects as this record
+   * with no conflict. Anything less is treated as kept.
+   */
+  const actionAllowed = (
+    record: DisposableRecord,
+    observed: Pick<HubNode, "environmentId" | "routes">,
+  ) => {
+    const projected = forNode(observed);
+    return (
+      !record.final &&
+      record.environmentId !== null &&
+      record.environmentId === observed.environmentId &&
+      projected?.attachId === record.attachId &&
+      projected.class === "disposable"
+    );
+  };
+  return { forNode, actionAllowed };
 };
-
-/**
- * Whether GOAT may act on a machine without a person (retire it, compensate, detach as the system):
- * an open record, the environment the machine identifies as now equal to the record's, and no
- * conflict. Anything less is treated as kept.
- */
-export const disposableActionAllowed = (
-  record: DisposableRecord,
-  observedEnvironmentId: string | null,
-  conflicts: ReadonlyArray<string>,
-) =>
-  !record.final &&
-  record.environmentId !== null &&
-  record.environmentId === observedEnvironmentId &&
-  conflicts.length === 0;

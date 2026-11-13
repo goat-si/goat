@@ -49,6 +49,7 @@ export class DisposableStoreError extends Data.TaggedError("DisposableStoreError
   readonly message: string;
 }> {}
 
+const OPEN_LIMIT = 1000;
 const unreadable = () =>
   new DisposableStoreError({ message: "The hub's disposable machine records are unreadable." });
 const isServerSettingsError = Schema.is(ServerSettingsError);
@@ -69,10 +70,10 @@ export type Forward<A> =
 export class DisposableMachineStore extends Context.Service<
   DisposableMachineStore,
   {
-    /** Every record; fails when the table cannot be read. */
+    /** Every open record; fails when the table cannot be read or holds more than it can show. */
     readonly records: Effect.Effect<ReadonlyArray<DisposableRecord>, DisposableStoreError>;
     /**
-     * Every record for display and for the class of hub nodes. An unreadable table reads as no
+     * Every open record, for the class of hub nodes. An unreadable table reads as no
      * records, so every machine is kept and nothing acts on one automatically.
      */
     readonly recordsOrKept: Effect.Effect<ReadonlyArray<DisposableRecord>>;
@@ -96,7 +97,11 @@ export const make = Effect.gen(function* () {
     const rows = yield* sql`SELECT attach_id, node_id, state, state_since, created_at,
         provisioner_json, final_at, environment_id, machine_install_id, sshd_pin, link_id,
         conflicts_json, pen_admitted_at, pen_removed_at
-      FROM disposable_machines ORDER BY created_at, attach_id LIMIT 1000`;
+      FROM disposable_machines
+      WHERE final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')
+      ORDER BY created_at, attach_id LIMIT ${OPEN_LIMIT + 1}`;
+    // A collision past the limit would go unseen, so too many records read as unreadable.
+    if (rows.length > OPEN_LIMIT) return yield* unreadable();
     return (yield* decodeRows(rows)).map((row): DisposableRecord => ({
       attachId: row.attach_id,
       nodeId: row.node_id,
@@ -124,24 +129,23 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<Forward<A>, E | DisposableStoreError, R> =>
     settings
       .withSettingsSnapshot((current) =>
-        Effect.gen(function* () {
-          const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-          return yield* sql.withTransaction(
-            Effect.gen(function* () {
-              const [row] = yield* sql<{ readonly grant_id: string; readonly fence: number }>`
+        sql.withTransaction(
+          Effect.gen(function* () {
+            // Read the clock once the transaction is held: waiting for it can outlast the expiry.
+            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+            const [row] = yield* sql<{ readonly grant_id: string; readonly fence: number }>`
                 SELECT grant_id, fence FROM disposable_machines WHERE attach_id = ${target.attachId}`;
-              const refused = (reason: ForwardRefusal): Forward<A> => ({
-                committed: false,
-                reason,
-              });
-              if (row === undefined) return refused("not_found");
-              if (!gate.open) return refused(gate.reason);
-              if (gate.grant !== row.grant_id) return refused("grant_changed");
-              if (row.fence !== target.fence) return refused("fence_moved");
-              return { committed: true, value: yield* write } as const;
-            }),
-          );
-        }),
+            const refused = (reason: ForwardRefusal): Forward<A> => ({
+              committed: false,
+              reason,
+            });
+            if (row === undefined) return refused("not_found");
+            if (!gate.open) return refused(gate.reason);
+            if (gate.grant !== row.grant_id) return refused("grant_changed");
+            if (row.fence !== target.fence) return refused("fence_moved");
+            return { committed: true, value: yield* write } as const;
+          }),
+        ),
       )
       .pipe(
         Effect.catchIf(isStorageFailure, () => Effect.fail(unreadable())),

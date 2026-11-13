@@ -60,6 +60,27 @@ const penRoute = (settings: ReadonlyMap<string, string>, node?: PenNode) =>
     ? unset(settings.get("proxyjump")) && PEN_PIPE.test(settings.get("proxycommand") ?? "")
     : penExactRoute(settings, node) !== undefined;
 
+/** The Pen a person confirmed for this machine: its executable and state folder (settings.pen). */
+export interface PenInstall {
+  readonly executablePath: string;
+  readonly stateDir: string;
+}
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/**
+ * The ProxyCommands `pen ssh-config` writes for `node` when it is the confirmed Pen, as ssh -G
+ * prints them: with PEN_HOME when it was set, and without it only for Pen's default ~/.pen.
+ */
+export const penExactCommands = (node: PenNode, pen: PenInstall, defaultStateDir: string) => {
+  if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return [];
+  const bare = `${shellQuote(pen.executablePath)} pipe --node ${node.nodeId} --noise ${node.noisePub} 22`;
+  return [
+    `env PEN_HOME=${shellQuote(pen.stateDir)} ${bare}`,
+    ...(pen.stateDir === defaultStateDir ? [bare] : []),
+  ].map((command) => command.replaceAll("%", "%%"));
+};
+
 /** No jump chain or proxy command: a jump chain is what missed OpenCodex's link admission window. */
 export const isPlainRoute = (settings: ReadonlyMap<string, string>) =>
   unset(settings.get("proxyjump")) && unset(settings.get("proxycommand"));
@@ -95,15 +116,18 @@ export const penConfigHosts = (config: string) =>
     .map((line) => /^Host\s+(\S+)\s*$/u.exec(line.trim())?.[1])
     .filter((alias): alias is string => alias !== undefined && !alias.includes("*"));
 
-/** The User line of Pen's own Host block for `alias`; Pen writes one only for a member that published it. */
-export const penHostUser = (config: string, alias: string) => {
+/**
+ * An option of Pen's own Host block for `alias`, as written. Pen writes User only for a member
+ * that published one.
+ */
+export const penHostOption = (config: string, alias: string, option: "User" | "ProxyCommand") => {
   let inBlock = false;
   for (const line of config.split(/\r?\n/u)) {
     const host = /^Host\s+(\S+)\s*$/u.exec(line.trim());
     if (host !== null) inBlock = host[1] === alias;
     else if (inBlock) {
-      const user = /^User\s+(\S+)$/u.exec(line.trim())?.[1];
-      if (user !== undefined) return user;
+      const value = new RegExp(`^${option}\\s+(\\S.*)$`, "u").exec(line.trim())?.[1];
+      if (value !== undefined) return value;
     }
   }
   return undefined;

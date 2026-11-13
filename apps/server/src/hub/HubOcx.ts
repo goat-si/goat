@@ -38,9 +38,11 @@ import {
   isPlainRoute,
   penConfigHosts,
   penGlobalFiles,
-  penHostUser,
+  penExactCommands,
+  penHostOption,
   penKnownHostsFile,
   penRevision,
+  type PenInstall,
   type PenNode,
   sshSettings,
 } from "./penSshRoute.ts";
@@ -160,7 +162,7 @@ export type PenExactRoute =
     }
   | {
       readonly kind: "refused";
-      readonly reason: "no_exact_block" | "no_user" | "no_key" | "several_keys";
+      readonly reason: "no_exact_block" | "other_pen" | "no_user" | "no_key" | "several_keys";
     };
 
 /** The only seam to OpenCodex and SSH; tests replace it with a scripted runner. */
@@ -241,9 +243,13 @@ export class HubOcx extends Context.Service<
     readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined, HubOcxError>;
     /**
      * Reads the route of a Pen member GOAT addresses by node id: Pen's exact pen-<nodeId> block for
-     * that node and Noise key, the User Pen wrote for it, and the one ed25519 host key Pen recorded.
+     * that node and Noise key run by the confirmed Pen, the User Pen wrote for it, and the one
+     * ed25519 host key Pen recorded.
      */
-    readonly penExactRoute: (node: PenNode) => Effect.Effect<PenExactRoute, HubOcxError>;
+    readonly penExactRoute: (
+      node: PenNode,
+      pen: PenInstall,
+    ) => Effect.Effect<PenExactRoute, HubOcxError>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
@@ -793,13 +799,20 @@ const make = Effect.gen(function* () {
       if (member === undefined) return undefined;
       return penRevision(member.settings, member.recorded);
     }),
-    penExactRoute: Effect.fn("HubOcx.penExactRoute")(function* (node) {
+    penExactRoute: Effect.fn("HubOcx.penExactRoute")(function* (node, pen) {
       const alias = `pen-${node.nodeId}`;
       const member = yield* penMember(alias, node);
       const proxyCommand = member?.settings.get("proxycommand");
       if (member === undefined || proxyCommand === undefined)
         return { kind: "refused", reason: "no_exact_block" } as const;
-      const user = penHostUser(member.config, alias);
+      // An ssh_config entry read before Pen's could name another pen or Pen home.
+      const trusted = penExactCommands(node, pen, path.join(homeDirectory, ".pen"));
+      if (
+        !trusted.includes(proxyCommand) ||
+        penHostOption(member.config, alias, "ProxyCommand") !== proxyCommand
+      )
+        return { kind: "refused", reason: "other_pen" } as const;
+      const user = penHostOption(member.config, alias, "User");
       if (user === undefined || member.settings.get("user") !== user)
         return { kind: "refused", reason: "no_user" } as const;
       const keys = member.recorded

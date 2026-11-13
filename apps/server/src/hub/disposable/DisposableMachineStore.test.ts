@@ -207,3 +207,65 @@ it.effect("a switch-off during a forward commit lets that commit finish and refu
     }),
   ),
 );
+
+it.effect(
+  "more open records than the read can show reads as unreadable, never as a partial list",
+  () =>
+    world(
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 145 });
+        const store = yield* Store.DisposableMachineStore;
+        // Records in a final state are not read, whatever their number.
+        for (let index = 0; index < 1000; index += 1)
+          yield* insert("open-" + String(index).padStart(4, "0"), "g");
+        yield* insert("final-1", "g", { state: "purged", final_at: T0 });
+        expect(yield* store.records).toHaveLength(1000);
+        // The 1001st open record, sharing a pin with the first, must not be dropped silently.
+        yield* insert("open-1000", "g", { sshd_pin: "SHA256:shared" });
+        expect(yield* store.records.pipe(Effect.flip)).toBeInstanceOf(Store.DisposableStoreError);
+        expect(yield* store.recordsOrKept).toEqual([]);
+      }),
+    ),
+);
+
+it.effect("a forward commit that waits for the database past the switch's expiry is refused", () =>
+  world(
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 145 });
+      const sql = yield* SqlClient.SqlClient;
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings(switchOn);
+      yield* insert("a1", yield* currentGrant);
+      const inTransaction = yield* Deferred.make<void>();
+      const releaseTransaction = yield* Deferred.make<void>();
+      const holder = yield* sql
+        .withTransaction(
+          Deferred.succeed(inTransaction, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseTransaction)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(inTransaction);
+      const queued = yield* Deferred.make<void>();
+      const observed = Settings.ServerSettingsService.of({
+        ...settings,
+        withSettingsSnapshot: (use) =>
+          Deferred.succeed(queued, undefined).pipe(
+            Effect.andThen(settings.withSettingsSnapshot(use)),
+          ),
+      });
+      const store = yield* Store.make.pipe(
+        Effect.provideService(Settings.ServerSettingsService, observed),
+      );
+      const commit = yield* store
+        .commitForward({ attachId: "a1", fence: 0 }, advance("a1", "admitted"))
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(queued);
+      yield* TestClock.adjust(31 * DAY_MS);
+      yield* Deferred.succeed(releaseTransaction, undefined);
+      yield* Fiber.join(holder);
+      expect(yield* Fiber.join(commit)).toEqual({ committed: false, reason: "switch_expired" });
+      expect(yield* stateOf("a1")).toBe("invited");
+    }),
+  ),
+);
