@@ -60,16 +60,17 @@ var clockStart = time.Now()
 // takes it for a step: a clock set, or a sleep the monotonic clock did not count.
 const clockStep = time.Second
 
-// keepFor is how long bytes may wait for a report by either clock. The daemon buckets a report when it arrives, up to
-// trafficWithin after the reporter read its clocks, so bytes sent within keepFor land at most one bucket later.
+// keepFor is how long bytes may wait for a report by either clock. The daemon buckets a report when it handles it,
+// normally within trafficWithin of the reporter's reading, so bytes sent within keepFor land at most one bucket later
+// (the contract states the cases the reporter cannot see).
 const keepFor = traffic.Span - trafficWithin
 
 // sessionTraffic counts one session's stream bytes and reports them to this machine's daemon (op traffic.report)
 // every trafficEvery and once at the end. Reports are best effort: no daemon, an older daemon or a failed report
 // prints nothing and changes nothing for the session. Bytes the daemon certainly did not count wait for the next
-// report, but for less than keepFor: older ones are dropped, so they are never counted more than one bucket after the
-// one they crossed the relay in. A report whose answer never came may have been counted, so its bytes are not sent
-// again.
+// report, but for less than keepFor: older ones are dropped, so they are counted at most one bucket after the one
+// they crossed the relay in, within the limits the contract states. A report whose answer never came may have been
+// counted, so its bytes are not sent again.
 type sessionTraffic struct {
 	st          *state.Store
 	node, relay string

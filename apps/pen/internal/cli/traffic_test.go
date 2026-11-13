@@ -952,15 +952,15 @@ func reportOnly(t *testing.T, answer func(n int) string) (s *sessionTraffic, set
 
 func counted(int) string { return `{"t":"counted"}` }
 
-// The node buckets a report when it arrives, up to trafficWithin after the reporter read its clocks. Bytes pending
-// since a report the wall clock puts a bucket ago, though the monotonic gap is shorter and the step under clockStep,
-// would land more than one bucket after they began: they are dropped.
+// The node buckets a report when it handles it, normally within trafficWithin of the reporter's reading. Bytes
+// pending since a report the wall clock puts keepFor or more ago are dropped, even when the monotonic gap is shorter
+// than keepFor and the step is within clockStep: counted at arrival they could land two buckets after they began.
 func TestPipeDropsPendingBytesTheWallClockPutsABucketBack(t *testing.T) {
 	s, set, got := reportOnly(t, counted)
 	start := s.lastTry.wall
 	s.in.Store(100)
 	s.out.Store(100)
-	set(start.Add(traffic.Span+400*time.Millisecond), traffic.Span-500*time.Millisecond)
+	set(start.Add(traffic.Span-500*time.Millisecond), traffic.Span-1500*time.Millisecond)
 	s.report(context.Background())
 	if r := got(); len(r) != 0 {
 		t.Fatalf("reports %+v; want the bytes pending across a bucket dropped, never sent", r)
@@ -1003,7 +1003,7 @@ func TestPipeKeepsBytesWhenTheWallClockSlewsHalfASecond(t *testing.T) {
 	s.out.Store(150)
 	set(start.Add(4*time.Minute), 4*time.Minute)
 	s.report(context.Background())
-	if r := got(); len(r) != 2 || r[0].In != 100 || r[1].In != 50 || r[1].Out != 50 {
+	if r := got(); len(r) != 2 || r[0].In != 100 || r[0].Out != 100 || r[1].In != 50 || r[1].Out != 50 {
 		t.Fatalf("reports %+v; want 100 then 50 bytes each way counted across a 500 ms slew", r)
 	}
 }
