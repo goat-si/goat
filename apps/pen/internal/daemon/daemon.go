@@ -148,8 +148,9 @@ type Daemon struct {
 	// versions.json so an offline member's last announcement still counts.
 	versions map[string]string
 	// acct are the running kind 0x04 sessions, oldest first.
-	acct       []*acctSlot
-	inviteWait map[string]chan mesh.Member
+	acct []*acctSlot
+	// inviteWait holds the callers waiting on an invite: an admitted member, or nil when the invite was cancelled.
+	inviteWait map[string]chan *mesh.Member
 	lastView   *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
@@ -302,7 +303,7 @@ func New(opt Options) (*Daemon, error) {
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, snapWatchers: map[chan []byte]struct{}{}, snapGen: 1,
 		seen:     map[string]seenInfo{},
-		versions: versions, inviteWait: map[string]chan mesh.Member{}, stopCh: make(chan struct{}),
+		versions: versions, inviteWait: map[string]chan *mesh.Member{}, stopCh: make(chan struct{}),
 	}
 	d.svc.onPhones = opt.PhoneSlots
 	switch opt.SSHUser {

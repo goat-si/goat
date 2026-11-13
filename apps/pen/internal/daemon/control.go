@@ -453,7 +453,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 
 // awaitJoin answers r, then the invite's admission or expiry, unless the client hangs up first.
 func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, reply func(any)) {
-	wait := make(chan mesh.Member, 1)
+	wait := make(chan *mesh.Member, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
 	d.mu.Unlock()
@@ -468,7 +468,11 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	defer t.Stop()
 	select {
 	case m := <-wait:
-		reply(map[string]any{"t": "admitted", "member": m})
+		if m == nil {
+			reply(map[string]any{"t": "cancelled"})
+		} else {
+			reply(map[string]any{"t": "admitted", "member": *m})
+		}
 	case <-t.C:
 		reply(map[string]any{"t": "expired"})
 	case <-gone:

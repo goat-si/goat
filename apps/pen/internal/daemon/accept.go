@@ -236,7 +236,7 @@ func (d *Daemon) serveJoin(ctx context.Context, sec *session.Secure) {
 	d.opt.Logf("admitted %s (%s)", member.Name, member.NodeID)
 	d.mu.Lock()
 	if ch := d.inviteWait[inviteID]; ch != nil {
-		ch <- *member
+		ch <- member
 		delete(d.inviteWait, inviteID)
 	}
 	d.mu.Unlock()

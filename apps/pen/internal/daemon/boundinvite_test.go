@@ -327,3 +327,34 @@ func TestAnInviteWithANullOrStringSubjectIsRefused(t *testing.T) {
 		t.Fatalf("offers.json holds %d invite(s) (%v); want none", len(offers), err)
 	}
 }
+
+// A caller waiting on an invite (wait:true) is told when the invite is cancelled and its connection ends, instead of
+// waiting until the expiry and then answering expired.
+func TestCancelEndsAWaitOnTheInvite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	var c InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.cancel","mintId":"m1"}`, &c); err != nil || c.State != "cancelled" {
+		t.Fatalf("cancel: %+v, %v", c, err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}

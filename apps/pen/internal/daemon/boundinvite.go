@@ -98,6 +98,9 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			fail(err)
 			return
 		}
+		if t == "invite-cancel" && state == mesh.InviteCancelled {
+			d.endWait(ref)
+		}
 		reply(InviteCancelReply{T: t, InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		return
 	}
@@ -155,6 +158,21 @@ func boundExpiry(req boundInviteRequest, has map[string]bool, now time.Time) (ti
 		ttl = 10 * time.Minute
 	}
 	return now.Add(ttl), nil
+}
+
+// endWait tells a caller waiting on the cancelled invite (wait:true) that it was cancelled.
+func (d *Daemon) endWait(ref inviteRef) {
+	id := ref.InviteID
+	if id == "" {
+		store, book := d.meshAndBook()
+		id = mesh.StatusOf(store, book, "", ref.MintID, d.now).InviteID
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ch := d.inviteWait[id]; ch != nil && id != "" {
+		ch <- nil
+		delete(d.inviteWait, id)
+	}
 }
 
 // presentMembers names the members of a bound-invite line and refuses one that is null, which would decode like an
