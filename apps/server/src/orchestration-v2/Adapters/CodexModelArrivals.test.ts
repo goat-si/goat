@@ -408,7 +408,7 @@ it.effect("a process that could not say where its catalog is is asked again a mi
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("a cached-only check answers from memory while the catalog file does not respond", () =>
+it.effect("a cached-only check waits only a moment for a catalog file that does not respond", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
@@ -433,7 +433,42 @@ it.effect("a cached-only check answers from memory while the catalog file does n
     });
     assert.strictEqual(yield* modelStatus(known), "outdated");
     stuck = true;
-    // Placement runs on the serial dispatch path, so it must not wait on the file.
+    // Placement runs on the serial dispatch path, so it answers from memory past a short bound.
+    const placed = yield* modelStatus(known, { cachedOnly: true }).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* TestClock.adjust("50 millis");
+    assert.strictEqual(yield* Fiber.join(placed), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("placement sees a catalog change before GOAT has read the new file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    let reading = true;
+    // The background read cannot land before placement answers.
+    const slowFs: FileSystem.FileSystem = {
+      ...fs,
+      readFileString: (path, encoding) =>
+        reading ? fs.readFileString(path, encoding) : Effect.never,
+    };
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: slowFs,
+        readConfig: Effect.succeed({ config: { model_catalog_json: filename } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    yield* writeCatalog(filename, { [known]: 1_048_576 }, 3_000);
+    reading = false;
     assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

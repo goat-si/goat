@@ -121,16 +121,25 @@ export const makeCodexCatalogFreshness = <E>(input: {
     options?: { readonly cachedOnly?: boolean },
   ) {
     if (options?.cachedOnly === true) {
-      // Placement holds dispatch, so it answers from memory and reads the file in the background.
+      // Placement holds dispatch: one bounded stat, and the read and parse run in the background.
       const known = Option.getOrUndefined(catalogPath);
-      if (known !== undefined && !refreshing) {
+      if (known === undefined) return false;
+      const seen = yield* input.fileSystem.stat(known).pipe(
+        Effect.map(describe),
+        Effect.timeoutOption("50 millis"),
+        Effect.map(Option.getOrUndefined),
+        Effect.orElseSucceed(() => undefined),
+      );
+      const changed = seen !== undefined && seen.identity !== current?.identity;
+      if (changed && !refreshing) {
         refreshing = true;
         yield* refresh(known).pipe(
           Effect.ensuring(Effect.sync(() => (refreshing = false))),
           Effect.forkDetach,
         );
       }
-      return judge(model);
+      // Until the background read lands, a changed file counts as changing this model too.
+      return (changed && current?.entries?.has(model) === true) || judge(model);
     }
     const filename = Option.isSome(catalogPath) ? catalogPath.value : yield* resolvePath;
     if (filename !== undefined) yield* refresh(filename);
