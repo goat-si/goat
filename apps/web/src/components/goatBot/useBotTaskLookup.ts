@@ -89,10 +89,10 @@ export function useBotTaskLookup(
   }, [decision.startRead, period.id, start]);
   /**
    * An action or acknowledgement sent for `sent` (this hook's key then) completed. It marks the
-   * view to reread only while that is still the pane's task; false means drop the completion.
+   * view to reread only while that is still the mounted pane's task; false means drop it.
    */
   const complete = useStableCallback((sent: string) => {
-    if (sent !== key) return false;
+    if (sent !== key || live.current === null) return false;
     setStale(period.id);
     return true;
   });

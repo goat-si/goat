@@ -548,3 +548,16 @@ it("shows no loading line when read permission goes with a read pending", async 
   await act(() => calls[0]?.answer("Answer from before"));
   expect(screen.getByRole("heading", { name: "Answer from before" }).query()).toBeNull();
 });
+
+it("drops an acknowledgement that completes after the pane unmounted", async () => {
+  setup();
+  const acknowledged = holdUpdate();
+  {
+    await using _screen = await render(<Pane onClose={() => {}} />);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await act(() => calls[0]?.answer("Unread task", true));
+    await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+  }
+  await acknowledged();
+  expect(state.refresh).not.toHaveBeenCalled();
+});
