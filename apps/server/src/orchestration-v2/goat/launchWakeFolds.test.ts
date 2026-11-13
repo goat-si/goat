@@ -13,7 +13,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../../fleet/pressure/pressureModel.ts";
 import { finishedWake, newLaunchWatch } from "../../mcp/launchWatch.ts";
 import { foldIntoQueuedNotice } from "../TurnDigest.ts";
-import { LAUNCH_WAKE_KEY_WARNING, launchWakeKeyCrossing } from "./launchWakeFolds.ts";
+import { launchWakeKeyCrossing } from "./launchWakeFolds.ts";
+
+/** Distinct launching runs a thread may queue wakes for before the warning. */
+const LAUNCH_WAKE_KEY_WARNING = 8;
 
 type Projection = Pick<OrchestrationV2ThreadProjection, "runs" | "messages">;
 type Dispatch = Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;

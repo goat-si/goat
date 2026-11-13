@@ -44,8 +44,8 @@ export function launchWakeFoldTarget(projection: Projection, command: Dispatch) 
     : ("none" as const);
 }
 
-export const LAUNCH_WAKE_KEY_WARNING = 8;
-export function launchWakeKeys(projection: Projection) {
+const LAUNCH_WAKE_KEY_WARNING = 8;
+function launchWakeKeys(projection: Projection) {
   return new Set(
     queuedRunsInDeliveryOrder(projection).flatMap((run) => {
       const key = stampedMessage(projection, run.userMessageId)?.notification?.aboutRunId;
