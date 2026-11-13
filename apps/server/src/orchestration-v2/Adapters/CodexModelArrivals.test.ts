@@ -351,14 +351,16 @@ it.effect(
       const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
       yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
       let rewrites = 0;
+      const rewrite = writeCatalog(filename, { [known]: 1_048_576 }, 3_000).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
       // The sync replaces the file after GOAT's stat and before its read.
       const racingFs: FileSystem.FileSystem = {
         ...fs,
         readFileString: (path, encoding) =>
-          (rewrites++ === 0
-            ? writeCatalog(filename, { [known]: 1_048_576 }, 3_000)
-            : Effect.void
-          ).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+          (rewrites++ === 0 ? rewrite : Effect.void).pipe(
+            Effect.andThen(fs.readFileString(path, encoding)),
+          ),
       };
       const modelStatus = makeCodexModelArrivals({
         atStart: [model(known)],
