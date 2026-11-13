@@ -9,7 +9,7 @@ import { useStableCallback } from "~/hooks/useStableCallback";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { scheduleBotTaskSearch } from "./botTaskSearchScheduler";
+import { pruneBotTaskSearch, scheduleBotTaskSearch } from "./botTaskSearchScheduler";
 import { ITEM_ICON_CLASS, type CommandPaletteGroup } from "../CommandPalette.logic";
 
 const NO_PERMISSION = Atom.make(false);
@@ -129,6 +129,21 @@ export function useGoatBotTaskSearch(
       return scheduleBotTaskSearch(
         () => sequence.current === version,
         () => request(bot, key, version, limit, cursor),
+        () =>
+          setSearch((prev) => {
+            if (prev.key !== key) return prev;
+            return {
+              ...prev,
+              pages: {
+                ...prev.pages,
+                [bot.botId]: {
+                  ...(prev.pages[bot.botId] ?? emptyPage()),
+                  error: true,
+                  loading: false,
+                },
+              },
+            };
+          }),
       ).finally(() => inFlight.current.delete(flightKey));
     },
   );
@@ -146,6 +161,7 @@ export function useGoatBotTaskSearch(
     return () => {
       clearTimeout(timer);
       sequence.current++;
+      pruneBotTaskSearch();
     };
   }, [valid, key, start]);
   if (!valid) {
@@ -191,7 +207,9 @@ export function useGoatBotTaskSearch(
         : null,
       page.partial ? "Some results could not be checked." : null,
       page.endedEarly ? "Search ended early." : null,
-      page.tasks.length >= RESULT_LIMIT ? "More tasks may exist. Narrow your search." : null,
+      page.tasks.length >= RESULT_LIMIT && (page.cursor || page.endedEarly)
+        ? "More tasks may exist. Narrow your search."
+        : null,
     ].filter((message) => message !== null);
     const messages = [
       page.loading ? "Searching tasks…" : null,

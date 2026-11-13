@@ -19,6 +19,7 @@ export function useBotTaskLookup(
   taskId: ChannelTaskId,
   botId: BotId,
   needed: boolean,
+  paused = false,
 ) {
   const configs = useServerConfigs();
   const supported =
@@ -26,6 +27,7 @@ export function useBotTaskLookup(
   const permitted = useAtomValue(channelEnvironment.getBotTask.permissionAtom(environmentId));
   const read = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
   const sequence = useRef(0);
+  const inFlight = useRef<string | null>(null);
   const [answer, setAnswer] = useState<Lookup | null>(null);
   const key = JSON.stringify([environmentId, botId, taskId]);
   const eligibleKey = supported && permitted && needed ? key : null;
@@ -42,8 +44,10 @@ export function useBotTaskLookup(
       needed: boolean,
       supported: boolean,
       permitted: boolean,
+      force = false,
     ) => {
-      if (!supported || !permitted || !needed) return;
+      if (!supported || !permitted || !needed || (!force && inFlight.current === key)) return;
+      inFlight.current = key;
       const current = ++sequence.current;
       setAnswer((previous) => ({
         key,
@@ -51,6 +55,7 @@ export function useBotTaskLookup(
         loading: true,
       }));
       void read({ environmentId, input: { taskId, botId } }).then((result) => {
+        if (inFlight.current === key) inFlight.current = null;
         if (current !== sequence.current) return;
         if (result._tag === "Success") setAnswer({ key, value: result.value });
         else {
@@ -79,9 +84,12 @@ export function useBotTaskLookup(
     run(environmentId, taskId, botId, needed, supported, permitted);
     return () => {
       sequence.current++;
+      inFlight.current = null;
     };
   }, [environmentId, botId, taskId, needed, supported, permitted, run]);
-  const reload = () => run(environmentId, taskId, botId, needed, supported, permitted);
+  const reload = useStableCallback((force = false) => {
+    if (!paused) run(environmentId, taskId, botId, needed, supported, permitted, force);
+  });
   return {
     supported,
     permitted,

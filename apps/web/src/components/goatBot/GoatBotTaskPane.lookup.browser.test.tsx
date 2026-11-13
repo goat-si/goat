@@ -1,5 +1,6 @@
 import {
   BotProfile,
+  BotId,
   ChannelGatewayError,
   BotThreadRow,
   ChannelTaskId,
@@ -18,6 +19,7 @@ const state = vi.hoisted(() => ({
   noRows: false,
   listLoaded: true,
   listFailed: false,
+  listPending: false,
   canUpdate: true,
   lookupSupported: false,
   lookup: vi.fn(),
@@ -130,6 +132,7 @@ vi.mock("./useBotRoster", () => ({
           ],
       remoteWork: [],
       loaded: state.listLoaded,
+      pending: state.listPending,
       failed: state.listFailed,
       refresh: state.refresh,
     };
@@ -156,6 +159,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { channelEnvironment } from "~/state/channels";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { useBotTaskLookup } from "./useBotTaskLookup";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -177,6 +181,7 @@ function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: st
 function setup() {
   state.noRows = false;
   state.listLoaded = true;
+  state.listPending = false;
   state.listFailed = false;
   state.canUpdate = true;
   state.lookupSupported = false;
@@ -653,3 +658,99 @@ it("shows lookup loading and does not retry a permission refusal", async () => {
     .toHaveTextContent("Permission to read this task is unavailable.");
   expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
 });
+
+it("keeps an older task during a list refresh and rereads only after an action settles", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Older task",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Older task" })).toBeVisible();
+  state.lookup.mockClear();
+  state.listPending = true;
+  state.listLoaded = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  expect(screen.getByRole("heading", { name: "Older task" }).query()).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Pin" }).query()).not.toBeNull();
+  state.listPending = false;
+  state.listLoaded = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  expect(state.lookup).not.toHaveBeenCalled();
+  state.refresh.mockImplementationOnce(() => {
+    state.listPending = true;
+    state.listLoaded = false;
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await screen.rerender(<Pane onClose={() => {}} />);
+  expect(state.lookup).not.toHaveBeenCalled();
+  state.listPending = false;
+  state.listLoaded = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(state.lookup).toHaveBeenCalledTimes(1));
+});
+
+it("shows Home guidance while the first list read is pending", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.listLoaded = false;
+  state.listPending = true;
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByText("Status and actions for older work are in GOAT Bot's Home."))
+    .toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Open Home" })).toBeVisible();
+  expect(state.lookup).not.toHaveBeenCalled();
+});
+
+it("starts only one read for two immediate retry invocations", async () => {
+  setup();
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("offline")) });
+  state.lookup.mockReturnValue(new Promise(() => {}));
+  await using screen = await render(<LookupRetryTwice />);
+  await expect.element(screen.getByRole("button", { name: "Retry twice" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Retry twice" }));
+  expect(state.lookup).toHaveBeenCalledTimes(2);
+});
+
+function LookupRetryTwice() {
+  const lookup = useBotTaskLookup(
+    EnvironmentId.make("env"),
+    ChannelTaskId.make("task-1"),
+    BotId.make("main"),
+    true,
+  );
+  return lookup.error === "failed" ? (
+    <button
+      onClick={() => {
+        lookup.reload();
+        lookup.reload();
+      }}
+    >
+      Retry twice
+    </button>
+  ) : null;
+}

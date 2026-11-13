@@ -419,3 +419,63 @@ it("stops reading and removes sections when capability is withdrawn", async () =
   expect(state.read).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "A task" }).query()).toBeNull();
 });
+
+it.each([false, true])("shows a cap notice only with continuation: %s", async (more) => {
+  setup();
+  state.read.mockImplementation(
+    async ({ input }: { input: { cursor?: string; limit: number } }) => {
+      const start = input.cursor === "c20" ? 20 : input.cursor === "c40" ? 40 : 0;
+      return {
+        _tag: "Success",
+        value: {
+          tasks: Array.from({ length: input.limit }, (_, i) => ({
+            taskId: `t${start + i}`,
+            title: `Result ${start + i}`,
+            createdAt: "2026-11-07T00:00:00.000Z",
+          })),
+          ...(start < 40 || more ? { nextCursor: `c${start + input.limit}` } : {}),
+        },
+      };
+    },
+  );
+  await using screen = await render(<Search query="" profiles={[bots[0]!]} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="work" profiles={[bots[0]!]} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await expect.element(screen.getByRole("button", { name: "Result 39" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await expect.element(screen.getByRole("button", { name: "Result 49" })).toBeVisible();
+  expect(
+    screen
+      .getByRole("region", { name: "Goaty tasks" })
+      .getByText(/More tasks may exist/)
+      .query() !== null,
+  ).toBe(more);
+});
+
+it.each(["reject", "throw"] as const)(
+  "shows a search error and frees its slot when a request %s",
+  async (kind) => {
+    setup();
+    const first =
+      kind === "throw"
+        ? () => {
+            throw new Error("offline");
+          }
+        : () => Promise.reject(new Error("offline"));
+    state.read.mockImplementationOnce(first).mockResolvedValue({
+      _tag: "Success",
+      value: {
+        tasks: [{ taskId: "ok", title: "Later result", createdAt: "2026-11-07T00:00:00.000Z" }],
+      },
+    });
+    await using screen = await render(<Search query="" profiles={[bots[0]!]} />);
+    using _clock = fakeTimers();
+    await screen.rerender(<Search query="first" profiles={[bots[0]!]} />);
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    await expect.element(screen.getByRole("button", { name: "Retry task search" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Retry task search" }));
+    await expect.element(screen.getByRole("button", { name: "Later result" })).toBeVisible();
+  },
+);
