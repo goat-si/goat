@@ -380,7 +380,8 @@ function AttachDialog({
     } else {
       onAttached();
       if (result.value.invite) setInvite(result.value.invite);
-      else setError("The invite was not returned. Reissue it from the machine list.");
+      else
+        setError(`No invite was made: ${result.value.message} Create a new invite to try again.`);
     }
   }
   return (
