@@ -476,6 +476,11 @@ export function GoatBotChatView({
             threadId={bot.threadId}
             onDraft={onDraft}
             notesRefreshKey={notesRefreshKey}
+            onClose={() => {
+              setPanelOpen(false);
+              // The chip says whether the panel is open, so closing hands control back to it.
+              homeRef.current?.focus();
+            }}
             peekRows={rowsForTask}
             onRetryInput={onRetryInput}
             openFile={shownFile?.file.relativePath ?? null}

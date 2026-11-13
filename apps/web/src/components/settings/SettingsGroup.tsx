@@ -1,30 +1,8 @@
 import type { ComponentProps } from "react";
 
-import { cn } from "../../lib/utils";
+import { GroupedCard } from "../ui/grouped-card";
 
-export function SettingsGroup({
-  variant = "grouped",
-  divided = true,
-  className,
-  ...props
-}: ComponentProps<"div"> & {
-  variant?: "grouped" | "plain";
-  divided?: boolean;
-}) {
-  return (
-    <div
-      data-slot="settings-group"
-      {...props}
-      className={cn(
-        "relative overflow-visible text-foreground",
-        variant === "grouped"
-          ? "rounded-xl border border-border/60 bg-card/40 shadow-xs/5"
-          : "space-y-1",
-        variant === "grouped" &&
-          divided &&
-          "[&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none",
-        className,
-      )}
-    />
-  );
+/** The settings slot of the shared grouped card; settings CSS and rows target this slot. */
+export function SettingsGroup(props: ComponentProps<typeof GroupedCard>) {
+  return <GroupedCard data-slot="settings-group" {...props} />;
 }

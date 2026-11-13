@@ -258,7 +258,7 @@ export const BotRailItem = memo(function BotRailItem({ active }: { active: boole
           aria-label={botRailLabel(face, mainName)}
           activeOptions={EXACT_MATCH}
           aria-current={active ? "page" : undefined}
-          className={railItemClassName(active)}
+          className={cn(railItemClassName(active), "group/rail")}
           {...botReadMenu}
           onClick={() => setMode("bot")}
         >
@@ -266,6 +266,7 @@ export const BotRailItem = memo(function BotRailItem({ active }: { active: boole
             size="sm"
             state={face.state}
             emoji={roster[0]?.profile?.avatar}
+            surface="rail"
             motion={{ rank: FACE_MOTION_RANK.rail, since: face.since }}
           />
           <RailCount count={botWaiting} />
@@ -295,10 +296,10 @@ function MemberRailItem({ bot, onOpen }: { bot: BotProfile; onOpen: () => void }
         to="/$environmentId/$threadId"
         params={{ environmentId: bot.environmentId, threadId: bot.sessionThreadId }}
         aria-label={botRailLabel(face, bot.name)}
-        className={railItemClassName(false)}
+        className={cn(railItemClassName(false), "group/rail aria-[current=page]:bg-accent")}
         onClick={onOpen}
       >
-        <GoatBotMemberAvatar size="sm" bot={bot} face={face} />
+        <GoatBotMemberAvatar size="sm" bot={bot} face={face} surface="rail" />
       </Link>
     </RailTooltip>
   );

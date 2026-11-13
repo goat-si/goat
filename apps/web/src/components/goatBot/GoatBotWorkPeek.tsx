@@ -1,8 +1,12 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
+import { useEffect } from "react";
 
 import { ChevronLeftIcon } from "~/components/solar";
+import { channelEnvironment } from "~/state/channels";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
@@ -25,6 +29,8 @@ export function GoatBotWorkPeek({
   statusLabel,
   rows,
   environmentId,
+  unreadThrough = null,
+  onAcknowledged,
   onRetry,
   onBack,
 }: {
@@ -33,10 +39,24 @@ export function GoatBotWorkPeek({
   readonly statusLabel: string;
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly environmentId: EnvironmentId;
+  /** The activity this task has not been read up to; null when nothing is unread. */
+  readonly unreadThrough?: string | null | undefined;
+  /** Called once the acknowledgment lands, so the list stops showing its mark. */
+  readonly onAcknowledged?: (() => void) | undefined;
   readonly onRetry?: ((clientKey: string) => void) | undefined;
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
+  const update = useAtomCommand(channelEnvironment.updateTaskView);
+  const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
+  // Opening a task acknowledges its activity, as its task view does.
+  // oxlint-disable-next-line goat/react-effect-budget -- Opening a task acknowledges its current activity on the server.
+  useEffect(() => {
+    if (!canUpdate || unreadThrough === null) return;
+    void update({ environmentId, input: { taskId, readThrough: unreadThrough } }).then((result) => {
+      if (result._tag === "Success") onAcknowledged?.();
+    });
+  }, [canUpdate, environmentId, taskId, unreadThrough, update, onAcknowledged]);
   return (
     <section
       aria-label={title}
