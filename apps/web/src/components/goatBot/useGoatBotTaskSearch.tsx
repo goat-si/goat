@@ -114,14 +114,17 @@ export function useGoatBotTaskSearch(
   );
   const start = useStableCallback((key: string, version: number) => {
     const selected = usable;
-    let index = 0;
-    const worker = async () => {
-      while (sequence.current === version && index < selected.length) {
-        const bot = selected[index++];
+    const worker = async (offset: number) => {
+      for (
+        let index = offset;
+        sequence.current === version && index < selected.length;
+        index += 4
+      ) {
+        const bot = selected[index];
         if (bot) await request(bot, key, version, undefined, controller.current?.signal);
       }
     };
-    for (let i = 0; i < Math.min(4, selected.length); i++) void worker();
+    for (let i = 0; i < Math.min(4, selected.length); i++) void worker(i);
   });
   const load = useStableCallback((bot: BotProfile, key: string, cursor?: string) =>
     request(bot, key, sequence.current, cursor, controller.current?.signal),

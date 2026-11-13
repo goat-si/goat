@@ -36,8 +36,8 @@ const profile = (botId: string, role: "main" | "member", name: string) =>
     updatedAt: "2026-11-07T00:00:00.000Z",
   });
 const bots = [profile("main", "main", "Goaty"), profile("research", "member", "Research")];
-function Search({ query }: { query: string }) {
-  const groups = useGoatBotTaskSearch(bots, query, true, state.navigate);
+function Search({ query, profiles = bots }: { query: string; profiles?: readonly BotProfile[] }) {
+  const groups = useGoatBotTaskSearch(profiles, query, true, state.navigate);
   return (
     <div>
       {groups.map((group) => (
@@ -198,4 +198,18 @@ it("cancels an old query and ignores its late results", async () => {
     }),
   );
   expect(screen.getByRole("button", { name: "Old result" }).query()).toBeNull();
+});
+
+it("does not offer searches for deleted or unknown bots", async () => {
+  setup();
+  state.read.mockResolvedValue({ _tag: "Success", value: { tasks: [] } });
+  const profiles = [bots[0]!, { ...bots[1]!, state: "deleted" as const }];
+  await using screen = await render(<Search query="" profiles={profiles} />);
+  using _clock = fakeTimers();
+  await screen.rerender(<Search query="papers" profiles={profiles} />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await expect.element(screen.getByRole("region", { name: "Goaty tasks" })).toBeVisible();
+  expect(state.read).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("region", { name: "Research tasks" }).query()).toBeNull();
+  expect(screen.getByRole("region", { name: "Unknown tasks" }).query()).toBeNull();
 });
