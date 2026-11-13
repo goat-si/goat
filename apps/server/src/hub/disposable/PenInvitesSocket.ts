@@ -65,7 +65,7 @@ const decodeAcked = decode(Acked);
 const unknown = (reason: string) => new PenInviteUnknown({ reason });
 const encodeLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
 
   /** Sends one op to the confirmed Pen's control socket and reads its one answer line. */

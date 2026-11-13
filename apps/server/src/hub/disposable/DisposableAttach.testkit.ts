@@ -31,8 +31,8 @@ export const input = (
   clientRequestId: "req-" + n,
   ...overrides,
 });
-export const THREAD = "thread-provisioner";
-export const caller: Attach.AttachCaller = { provisioner: { kind: "thread", threadId: THREAD } };
+const THREAD = "thread-provisioner";
+const caller: Attach.AttachCaller = { provisioner: { kind: "thread", threadId: THREAD } };
 export const GRANT = {
   kind: "thread" as const,
   runtimeMode: "full-access",
