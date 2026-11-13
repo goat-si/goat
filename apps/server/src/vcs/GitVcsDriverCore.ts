@@ -1238,6 +1238,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       "--quiet",
       "--no-tags",
       "--no-auto-gc",
+      "--no-write-fetch-head",
       "--",
       remoteName,
     ];
