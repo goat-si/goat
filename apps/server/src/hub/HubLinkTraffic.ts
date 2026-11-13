@@ -100,6 +100,8 @@ export function deriveLinkRows(
         : {
             traffic: {
               ...view,
+              // OpenCodex's Home book counts relayed HTTP bodies, never link WebSocket payloads.
+              ...(row.ws !== undefined && row.ws.open > 0 ? { httpBodiesOnly: true as const } : {}),
               ...(warned ? { warning: { thresholdBytes: thresholds.deviceBytes } } : {}),
             },
           }),
