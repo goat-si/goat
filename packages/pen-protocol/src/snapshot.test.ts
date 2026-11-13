@@ -3,7 +3,6 @@ import * as NodeStream from "node:stream";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import type * as NodeNet from "node:net";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   PEN_SNAPSHOT_LINE_CAP,
@@ -35,7 +34,7 @@ function fixture() {
   });
   const onSnapshot = vi.fn();
   const onStale = vi.fn();
-  const connect = vi.fn((_path: string) => socket as NodeNet.Socket);
+  const connect = vi.fn((_path: string) => socket);
   const stop = watchPenSnapshots({ stateDir: "/test", connect, onSnapshot, onStale });
   socket.emit("connect");
   const send = (line: string) => socket.emit("data", Buffer.from(line));
