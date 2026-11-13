@@ -152,6 +152,24 @@ describe("launch wakes on task threads fold only by launching run", () => {
     ).toBeUndefined();
   });
 
+  it("invariant: a stamped wake never folds past a user message queued after its run's turn", () => {
+    const fold = foldIntoQueuedNotice(
+      queue([asNotice(wake("a", session, "run:one")), userMessage]),
+      dispatch(session, wake("b", session, "run:one")),
+      now,
+    );
+    expect(fold).toBeUndefined();
+  });
+
+  it("contract: another notice kind after a launching run's turn does not stop its next wake folding", () => {
+    const fold = foldIntoQueuedNotice(
+      queue([asNotice(wake("a", session, "run:one")), asNotice(pressure("elevated"))]),
+      dispatch(session, wake("b", session, "run:one")),
+      now,
+    );
+    expect(fold?.runId).toBe("run:queued-0");
+  });
+
   it("invariant: another notice behind a stamped wake queues its own turn", () => {
     const fold = foldIntoQueuedNotice(
       queue([asNotice(wake("a", session, "run:one"))]),

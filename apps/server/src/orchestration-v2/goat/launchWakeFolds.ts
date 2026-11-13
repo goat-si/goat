@@ -28,7 +28,7 @@ export function launchWakeFoldTarget(projection: Projection, command: Dispatch) 
     command.messageId.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX) &&
     command.notification?.aboutRunId !== undefined
   ) {
-    const run = runs.findLast((candidate) => {
+    const index = runs.findLastIndex((candidate) => {
       const message = stampedMessage(projection, candidate.userMessageId);
       return (
         message !== undefined &&
@@ -36,7 +36,16 @@ export function launchWakeFoldTarget(projection: Projection, command: Dispatch) 
         message.notification?.source.kind === command.notification?.source.kind
       );
     });
-    return run === undefined ? ("own" as const) : { run };
+    // A user message queued after that turn is a barrier: a newer result must not run before it.
+    const barrier = runs
+      .slice(index + 1)
+      .some(
+        (later) =>
+          projection.messages.find((message) => message.id === later.userMessageId)?.createdBy ===
+          "user",
+      );
+    const run = runs[index];
+    return run === undefined || barrier ? ("own" as const) : { run };
   }
   const tail = runs.at(-1);
   return tail !== undefined && stampedMessage(projection, tail.userMessageId) !== undefined
