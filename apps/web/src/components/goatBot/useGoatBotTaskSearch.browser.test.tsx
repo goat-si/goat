@@ -1,3 +1,5 @@
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -148,7 +150,7 @@ it("does not search an older server", async () => {
 
 it("shows a search error without claiming there were no results", async () => {
   setup();
-  state.read.mockResolvedValue({ _tag: "Failure" });
+  state.read.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("offline"))));
   await using screen = await render(<Search query="" />);
   using _clock = fakeTimers();
   await screen.rerender(<Search query="papers" />);
@@ -257,7 +259,7 @@ it("ignores a late answer after the palette closes", async () => {
   await screen.rerender(<Search query="papers" />);
   await act(() => vi.advanceTimersByTimeAsync(250));
   await screen.rerender(<Search query="papers" enabled={false} />);
-  await act(() => finish({ _tag: "Failure" }));
+  await act(() => finish(AsyncResult.failure(Cause.fail(new Error("offline")))));
   expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toBe("");
   expect(screen.getByRole("button", { name: "Retry task search" }).query()).toBeNull();
   expect(errors).not.toHaveBeenCalled();

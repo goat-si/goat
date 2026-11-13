@@ -1,11 +1,14 @@
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
+import "~/index.css";
 
-const state = vi.hoisted(() => ({ read: vi.fn() }));
+const state = vi.hoisted(() => ({ read: vi.fn(), members: false }));
 const decodeBot = Schema.decodeSync(BotProfile);
 vi.mock("./goatBot/goatBotPaletteItems", async (original) => ({
   ...(await original<typeof import("./goatBot/goatBotPaletteItems")>()),
@@ -23,6 +26,23 @@ vi.mock("./goatBot/goatBotPaletteItems", async (original) => ({
       createdAt: "2026-11-07T00:00:00.000Z",
       updatedAt: "2026-11-07T00:00:00.000Z",
     }),
+    ...(state.members
+      ? ["New bot", "Keyboard Bot", "A11y Bot"].map((name, index) =>
+          decodeBot({
+            botId: `member-${index}`,
+            role: "member",
+            name,
+            avatar: null,
+            purpose: "",
+            defaultModelSelection: null,
+            defaultProjectId: null,
+            environmentId: "env-1",
+            sessionThreadId: `member-thread-${index}`,
+            createdAt: "2026-11-07T00:00:00.000Z",
+            updatedAt: "2026-11-07T00:00:00.000Z",
+          }),
+        )
+      : []),
   ],
 }));
 vi.mock("~/state/entities", async (original) => {
@@ -92,9 +112,12 @@ it("announces task search states and operates results with the palette keyboard"
   await vi.waitFor(() =>
     expect(status.element().textContent).toContain("Some results could not be checked"),
   );
+  await expect
+    .element(page.getByText("Some results could not be checked.", { exact: true }))
+    .toBeVisible();
   await expect.element(page.getByRole("option", { name: /Zebra task/ })).toBeVisible();
   await expect.element(page.getByRole("option", { name: /Load more/ })).toBeVisible();
-  state.read.mockResolvedValueOnce({ _tag: "Failure" });
+  state.read.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("offline"))));
   await userEvent.keyboard("{ArrowDown}{Enter}");
   await vi.waitFor(() => expect(status.element().textContent).toContain("Couldn't search tasks"));
   expect(status.element()).toBe(statusNode);
@@ -126,10 +149,33 @@ it("ignores a late task search after the palette closes", async () => {
   await act(() => vi.advanceTimersByTimeAsync(250));
   await vi.waitFor(() => expect(state.read).toHaveBeenCalledOnce());
   await userEvent.keyboard("{Escape}");
-  await act(() => finish({ _tag: "Failure" }));
+  await act(() => finish(AsyncResult.failure(Cause.fail(new Error("offline")))));
   expect(
     page.getByRole("dialog", { name: "Command palette" }).element().hasAttribute("data-closed"),
   ).toBe(true);
   expect(page.getByRole("status", { name: "Bot task search" }).element().textContent).toBe("");
   expect(errors).not.toHaveBeenCalled();
+});
+
+it("announces empty member searches without showing them in the palette", async () => {
+  state.read.mockReset();
+  state.read.mockResolvedValue({ _tag: "Success", value: { tasks: [] } });
+  state.members = true;
+  using _members = {
+    [Symbol.dispose]: () => {
+      state.members = false;
+    },
+  };
+  await using _screen = await render(<CommandPalette>{null}</CommandPalette>, { router: "/" });
+  using _clock = fakeTimers();
+  await act(() => openCommandPalette({ query: "checklist" }));
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  const status = page.getByRole("status", { name: "Bot task search" });
+  await vi.waitFor(() =>
+    expect(status.element().textContent).toContain("A11y Bot: No matching tasks."),
+  );
+  expect(status.element().classList.contains("sr-only")).toBe(true);
+  expect(getComputedStyle(status.element()).position).toBe("absolute");
+  expect(getComputedStyle(status.element()).width).toBe("1px");
+  expect(page.getByRole("option", { name: /No matching tasks/ }).query()).toBeNull();
 });

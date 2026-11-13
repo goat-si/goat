@@ -200,8 +200,25 @@ export function useGoatBotTaskSearch(
         keepOpen: true,
         run: async () => load(bot, key, page.cursor),
       });
-    return items.length
-      ? [{ value: `bot-tasks:${bot.botId}`, label: `${bot.name} tasks`, items }]
+    const note = page.error
+      ? "Couldn't search tasks."
+      : !page.loading && page.tasks.length === 0 && (page.partial || page.endedEarly || page.cursor)
+        ? "No matching tasks found. Some tasks could not be checked."
+        : [
+            page.partial ? "Some results could not be checked." : null,
+            page.endedEarly ? "Search ended early." : null,
+          ]
+            .filter((message) => message !== null)
+            .join(" ");
+    return items.length || note
+      ? [
+          {
+            value: `bot-tasks:${bot.botId}`,
+            label: `${bot.name} tasks`,
+            ...(note ? { note } : {}),
+            items,
+          },
+        ]
       : [];
   });
   return { groups, status: statuses.join(" ") };
@@ -209,12 +226,7 @@ export function useGoatBotTaskSearch(
 
 export function BotTaskSearchStatus({ status }: { status: string }) {
   return (
-    <div
-      role="status"
-      aria-label="Bot task search"
-      aria-live="polite"
-      className="px-4 text-xs text-muted-foreground"
-    >
+    <div role="status" aria-label="Bot task search" aria-live="polite" className="sr-only">
       {status}
     </div>
   );
