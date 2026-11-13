@@ -11,7 +11,13 @@ import {
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { flushSync } from "react-dom";
-import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
+import {
+  ArrowUpLeftIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  CircleAlertIcon,
+  XIcon,
+} from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -669,7 +675,8 @@ export function GoatBotTimeline({
       </div>
       {follow.cueIds.length > 0 ? (
         <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
-          <Button size="sm" variant="outline" onClick={follow.jump}>
+          <Button size="xs" variant="glass" onClick={follow.jump}>
+            <ChevronDownIcon className="size-3.5" />
             {follow.cueIds.length === 1
               ? "Jump to latest"
               : `Jump to latest (${follow.cueIds.length} new)`}
