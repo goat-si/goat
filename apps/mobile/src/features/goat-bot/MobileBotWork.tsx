@@ -47,6 +47,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { accessDenied } from "./mobileBotWorkShared";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
@@ -424,13 +425,20 @@ export function MobileBotWork(props: {
       homeItems.push(
         message(
           "tasks-error",
-          <Pressable
-            accessibilityRole="button"
-            onPress={threads.refresh}
-            className="min-h-[44px] justify-center"
-          >
-            <Text className="text-danger-foreground">Couldn't load tasks. Try again</Text>
-          </Pressable>,
+          accessDenied(threads.cause) ? (
+            <Text className="text-foreground-muted">This device can't read {botName}'s work.</Text>
+          ) : (
+            <View>
+              <Text className="text-danger-foreground">Couldn't load {botName}'s tasks.</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={threads.refresh}
+                className="min-h-[44px] justify-center"
+              >
+                <Text className="text-foreground">Try again</Text>
+              </Pressable>
+            </View>
+          ),
         ),
       );
     }
@@ -442,7 +450,9 @@ export function MobileBotWork(props: {
         message(
           "tasks-unavailable",
           <Text className="text-foreground-muted">
-            Tasks are unavailable while {botName} is offline or unsupported.
+            {selected?.connected !== true
+              ? `${botName}'s tasks are unavailable while the computer is offline.`
+              : "Tasks can't be listed from this server right now."}
           </Text>,
         ),
       );

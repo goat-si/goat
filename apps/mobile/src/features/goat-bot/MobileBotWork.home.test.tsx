@@ -73,6 +73,8 @@ const state = vi.hoisted(() => ({
   childKeys: [] as unknown[],
   remoteOpenable: true,
   connected: true,
+  taskSupported: true,
+  taskError: null as unknown,
   detail: null as null | { status: string; data: boolean; error: string | null },
   messages: [] as object[],
   life: [] as string[],
@@ -135,7 +137,14 @@ vi.mock("@expo/ui/community/datetime-picker", () => ({
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
-      ["env", { serverConfig: { environment: { capabilities: { goatBotTaskThreads: true } } } }],
+      [
+        "env",
+        {
+          serverConfig: {
+            environment: { capabilities: { goatBotTaskThreads: state.taskSupported } },
+          },
+        },
+      ],
     ]),
   }),
 }));
@@ -149,7 +158,8 @@ vi.mock("../../state/query", () => ({
           : key === "routines"
             ? { tasks: state.routineTasks }
             : null,
-    error: null,
+    error: key === "task" ? state.taskError : null,
+    cause: key === "task" ? state.taskError : null,
     isPending: false,
     isSuccess: key !== null,
     refresh: vi.fn(),
@@ -275,6 +285,8 @@ afterEach(async () => {
     childKeys: [],
     remoteOpenable: true,
     connected: true,
+    taskSupported: true,
+    taskError: null,
     detail: null,
     messages: [],
     life: [],
@@ -340,6 +352,27 @@ it("shows Work, Routines, then Machines on Home, and files then Memory in Librar
   await press("Draft a note");
   expect(state.draft).toHaveBeenCalledWith("Remember this");
   expect(button("Library")).toBeUndefined();
+});
+
+it("distinguishes offline, unsupported, denied, and failed work reads", async () => {
+  state.connected = false;
+  await open();
+  expect(home()?.textContent).toContain(
+    "GOAT Bot's tasks are unavailable while the computer is offline.",
+  );
+  state.connected = true;
+  state.taskSupported = false;
+  await open();
+  expect(home()?.textContent).toContain("Tasks can't be listed from this server right now.");
+  state.taskSupported = true;
+  state.taskError = { _tag: "EnvironmentAuthorizationError" };
+  await open();
+  expect(home()?.textContent).toContain("This device can't read GOAT Bot's work.");
+  expect(home()?.textContent).not.toContain("Try again");
+  state.taskError = new Error("network");
+  await open();
+  expect(home()?.textContent).toContain("Couldn't load GOAT Bot's tasks.");
+  expect(home()?.textContent).toContain("Try again");
 });
 
 it("peeks at a task on Home, opens its thread or its conversation, and comes back to the same Home", async () => {
@@ -452,7 +485,9 @@ it("leaves a peek for an honest unavailable line when the bot's machine disconne
   await press("Library");
   await press("Home");
   expect(container.textContent).not.toContain("Loading messages…");
-  expect(container.textContent).toContain("Tasks are unavailable while GOAT Bot is offline");
+  expect(container.textContent).toContain(
+    "GOAT Bot's tasks are unavailable while the computer is offline.",
+  );
   expect(home()?.getAttribute("aria-hidden")).toBeNull();
 });
 
