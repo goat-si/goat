@@ -17,10 +17,75 @@ const DEFAULT_GLOBAL_KNOWN_HOSTS = ["/etc/ssh/ssh_known_hosts", "/etc/ssh/ssh_kn
  * The global known_hosts files ssh reads for an alias, when they are certain: ssh's default list
  * or none. ssh -G prints a custom setting unquoted, so its files cannot be named exactly.
  */
-export const penGlobalFiles = (settings: ReadonlyMap<string, string>) => {
+export const penGlobalFiles = (
+  settings: ReadonlyMap<string, string>,
+  input?: { platform?: NodeJS.Platform; programData?: string | undefined },
+) => {
   const value = settings.get("globalknownhostsfile");
   if (value === undefined || value === "none") return [];
+  if (input?.platform === "win32") {
+    const root = input.programData;
+    if (!root || /\s/u.test(root) || !windowsAbsolute(root)) return undefined;
+    const files = windowsGlobalFiles(root);
+    const placeholder = windowsGlobalFiles("__PROGRAMDATA__");
+    return value === files.join(" ") || value === placeholder.join(" ") ? files : undefined;
+  }
   return value === DEFAULT_GLOBAL_KNOWN_HOSTS.join(" ") ? DEFAULT_GLOBAL_KNOWN_HOSTS : undefined;
+};
+
+const windowsGlobalFiles = (root: string) => [
+  `${root}\\ssh/ssh_known_hosts`,
+  `${root}\\ssh/ssh_known_hosts2`,
+];
+
+const windowsAbsolute = (value: string) =>
+  /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))/u.test(value);
+
+const windowsQuoted = (text: string, start: number): { value: string; end: number } | undefined => {
+  if (text[start] !== '"') return undefined;
+  let value = "";
+  let i = start + 1;
+  while (i < text.length) {
+    let slashes = 0;
+    while (text[i] === "\\") {
+      slashes++;
+      i++;
+    }
+    if (text[i] === '"') {
+      value += "\\".repeat(Math.floor(slashes / 2));
+      if (slashes % 2 === 0) return { value, end: i + 1 };
+      value += '"';
+      i++;
+    } else {
+      value += "\\".repeat(slashes);
+      if (i >= text.length) return undefined;
+      value += text[i];
+      i++;
+    }
+  }
+  return undefined;
+};
+
+const windowsExactPipe = (command: string) => {
+  const program = windowsQuoted(command, 0);
+  // CreateProcess reads the program name without escapes, so a quote in it is not pen's form.
+  if (
+    !program ||
+    !windowsAbsolute(program.value) ||
+    program.value.includes('"') ||
+    !/[\\/]pen\.exe$/iu.test(program.value)
+  )
+    return undefined;
+  let rest = command.slice(program.end);
+  if (!rest.startsWith(" pipe")) return undefined;
+  rest = rest.slice(5);
+  if (rest.startsWith(" --home ")) {
+    const home = windowsQuoted(rest, 8);
+    if (!home || !windowsAbsolute(home.value)) return undefined;
+    rest = rest.slice(home.end);
+  }
+  const match = /^ --node ([a-z2-7]{26}) --noise ([A-Za-z0-9_-]{43}) 22$/u.exec(rest);
+  return match ? { nodeId: match[1], noisePub: match[2] } : undefined;
 };
 
 const unset = (value: string | undefined) =>
@@ -204,7 +269,23 @@ const PEN_EXACT_PIPE = new RegExp(
   "u",
 );
 
-export const penExactAliasRoute = (settings: ReadonlyMap<string, string>) => {
+export const penExactAliasRoute = (
+  settings: ReadonlyMap<string, string>,
+  platform?: NodeJS.Platform,
+) => {
+  if (platform === "win32") {
+    const match = windowsExactPipe(settings.get("proxycommand") ?? "");
+    const file = settings.get("userknownhostsfile");
+    return match &&
+      unset(settings.get("proxyjump")) &&
+      ["true", "yes"].includes(settings.get("stricthostkeychecking") ?? "") &&
+      unset(settings.get("knownhostscommand")) &&
+      ["false", "no"].includes(settings.get("controlmaster") ?? "") &&
+      unset(settings.get("controlpath")) &&
+      file !== undefined
+      ? { ...match, knownHostsFile: file }
+      : undefined;
+  }
   const match = PEN_EXACT_PIPE.exec(settings.get("proxycommand") ?? "");
   const file = settings.get("userknownhostsfile");
   return match !== null &&
@@ -229,6 +310,7 @@ export type PenRouteRefusal =
   | "marker-lines";
 export interface PenAliasFacts {
   readonly alias: string;
+  readonly platform?: NodeJS.Platform;
   readonly configHosts: ReadonlyArray<string>;
   readonly settings: ReadonlyMap<string, string>;
   readonly penKnownHosts: string;
@@ -243,7 +325,7 @@ export const penExactAliasDecision = (
   | PenRouteRefusal => {
   if (!facts.configHosts.includes(facts.alias)) return "not-in-pen-config";
   const alias = PEN_EXACT_ALIAS.exec(facts.alias);
-  const route = penExactAliasRoute(facts.settings);
+  const route = penExactAliasRoute(facts.settings, facts.platform);
   if (
     !alias ||
     !route ||
@@ -255,7 +337,15 @@ export const penExactAliasDecision = (
   )
     return "not-pen-route";
   if (route.nodeId !== alias[1]) return "node-mismatch";
-  if (route.knownHostsFile !== facts.penKnownHosts) return "known-hosts-not-pen";
+  if (facts.platform === "win32") {
+    const file = route.knownHostsFile;
+    if (
+      /\s/u.test(file) ||
+      !windowsAbsolute(file) ||
+      file.replaceAll("\\", "/") !== facts.penKnownHosts.replaceAll("\\", "/")
+    )
+      return "known-hosts-not-pen";
+  } else if (route.knownHostsFile !== facts.penKnownHosts) return "known-hosts-not-pen";
   if (facts.globalKey) return "global-known-hosts";
   const keys = facts.recorded
     .split(/\r?\n/u)

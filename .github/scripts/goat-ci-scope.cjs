@@ -58,6 +58,7 @@ const LANES = ["all", "server", "memory-growth", "windows", "quick"];
  */
 const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
+  "apps/desktop/src/pen/penBinaryWindows",
   "apps/server/src/cua/",
   "apps/server/src/memory/imports/MemoryImportReaderWindows",
   "apps/server/src/runtimeRelaunch",
@@ -71,6 +72,7 @@ const WINDOWS_SUITES = [
   "packages/shared/src/goatHome",
   "packages/shared/src/devHome",
   "packages/shared/src/testing/",
+  "packages/ssh/src/penAliasWindows",
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
 ];
