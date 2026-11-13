@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - normalize paths without adding services to the search index layer.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 

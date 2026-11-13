@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - streaming hashes bound memory for arbitrarily many paths.
 import * as NodeCrypto from "node:crypto";
 import { GitCommandError } from "@goat/contracts";
 import * as Clock from "effect/Clock";

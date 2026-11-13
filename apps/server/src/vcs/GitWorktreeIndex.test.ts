@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -26,17 +27,19 @@ it.layer(layerTest)("worktree index refresh", (it) => {
       yield* git(cwd, ["add", "."]);
       yield* git(cwd, ["commit", "-m", "more files"]);
       const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "fresh");
-      const timestamp = new Date("2020-01-01T00:00:00Z");
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2020-01-01T00:00:00Z"));
       yield* driver.createWorktree(
         { cwd, path: worktreePath, refName: initialBranch, newRefName: "feature/fresh" },
         {
           progress: {
             onWorktreeClaimed: () =>
               Effect.gen(function* () {
-                const index = path.resolve(
-                  worktreePath,
-                  yield* git(worktreePath, ["rev-parse", "--git-path", "index"]),
-                );
+                const indexOutput = yield* driver.execute({
+                  operation: "test.worktreeIndex",
+                  cwd: worktreePath,
+                  args: ["rev-parse", "--git-path", "index"],
+                });
+                const index = path.resolve(worktreePath, indexOutput.stdout.trim());
                 yield* fs.utimes(path.join(worktreePath, "README.md"), timestamp, timestamp);
                 for (let file = 0; file < 50; file++) {
                   yield* fs.utimes(
