@@ -524,6 +524,10 @@ it("keeps a failed task's Retry and its problem on screen offline, closed until 
   expect(retries()).toBe(1);
   state.connected = true;
   await open("t1");
+  state.run.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { status: "started", taskId: "t1", generation: 2 },
+  } as never);
   await press("Retry");
   expect(retries()).toBe(2);
 });
