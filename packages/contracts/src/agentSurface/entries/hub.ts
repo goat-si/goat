@@ -103,7 +103,7 @@ export const hubEntries = {
     description:
       "Cancel the open invite of an attach that nobody joined yet and mint a new token bound to the same keys. If the old invite was already used, no token is minted and the attach shows what Pen recorded.",
     guide:
-      "Only the thread that started the attach, or a person, may reissue it, under the same switch and grant checks as goat_hub_machine_attach. Use a new clientRequestId for each reissue; a repeat of one answers without a token. A lost answer needs another reissue with a new key, which cancels the token that answer carried.",
+      "Only the thread that started the attach, or a person, may reissue it, under the same switch and grant checks as goat_hub_machine_attach. Use a new clientRequestId for each reissue; a repeat of one answers without a token. A lost answer needs another reissue with a new key, which cancels the token that answer carried. An attach takes at most 32 invites. Refusals: not_found, provisioner_refused, invalid_request (a key used for another attach), conflict (no open invite, or all 32 used: the last invite holds the keys until it expires), switch_off, switch_expired, delegation_lost, pen_unsupported, opencodex_unsupported, unknown_outcome (read goat_hub_machine_list), storage_failed.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
