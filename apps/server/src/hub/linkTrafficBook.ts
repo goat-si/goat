@@ -196,6 +196,12 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
           uncounted,
           last.webSocket || next.webSocket ? gap : 0,
         ]);
+      } else if (at > last.at && (last.webSocket || next.webSocket)) {
+        // Counters that reset still leave a WebSocket's uncounted time in the window.
+        const websocketOnly = Array.from({ length: FIELDS }, (_, field) =>
+          field === WEBSOCKET ? at - last.at : 0,
+        );
+        spread(series, last.at, at, websocketOnly);
       }
       series.last = next;
       book.delete(reading.linkId);

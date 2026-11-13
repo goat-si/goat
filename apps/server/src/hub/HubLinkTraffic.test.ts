@@ -80,4 +80,18 @@ describe("deriveLinkRows", () => {
     expect(later?.traffic).toBeDefined();
     expect(later?.traffic?.httpBodiesOnly).toBeUndefined();
   });
+
+  it("remembers WebSocket time across a counter reset, so traffic that pairs later still says HTTP bodies only", () => {
+    const book = makeLinkTrafficBook();
+    const at = (generation: number, bytes: number, open: number) =>
+      row({
+        ws: { open },
+        traffic: { epoch: "ab", generation, toHomeBytes: bytes, fromHomeBytes: 0 },
+      });
+    deriveLinkRows(book, [at(0, 0, 1)], T0, pen, thresholds);
+    deriveLinkRows(book, [at(1, 100, 0)], T0 + 60_000, pen, thresholds);
+    const [link] = deriveLinkRows(book, [at(1, 500, 0)], T0 + 120_000, pen, thresholds).links;
+    expect(link?.traffic?.day.toHomeBytes).toBe(400);
+    expect(link?.traffic?.httpBodiesOnly).toBe(true);
+  });
 });
