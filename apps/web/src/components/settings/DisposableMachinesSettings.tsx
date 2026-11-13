@@ -33,6 +33,7 @@ import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
 
 const isMachinesError = Schema.is(HubMachinesError);
 // One line of pen identity --json: {"nodeId","signPub","noisePub"}.
@@ -115,7 +116,7 @@ export function DisposableMachinesSettings({
     return (
       <SettingsSection title="Disposable machines">
         <SettingsRow
-          title="Attach disposable machines"
+          {...searchableSetting("hub-disposable-machines")}
           description="Update GOAT on this hub to attach disposable machines."
         />
       </SettingsSection>
@@ -125,7 +126,7 @@ export function DisposableMachinesSettings({
       <SettingsRow
         serverScoped
         settingKeys={["hub"]}
-        title="Attach disposable machines"
+        {...searchableSetting("hub-disposable-machines")}
         description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${expires}`}
         control={
           <div className="flex items-center gap-2">
