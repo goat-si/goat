@@ -10,13 +10,12 @@ import type {
   BotRemoteWork,
   BotThreadRow,
   ChannelTaskId,
-  ChannelTaskView,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { holdNavigation } from "~/lib/navigationHolds";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -35,6 +34,16 @@ import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
+export type HomeHistory = {
+  readonly supported: boolean;
+  readonly hasMore: boolean;
+  readonly loading: boolean;
+  readonly failed: boolean;
+  readonly incomplete: boolean;
+  readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  readonly currentTaskIds: ReadonlySet<ChannelTaskId>;
+  readonly loadMore: () => void;
+};
 
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
 
@@ -67,14 +76,7 @@ export function GoatBotHomeWork({
   focusTaskId = null,
   focusRef,
   notice = null,
-  historySupported = false,
-  historyAvailable = false,
-  historyLoading = false,
-  historyFailed = false,
-  historyIncomplete = false,
-  launchesTruncated,
-  onLoadHistory,
-  onHistoryView,
+  history,
 }: {
   readonly environmentId: EnvironmentId;
   /** Kept for the history walk, which will read this bot's older work for these rows. */
@@ -102,15 +104,10 @@ export function GoatBotHomeWork({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
-  readonly historySupported?: boolean;
-  readonly historyAvailable?: boolean;
-  readonly historyLoading?: boolean;
-  readonly historyFailed?: boolean;
-  readonly historyIncomplete?: boolean;
-  readonly launchesTruncated?: ReadonlySet<ChannelTaskId>;
-  readonly onLoadHistory?: () => void;
-  readonly onHistoryView?: (taskId: ChannelTaskId, view: ChannelTaskView) => void;
+  /** The bot's older work; rows missing from currentTaskIds came from this walk. */
+  readonly history?: HomeHistory | undefined;
 }) {
+  const historyAvailable = history?.hasMore === true;
   const work = botHomeWork(rows, [], environmentId, remoteWork);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
@@ -143,14 +140,14 @@ export function GoatBotHomeWork({
       environmentId={environmentId}
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
-      onHistoryView={onHistoryView}
+      older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
       peekable={peekable}
       focusRef={(element) => {
         if (element) rowRefs.current.set(task.row.task.taskId, element);
         else rowRefs.current.delete(task.row.task.taskId);
         if (task.row.task.taskId === focusTaskId) focusRef?.(element);
       }}
-      launchesTruncated={launchesTruncated?.has(task.row.task.taskId) === true}
+      launchesTruncated={history?.launchesTruncated.has(task.row.task.taskId) === true}
     />
   );
   return (
@@ -183,7 +180,7 @@ export function GoatBotHomeWork({
           <p className="font-medium text-foreground">No recent tasks</p>
           <p className="text-muted-foreground">
             Ask {botName} in chat to start work.
-            {!historySupported &&
+            {!history?.supported &&
               " Unpinned tasks that finished more than three days ago aren't listed here."}
           </p>
         </div>
@@ -191,10 +188,10 @@ export function GoatBotHomeWork({
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {historyIncomplete && (
+      {history?.incomplete && (
         <p className="px-3 py-2 text-xs text-muted-foreground">Older work may be missing</p>
       )}
-      {historyFailed && (
+      {history?.failed && (
         <p className="px-3 py-2 text-xs text-muted-foreground">Couldn't load older work.</p>
       )}
       {showMore && (
@@ -206,7 +203,7 @@ export function GoatBotHomeWork({
           expanded={showAll}
           label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
-            if (historyLoading) return;
+            if (history?.loading) return;
             if (historyAvailable) {
               if (document.activeElement === showMoreRef.current)
                 pendingFocus.current = new Set(
@@ -215,7 +212,7 @@ export function GoatBotHomeWork({
                   ),
                 );
               onShowAllChange(true);
-              onLoadHistory?.();
+              history?.loadMore();
             } else onShowAllChange(!showAll);
           }}
         />
@@ -243,7 +240,7 @@ function WorkRow({
   peekable,
   focusRef,
   launchesTruncated,
-  onHistoryView,
+  older,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -255,11 +252,12 @@ function WorkRow({
   readonly peekable: boolean;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   readonly launchesTruncated: boolean;
-  readonly onHistoryView?: ((taskId: ChannelTaskId, view: ChannelTaskView) => void) | undefined;
+  readonly older: boolean;
 }) {
   const row = task.row;
   const title = row.task.title;
   const member = useGoatBotMember();
+  const navigate = useNavigate();
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const [expanded, setExpanded] = useState(false);
@@ -270,16 +268,23 @@ function WorkRow({
     const release = holdNavigation();
     const action = await api.contextMenu
       .show(
-        [
-          { id: "work", label: expanded ? "Hide work" : "Show work" },
-          ...(canUpdate
-            ? [
-                { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
-                { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
-                { id: "read", label: "Mark read", disabled: !row.unread },
-              ]
-            : []),
-        ],
+        // Older work offers Pin; once pinned it joins the current list, whose row has the rest.
+        older
+          ? [
+              { id: "work", label: expanded ? "Hide work" : "Show work" },
+              { id: "open", label: "Open" },
+              { id: "pin", label: "Pin", disabled: !canUpdate },
+            ]
+          : [
+              { id: "work", label: expanded ? "Hide work" : "Show work" },
+              ...(canUpdate
+                ? [
+                    { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
+                    { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
+                    { id: "read", label: "Mark read", disabled: !row.unread },
+                  ]
+                : []),
+            ],
         position,
       )
       .catch(() => null)
@@ -287,6 +292,15 @@ function WorkRow({
     if (action === null) return;
     if (action === "work") {
       setExpanded((value) => !value);
+      return;
+    }
+    if (action === "open") {
+      if (peekable) onOpenTask(row);
+      else
+        void navigate({
+          to: "/bot",
+          search: { task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) },
+        });
       return;
     }
     const input: ChannelUpdateTaskViewInput =
@@ -298,10 +312,9 @@ function WorkRow({
             ? { taskId: row.task.taskId, readThrough: row.lastActivityAt }
             : { taskId: row.task.taskId };
     const result = await update({ environmentId, input });
-    if (result._tag === "Success") {
-      onHistoryView?.(row.task.taskId, result.value);
-      onRefresh();
-    }
+    // A pinned older task joins the current list after this refresh, unless the bot has 100
+    // newer listed tasks (the server's first page is capped at 100 rows).
+    if (result._tag === "Success") onRefresh();
   }
   return (
     <div className="border-t border-border/50 first:border-t-0">

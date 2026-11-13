@@ -30,6 +30,11 @@ const page = (rows: readonly unknown[], history: Record<string, unknown>) => ({
   value: { rows, mainMessageCount: 0, history },
 });
 const current = (rows: unknown[]) => ({ rows, mainMessageCount: 0 }) as ChannelListBotThreadsResult;
+const pinnedOld = { ...old, view: { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" } };
+// Home is keyed by environment and bot in GoatBotChatView, so a switch remounts the walk.
+function KeyedHistory(props: { list: ChannelListBotThreadsResult; botId?: BotId | null }) {
+  return <History key={JSON.stringify([env, props.botId ?? null])} {...props} />;
+}
 function History({
   list,
   botId = null,
@@ -41,22 +46,6 @@ function History({
   return (
     <>
       {history.hasMore && <button onClick={history.loadMore}>Read history</button>}
-      <button
-        onClick={() => history.applyView(taskId, { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" })}
-      >
-        Pin old
-      </button>
-      <button
-        onClick={() =>
-          history.applyView(ChannelTaskId.make("item-0"), {
-            ...old.view,
-            taskId: ChannelTaskId.make("item-0"),
-            pinnedAt: "2026-11-13T01:00:00Z",
-          })
-        }
-      >
-        Pin first
-      </button>
       <button onClick={() => history.markRead(taskId, "2026-11-13T01:00:00Z")}>Read valid</button>
       <button onClick={() => history.markRead(taskId, "invalid")}>Read invalid</button>
       {history.incomplete && <p>Older work may be missing</p>}
@@ -110,18 +99,20 @@ it("drops a pending page for the previous bot", async () => {
       finish = resolve;
     }),
   );
-  await using screen = await render(<History list={current([])} botId={BotId.make("first")} />);
+  await using screen = await render(
+    <KeyedHistory list={current([])} botId={BotId.make("first")} />,
+  );
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await screen.rerender(<History list={current([])} botId={BotId.make("second")} />);
+  await screen.rerender(<KeyedHistory list={current([])} botId={BotId.make("second")} />);
   await act(() => finish(page([old], {})));
-  await screen.rerender(<History list={current([])} botId={BotId.make("first")} />);
+  await screen.rerender(<KeyedHistory list={current([])} botId={BotId.make("first")} />);
   await expect.element(screen.getByText("Old task Unpinned")).not.toBeInTheDocument();
 });
 function setup() {
   mock.read.mockReset();
 }
 
-it("keeps Pin when a page started earlier arrives late", async () => {
+it("a page that arrives after Pin, still saying unpinned, does not change the pinned row", async () => {
   setup();
   const firstPage = [
     old,
@@ -142,7 +133,8 @@ it("keeps Pin when a page started earlier arrives late", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await userEvent.click(screen.getByRole("button", { name: "Pin old" }));
+  // Pin refreshes the current list, which now lists the task as pinned.
+  await screen.rerender(<History list={current([pinnedOld])} />);
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
   await act(() => finish(page([old], {})));
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
@@ -173,11 +165,10 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
   mock.read.mockResolvedValueOnce(page(last, { nextCursor: "still-more" }));
   await using screen = await render(<History list={current([])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await userEvent.click(screen.getByRole("button", { name: "Pin first" }));
   for (let batch = 1; batch < 11; batch++)
     await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
-  await expect.element(screen.getByText("Task item-0 Pinned")).toBeVisible();
+  await expect.element(screen.getByText("Task item-0 Unpinned")).toBeVisible();
   await expect.element(screen.getByText("Task item-499 Unpinned")).toBeVisible();
   await expect.element(screen.getByText("Task item-500 Unpinned")).not.toBeInTheDocument();
   expect(mock.read).toHaveBeenCalledTimes(11);
@@ -186,14 +177,15 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
     .not.toBeInTheDocument();
 });
 
-it("does not let an unchanged current list undo a newer view update", async () => {
+it("a task unpinned from the current list returns to its history row", async () => {
   setup();
   mock.read.mockResolvedValueOnce(page([old], {}));
-  await using screen = await render(<History list={current([old])} />);
+  await using screen = await render(<History list={current([])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await userEvent.click(screen.getByRole("button", { name: "Pin old" }));
-  await screen.rerender(<History list={current([])} />);
+  await screen.rerender(<History list={current([pinnedOld])} />);
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
+  await screen.rerender(<History list={current([])} />);
+  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
 });
 
 it("ignores an invalid acknowledgement timestamp", async () => {
@@ -233,10 +225,12 @@ it("reopens the first bot's walk after switching away while a page is pending", 
     }),
   );
   mock.read.mockResolvedValueOnce(page([old], {}));
-  await using screen = await render(<History list={current([])} botId={BotId.make("first")} />);
+  await using screen = await render(
+    <KeyedHistory list={current([])} botId={BotId.make("first")} />,
+  );
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await screen.rerender(<History list={current([])} botId={BotId.make("second")} />);
-  await screen.rerender(<History list={current([])} botId={BotId.make("first")} />);
+  await screen.rerender(<KeyedHistory list={current([])} botId={BotId.make("second")} />);
+  await screen.rerender(<KeyedHistory list={current([])} botId={BotId.make("first")} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   await act(() => finish(page([], {})));

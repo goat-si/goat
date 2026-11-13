@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
+import { goatBotHomeKey, takeHomeOpen } from "./goatBotHomeRequest";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
@@ -139,8 +140,12 @@ export function GoatBotChatView({
   onRestore,
   onCheckAgain,
 }: GoatBotChatViewProps) {
-  const [panelOpen, setPanelOpen] = useState(false);
   const member = useGoatBotMember();
+  // The task pane's Open Home leaves a one-shot request for this bot's next chat.
+  const [panelOpen, setPanelOpen] = useState(() => {
+    const home = availability.kind === "ready" ? availability.bot.environmentId : environmentId;
+    return home !== null && takeHomeOpen(goatBotHomeKey(home, member?.botId ?? null));
+  });
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -168,6 +173,8 @@ export function GoatBotChatView({
     return field;
   };
   const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
+  // A bot or environment switch remounts Home, so its history walk starts over.
+  const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
@@ -475,6 +482,7 @@ export function GoatBotChatView({
       {bot && panelOpen && !narrow && (
         <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
+            key={homeKey}
             environmentId={bot.environmentId}
             threadId={bot.threadId}
             onDraft={onDraft}
@@ -502,6 +510,7 @@ export function GoatBotChatView({
           >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
+              key={homeKey}
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}

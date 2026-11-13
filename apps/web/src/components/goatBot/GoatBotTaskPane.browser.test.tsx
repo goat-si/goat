@@ -116,7 +116,7 @@ vi.mock("./useGoatBotSession", () => ({
   useGoatBotSession: (_items: unknown, taskId: string) => {
     state.session(taskId);
     return {
-      availability: { kind: "ready" },
+      availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
@@ -133,6 +133,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { goatBotHomeKey, takeHomeOpen } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -370,4 +371,27 @@ it("explains where to find actions for older work absent from the current list",
   await expect.element(screen.getByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
   expect(close).toHaveBeenCalledOnce();
+});
+
+it("Open Home from an older task asks that bot's chat to open Home once", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const close = vi.fn();
+  await using screen = await render(
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      taskTitle="Older task"
+      narrow
+      onClose={close}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open Home" }));
+  expect(close).not.toHaveBeenCalled();
+  const key = goatBotHomeKey(EnvironmentId.make("env"), null);
+  expect(takeHomeOpen(goatBotHomeKey(EnvironmentId.make("other"), null))).toBe(false);
+  expect(takeHomeOpen(key)).toBe(true);
+  expect(takeHomeOpen(key)).toBe(false);
 });

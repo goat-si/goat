@@ -86,7 +86,6 @@ export function GoatBotWorkPanel({
   const [peek, setPeek] = useState<{
     readonly taskId: ChannelTaskId;
     readonly title: string;
-    readonly historyRow: Extract<BotThreadRow, { kind: "task" }> | null;
   } | null>(null);
   // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
   // peek held focus and closed because its task left the list. It applies once, so later tab
@@ -192,12 +191,10 @@ export function GoatBotWorkPanel({
   const peeked =
     peek === null
       ? undefined
-      : (rows.find(
+      : rows.find(
           (row): row is Extract<BotThreadRow, { kind: "task" }> =>
             row.kind === "task" && row.task.taskId === peek.taskId,
-        ) ??
-        peek.historyRow ??
-        undefined);
+        );
   // A task the list no longer has, once it has loaded, closes its peek.
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
   if (peekGone) {
@@ -238,11 +235,7 @@ export function GoatBotWorkPanel({
               workRowCollapsed(rows, environmentId, remoteWork, peek.taskId)
             )
               setShowAllWork(true);
-            setFocusTarget(
-              rows.some((row) => row.kind === "task" && row.task.taskId === peek.taskId)
-                ? peek.taskId
-                : "home",
-            );
+            setFocusTarget(peeked === undefined ? "home" : peek.taskId);
             setPeekHasFocus(false);
             setPeek(null);
           }}
@@ -339,29 +332,14 @@ export function GoatBotWorkPanel({
                 supported={supported}
                 offline={offline}
                 onRetry={refresh}
-                historySupported={history.historySupported}
-                historyAvailable={history.hasMore}
-                historyLoading={history.loading}
-                historyFailed={history.failed}
-                historyIncomplete={history.incomplete}
-                launchesTruncated={history.launchesTruncated}
-                onLoadHistory={history.loadMore}
-                onHistoryView={history.applyView}
+                history={history}
                 peekable={peekRows !== undefined}
                 showAll={showAllWork}
                 onShowAllChange={setShowAllWork}
                 onOpenTask={(row) => {
                   if (peekRows === undefined) return;
                   setRoutineFocus(null);
-                  setPeek({
-                    taskId: row.task.taskId,
-                    title: row.task.title,
-                    historyRow: current.rows.some(
-                      (item) => item.kind === "task" && item.task.taskId === row.task.taskId,
-                    )
-                      ? null
-                      : row,
-                  });
+                  setPeek({ taskId: row.task.taskId, title: row.task.title });
                 }}
                 focusTaskId={focusTarget === "home" ? null : focusTarget}
                 focusRef={focusOnce}

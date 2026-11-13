@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   botThreadKey,
   botThreadsHistoryInput,
@@ -11,7 +11,6 @@ import type {
   BotThreadRow,
   ChannelListBotThreadsResult,
   ChannelTaskId,
-  ChannelTaskView,
   EnvironmentId,
   ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
@@ -25,22 +24,10 @@ type Entry = {
   remoteWork: readonly BotRemoteWork[];
   truncated: boolean;
 };
-type Walk = {
-  key: string;
-  entries: readonly Entry[];
-  cursor: string | undefined;
-  started: boolean;
-  partial: boolean;
-  endedEarly: boolean;
-  capped: boolean;
-  unsupported: boolean;
-  loading: boolean;
-  failed: boolean;
-};
-const emptyWalk = (key: string): Walk => ({
-  key,
-  entries: [],
-  cursor: undefined,
+const HISTORY_LIMIT = 500;
+const EMPTY_WALK = {
+  entries: [] as readonly Entry[],
+  cursor: undefined as string | undefined,
   started: false,
   partial: false,
   endedEarly: false,
@@ -48,8 +35,14 @@ const emptyWalk = (key: string): Walk => ({
   unsupported: false,
   loading: false,
   failed: false,
-});
+};
+const time = (value: string | null) => (value === null ? NaN : Date.parse(value));
 
+/**
+ * A bot's older work, read page by page while its Home panel is open. The panel is keyed by
+ * environment and bot, so a switch starts a new walk and late answers reach an unmounted one.
+ * Pages only add tasks; current-list rows win by id, so nothing a page says undoes an action.
+ */
 export function useBotWorkHistory(
   environmentId: EnvironmentId,
   botId: BotId | null,
@@ -58,24 +51,9 @@ export function useBotWorkHistory(
   loaded: boolean,
 ) {
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
-  const key = JSON.stringify([environmentId, botId]);
-  const [stored, setStored] = useState(() => emptyWalk(key));
-  const identity = useRef<{ key: string } | null>(null);
-  const walk = stored.key === key ? stored : emptyWalk(key);
-  // Every update starts from this key's walk, so a bot switch never applies to the old one.
-  const update = (change: (state: Walk) => Walk) =>
-    setStored((state) => change(state.key === key ? state : emptyWalk(key)));
-  const active = useRef<object | null>(null);
-  // oxlint-disable-next-line goat/react-effect-budget -- Invalidate pending pages when the key changes or the panel unmounts.
-  useLayoutEffect(() => {
-    const token = { key };
-    identity.current = token;
-    return () => {
-      identity.current = null;
-    };
-  }, [key]);
-  const historySupported =
-    botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
+  const [walk, setWalk] = useState(EMPTY_WALK);
+  const busy = useRef(false);
+  const supported = botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
   const history: ChannelListBotThreadsResult = {
     rows: walk.entries.flatMap((entry) => entry.rows),
     remoteWork: walk.entries.flatMap((entry) => entry.remoteWork),
@@ -86,45 +64,35 @@ export function useBotWorkHistory(
         .map((entry) => entry.task.task.taskId),
     },
   };
-  const merged = mergeBotThreadHistory(current, historySupported ? [history] : []);
+  const merged = mergeBotThreadHistory(current, supported ? [history] : []);
   const hasMore =
-    loaded && historySupported && !walk.capped && (!walk.started || walk.cursor !== undefined);
-  // A view from the server replaces the entry's view; a read-through never moves backwards.
-  function applyView(taskId: ChannelTaskId, view: Partial<ChannelTaskView>) {
-    update((state) => {
-      const entries = state.entries.map((entry) => {
+    loaded && supported && !walk.capped && (!walk.started || walk.cursor !== undefined);
+  // Opening an older row's peek acknowledges it; its read-through only moves forward.
+  function markRead(taskId: ChannelTaskId, through: string) {
+    if (!Number.isFinite(time(through))) return;
+    setWalk((state) => ({
+      ...state,
+      entries: state.entries.map((entry) => {
         if (entry.task.task.taskId !== taskId) return entry;
         const old = entry.task.view.readThrough;
-        const next = view.readThrough ?? null;
-        const readThrough =
-          next === null || (old !== null && Date.parse(old) >= Date.parse(next)) ? old : next;
+        const readThrough = time(old) >= time(through) ? old : through;
         const task = {
           ...entry.task,
-          view: { ...entry.task.view, ...view, readThrough },
-          unread:
-            entry.task.unread &&
-            !(
-              readThrough !== null &&
-              Date.parse(entry.task.lastActivityAt) <= Date.parse(readThrough)
-            ),
+          view: { ...entry.task.view, readThrough },
+          unread: entry.task.unread && !(time(entry.task.lastActivityAt) <= time(readThrough)),
         };
         return {
           ...entry,
           task,
           rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
         };
-      });
-      return { ...state, entries };
-    });
+      }),
+    }));
   }
-  const markRead = (taskId: ChannelTaskId, through: string) => {
-    if (Number.isFinite(Date.parse(through))) applyView(taskId, { readThrough: through });
-  };
   async function loadMore() {
-    const token = identity.current;
-    if (!hasMore || token === null || token.key !== key || active.current === token) return;
-    active.current = token;
-    update((state) => ({ ...state, loading: true, failed: false }));
+    if (!hasMore || busy.current) return;
+    busy.current = true;
+    setWalk((state) => ({ ...state, loading: true, failed: false }));
     try {
       const result = await readBotThreadHistory({
         from: walk.cursor,
@@ -138,8 +106,7 @@ export function useBotWorkHistory(
           return answer.value;
         },
       });
-      if (identity.current !== token) return;
-      update((state) => {
+      setWalk((state) => {
         if (!result.supported) return { ...state, unsupported: true, loading: false };
         const entries = [...state.entries];
         const ids = new Set(entries.map((entry) => entry.task.task.taskId));
@@ -147,7 +114,7 @@ export function useBotWorkHistory(
         for (const { result: page } of result.pages) {
           for (const row of page.rows) {
             if (row.kind !== "task" || ids.has(row.task.taskId)) continue;
-            if (entries.length >= 500) {
+            if (entries.length >= HISTORY_LIMIT) {
               capped = true;
               continue;
             }
@@ -167,7 +134,7 @@ export function useBotWorkHistory(
           endedEarly = endedEarly || page.history?.endedEarly === true;
           cursor = page.history?.nextCursor;
         }
-        if (entries.length >= 500 && cursor !== undefined) capped = true;
+        if (entries.length >= HISTORY_LIMIT && cursor !== undefined) capped = true;
         return {
           ...state,
           entries,
@@ -180,21 +147,21 @@ export function useBotWorkHistory(
         };
       });
     } catch {
-      if (identity.current === token)
-        update((state) => ({ ...state, loading: false, failed: true }));
+      setWalk((state) => ({ ...state, loading: false, failed: true }));
     }
-    if (active.current === token) active.current = null;
+    busy.current = false;
   }
+  const useMerged = merged.supported && supported;
   return {
-    historySupported,
-    applyView,
+    supported,
     markRead,
-    rows: merged.supported && historySupported ? merged.rows : current.rows,
-    remoteWork:
-      merged.supported && historySupported ? merged.remoteWork : (current.remoteWork ?? []),
-    launchesTruncated:
-      merged.supported && historySupported ? merged.launchesTruncated : new Set<ChannelTaskId>(),
-    incomplete: historySupported && (walk.partial || walk.endedEarly || walk.capped),
+    currentTaskIds: new Set(
+      current.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+    ),
+    rows: useMerged ? merged.rows : current.rows,
+    remoteWork: useMerged ? merged.remoteWork : (current.remoteWork ?? []),
+    launchesTruncated: useMerged ? merged.launchesTruncated : new Set<ChannelTaskId>(),
+    incomplete: supported && (walk.partial || walk.endedEarly || walk.capped),
     hasMore,
     loading: walk.loading,
     failed: walk.failed,

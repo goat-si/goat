@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
+import { ChannelTaskId, EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -41,7 +41,7 @@ vi.mock("~/state/query", () => ({
   }),
 }));
 
-import { GoatBotHomeWork } from "./GoatBotHomeWork";
+import { GoatBotHomeWork, type HomeHistory } from "./GoatBotHomeWork";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -72,6 +72,20 @@ function setup(rows: Row[] = []) {
   actions.update.mockResolvedValue({ _tag: "Success" });
   actions.refresh.mockReset();
   return rows;
+}
+
+function history(overrides: Partial<HomeHistory> = {}): HomeHistory {
+  return {
+    supported: false,
+    hasMore: false,
+    loading: false,
+    failed: false,
+    incomplete: false,
+    launchesTruncated: new Set(),
+    currentTaskIds: new Set(),
+    loadMore: () => {},
+    ...overrides,
+  };
 }
 
 function view(rows: readonly Row[], overrides: Record<string, unknown> = {}) {
@@ -227,7 +241,7 @@ it("an access-denied read explains itself and offers no retry that can never suc
 
 it("an empty list offers the next action without claiming history is unavailable", async () => {
   const rows = setup([]);
-  await using screen = await render(view(rows, { historySupported: true }));
+  await using screen = await render(view(rows, { history: history({ supported: true }) }));
   await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText(/Ask GOAT Bot in chat to start work/)).toBeVisible();
   expect(screen.container.textContent).not.toContain("aren't listed here");
@@ -235,7 +249,7 @@ it("an empty list offers the next action without claiming history is unavailable
 
 it("explains the three-day cutoff when history is unsupported", async () => {
   const rows = setup([]);
-  await using screen = await render(view(rows, { historySupported: false }));
+  await using screen = await render(view(rows, { history: history() }));
   await expect
     .element(screen.getByText(/Unpinned tasks that finished more than three days/))
     .toBeVisible();
@@ -280,10 +294,12 @@ it("offers history continuation and explains incomplete older work and truncated
   const loadMore = vi.fn();
   await using screen = await render(
     view(rows, {
-      historyAvailable: true,
-      historyIncomplete: true,
-      launchesTruncated: new Set(["task-a"]),
-      onLoadHistory: loadMore,
+      history: history({
+        hasMore: true,
+        incomplete: true,
+        launchesTruncated: new Set([ChannelTaskId.make("task-a")]),
+        loadMore,
+      }),
     }),
   );
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
@@ -292,40 +308,44 @@ it("offers history continuation and explains incomplete older work and truncated
   expect(loadMore).toHaveBeenCalledOnce();
 });
 
-it("updates a history-only row when its Home menu pins and marks it read", async () => {
+it("an older row's menu offers Show work, Open and Pin, and Pin only refreshes the list", async () => {
   const [row] = setup([
-    taskRow("old", "Older task", "running", "2026-11-09T01:00:00.000Z", { unread: true }),
+    taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z", { unread: true }),
   ]);
   if (!row) throw new Error("missing fixture");
-  function Home() {
-    const [task, setTask] = useState(row!);
-    return view([task], {
-      onHistoryView: (_id: unknown, next: Row["view"]) =>
-        setTask((prev) => ({
-          ...prev,
-          view: next,
-          unread: next.readThrough === null ? prev.unread : false,
-        })),
-    });
-  }
-  await using screen = await render(<Home />);
+  const onOpenTask = vi.fn();
+  await using screen = await render(
+    view([row], { history: history({ supported: true }), onOpenTask }),
+  );
+  const trigger = screen.getByRole("button", { name: "Actions for Older task" });
   actions.show.mockResolvedValueOnce("pin");
-  actions.update.mockResolvedValueOnce({
-    _tag: "Success",
-    value: { ...row.view, pinnedAt: "2026-11-09T02:00:00.000Z" },
+  await userEvent.click(trigger);
+  expect(actions.show.mock.calls[0]?.[0]).toEqual([
+    { id: "work", label: "Show work" },
+    { id: "open", label: "Open" },
+    { id: "pin", label: "Pin", disabled: false },
+  ]);
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  expect(actions.update.mock.calls[0]?.[0]).toEqual({
+    environmentId,
+    input: { taskId: "old", pinned: true },
   });
+  actions.show.mockResolvedValueOnce("open");
+  await userEvent.click(trigger);
+  expect(onOpenTask).toHaveBeenCalledWith(row);
+});
+
+it("an older row's Pin is unavailable without permission to change task views", async () => {
+  const [row] = setup([taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z")]);
+  if (!row) throw new Error("missing fixture");
+  actions.permit = false;
+  await using screen = await render(view([row], { history: history({ supported: true }) }));
   await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
-  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
-  expect(actions.show.mock.calls[1]?.[0]).toContainEqual({ id: "pin", label: "Unpin" });
-  actions.show.mockResolvedValueOnce("read");
-  actions.update.mockResolvedValueOnce({
-    _tag: "Success",
-    value: { ...row.view, pinnedAt: "2026-11-09T02:00:00.000Z", readThrough: row.lastActivityAt },
+  expect(actions.show.mock.calls[0]?.[0]).toContainEqual({
+    id: "pin",
+    label: "Pin",
+    disabled: true,
   });
-  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
-  await expect
-    .element(screen.getByRole("button", { name: /^Older task.*Unread/ }))
-    .not.toBeInTheDocument();
 });
 
 it("does not steal focus after a person leaves Show more while history is pending", async () => {
@@ -344,12 +364,14 @@ it("does not steal focus after a person leaves Show more while history is pendin
       <>
         <p>Outside text</p>
         {view(rows, {
-          historyAvailable: !loaded,
+          history: history({
+            hasMore: !loaded,
+            loadMore: () => {
+              void waiting.then(() => setLoaded(true));
+            },
+          }),
           showAll: expanded,
           onShowAllChange: setExpanded,
-          onLoadHistory: () => {
-            void waiting.then(() => setLoaded(true));
-          },
         })}
       </>
     );

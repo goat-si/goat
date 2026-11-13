@@ -116,6 +116,7 @@ vi.mock("~/state/query", async (original) => ({
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { goatBotHomeKey, requestHomeOpen } from "./goatBotHomeRequest";
 
 const note = { index: 0, date: "2026-11-07", text: 'Reply in "Korean"' };
 const environmentId = EnvironmentId.make("local");
@@ -158,6 +159,21 @@ async function windowSize(width: number, height: number) {
 }
 
 const homeSheet = () => page.getByRole("dialog", { name: "GOAT Bot work" });
+
+it("a request from an older task's pane opens Home once; the next chat starts with it closed", async () => {
+  const { view } = setup();
+  requestHomeOpen(goatBotHomeKey(environmentId, null));
+  {
+    await using screen = await render(view());
+    await expect
+      .element(screen.getByRole("button", { name: "GOAT Bot home" }))
+      .toHaveAttribute("aria-expanded", "true");
+  }
+  await using again = await render(view());
+  await expect
+    .element(again.getByRole("button", { name: "GOAT Bot home" }))
+    .toHaveAttribute("aria-expanded", "false");
+});
 
 it("the home chip toggles by click and keyboard without losing the draft", async () => {
   const { view } = setup();
