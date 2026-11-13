@@ -182,13 +182,13 @@ import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead"
 import { GoatBotChatView } from "./GoatBotChatView";
 import { useGoatBotSession } from "./useGoatBotSession";
 
-function Pane({ onClose }: { onClose: () => void }) {
+function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: string }) {
   const session = useGoatBotSession();
   return (
     <GoatBotTaskPane
       environmentId={EnvironmentId.make("env")}
       session={session}
-      taskId={ChannelTaskId.make("task-1")}
+      taskId={ChannelTaskId.make(taskId)}
       narrow
       onClose={onClose}
     />
@@ -1056,4 +1056,39 @@ it("does not add Mark read to a listed task on an older server", async () => {
   await using screen = await render(<Pane onClose={() => {}} />);
   await expect.element(screen.getByRole("heading", { name: "Review work" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Mark read" }).query()).toBeNull();
+});
+
+it("does not reuse an old view when switching away from and back to a task", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Old view",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  state.lookup.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  state.lookup.mockReturnValue(new Promise(() => {}));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Old view" })).toBeVisible();
+  await screen.rerender(<Pane taskId="task-2" onClose={() => {}} />);
+  await screen.rerender(<Pane taskId="task-1" onClose={() => {}} />);
+  expect(screen.getByRole("button", { name: "Pin", exact: true }).query()).toBeNull();
 });
