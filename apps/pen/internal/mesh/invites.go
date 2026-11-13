@@ -63,14 +63,23 @@ func (x *Invite) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return err
 	}
-	*x = Invite{ID: f.ID, Secret: f.Secret, ExpiresAt: f.ExpiresAt, Subject: f.Subject, MintID: f.MintID, State: f.State,
+	*x = f.invite()
+	return nil
+}
+
+func (f inviteFile) invite() Invite {
+	x := Invite{ID: f.ID, Secret: f.Secret, ExpiresAt: f.ExpiresAt, Subject: f.Subject, MintID: f.MintID, State: f.State,
 		Nonce: f.Nonce, At: f.At}
-	if f.Subject != nil && (f.BoundSecret != nil || f.BoundExpiresAt != 0) {
-		// A bound entry written before its secret moved to boundSecret keeps secret and expiresAt; the next save moves
-		// them.
+	if f.Subject != nil && !f.earlierForm() {
 		x.Secret, x.ExpiresAt = f.BoundSecret, f.BoundExpiresAt
 	}
-	return nil
+	return x
+}
+
+// earlierForm reports a bound entry written before its secret moved to boundSecret (#3117): it keeps secret and
+// expiresAt, which a node older than bound invites would read and use.
+func (f inviteFile) earlierForm() bool {
+	return f.Subject != nil && f.BoundSecret == nil && f.BoundExpiresAt == 0 && (f.Secret != nil || f.ExpiresAt != 0)
 }
 
 // Invite states as cancel answers them.
@@ -101,6 +110,9 @@ type Invites struct {
 	cancelled map[string]chan struct{}
 	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
 	retired bool
+	// rewrite is set while offers.json still holds a bound entry in the earlier file form; Prune saves until it is
+	// written.
+	rewrite bool
 }
 
 // LoadInvites reads offers.json (st may be nil for in-memory use).
@@ -109,17 +121,25 @@ func LoadInvites(st *state.Store) (*Invites, error) {
 	if st == nil {
 		return iv, nil
 	}
-	var list []Invite
+	var list []inviteFile
 	if _, err := st.ReadJSON("offers.json", &list); err != nil {
 		return nil, err
 	}
-	for _, x := range list {
+	for _, f := range list {
+		iv.rewrite = iv.rewrite || f.earlierForm()
+		x := f.invite()
 		switch {
 		case x.ID != "":
 			iv.byID[x.ID] = x
 		case x.MintID != "" && x.State == InviteCancelled:
 			iv.fences[x.MintID] = x
 		}
+	}
+	if iv.rewrite {
+		// Moved to the current form at once, so a node downgraded before any later save finds no secret to use. A
+		// failed write keeps the book as read and is retried by every prune until it succeeds. At time zero no
+		// invite with a real (positive) expiry is settled: this write only changes the form.
+		_ = iv.saveLocked(time.UnixMilli(0))
 	}
 	return iv, nil
 }
@@ -154,6 +174,7 @@ func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) e
 		if err := iv.st.WriteJSON("offers.json", list, 0o600); err != nil {
 			return err
 		}
+		iv.rewrite = false
 	}
 	iv.byID, iv.fences = byID, fences
 	for id := range iv.cancelled {
@@ -213,6 +234,9 @@ func newInvite(expiresAt time.Time) (Invite, error) {
 func (iv *Invites) Prune(now time.Time) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	if iv.rewrite {
+		return iv.saveLocked(now)
+	}
 	for _, x := range iv.byID {
 		if expired(x, now) {
 			return iv.saveLocked(now)
