@@ -7,6 +7,8 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import type * as Scope from "effect/Scope";
+import type { ConnectionBlockedError } from "./model.ts";
 
 import { PenMembersGateway } from "../platform/capabilities.ts";
 import { layer, PenMembership, trustedPenMember } from "./penMembership.ts";
@@ -33,7 +35,7 @@ const ready = (seq: number): Extract<DesktopPenMembersState, { kind: "ready" }> 
 const removed: DesktopPenMembersState = { kind: "not-member", seq: 2 };
 
 const awaitLatest = (
-  ref: PenMembership["latest"],
+  ref: (typeof PenMembership.Service)["latest"],
   predicate: (
     value: Option.Option<import("../platform/capabilities.ts").PenMembersInput>,
   ) => boolean,
@@ -48,8 +50,8 @@ const run = (
   test: (h: {
     desktop: Queue.Queue<DesktopPenMembersState>;
     enabled: Queue.Queue<boolean>;
-    membership: PenMembership;
-  }) => Effect.Effect<void>,
+    membership: typeof PenMembership.Service;
+  }) => Effect.Effect<void, ConnectionBlockedError | void, Scope.Scope>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {

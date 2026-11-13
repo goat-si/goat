@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
+import type { PenMembersInput } from "../platform/capabilities.ts";
 import * as RpcHttp from "../rpc/http.ts";
 import type { ConnectionCatalogEntry, ConnectionCredential, ConnectionProfile } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
@@ -16,6 +17,8 @@ import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
 import type { ConnectionTarget } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as ConnectionResolver from "./resolver.ts";
+import { PenMembership } from "./penMembership.ts";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 export const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
 export const ENDPOINT = {
@@ -45,6 +48,7 @@ export const makeDependencies = Effect.fn("TestConnectionResolver.makeDependenci
   readonly authorizeBearer?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeBearer"];
   readonly authorizeDpop?: RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]["authorizeDpop"];
   readonly primaryBearerToken?: string;
+  readonly admit?: PenMembership["Service"]["admit"];
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
   readonly fetch?: typeof fetch;
@@ -113,6 +117,12 @@ export const makeDependencies = Effect.fn("TestConnectionResolver.makeDependenci
   });
 
   const layerDependencies = Layer.mergeAll(
+    Layer.effect(
+      PenMembership,
+      Effect.map(SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.none()), (latest) =>
+        PenMembership.of({ latest, admit: options?.admit ?? (() => Effect.void) }),
+      ),
+    ),
     options?.hubAuth === undefined
       ? Layer.empty
       : Layer.succeed(HubProxyAuthSource, options.hubAuth),

@@ -15,7 +15,7 @@ export class PenMembership extends Context.Service<
     readonly latest: SubscriptionRef.SubscriptionRef<Option.Option<PenMembersInput>>;
     readonly admit: (owner: Owner) => Effect.Effect<void, ConnectionBlockedError>;
   }
->()("@goat/client-runtime/connection/penMembership/PenMembership") {}
+>()("@goat/client-runtime/connection/penMembership") {}
 export const trustedPenMember = (
   state: PenMembersInput,
   owner: Owner,

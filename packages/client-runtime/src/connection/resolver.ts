@@ -54,7 +54,8 @@ import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
-import { credentialConnectionId } from "./routes.ts";
+import { credentialConnectionId, penRouteOwner } from "./routes.ts";
+import { PenMembership } from "./penMembership.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
@@ -226,6 +227,7 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
 const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(function* () {
   const profiles = yield* ConnectionProfileStore.ConnectionProfileStore;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
+  const penMembership = yield* PenMembership;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
 
@@ -272,8 +274,13 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
             : { verifiedSshEndpoint: prepared.verifiedEndpoint }),
         })
         .pipe(withSshConnectionTiming("authorization"));
+    const owner = penRouteOwner(target.connectionId);
+    if (owner !== null) yield* penMembership.admit(owner);
     const prepared = yield* ssh.prepare({
       connectionId: target.connectionId,
+      ...(owner === null
+        ? {}
+        : { installation: "existing-only" as const, penNodeId: owner.nodeId }),
       expectedEnvironmentId: target.environmentId,
       target: profile.target,
       ...(savedToken === undefined ? {} : { bearerToken: savedToken }),

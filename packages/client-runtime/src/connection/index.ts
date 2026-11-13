@@ -38,3 +38,7 @@ export { handleConnectionCatalogOperation } from "./catalogHost.ts";
 export * as HubProxyAuth from "./hubProxyAuthSource.ts";
 export type { HubProxyAuthorization } from "./hubProxyAuthSource.ts";
 export * from "./hubProxyDiscovery.ts";
+
+export * as PenDiscovery from "./penDiscovery.ts";
+export type { PenMemberState, PenMemberStatus } from "./penDiscovery.ts";
+export * as PenMembership from "./penMembership.ts";

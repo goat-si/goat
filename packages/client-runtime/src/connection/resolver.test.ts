@@ -29,7 +29,12 @@ import {
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   putConnectionCredentialInCatalog,
 } from "../platform/storageDocument.ts";
-import { ConnectionTransientError, PrimaryConnectionTarget, SshConnectionTarget } from "./model.ts";
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  PrimaryConnectionTarget,
+  SshConnectionTarget,
+} from "./model.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -45,6 +50,59 @@ import {
 } from "./resolver.testkit.ts";
 
 describe("ConnectionResolver", () => {
+  it.effect.each(["managed", "refused", "ordinary"] as const)(
+    "checks Pen admission before SSH preparation: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const events: string[] = [];
+        const managed = scenario !== "ordinary";
+        const meshId = "a".repeat(26);
+        const nodeId = "b".repeat(26);
+        const connectionId = managed ? `ssh:pen:${meshId}:${nodeId}` : "ssh:ordinary";
+        const target = new SshConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "SSH",
+          connectionId,
+        });
+        const profile = new SshConnectionProfile({
+          connectionId,
+          environmentId: ENVIRONMENT_ID,
+          label: "SSH",
+          target: SSH_TARGET,
+        });
+        const layer = yield* makeDependencies({
+          admit: (owner) =>
+            Effect.gen(function* () {
+              events.push(`admit:${owner.meshId}:${owner.nodeId}`);
+              if (scenario === "refused")
+                return yield* new ConnectionBlockedError({
+                  reason: "configuration",
+                  detail: "refused",
+                });
+            }),
+          prepareSsh: (input) =>
+            Effect.sync(() => {
+              events.push("prepare");
+              expect(input.installation).toBe(managed ? "existing-only" : undefined);
+              expect(input.penNodeId).toBe(managed ? nodeId : undefined);
+              return {
+                bootstrap: { target: SSH_TARGET, ...ENDPOINT, pairingToken: null },
+                bearerToken: "token",
+              };
+            }),
+        });
+        const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+        const result = resolver.prepare(catalogEntry(target, Option.some(profile)));
+        if (scenario === "refused") {
+          expect(yield* Effect.flip(result)).toMatchObject({ detail: "refused" });
+          expect(events).toEqual([`admit:${meshId}:${nodeId}`]);
+        } else {
+          yield* result;
+          expect(events).toEqual(managed ? [`admit:${meshId}:${nodeId}`, "prepare"] : ["prepare"]);
+        }
+      }),
+  );
+
   it.effect.each(["compatible", "older-runtime", "restarted"] as const)(
     "uses verified SSH discovery for the protocol gate (%s)",
     (scenario) =>
