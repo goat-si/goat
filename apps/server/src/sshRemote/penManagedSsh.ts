@@ -23,8 +23,43 @@ export const guardPenManaged = (
     Effect.suspend(() =>
       routes.isManaged(alias) ? routes.admit(alias).pipe(Effect.andThen(use)) : use,
     );
+  const {
+    existingEnvironment,
+    existingEnvironmentOther,
+    issueExistingMcpSession,
+    revokeExistingMcpSession,
+  } = manager;
   return {
     ...manager,
+    // The manager's optional methods stay absent when it has none.
+    ...(existingEnvironment === undefined
+      ? {}
+      : {
+          existingEnvironment: (target, environmentId) =>
+            admitted(target.alias, existingEnvironment(target, environmentId)),
+        }),
+    ...(existingEnvironmentOther === undefined
+      ? {}
+      : {
+          existingEnvironmentOther: (target, current) =>
+            admitted(target.alias, existingEnvironmentOther(target, current)).pipe(
+              Effect.catchTags({
+                SshInvalidTargetError: () => Effect.succeed({ kind: "unavailable" as const }),
+              }),
+            ),
+        }),
+    ...(issueExistingMcpSession === undefined
+      ? {}
+      : {
+          issueExistingMcpSession: (target, environmentId, options) =>
+            admitted(target.alias, issueExistingMcpSession(target, environmentId, options)),
+        }),
+    ...(revokeExistingMcpSession === undefined
+      ? {}
+      : {
+          revokeExistingMcpSession: (target, environmentId, sessionId) =>
+            admitted(target.alias, revokeExistingMcpSession(target, environmentId, sessionId)),
+        }),
     status: (target) => admitted(target.alias, manager.status(target)),
     readyEnvironment: (target) => admitted(target.alias, manager.readyEnvironment(target)),
     runRemoteScript: (target, input) =>

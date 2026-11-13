@@ -83,6 +83,18 @@ export type RemoteClientSessionOptions = {
   | { readonly penMember: string; readonly subject?: never }
 );
 
+/**
+ * A GOAT CLI that predates `--pen-member` rejects the flag by name. Only that refusal proves an
+ * older issuer; any other failure stays what it is and is never retried under a subject.
+ */
+export const refusesPenMemberFlag = (error: {
+  readonly stderr: string;
+  readonly stdout?: string | undefined;
+}) =>
+  /(?:unknown|unrecognized|unexpected) (?:option|argument|flag)[^\n]*--pen-member/iu.test(
+    `${error.stderr}\n${error.stdout ?? ""}`,
+  );
+
 export interface RemoteClientSession {
   readonly token: string;
   readonly expiresAt: string | null;
@@ -593,10 +605,7 @@ export function makeRemoteSessions({
         SshCommandError: (error) =>
           existingRunnerError(error, selected.runner, target.alias) instanceof SshLaunchError
             ? Effect.fail(existingRunnerError(error, selected.runner, target.alias))
-            : sessionOptions.penMember !== undefined &&
-                /(?:unknown|unrecognized|unexpected) (?:option|argument)[^\n]*--pen-member/iu.test(
-                  error.stderr,
-                )
+            : sessionOptions.penMember !== undefined && refusesPenMemberFlag(error)
               ? Effect.fail(
                   new SshPairingError({
                     reason: "pen-member-unsupported",

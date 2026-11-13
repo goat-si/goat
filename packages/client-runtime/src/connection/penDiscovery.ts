@@ -39,6 +39,14 @@ export function reconcilePenRoutes(input: {
   readonly existing: ReadonlyArray<ConnectionCatalogEntry>;
 }) {
   const trusted = input.members.filter((member) => member.route.kind === "trusted");
+  // Not readable just now: neither proof of trust nor of a departure, so its route stays.
+  const unread = new Set(
+    input.members.flatMap((member) =>
+      member.route.kind === "refused" && member.route.reason === "unreadable"
+        ? [member.nodeId]
+        : [],
+    ),
+  );
   const remove: Array<{ environmentId: EnvironmentId; routeId: string }> = [];
   const managed = new Map<string, EnvironmentId>();
   const yours = new Map<string, EnvironmentId>();
@@ -49,7 +57,7 @@ export function reconcilePenRoutes(input: {
       if (owner !== null) {
         if (
           owner.meshId !== input.meshId ||
-          !trusted.some((member) => member.nodeId === owner.nodeId)
+          (!trusted.some((member) => member.nodeId === owner.nodeId) && !unread.has(owner.nodeId))
         ) {
           remove.push({
             environmentId: entry.target.environmentId,

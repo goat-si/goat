@@ -155,18 +155,22 @@ machine that leaves or is revoked disappears together with the sign-in GOAT held
 - A member whose GOAT is too old to sign this computer in asks you to update GOAT on that machine.
 - A machine you had already added yourself stays as you added it.
 - While Pen is not running on this computer, machines already listed stay listed, but nothing new
-  is added and no new sign-in is made until Pen is back.
+  is added and no new sign-in is made until Pen is back. The same holds on the other side: a
+  machine accepts this computer's sign-in only while its own Pen is running and lists it.
 - Turn it off with **Show my Pen machines**. The machines you added yourself stay.
 
 The machines need the same ssh access as `ssh pen-<name>`: an sshd on the member and a key it
 accepts. GOAT reaches each one through its `pen-<nodeId>` host, so reusing a name for another
 machine never points GOAT at the wrong one.
 
-A GOAT server without a screen (`goat serve`) that is a Pen member lists the other members under
+Every GOAT server that is a Pen member, including the one inside the desktop app and a
+`goat serve` without a screen, lists the other members under
 [Hub devices](./remote-access.md#hub-devices) the same way, so a phone paired with any member's
-server sees them. A phone still needs **Hub access** to open them, and a member without GOAT is
-listed but is not set up from there: add it as an SSH host on the hub and set it up, or install
-GOAT on it. Turn this off with the server setting `penHubNodes`.
+server sees them. A phone still needs **Hub access** to open them. A member without GOAT is listed
+but never set up from there: install GOAT on it, or add it to the hub as an SSH host and set that
+up. Turn this off under **Settings → Hub → List Pen machines as hub devices**.
+
+**Update everything** leaves Pen machines alone; update GOAT on each machine itself.
 
 ### Use a member as an OpenCodex Child
 

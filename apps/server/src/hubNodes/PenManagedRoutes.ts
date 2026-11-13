@@ -51,6 +51,7 @@ export interface PenManagedRoutesShape {
   readonly registerCleanup: (cleanup: PenRouteCleanup) => Effect.Effect<void>;
 }
 
+const CLEANUP_TIMEOUT = "30 seconds";
 const notWired = (alias: string) =>
   new SshInvalidTargetError({ message: `${alias} is not a Pen machine this server follows.` });
 
@@ -60,18 +61,19 @@ const notWired = (alias: string) =>
  * of it. HubNodes writes the set under its lock. Without the layer every exact Pen alias counts
  * as managed and is refused, so a build that forgot to wire it reaches no Pen machine at all.
  */
+/** No Pen machine is reachable: every exact Pen alias counts as managed and is refused. */
+const refuseEveryPenAlias: PenManagedRoutesShape = {
+  isManaged: (alias) => PEN_EXACT_ALIAS.test(alias),
+  binding: () => undefined,
+  admit: (alias) => Effect.fail(notWired(alias)),
+  hold: () => Effect.die("PenManagedRoutes is not wired; no Pen route may be added"),
+  release: () => Effect.void,
+  registerCleanup: () => Effect.void,
+};
+
 export class PenManagedRoutes extends Context.Reference<PenManagedRoutesShape>(
   "goat/hubNodes/PenManagedRoutes",
-  {
-    defaultValue: () => ({
-      isManaged: (alias) => PEN_EXACT_ALIAS.test(alias),
-      binding: () => undefined,
-      admit: (alias) => Effect.fail(notWired(alias)),
-      hold: () => Effect.die("PenManagedRoutes is not wired; no Pen route may be added"),
-      release: () => Effect.void,
-      registerCleanup: () => Effect.void,
-    }),
-  },
+  { defaultValue: () => refuseEveryPenAlias },
 ) {}
 
 export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
@@ -120,9 +122,19 @@ export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
     isManaged: (alias) => held.has(alias),
     binding: (alias) => held.get(alias)?.binding,
     admit,
-    hold: Effect.fn("PenManagedRoutes.hold")(function* (alias: string, binding: PenRouteBinding) {
-      held.set(alias, { binding, releasing: false });
-    }),
+    hold: (alias, binding) =>
+      Effect.sync(() => {
+        const entry = held.get(alias);
+        // Holding what is already held keeps the entry, so an admission in flight still stands.
+        if (
+          entry === undefined ||
+          entry.releasing ||
+          entry.binding.meshId !== binding.meshId ||
+          entry.binding.nodeId !== binding.nodeId ||
+          entry.binding.noisePub !== binding.noisePub
+        )
+          held.set(alias, { binding, releasing: false });
+      }),
     release: Effect.fn("PenManagedRoutes.release")(function* (alias: string) {
       const entry = held.get(alias);
       if (entry === undefined) return;
@@ -130,6 +142,9 @@ export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
       let failed = false;
       for (const cleanup of cleanups)
         yield* cleanup(alias, entry.binding).pipe(
+          // Callers hold a lock and cannot be interrupted here, so a hung close must end by itself.
+          Effect.interruptible,
+          Effect.timeout(CLEANUP_TIMEOUT),
           Effect.catchCause((cause) =>
             Effect.logWarning("pen.managedRoute.cleanup.failed", { alias }, cause).pipe(
               Effect.andThen(Effect.sync(() => void (failed = true))),
@@ -139,11 +154,7 @@ export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
       if (failed) return yield* new PenRouteCleanupError({ alias });
       if (held.get(alias) === entry) held.delete(alias);
     }),
-    registerCleanup: Effect.fn("PenManagedRoutes.registerCleanup")(function* (
-      cleanup: PenRouteCleanup,
-    ) {
-      cleanups.push(cleanup);
-    }),
+    registerCleanup: (cleanup) => Effect.sync(() => void cleanups.push(cleanup)),
   } satisfies PenManagedRoutesShape;
 });
 
@@ -155,12 +166,18 @@ export const layer = Layer.effect(
     const services = yield* Effect.context<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
     >();
-    // An unreadable node list must not start a server that reaches Pen machines unguarded.
-    const registrations = yield* repository.listRegistrations.pipe(Effect.orDie);
+    // With an unreadable node list nobody knows which aliases are Pen's: refuse them all.
+    const registrations = yield* repository.listRegistrations.pipe(
+      Effect.tapError((error) =>
+        Effect.logError("pen.managedRoutes.unreadable", { reason: error.reason }),
+      ),
+      Effect.option,
+    );
+    if (registrations._tag === "None") return refuseEveryPenAlias;
     return yield* make({
       inspect: (alias) =>
         inspectPenExactAlias({ alias, homeDirectory }).pipe(Effect.provide(services)),
-      persisted: registrations.flatMap((row) =>
+      persisted: registrations.value.flatMap((row) =>
         row.addedBy.pen !== undefined && row.target.kind === "ssh"
           ? [[row.target.alias, row.addedBy.pen] as const]
           : [],

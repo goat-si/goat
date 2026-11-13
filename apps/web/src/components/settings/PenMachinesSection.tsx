@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { connectionAtomRuntime } from "~/connection/runtime";
+import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
@@ -12,7 +13,7 @@ import { Switch } from "../ui/switch";
 import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
-import { penGuidance, penMemberText } from "./PenMachinesSection.logic";
+import { penGuidance, penLiveStatus, penMemberText } from "./PenMachinesSection.logic";
 
 const statusesAtom = connectionAtomRuntime.atom(
   Stream.unwrap(
@@ -104,7 +105,14 @@ export function EnvironmentsWithPenMachines() {
 }
 
 function PenMachinesSection() {
-  const statuses = useEnvironmentQuery(statusesAtom).data ?? [];
+  const { environments } = useEnvironments();
+  const statuses = (useEnvironmentQuery(statusesAtom).data ?? []).map((member) =>
+    penLiveStatus(
+      member,
+      environments.find((environment) => environment.environmentId === member.environmentId)
+        ?.connection,
+    ),
+  );
   const membership = useEnvironmentQuery(membershipAtom).data;
   const retryMember = useAtomCommand(retry);
   const setUpMember = useAtomCommand(setUp);

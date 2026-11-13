@@ -242,13 +242,21 @@ alias. The Pen-native path (`apps/server/src/pen`, `PEN_TARGET_ENABLED`) stays c
   and nothing global that could accept another key. The check is repeated in desktop main and in the
   server's SSH manager guard at every use, because the renderer and the snapshot are not trusted
   with it.
-- **A dead watch is not a departure.** Only Pen's `left` marker or a list without this machine
-  removes routes. A closed socket, a skipped generation or more than 1024 members is `unavailable`:
-  what exists stays, nothing new is added and no credential is issued until a live list returns.
+- **A dead watch is not a departure, and neither is an unreadable alias.** Only Pen's `left`
+  marker, a list without this machine, or an alias that now pins another key removes a route. A
+  closed socket, a skipped generation, more than 1024 members or an `ssh -G` that did not answer
+  is "unknown": what exists stays, nothing new is added and no credential is issued.
+- **Pen admits eight snapshot watchers per machine.** The desktop's main process and each GOAT
+  server take one; a dev server that refuses ssh takes none. A refused watch reads as
+  `unavailable`, which closes that server's member fence. One watch per machine is not built.
 - **Managed use is existing-only.** `installation: "existing-only"` reaches every launch script
   (`packages/ssh/src/existingOnly.ts`): it requires an installed runtime, never upgrades, adopts or
   refreshes, and refuses instead of publishing a runner wrapper whose bytes differ. Only a person's
-  Set up on the desktop runs without it. On a hub a managed alias is never set up at all.
+  Set up on the desktop runs without it. On a hub a managed alias is never set up at all, and
+  every manager method that opens ssh is admitted first (`apps/server/src/sshRemote/penManagedSsh.ts`).
+- **A hub's MCP sessions on a member are ordinary sessions.** Only the client session the hub
+  proxy uses is issued as a member session. Dispatch and fleet sessions (`mcp-client`, 12 hours)
+  are not fenced by the member after the hub leaves; they end by expiry.
 - **A member session must be refused by a build that cannot fence it.** The session is issued in a
   form older builds reject (`--pen-member`, request kind `pen-member-session`) and stored with
   `revoked_at` set, so a server downgraded to a build without `PenMemberSessionFence` reads the

@@ -187,12 +187,16 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
     const { penNodeId, ...ensureOptions } = options ?? {};
     // A Pen route is admitted here, in main, on every ensure: never on the renderer's word.
     // Only a reconnect that neither installs nor issues a credential may run while Pen is down.
-    if (penNodeId !== undefined)
+    if (penNodeId !== undefined) {
+      // A Pen machine is signed in to as a member; a pairing credential would outlive membership.
+      if (ensureOptions.issuePairingToken !== false)
+        return yield* new SshInvalidTargetError({
+          message: "A Pen machine is never paired with; it is signed in to as a Pen member.",
+        });
       yield* (yield* DesktopPenMembers.DesktopPenMembers).requireTrusted(target, penNodeId, {
-        requireReady:
-          ensureOptions.issuePairingToken !== false ||
-          ensureOptions.installation !== "existing-only",
+        requireReady: ensureOptions.installation !== "existing-only",
       });
+    }
     yield* Effect.annotateCurrentSpan({
       senderId: event?.sender.id,
       caller: caller ?? "unknown",

@@ -33,7 +33,7 @@ vi.mock("./settingsLayout", () => ({
   ),
 }));
 import { PenMachinesView } from "./PenMachinesSection";
-import { penGuidance } from "./PenMachinesSection.logic";
+import { penGuidance, penLiveStatus } from "./PenMachinesSection.logic";
 
 const setup = () => state.update.mockReset();
 
@@ -102,4 +102,23 @@ it("says what to do when Pen has written no ssh hosts", () => {
   expect(penGuidance({ kind: "unavailable", seq: 1, reason: "daemon-down" }, [])).toContain(
     "pen up",
   );
+});
+
+it("a connected row follows its live connection, not the last member list", () => {
+  const row = { nodeId: "1", name: "box", state: "connecting" } as const;
+  expect(penLiveStatus(row, { phase: "connected" }).state).toBe("connected");
+  expect(penLiveStatus({ ...row, state: "connected" }, { phase: "connecting" }).state).toBe(
+    "connecting",
+  );
+  expect(penLiveStatus(row, { phase: "reconnecting", unreachable: true }).state).toBe("offline");
+  expect(
+    penLiveStatus(row, {
+      phase: "error",
+      failure: { kind: "blocked", detail: "That host reaches another machine." },
+    }),
+  ).toMatchObject({ state: "failed", detail: "That host reaches another machine." });
+  // A row GOAT is not connected through keeps what discovery found.
+  expect(
+    penLiveStatus({ nodeId: "2", name: "new", state: "not-set-up" }, { phase: "connected" }).state,
+  ).toBe("not-set-up");
 });

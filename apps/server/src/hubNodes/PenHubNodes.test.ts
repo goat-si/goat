@@ -8,7 +8,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
+import { PenAliasUnreadable } from "@goat/ssh/penAlias";
 
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -145,7 +147,9 @@ describe("HubNodes Pen registrations", () => {
           retry: false,
         });
         expect(yield* rows).toEqual([]);
-        expect(state.events).toEqual([`hold ${alias("a")}`, `release ${alias("a")}`]);
+        expect(state.events.at(0)).toBe(`hold ${alias("a")}`);
+        expect(state.events.at(-1)).toBe(`release ${alias("a")}`);
+        expect(state.held.size).toBe(0);
       }),
     ),
   );
@@ -231,6 +235,27 @@ describe("HubNodes Pen registrations", () => {
     ),
   );
 
+  it.effect("a hand-add over a Pen route that fails to save leaves the route guarded", () =>
+    run(({ service, state, rows }) =>
+      Effect.gen(function* () {
+        yield* service.reconcilePen({ members: [member("a")], ...current });
+        const input = {
+          kind: "ssh" as const,
+          alias: alias("a"),
+          hostname: null,
+          username: null,
+          port: null,
+        };
+        const exit = yield* service
+          .add(input, { addedBy: user, beforeSave: Effect.fail("caller lost access" as const) })
+          .pipe(Effect.exit);
+        expect(exit._tag).toBe("Failure");
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+        expect(state.held.get(alias("a"))?.noisePub).toBe(key("a"));
+      }),
+    ),
+  );
+
   it.effect("removing a Pen route by hand closes it first", () =>
     run(({ service, state, rows }) =>
       Effect.gen(function* () {
@@ -279,18 +304,22 @@ const reconciler = (enabled = true) =>
     const inspected: string[] = [];
     const { pass } = yield* PenHubNodes.make({
       inspect: (name) =>
-        Effect.sync(() => {
-          inspected.push(name);
-          const noisePub = pinned.get(name);
-          return noisePub === undefined
-            ? { refused: "not-in-pen-config" as const }
-            : {
-                alias: name,
-                nodeId: name.slice(4),
-                noisePub,
-                revision: "pen:test",
-                target: { alias: name, hostname: name, username: null, port: null },
-              };
+        Effect.try({
+          try: () => {
+            inspected.push(name);
+            const noisePub = pinned.get(name);
+            if (unreadable.has(name)) throw new PenAliasUnreadable({ alias: name, detail: "slow" });
+            return noisePub === undefined
+              ? { refused: "not-in-pen-config" as const }
+              : {
+                  alias: name,
+                  nodeId: name.slice(4),
+                  noisePub,
+                  revision: "pen:test",
+                  target: { alias: name, hostname: name, username: null, port: null },
+                };
+          },
+          catch: (error) => error as PenAliasUnreadable,
         }),
     }).pipe(
       Effect.provide(
@@ -300,8 +329,15 @@ const reconciler = (enabled = true) =>
         ),
       ),
     );
-    const show = (view: PenMembershipView) => pass(view).pipe(Effect.orDie);
-    return { ...f, show, pinned, inspected };
+    const unreadable = new Set<string>();
+    // A member Pen has not written to ssh config yet is inspected once more 2 s later.
+    const show = (view: PenMembershipView) =>
+      Effect.gen(function* () {
+        const running = yield* pass(view).pipe(Effect.orDie, Effect.forkChild);
+        yield* TestClock.adjust("2 seconds");
+        yield* Fiber.join(running);
+      });
+    return { ...f, show, pass, pinned, inspected, unreadable };
   });
 const reconcile = <A, E>(
   body: (f: Effect.Success<ReturnType<typeof reconciler>>) => Effect.Effect<A, E, never>,
@@ -385,6 +421,52 @@ describe("PenHubNodes", () => {
         yield* Fiber.join(left);
         expect(yield* rows).toEqual([]);
         expect(state.held.size).toBe(0);
+      }),
+    ),
+  );
+  it.effect("a member whose ssh settings cannot be read just now keeps its registration", () =>
+    reconcile(({ show, pinned, rows, unreadable, state }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        yield* show(ready(["a", "a"]));
+        unreadable.add(alias("a"));
+        yield* show(ready(["a", "a"]));
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+        expect(state.held.has(alias("a"))).toBe(true);
+        // Unreadable is not trust either: a member never listed is not added on it.
+        unreadable.add(alias("b"));
+        pinned.set(alias("b"), key("b"));
+        yield* show(ready(["a", "a"], ["b", "b"]));
+        expect((yield* rows).length).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("a member Pen wrote to ssh config after its snapshot is listed 2 s later", () =>
+    reconcile(({ pinned, rows, pass }) =>
+      Effect.gen(function* () {
+        const running = yield* pass(ready(["a", "a"])).pipe(Effect.orDie, Effect.forkChild);
+        yield* TestClock.adjust(0);
+        expect(yield* rows).toEqual([]);
+        pinned.set(alias("a"), key("a"));
+        yield* TestClock.adjust("2 seconds");
+        yield* Fiber.join(running);
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+      }),
+    ),
+  );
+
+  it.effect("a member that was offline when listed is identified once it is online", () =>
+    reconcile(({ show, pinned, service }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        yield* show(ready(["a", "a", false]));
+        expect((yield* service.snapshot).nodes[0]?.environmentId).toBeNull();
+        yield* show(ready(["a", "a", true]));
+        expect((yield* service.snapshot).nodes[0]).toMatchObject({
+          environmentId: remote,
+          status: "online",
+        });
       }),
     ),
   );

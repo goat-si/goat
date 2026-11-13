@@ -30,6 +30,7 @@ import {
   decodeRemoteClientSessionOutput,
   type RemoteClientSessionOptions,
 } from "./tunnel.ts";
+import { refusesPenMemberFlag } from "./remoteSessions.ts";
 
 const options = {
   subject: "hub-proxy",
@@ -90,6 +91,22 @@ describe("remote client session script", () => {
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provide(NodeServices.layer),
       Effect.scoped,
+    );
+  });
+  it("reads an older CLI's rejection of --pen-member as unsupported, and nothing else", () => {
+    // What Effect's CLI prints for a flag it does not know.
+    const older = "Unrecognized flag: --pen-member in command goat auth session issue";
+    expect(refusesPenMemberFlag({ stderr: older })).toBe(true);
+    expect(
+      refusesPenMemberFlag({
+        stderr: "",
+        stdout: `${older}\n`,
+      }),
+    ).toBe(true);
+    expect(refusesPenMemberFlag({ stderr: "error: unknown option '--pen-member'" })).toBe(true);
+    expect(refusesPenMemberFlag({ stderr: "Unrecognized flag: --scope" })).toBe(false);
+    expect(refusesPenMemberFlag({ stderr: "ssh: connect to host pen-x port 22: timed out" })).toBe(
+      false,
     );
   });
   it("requests a Pen member without supplying a subject", () => {

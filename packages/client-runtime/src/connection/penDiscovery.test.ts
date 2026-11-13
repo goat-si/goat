@@ -48,20 +48,27 @@ describe("reconcilePenRoutes", () => {
     const candidate = member("e");
     const refused: DesktopPenMember = {
       ...member("f"),
+      route: { kind: "refused", reason: "key-mismatch" },
+    };
+    // Its ssh settings could not be read just now: not a departure, so its route stays.
+    const unread: DesktopPenMember = {
+      ...member("i"),
       route: { kind: "refused", reason: "unreadable" },
     };
+    const unreadId = penRouteConnectionId(mesh, unread.nodeId);
     const managedId = penRouteConnectionId(mesh, managed.nodeId);
     const departed = penRouteConnectionId(mesh, node("g"));
     const foreign = penRouteConnectionId(otherMesh, node("h"));
     const refusedId = penRouteConnectionId(mesh, refused.nodeId);
     const result = reconcilePenRoutes({
       meshId: mesh,
-      members: [managed, yours, candidate, refused],
+      members: [managed, yours, candidate, refused, unread],
       existing: [
         entry(managedId, "x"),
         entry(departed, "x"),
         entry(foreign, "x"),
         entry(refusedId, "x"),
+        entry(unreadId, "x"),
         entry("own", `pen-${yours.nodeId}`),
       ],
     });

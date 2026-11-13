@@ -113,9 +113,29 @@ describe("SSH runtime IPC", () => {
   it.effect("without desktop main's Pen watch a managed route is refused, not waved through", () =>
     Effect.gen(function* () {
       const exit = yield* ensureSshEnvironment
-        .handler({ target: penTarget, options: { penNodeId: penNode } })
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, issuePairingToken: false },
+        })
         .pipe(
           Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+          Effect.provide(desktopAt("/nonexistent-home")),
+          Effect.exit,
+        );
+      assert.isTrue(Exit.isFailure(exit));
+    }),
+  );
+
+  it.effect("a Pen machine is never paired with: asking for a pairing token is refused", () =>
+    Effect.gen(function* () {
+      const exit = yield* ensureSshEnvironment
+        .handler({ target: penTarget, options: { penNodeId: penNode, issuePairingToken: true } })
+        .pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+          Effect.provideService(
+            DesktopPenMembers.DesktopPenMembers,
+            penMembers(() => Effect.die("refused before admission")),
+          ),
           Effect.provide(desktopAt("/nonexistent-home")),
           Effect.exit,
         );

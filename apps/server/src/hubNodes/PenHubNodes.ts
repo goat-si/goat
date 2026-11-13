@@ -15,7 +15,7 @@ import type { PenRouteBinding } from "./PenManagedRoutes.ts";
 
 type PenAliasInspection = Effect.Success<ReturnType<typeof inspectPenExactAlias>>;
 const CHECK_TIMEOUT = "60 seconds";
-const RETRY_DELAYS = ["5 seconds", "30 seconds", "2 minutes", "10 minutes"] as const;
+const RETRY_DELAYS = ["2 seconds", "30 seconds", "2 minutes", "10 minutes"] as const;
 
 /**
  * Keeps one hub registration per trusted Pen member, on a server that is itself a member and has
@@ -31,31 +31,40 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
   // Bumped by every trigger, so work begun for an older member list or setting writes nothing.
   let revision = 0;
 
-  const trusted = Effect.fn("PenHubNodes.trusted")(function* (
+  const inspectAll = Effect.fn("PenHubNodes.inspectAll")(function* (
     view: Extract<PenMembershipView, { kind: "ready" }>,
     isCurrent: () => boolean,
   ) {
-    const members: Array<PenRouteBinding & { readonly name: string; readonly online: boolean }> =
-      [];
+    const members: Array<PenRouteBinding & { readonly name: string }> = [];
+    const online = new Set<string>();
+    // Could not be read just now: neither proof of trust nor of a departure.
+    const keep = new Set<string>();
+    let unsettled = false;
     for (const member of view.snapshot.members) {
       if (member.nodeId === view.snapshot.self) continue;
       if (!isCurrent()) return undefined;
+      if (member.online) online.add(member.nodeId);
       const route = yield* input.inspect(`pen-${member.nodeId}`).pipe(
         Effect.catchTags({
           PenAliasUnreadable: () => Effect.succeed({ refused: "unreadable" as const }),
         }),
       );
-      if ("refused" in route) continue;
+      if ("refused" in route) {
+        if (route.refused === "unreadable") keep.add(member.nodeId);
+        // Pen writes its ssh config after it publishes a snapshot, so a new member settles late.
+        else if (route.refused === "not-in-pen-config" || route.refused === "no-recorded-key")
+          unsettled = true;
+        continue;
+      }
       if (route.nodeId !== member.nodeId || route.noisePub !== member.noisePub) continue;
       members.push({
         meshId: view.snapshot.mesh,
         nodeId: member.nodeId,
         noisePub: member.noisePub,
         name: member.name,
-        online: member.online,
       });
     }
-    return members;
+    return { members, online, keep, unsettled };
   });
 
   const pass = Effect.fn("PenHubNodes.pass")(function* (view: PenMembershipView) {
@@ -64,24 +73,36 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
     const stored = yield* settings.getSettings.pipe(Effect.option);
     // Unreadable settings or a Pen that is down say nothing about who left: change nothing.
     if (stored._tag === "None" || view.kind === "unavailable") return;
-    for (const delay of [undefined, ...RETRY_DELAYS]) {
+    const enabled = stored.value.penHubNodes && view.kind === "ready";
+    for (const [round, delay] of [undefined, ...RETRY_DELAYS].entries()) {
       if (delay !== undefined) yield* Effect.sleep(delay);
-      const members =
-        stored.value.penHubNodes && view.kind === "ready" ? yield* trusted(view, isCurrent) : [];
-      if (members === undefined || !isCurrent()) return;
-      const result = yield* nodes.reconcilePen({ members, isCurrent });
-      // A new registration learns which machine it is by reading, never by preparing a runtime.
-      for (const routeId of result.added) {
+      const inspected = enabled
+        ? yield* inspectAll(view, isCurrent)
+        : { members: [], online: new Set<string>(), keep: new Set<string>(), unsettled: false };
+      if (inspected === undefined || !isCurrent()) return;
+      const result = yield* nodes.reconcilePen({
+        members: inspected.members,
+        keep: inspected.keep,
+        isCurrent,
+      });
+      // A member GOAT does not know yet is read once it is online; nothing is prepared for it.
+      const listed = yield* nodes.snapshot.pipe(Effect.option);
+      for (const node of listed._tag === "Some" ? listed.value.nodes : []) {
+        const route = node.routes.find((candidate) => candidate.pen !== undefined);
+        if (
+          node.environmentId !== null ||
+          route?.pen === undefined ||
+          !inspected.online.has(route.pen.nodeId)
+        )
+          continue;
         if (!isCurrent()) return;
-        if (members.some((member) => member.online && `ssh:pen-${member.nodeId}` === routeId))
-          yield* nodes
-            .check({ nodeId: `route:${routeId}` })
-            .pipe(Effect.timeout(CHECK_TIMEOUT), Effect.ignore);
+        yield* nodes
+          .check({ nodeId: `route:${route.routeId}` })
+          .pipe(Effect.timeout(CHECK_TIMEOUT), Effect.ignore);
       }
-      if (!result.retry) return;
+      if (!result.retry && !(inspected.unsettled && round === 0)) return;
     }
   });
-
   return { pass };
 });
 

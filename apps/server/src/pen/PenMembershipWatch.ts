@@ -6,6 +6,7 @@ import {
   type PenMembershipView,
 } from "@goat/ssh/penMembershipWatch";
 import * as Context from "effect/Context";
+import { ServerConfig } from "../config.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -49,8 +50,11 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const home = yield* HostProcess.HomeDirectory;
     const env = yield* HostProcess.Environment;
+    const config = yield* ServerConfig;
+    // Pen admits eight watchers per machine, and a dev server that refuses ssh reaches no member.
+    const devWithoutSsh = config.devUrl !== undefined && env.GOAT_DEV_SSH !== "on";
     return yield* make({
-      stateDir: penStateDir(env, home),
+      stateDir: devWithoutSsh ? undefined : penStateDir(env, home),
       stateDirExists: (stateDir) => fs.exists(stateDir).pipe(Effect.orElseSucceed(() => false)),
       leftMesh: (stateDir) => Effect.promise(() => penLeftMesh(stateDir)),
       watch: watchPenSnapshots,

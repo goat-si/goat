@@ -4,6 +4,7 @@ import * as NetService from "@goat/shared/Net";
 import * as SshAuth from "@goat/ssh/auth";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import { SshInvalidTargetError } from "@goat/ssh/errors";
+import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -170,5 +171,59 @@ describe("guardPenManaged", () => {
       });
       expect(guarded.attachedServerKind).toBeUndefined();
     }).pipe(Effect.provide(testServices)),
+  );
+  it.effect(
+    "the methods that reuse an existing server are admitted too, and stay absent when the manager has none",
+    () =>
+      Effect.gen(function* () {
+        const { guarded, state } = fixture();
+        expect(guarded.issueExistingMcpSession).toBeUndefined();
+        expect(guarded.existingEnvironment).toBeUndefined();
+        const reached: string[] = [];
+        const routes: PenManagedRoutesShape = {
+          isManaged: () => true,
+          binding: () => undefined,
+          admit: () =>
+            state.admitted
+              ? Effect.succeed({ selfNodeId: "local" })
+              : Effect.fail(new SshInvalidTargetError({ message: "refused" })),
+          hold: () => Effect.void,
+          release: () => Effect.void,
+          registerCleanup: () => Effect.void,
+        };
+        const withExisting = guardPenManaged(
+          {
+            ...guarded,
+            issueExistingMcpSession: () =>
+              Effect.sync(() => {
+                reached.push("issue");
+                return { token: "test", expiresAt: null, runtimeModeCeilingApplied: true };
+              }),
+            existingEnvironmentOther: () =>
+              Effect.sync(() => {
+                reached.push("other");
+                return { kind: "absent" as const };
+              }),
+          },
+          routes,
+        );
+        state.admitted = false;
+        const environmentId = EnvironmentId.make("env-member");
+        const refused = yield* Effect.flip(
+          withExisting.issueExistingMcpSession?.(target, environmentId, {
+            label: "mcp",
+            ttl: "1h",
+            runtimeModeCeiling: null,
+          }) ?? Effect.die("guard dropped the method"),
+        );
+        expect(refused._tag).toBe("SshInvalidTargetError");
+        expect(
+          yield* (
+            withExisting.existingEnvironmentOther?.(target, null) ??
+              Effect.die("guard dropped the method")
+          ),
+        ).toEqual({ kind: "unavailable" });
+        expect(reached).toEqual([]);
+      }).pipe(Effect.provide(testServices)),
   );
 });

@@ -34,6 +34,8 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
     // The fence first: a failed or slow cleanup never leaves a departed member admitted.
     yield* sessions.setPenMembersAdmitted(view.kind === "ready" ? members : "closed");
     yield* revokeUnless(members).pipe(
+      // A list that could not be read arrives as a defect; it is retried like any failure.
+      Effect.sandbox,
       Effect.retry(RETRY),
       Effect.catchCause((cause) => Effect.logWarning("pen.memberSessions.cleanup.failed", cause)),
     );

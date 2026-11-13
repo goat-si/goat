@@ -75,3 +75,26 @@ export function penGuidance(
         : null;
   }
 }
+
+/**
+ * A listed machine as its connection stands now. The member list changes rarely, so a row GOAT
+ * already connects to reads its live connection, not what was true when the list last changed.
+ */
+export function penLiveStatus(
+  member: PenMemberStatus,
+  connection:
+    | {
+        readonly phase: string;
+        readonly unreachable?: boolean;
+        readonly failure?: { readonly kind: "blocked" | "retrying"; readonly detail: string };
+      }
+    | undefined,
+): PenMemberStatus {
+  if (connection === undefined || (member.state !== "connected" && member.state !== "connecting"))
+    return member;
+  if (connection.phase === "connected") return { ...member, state: "connected" };
+  if (connection.unreachable === true) return { ...member, state: "offline" };
+  return connection.failure?.kind === "blocked"
+    ? { ...member, state: "failed", detail: connection.failure.detail }
+    : { ...member, state: "connecting" };
+}
