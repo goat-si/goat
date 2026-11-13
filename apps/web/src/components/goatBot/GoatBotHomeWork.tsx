@@ -10,6 +10,7 @@ import type {
   BotRemoteWork,
   BotThreadRow,
   ChannelTaskId,
+  ChannelTaskView,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
@@ -32,7 +33,6 @@ import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
-import { updateHistoryView } from "./botWorkHistoryStore";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 
@@ -74,6 +74,7 @@ export function GoatBotHomeWork({
   historyIncomplete = false,
   launchesTruncated,
   onLoadHistory,
+  onHistoryView,
 }: {
   readonly environmentId: EnvironmentId;
   /** Kept for the history walk, which will read this bot's older work for these rows. */
@@ -108,6 +109,7 @@ export function GoatBotHomeWork({
   readonly historyIncomplete?: boolean;
   readonly launchesTruncated?: ReadonlySet<ChannelTaskId>;
   readonly onLoadHistory?: () => void;
+  readonly onHistoryView?: (taskId: ChannelTaskId, view: ChannelTaskView) => void;
 }) {
   const work = botHomeWork(rows, [], environmentId, remoteWork);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
@@ -141,6 +143,7 @@ export function GoatBotHomeWork({
       environmentId={environmentId}
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
+      onHistoryView={onHistoryView}
       peekable={peekable}
       focusRef={(element) => {
         if (element) rowRefs.current.set(task.row.task.taskId, element);
@@ -240,6 +243,7 @@ function WorkRow({
   peekable,
   focusRef,
   launchesTruncated,
+  onHistoryView,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -251,6 +255,7 @@ function WorkRow({
   readonly peekable: boolean;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   readonly launchesTruncated: boolean;
+  readonly onHistoryView?: ((taskId: ChannelTaskId, view: ChannelTaskView) => void) | undefined;
 }) {
   const row = task.row;
   const title = row.task.title;
@@ -294,7 +299,7 @@ function WorkRow({
             : { taskId: row.task.taskId };
     const result = await update({ environmentId, input });
     if (result._tag === "Success") {
-      updateHistoryView(environmentId, row.task.taskId, result.value);
+      onHistoryView?.(row.task.taskId, result.value);
       onRefresh();
     }
   }

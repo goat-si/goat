@@ -228,7 +228,7 @@ export function GoatBotWorkPanel({
           environmentId={environmentId}
           unreadThrough={peeked?.unread === true ? peeked.lastActivityAt : null}
           onAcknowledged={() => {
-            if (peeked?.unread) history.acknowledge(peek.taskId, peeked.lastActivityAt);
+            if (peeked?.unread) history.markRead(peek.taskId, peeked.lastActivityAt);
             refresh();
           }}
           onRetry={onRetryInput}
@@ -347,6 +347,7 @@ export function GoatBotWorkPanel({
                 historyIncomplete={history.incomplete}
                 launchesTruncated={history.launchesTruncated}
                 onLoadHistory={history.loadMore}
+                onHistoryView={history.applyView}
                 peekable={peekRows !== undefined}
                 showAll={showAllWork}
                 onShowAllChange={setShowAllWork}

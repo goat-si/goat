@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   botThreadKey,
   botThreadsHistoryInput,
@@ -7,53 +7,145 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type {
   BotId,
+  BotRemoteWork,
+  BotThreadRow,
   ChannelListBotThreadsResult,
   ChannelTaskId,
+  ChannelTaskView,
   EnvironmentId,
   ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
-import {
-  acknowledgeHistoryRow,
-  beginHistoryRead,
-  failHistoryRead,
-  finishHistoryRead,
-  historyResult,
-  syncHistoryCurrent,
-  useHistoryScope,
-} from "./botWorkHistoryStore";
+
+type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
+type Entry = {
+  task: TaskRow;
+  rows: readonly BotThreadRow[];
+  remoteWork: readonly BotRemoteWork[];
+  truncated: boolean;
+};
+type Walk = {
+  key: string;
+  entries: readonly Entry[];
+  cursor: string | undefined;
+  started: boolean;
+  partial: boolean;
+  endedEarly: boolean;
+  capped: boolean;
+  unsupported: boolean;
+  loading: boolean;
+  failed: boolean;
+};
+const emptyWalk = (key: string): Walk => ({
+  key,
+  entries: [],
+  cursor: undefined,
+  started: false,
+  partial: false,
+  endedEarly: false,
+  capped: false,
+  unsupported: false,
+  loading: false,
+  failed: false,
+});
 
 export function useBotWorkHistory(
   environmentId: EnvironmentId,
   botId: BotId | null,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   current: ChannelListBotThreadsResult,
-  revision: number,
+  _revision: number,
   loaded: boolean,
 ) {
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
-  const scope = useHistoryScope(environmentId, botId);
-  // oxlint-disable-next-line goat/react-effect-budget -- Reconcile the live list into the shared history walk.
-  useEffect(() => {
-    if (loaded) syncHistoryCurrent(environmentId, botId, revision, current.rows);
-  }, [environmentId, botId, revision, current.rows, loaded]);
+  const key = JSON.stringify([environmentId, botId]);
+  const [stored, setStored] = useState(() => emptyWalk(key));
+  const identity = useRef<{ key: string } | null>(null);
+  const walk = stored.key === key ? stored : emptyWalk(key);
+  if (stored.key !== key) setStored(walk);
+  const active = useRef<object | null>(null);
+  // oxlint-disable-next-line goat/react-effect-budget -- Invalidate pending pages when the key changes or the panel unmounts.
+  useLayoutEffect(() => {
+    const token = { key };
+    identity.current = token;
+    return () => {
+      identity.current = null;
+    };
+  }, [key]);
   const historySupported =
-    botThreadsHistoryInput(capabilities, botId) !== null && !scope?.unsupported;
-  const merged = mergeBotThreadHistory(
-    current,
-    scope && historySupported ? [historyResult(scope)] : [],
-  );
+    botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
+  const history: ChannelListBotThreadsResult = {
+    rows: walk.entries.flatMap((entry) => entry.rows),
+    remoteWork: walk.entries.flatMap((entry) => entry.remoteWork),
+    mainMessageCount: 0,
+    history: {
+      launchesTruncated: walk.entries
+        .filter((entry) => entry.truncated)
+        .map((entry) => entry.task.task.taskId),
+    },
+  };
+  const merged = mergeBotThreadHistory(current, historySupported ? [history] : []);
   const hasMore =
-    loaded && historySupported && !scope?.capped && (!scope?.started || scope.cursor !== undefined);
-
+    loaded && historySupported && !walk.capped && (!walk.started || walk.cursor !== undefined);
+  function applyView(taskId: ChannelTaskId, view: ChannelTaskView) {
+    setStored((state) => {
+      if (state.key !== key) return state;
+      return {
+        ...state,
+        entries: state.entries.map((entry) => {
+          if (entry.task.task.taskId !== taskId) return entry;
+          const through = view.readThrough === null ? NaN : Date.parse(view.readThrough);
+          const last = Date.parse(entry.task.lastActivityAt);
+          const task = {
+            ...entry.task,
+            view,
+            unread:
+              entry.task.unread &&
+              !(Number.isFinite(through) && Number.isFinite(last) && last <= through),
+          };
+          return {
+            ...entry,
+            task,
+            rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
+          };
+        }),
+      };
+    });
+  }
+  function markRead(taskId: ChannelTaskId, through: string) {
+    setStored((state) => {
+      if (state.key !== key) return state;
+      return {
+        ...state,
+        entries: state.entries.map((entry) => {
+          if (entry.task.task.taskId !== taskId) return entry;
+          const old = entry.task.view.readThrough;
+          const readThrough = old !== null && Date.parse(old) > Date.parse(through) ? old : through;
+          const task = {
+            ...entry.task,
+            view: { ...entry.task.view, readThrough },
+            unread:
+              entry.task.unread &&
+              !(Date.parse(entry.task.lastActivityAt) <= Date.parse(readThrough)),
+          };
+          return {
+            ...entry,
+            task,
+            rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
+          };
+        }),
+      };
+    });
+  }
   async function loadMore() {
-    if (!hasMore) return;
-    const token = beginHistoryRead(environmentId, botId);
-    if (!token) return;
+    const token = identity.current;
+    if (!hasMore || token === null || token.key !== key || active.current === token) return;
+    active.current = token;
+    setStored((state) => (state.key === key ? { ...state, loading: true, failed: false } : state));
     try {
       const result = await readBotThreadHistory({
-        from: scope?.cursor,
+        from: walk.cursor,
         listed: new Set((merged.supported ? merged.rows : current.rows).map(botThreadKey)),
         wanted: 5,
         read: async (cursor) => {
@@ -64,30 +156,70 @@ export function useBotWorkHistory(
           return answer.value;
         },
       });
-      finishHistoryRead(
-        environmentId,
-        botId,
-        token,
-        result.pages.map((page) => page.result),
-        result.supported,
-      );
+      if (identity.current !== token) return;
+      setStored((state) => {
+        if (state.key !== key) return state;
+        if (!result.supported) return { ...state, unsupported: true, loading: false };
+        const entries = [...state.entries];
+        const ids = new Set(entries.map((entry) => entry.task.task.taskId));
+        let { partial, endedEarly, cursor, capped } = state;
+        for (const { result: page } of result.pages) {
+          for (const row of page.rows) {
+            if (row.kind !== "task" || ids.has(row.task.taskId)) continue;
+            if (entries.length >= 500) {
+              capped = true;
+              continue;
+            }
+            const id = row.task.taskId;
+            ids.add(id);
+            entries.push({
+              task: row,
+              rows: [
+                row,
+                ...page.rows.filter((item) => item.kind === "coding" && item.taskId === id),
+              ],
+              remoteWork: (page.remoteWork ?? []).filter((item) => item.taskId === id),
+              truncated: page.history?.launchesTruncated?.includes(id) === true,
+            });
+          }
+          partial ||= page.history?.partial === true;
+          endedEarly ||= page.history?.endedEarly === true;
+          cursor = page.history?.nextCursor;
+        }
+        if (entries.length >= 500) capped = true;
+        return {
+          ...state,
+          entries,
+          partial,
+          endedEarly,
+          cursor,
+          capped,
+          started: true,
+          loading: false,
+        };
+      });
     } catch {
-      failHistoryRead(environmentId, botId, token);
+      if (identity.current === token)
+        setStored((state) =>
+          state.key === key ? { ...state, loading: false, failed: true } : state,
+        );
+    } finally {
+      if (active.current === token) active.current = null;
     }
   }
   return {
     historySupported,
-    acknowledge: (taskId: ChannelTaskId, through: string) =>
-      acknowledgeHistoryRow(environmentId, taskId, through),
+    applyView,
+    markRead,
     rows: merged.supported && historySupported ? merged.rows : current.rows,
     remoteWork:
       merged.supported && historySupported ? merged.remoteWork : (current.remoteWork ?? []),
     launchesTruncated:
       merged.supported && historySupported ? merged.launchesTruncated : new Set<ChannelTaskId>(),
-    incomplete: historySupported && !!scope && (scope.partial || scope.endedEarly || scope.capped),
+    incomplete: historySupported && (walk.partial || walk.endedEarly || walk.capped),
     hasMore,
-    loading: scope?.loading ?? false,
-    failed: scope?.failed ?? false,
+    loading: walk.loading,
+    failed: walk.failed,
     loadMore,
   };
 }

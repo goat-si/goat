@@ -13,8 +13,6 @@ const mock = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: { listBotThreadsPage: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => mock.read }));
 import { useBotWorkHistory } from "./useBotWorkHistory";
-import { resetHistoryTasksForTests, updateHistoryView } from "./botWorkHistoryStore";
-import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
 
 const env = EnvironmentId.make("round3");
 const taskId = ChannelTaskId.make("old");
@@ -46,11 +44,20 @@ function History({
     <>
       {history.hasMore && <button onClick={history.loadMore}>Read history</button>}
       <button
-        onClick={() =>
-          updateHistoryView(env, taskId, { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" })
-        }
+        onClick={() => history.applyView(taskId, { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" })}
       >
         Pin old
+      </button>
+      <button
+        onClick={() =>
+          history.applyView(ChannelTaskId.make("item-0"), {
+            ...old.view,
+            taskId: ChannelTaskId.make("item-0"),
+            pinnedAt: "2026-11-13T01:00:00Z",
+          })
+        }
+      >
+        Pin first
       </button>
       {history.incomplete && <p>Older work may be missing</p>}
       {history.rows
@@ -110,49 +117,8 @@ it("drops a pending page for the previous bot", async () => {
   await expect.element(screen.getByText("Old task Unpinned")).not.toBeInTheDocument();
 });
 function setup() {
-  resetHistoryTasksForTests();
   mock.read.mockReset();
 }
-
-it("keeps the current task view when it leaves the current list", async () => {
-  setup();
-  mock.read.mockResolvedValueOnce(page([old], {}));
-  await using screen = await render(<History list={current([])} />);
-  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
-  const latest = { ...old, view: { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" } };
-  await screen.rerender(<History list={current([latest])} revision={1} />);
-  await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
-  await screen.rerender(<History list={current([])} revision={2} />);
-  await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
-});
-
-it("removing an environment clears a mounted history and discards a pending answer", async () => {
-  setup();
-  let finish: (value: ReturnType<typeof page>) => void = () => {};
-  const firstPage = [
-    old,
-    ...Array.from({ length: 4 }, (_, index) => ({
-      ...old,
-      task: { ...old.task, taskId: ChannelTaskId.make(`extra-${index}`), title: `Extra ${index}` },
-      view: { ...old.view, taskId: ChannelTaskId.make(`extra-${index}`) },
-    })),
-  ];
-  mock.read.mockResolvedValueOnce(page(firstPage, { nextCursor: "next" }));
-  mock.read.mockReturnValueOnce(
-    new Promise((resolve) => {
-      finish = resolve;
-    }),
-  );
-  await using screen = await render(<History list={current([])} />);
-  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await act(() => disposeGoatBotEnvironment(env));
-  await expect.element(screen.getByText("Old task Unpinned")).not.toBeInTheDocument();
-  await act(() => finish(page([old], {})));
-  await expect.element(screen.getByText("Old task Unpinned")).not.toBeInTheDocument();
-});
 
 it("keeps Pin when a page started earlier arrives late", async () => {
   setup();
@@ -206,14 +172,7 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
   mock.read.mockResolvedValueOnce(page(last, { nextCursor: "still-more" }));
   await using screen = await render(<History list={current([])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  const firstId = ChannelTaskId.make("item-0");
-  await act(() =>
-    updateHistoryView(env, firstId, {
-      ...old.view,
-      taskId: firstId,
-      pinnedAt: "2026-11-13T01:00:00Z",
-    }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Pin first" }));
   for (let batch = 1; batch < 11; batch++)
     await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
@@ -231,9 +190,7 @@ it("does not let an unchanged current list undo a newer view update", async () =
   mock.read.mockResolvedValueOnce(page([old], {}));
   await using screen = await render(<History list={current([old])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await act(() =>
-    updateHistoryView(env, taskId, { ...old.view, pinnedAt: "2026-11-13T01:00:00Z" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Pin old" }));
   await screen.rerender(<History list={current([])} revision={1} />);
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
 });

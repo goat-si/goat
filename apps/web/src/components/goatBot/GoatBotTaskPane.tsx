@@ -27,7 +27,6 @@ import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
-import { acknowledgeHistoryRow, updateHistoryView, useHistoryWork } from "./botWorkHistoryStore";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -58,11 +57,9 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const botName = useGoatBotName();
   const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
-  const history = useHistoryWork(environmentId, taskId);
-  const historyTask = history?.task;
   // A direct link after reload has no cached history; its carried title remains available.
   const currentTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
-  const task = currentTask ?? historyTask;
+  const task = currentTask;
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
@@ -71,7 +68,6 @@ export function GoatBotTaskPane({
     taskId,
     readThrough,
     onAcknowledged: () => {
-      if (readThrough !== null) acknowledgeHistoryRow(environmentId, taskId, readThrough);
       refresh();
     },
   });
@@ -152,7 +148,6 @@ export function GoatBotTaskPane({
                   input: { taskId, pinned: task.view.pinnedAt === null },
                 }).then((result) => {
                   if (result._tag === "Success") {
-                    updateHistoryView(environmentId, taskId, result.value);
                     refresh();
                   }
                 })
@@ -170,7 +165,6 @@ export function GoatBotTaskPane({
                   input: { taskId, done: task.view.doneAt === null },
                 }).then((result) => {
                   if (result._tag === "Success") {
-                    updateHistoryView(environmentId, taskId, result.value);
                     refresh();
                   }
                 })
@@ -186,18 +180,16 @@ export function GoatBotTaskPane({
           Status and actions for older work are in {botName}'s Home.
         </p>
       )}
-      <div className="px-3">
-        <GoatBotWorkDetails
-          environmentId={environmentId}
-          taskId={taskId}
-          rows={history && currentTask === undefined ? [...rows, ...history.rows] : rows}
-          remoteWork={
-            history && currentTask === undefined
-              ? [...remoteWork, ...history.remoteWork]
-              : remoteWork
-          }
-        />
-      </div>
+      {task !== undefined && (
+        <div className="px-3">
+          <GoatBotWorkDetails
+            environmentId={environmentId}
+            taskId={taskId}
+            rows={rows}
+            remoteWork={remoteWork}
+          />
+        </div>
+      )}
       <GoatBotStepsProvider
         visibleTurnItems={session.visibleTurnItems}
         environmentId={environmentId}

@@ -1,4 +1,3 @@
-import { rememberHistoryRows } from "./botWorkHistoryStore.test-support";
 import {
   BotProfile,
   BotThreadRow,
@@ -7,7 +6,7 @@ import {
   EnvironmentId,
 } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -134,8 +133,6 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
-import { GoatBotHomeWork } from "./GoatBotHomeWork";
-import { resetHistoryTasksForTests, useHistoryWork } from "./botWorkHistoryStore";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -157,7 +154,6 @@ function setup() {
   state.noRows = false;
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
-  resetHistoryTasksForTests();
   resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
@@ -352,21 +348,6 @@ it("uses the title carried from a history row when the current list no longer co
 it("explains where to find actions for older work absent from the current list", async () => {
   setup();
   state.noRows = true;
-  rememberHistoryRows(EnvironmentId.make("env"), [
-    decodeBotThreadRow({
-      kind: "task",
-      task: {
-        taskId: "task-1",
-        title: "Older task",
-        status: "completed",
-        updatedAt: "2026-11-04T10:00:00.000Z",
-      },
-      view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
-      lastActivityAt: "2026-11-04T10:00:00.000Z",
-      unread: false,
-      mainMessagesSinceQuiet: 0,
-    }),
-  ]);
   const session = useGoatBotSession();
   const close = vi.fn();
   await using screen = await render(
@@ -389,162 +370,4 @@ it("explains where to find actions for older work absent from the current list",
   await expect.element(screen.getByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
   expect(close).toHaveBeenCalledOnce();
-});
-
-it("opens history-only work with its status and actions and acknowledges unread activity", async () => {
-  setup();
-  state.noRows = true;
-  rememberHistoryRows(EnvironmentId.make("env"), [
-    decodeBotThreadRow({
-      kind: "task",
-      task: {
-        taskId: "task-1",
-        title: "Earlier task",
-        status: "waiting_input",
-        updatedAt: "2026-11-04T10:00:00.000Z",
-      },
-      view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
-      lastActivityAt: "2026-11-04T10:00:00.000Z",
-      unread: true,
-      mainMessagesSinceQuiet: 0,
-    }),
-  ]);
-  await using screen = await render(<Pane onClose={() => {}} />);
-  await expect.element(screen.getByText("Needs your input")).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: "Pin" })).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: "Mark done" })).toBeVisible();
-  expect(state.update).toHaveBeenCalledWith({
-    environmentId: "env",
-    input: { taskId: "task-1", readThrough: "2026-11-04T10:00:00.000Z" },
-  });
-  state.update.mockResolvedValueOnce({
-    _tag: "Success",
-    value: {
-      taskId: "task-1",
-      pinnedAt: "2026-11-04T11:00:00.000Z",
-      doneAt: null,
-      readThrough: "2026-11-04T10:00:00.000Z",
-    },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
-  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
-});
-
-it("opens a task behind Show more with pinned actions after more history loads", async () => {
-  setup();
-  state.noRows = true;
-  const env = EnvironmentId.make("env");
-  const taskId = ChannelTaskId.make("task-1");
-  const row = decodeBotThreadRow({
-    kind: "task",
-    task: {
-      taskId,
-      title: "Earlier task",
-      status: "completed",
-      updatedAt: "2026-11-04T10:00:00.000Z",
-    },
-    view: { taskId, pinnedAt: "2026-11-04T11:00:00.000Z", doneAt: null, readThrough: null },
-    lastActivityAt: "2026-11-04T10:00:00.000Z",
-    unread: false,
-    mainMessagesSinceQuiet: 0,
-  });
-  if (row.kind !== "task") throw new Error("Expected a task row");
-  rememberHistoryRows(env, [row]);
-  const others = Array.from({ length: 500 }, (_, index) =>
-    decodeBotThreadRow({
-      ...row,
-      task: { ...row.task, taskId: `pressure-${index}`, title: `Other ${index}` },
-      view: { ...row.view, taskId: `pressure-${index}`, pinnedAt: null },
-    }),
-  );
-  rememberHistoryRows(env, others);
-  function HomeAndPane() {
-    const [open, setOpen] = useState(false);
-    const [expanded, setExpanded] = useState(false);
-    const history = useHistoryWork(env, taskId);
-    return open ? (
-      <Pane onClose={() => setOpen(false)} />
-    ) : (
-      <GoatBotHomeWork
-        environmentId={env}
-        botName="GOAT Bot"
-        rows={[...others.slice(0, 5), ...(history ? [history.task] : [])]}
-        loaded
-        failed={false}
-        onRetry={() => {}}
-        onOpenTask={() => setOpen(true)}
-        showAll={expanded}
-        onShowAllChange={setExpanded}
-      />
-    );
-  }
-  await using screen = await render(<HomeAndPane />);
-  await expect
-    .element(screen.getByRole("button", { name: /^Earlier task/ }))
-    .not.toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
-  await userEvent.click(screen.getByRole("button", { name: /^Earlier task/ }));
-  await expect.element(screen.getByText("Done")).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
-});
-
-it("keeps a history task pinned and read from Home through the pane", async () => {
-  setup();
-  state.noRows = true;
-  const environmentId = EnvironmentId.make("env");
-  const taskId = ChannelTaskId.make("task-1");
-  const at = "2026-11-04T10:00:00.000Z";
-  const pinnedAt = "2026-11-04T11:00:00.000Z";
-  const row = decodeBotThreadRow({
-    kind: "task",
-    task: { taskId, title: "Earlier task", status: "waiting_input", updatedAt: at },
-    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
-    lastActivityAt: at,
-    unread: true,
-    mainMessagesSinceQuiet: 0,
-  });
-  rememberHistoryRows(environmentId, [row]);
-  function HomeAndPane() {
-    const [open, setOpen] = useState(false);
-    const history = useHistoryWork(environmentId, taskId);
-    return open ? (
-      <Pane onClose={() => setOpen(false)} />
-    ) : (
-      <GoatBotHomeWork
-        environmentId={environmentId}
-        botName="GOAT Bot"
-        rows={history ? [history.task] : []}
-        loaded
-        failed={false}
-        onRetry={() => {}}
-        onOpenTask={() => setOpen(true)}
-        showAll={false}
-        onShowAllChange={() => {}}
-      />
-    );
-  }
-  await using screen = await render(<HomeAndPane />);
-  state.showMenu.mockResolvedValueOnce("pin");
-  state.update.mockResolvedValueOnce({
-    _tag: "Success",
-    value: { taskId, pinnedAt, doneAt: null, readThrough: null },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Actions for Earlier task" }));
-  state.update.mockResolvedValueOnce({ _tag: "Failure" });
-  await userEvent.click(screen.getByRole("button", { name: /^Earlier task.*Unread/ }));
-  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
-  await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
-  state.showMenu.mockResolvedValueOnce("read");
-  state.update.mockResolvedValueOnce({
-    _tag: "Success",
-    value: { taskId, pinnedAt, doneAt: null, readThrough: at },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Actions for Earlier task" }));
-  await expect
-    .element(screen.getByRole("button", { name: /^Earlier task.*Unread/ }))
-    .not.toBeInTheDocument();
-  const calls = state.update.mock.calls.length;
-  await userEvent.click(screen.getByRole("button", { name: /^Earlier task/ }));
-  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
-  expect(state.update).toHaveBeenCalledTimes(calls);
 });

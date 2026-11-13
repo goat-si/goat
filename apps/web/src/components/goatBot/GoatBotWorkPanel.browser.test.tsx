@@ -119,13 +119,11 @@ vi.mock("~/state/channels", () => ({
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
-import { resetHistoryTasksForTests } from "./botWorkHistoryStore";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   resetTaskReadAcknowledgementsForTests();
-  resetHistoryTasksForTests();
   mocks.canEdit = false;
   mocks.historySupported = false;
   mocks.revision = 0;
@@ -923,27 +921,6 @@ it("keeps a paged-in peek open when the current list is refreshed", async () => 
   expect(screen.container.textContent).toContain("Go to thread");
   await userEvent.click(screen.getByRole("button", { name: "Back to Home from Older task" }));
   await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
-});
-
-it("retains older work when an earlier page of a refreshed walk was partial", async () => {
-  setup([], [], [runningTask]);
-  mocks.historySupported = true;
-  const older = {
-    ...runningTask,
-    task: { ...runningTask.task, taskId: "older", title: "Older task" },
-  };
-  mocks.readHistory
-    .mockResolvedValueOnce(historyPage([older], {}))
-    .mockResolvedValueOnce(historyPage([], { partial: true, nextCursor: "next" }))
-    .mockResolvedValueOnce(historyPage([], {}));
-  await using screen = await render(historyPanel());
-  await userEvent.click(showMore(screen));
-  await expect.element(screen.getByText("Older task")).toBeVisible();
-  mocks.revision += 1;
-  await screen.rerender(historyPanel());
-  await userEvent.click(showMore(screen));
-  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
-  expect(screen.getByText("Older task").element()).toBeVisible();
 });
 
 it("clears a paged task's unread mark after acknowledging its peek", async () => {

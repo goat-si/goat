@@ -1,4 +1,3 @@
-import { rememberHistoryRows } from "./botWorkHistoryStore.test-support";
 import { EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -43,8 +42,6 @@ vi.mock("~/state/query", () => ({
 }));
 
 import { GoatBotHomeWork } from "./GoatBotHomeWork";
-import { resetHistoryTasksForTests, useHistoryWork } from "./botWorkHistoryStore";
-import { ChannelTaskId } from "@goat/contracts";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -296,15 +293,20 @@ it("offers history continuation and explains incomplete older work and truncated
 });
 
 it("updates a history-only row when its Home menu pins and marks it read", async () => {
-  resetHistoryTasksForTests();
   const [row] = setup([
     taskRow("old", "Older task", "running", "2026-11-09T01:00:00.000Z", { unread: true }),
   ]);
   if (!row) throw new Error("missing fixture");
-  rememberHistoryRows(environmentId, [row]);
   function Home() {
-    const cached = useHistoryWork(environmentId, ChannelTaskId.make("old"));
-    return view(cached ? [cached.task] : []);
+    const [task, setTask] = useState(row!);
+    return view([task], {
+      onHistoryView: (_id: unknown, next: Row["view"]) =>
+        setTask((prev) => ({
+          ...prev,
+          view: next,
+          unread: next.readThrough === null ? prev.unread : false,
+        })),
+    });
   }
   await using screen = await render(<Home />);
   actions.show.mockResolvedValueOnce("pin");
