@@ -12,6 +12,8 @@ export type HomeCurrentOpenableLink = {
   readonly taskId: ChannelTaskId;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly kind: "worker" | "coding" | "remote";
+  readonly launchedFrom?: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
   readonly remoteChildWorkId?: string;
 };
 export type HomeCurrentOpenableWork = {
@@ -38,12 +40,23 @@ export function selectHomeCurrentOpenableWork(input: {
   for (const task of tasks) {
     const taskId = task.row.task.taskId;
     for (const thread of task.threads) {
-      if (isOpenable(thread.environmentId)) links.push({ taskId, ...thread });
+      const worker = task.row.worker;
+      const kind =
+        worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId
+          ? "worker"
+          : "coding";
+      if (isOpenable(thread.environmentId)) links.push({ taskId, ...thread, kind });
     }
     for (const item of task.remote) {
       const target = resolveRemoteBotWork(item, isOpenable);
       if (target.kind === "open")
-        links.push({ taskId, ...target.ref, remoteChildWorkId: item.childWorkId });
+        links.push({
+          taskId,
+          ...target.ref,
+          kind: "remote",
+          remoteChildWorkId: item.childWorkId,
+          launchedFrom: { environmentId: sourceEnvironmentId, threadId: item.callerThreadId },
+        });
     }
   }
   return { eligible, list, work, links };

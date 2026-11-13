@@ -156,14 +156,7 @@ export function createChannelEnvironmentAtoms<R, E>(
             ? "failed"
             : "pending",
         current: AsyncResult.isSuccess(result) ? result.value : null,
-        isOpenable: (destination) => {
-          const state = Option.getOrNull(AsyncResult.value(get(connections(destination))));
-          return (
-            state?.[0].phase === "connected" &&
-            Option.isSome(state[1]) &&
-            get(remoteWorkOpenable(destination))
-          );
-        },
+        isOpenable: (destination) => get(remoteWorkOpenable(destination)),
       });
     });
   });

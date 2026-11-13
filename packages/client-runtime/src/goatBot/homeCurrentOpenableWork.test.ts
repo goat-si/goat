@@ -56,6 +56,8 @@ describe("current Home links", () => {
   it("contains only links under current task rows, scoped by destination", () => {
     const value = selectHomeCurrentOpenableWork(input);
     expect(value.work.running.map((entry) => entry.row.task.taskId)).toEqual(["a"]);
+    expect(value.links.map((link) => link.kind)).toEqual(["worker", "coding", "remote"]);
+    expect(value.links[2]?.launchedFrom).toEqual({ environmentId: source, threadId: "caller" });
     expect(value.links.map((link) => [link.environmentId, link.threadId])).toEqual([
       ["source", "worker"],
       ["source", "coding"],
