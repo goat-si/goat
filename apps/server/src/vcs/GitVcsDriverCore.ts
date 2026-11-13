@@ -98,6 +98,7 @@ import {
 } from "./gitRemoteParsing.ts";
 import { filterBranchesForListQuery, paginateBranches } from "./gitBranchListQuery.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
+import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
@@ -4368,6 +4369,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (progress?.onWorktreeClaimed) {
         yield* progress.onWorktreeClaimed(worktreePath);
       }
+      yield* refreshNewWorktreeIndex(worktreePath, executeGit, fileSystem, path).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("worktree index refresh failed", { worktreePath, cause }),
+        ),
+      );
     }
 
     // worktree add leaves submodules empty, potentially omitting project skills, tools or source.
