@@ -8,6 +8,8 @@ export function mobileBotWorkDetails(props: {
   entry: BotWorkTask;
   /** The bot list's rows, which carry each coding thread's title. */
   rows: ReadonlyArray<BotThreadRow>;
+  /** Offline, the work stays listed but nothing opens, as with the task rows. */
+  openable: boolean;
   supported: boolean;
   error: string | null;
   pending: boolean;
@@ -15,6 +17,7 @@ export function mobileBotWorkDetails(props: {
   openThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
 }): MobileBotHomeItem[] {
   const { entry, openThread } = props;
+  const closed = !props.openable;
   const id = entry.row.task.taskId;
   const items: MobileBotHomeItem[] = [
     ...entry.threads.map((thread) => ({
@@ -33,6 +36,8 @@ export function mobileBotWorkDetails(props: {
             accessibilityLabel={
               title === null ? "Work thread: " + entry.row.task.title : "GOAT thread: " + title
             }
+            accessibilityState={{ disabled: closed }}
+            disabled={closed}
             onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
             className="min-h-[44px] justify-center"
           >
@@ -45,7 +50,7 @@ export function mobileBotWorkDetails(props: {
     })),
     ...entry.remote.map((item) => ({
       key: JSON.stringify(["task-detail", id, "remote", item.childWorkId]),
-      render: () => <MobileBotRemoteWork item={item} onOpenThread={openThread} />,
+      render: () => <MobileBotRemoteWork item={item} onOpenThread={openThread} disabled={closed} />,
     })),
     ...entry.subagents.map((agent) => ({
       key: JSON.stringify(["task-detail", id, "subagent", agent.childWorkId]),
@@ -73,6 +78,11 @@ export function mobileBotWorkDetails(props: {
     items.push({
       key: JSON.stringify(["task-detail-status", id]),
       render: () => <Text className="text-foreground-muted">More work is available.</Text>,
+    });
+  else if (supported && props.hasData && items.length === 0)
+    items.push({
+      key: JSON.stringify(["task-detail-status", id]),
+      render: () => <Text className="text-foreground-muted">No other work.</Text>,
     });
   return items;
 }

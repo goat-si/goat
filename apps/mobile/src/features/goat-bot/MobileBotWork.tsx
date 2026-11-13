@@ -507,7 +507,7 @@ export function MobileBotWork(props: {
           <Pressable
             accessibilityRole="button"
             onPress={closeSheet}
-            className="min-h-[44px] justify-center"
+            className="min-h-[44px] justify-center py-2"
           >
             <Text className="text-foreground">
               {goatBotWaitingInChatText(botName)}. Open the chat
@@ -585,6 +585,7 @@ export function MobileBotWork(props: {
                 ? mobileBotWorkDetails({
                     entry,
                     rows,
+                    openable: enabled,
                     supported: enabled && capabilities?.goatBotChildWork === true,
                     error: expandedChildren.error,
                     pending: expandedChildren.isPending,

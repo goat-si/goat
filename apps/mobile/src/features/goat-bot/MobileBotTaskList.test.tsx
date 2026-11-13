@@ -17,9 +17,13 @@ vi.mock("react-native", () => ({
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
     onPress?: () => void;
     onLongPress?: () => void;
+    disabled?: boolean;
+    accessibilityState?: { disabled?: boolean };
   }) => (
     <button
       aria-label={props.accessibilityLabel}
+      disabled={props.disabled}
+      aria-disabled={props.accessibilityState?.disabled}
       data-actions={props.accessibilityActions?.map((action) => action.label).join(",")}
       onClick={props.onPress}
       onContextMenu={props.onLongPress}
@@ -63,8 +67,16 @@ vi.mock("./MobileBotPanelEmpty", () => ({
   MobileBotPanelEmpty: (props: { title: string }) => <p>{props.title}</p>,
 }));
 vi.mock("./GoatBotTaskRow", () => ({
-  GoatBotTaskRow: (props: { card: GoatBotTaskCard; onOpenTask?: () => void }) => (
-    <button aria-label={`card:${props.card.title}`} onClick={props.onOpenTask}>
+  GoatBotTaskRow: (props: {
+    card: GoatBotTaskCard;
+    onOpenTask?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button
+      aria-label={`card:${props.card.title}`}
+      disabled={props.disabled}
+      onClick={props.onOpenTask}
+    >
       {props.card.attentionLabel}
     </button>
   ),
@@ -259,4 +271,19 @@ it("does not list a task's work threads in the card", async () => {
   await show({ work: work([{ ...listedTask, threads }]), rows: [task] });
   expect(container.querySelector('[aria-label="Work thread: Review"]')).toBeNull();
   expect(container.querySelectorAll('[aria-label="Actions for Review"]')).toHaveLength(1);
+});
+
+it("offline, keeps other threads and earlier chat tasks listed but closed, as task rows are", async () => {
+  const calls = await show({ rows: [coding], chatTasks: [omitted], openable: false });
+  const thread = container.querySelector('[aria-label="GOAT thread: Fix the build"]');
+  const card = container.querySelector('[aria-label="card:Summarize the README"]');
+  expect(thread?.hasAttribute("disabled")).toBe(true);
+  expect(thread?.getAttribute("aria-disabled")).toBe("true");
+  expect(card?.hasAttribute("disabled")).toBe(true);
+  await act(async () => {
+    (thread as HTMLButtonElement).click();
+    (card as HTMLButtonElement).click();
+  });
+  expect(calls.thread).not.toHaveBeenCalled();
+  expect(calls.open).not.toHaveBeenCalled();
 });

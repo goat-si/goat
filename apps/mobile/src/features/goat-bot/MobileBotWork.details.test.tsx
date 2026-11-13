@@ -67,13 +67,14 @@ vi.mock("react-native", () => ({
       onPress?: () => void;
       accessibilityLabel?: string;
       disabled?: boolean;
-      accessibilityState?: { selected?: boolean };
+      accessibilityState?: { selected?: boolean; disabled?: boolean };
     },
   ) => (
     <button
       onClick={props.onPress}
       aria-label={props.accessibilityLabel}
       disabled={props.disabled}
+      aria-disabled={props.accessibilityState?.disabled}
       aria-pressed={props.accessibilityState?.selected}
     >
       {props.children}
@@ -443,6 +444,63 @@ it("loads expanded work from the shared child read and opens a child-only thread
   expect(home()?.textContent).toContain("More work is available.");
   await press("Open work thread");
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "child-thread" });
+});
+
+it("says an expanded task has no other work only after a complete read found none", async () => {
+  state.rows = [task("t1", "Fix the build")];
+  state.groups = [{ taskId: "t1", truncated: false, children: [] }];
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).toContain("No other work.");
+});
+
+it("does not call a task's work empty when this server cannot read sub-work", async () => {
+  state.childSupported = false;
+  state.rows = [task("t1", "Fix the build")];
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).not.toContain("No other work.");
+});
+
+it("offline, an expanded task's thread and remote links stay listed but do not open", async () => {
+  state.rows = [
+    task("t1", "Fix the build", "worker"),
+    decode({
+      kind: "coding",
+      taskId: "t1",
+      environmentId: "env",
+      threadId: "thread-a",
+      title: "Patch web",
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ];
+  state.remoteWork = [
+    {
+      childWorkId: "r1",
+      taskId: "t1",
+      callerThreadId: "bot",
+      host: "mini",
+      state: "running",
+      lastActivityAt: at,
+      environmentId: "remote",
+      threadId: "remote-thread",
+    },
+  ];
+  await open();
+  await toggleWork("Fix the build");
+  await press("GOAT thread: Patch web");
+  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "thread-a" });
+  state.openThread.mockClear();
+  state.connected = false;
+  await open();
+  for (const label of ["GOAT thread: Patch web", "Open work thread on mini"]) {
+    const link = button(label);
+    expect(link?.hasAttribute("disabled"), label).toBe(true);
+    expect(link?.getAttribute("aria-disabled"), label).toBe("true");
+    await act(async () => link?.click());
+  }
+  expect(state.openThread).not.toHaveBeenCalled();
 });
 
 it("names each coding thread of an expanded task, so two threads can be told apart", async () => {

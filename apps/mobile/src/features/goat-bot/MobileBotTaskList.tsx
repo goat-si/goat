@@ -220,6 +220,8 @@ export function mobileBotTaskListItems(props: {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={"GOAT thread: " + (row.title || "GOAT thread")}
+          accessibilityState={{ disabled: !openable }}
+          disabled={!openable}
           className="min-h-[44px] justify-center"
           onPress={() => props.onOpenThread({ environmentId: row.environmentId, id: row.threadId })}
         >
@@ -237,6 +239,7 @@ export function mobileBotTaskListItems(props: {
       render: () => (
         <GoatBotTaskRow
           card={card}
+          disabled={!openable}
           onSelectThread={(thread) =>
             props.onOpenThread({ environmentId: thread.environmentId, id: thread.id })
           }
