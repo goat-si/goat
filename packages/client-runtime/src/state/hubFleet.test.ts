@@ -344,6 +344,38 @@ describe("link traffic", () => {
     expect(facts.join(" ")).not.toMatch(/none through a relay|not via relay|direct/u);
   });
 
+  it("says when figures are lower bounds or averaged: WebSocket payloads, uncounted bodies, gaps without readings", () => {
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: home([
+          {
+            id: "lnk_a",
+            alias: "mini",
+            tunnelPort: 54958,
+            state: "connected",
+            route: { name: "mini", via: "direct" },
+            transport: "websocket",
+            traffic: {
+              hour: { ...window(100, 0, 600_000, 100), averagedMs: 0, uncountedRequests: 0 },
+              day: {
+                ...window(100, 0, 600_000, 100),
+                averagedMs: 6 * 3_600_000,
+                uncountedRequests: 3,
+              },
+              httpBodiesOnly: true,
+            },
+          },
+        ]),
+      },
+    ]);
+    const facts = hubDeviceFacts(hub!.devices[0]!);
+    expect(facts).toContain("HTTP bodies only: link WebSocket traffic not counted");
+    expect(facts).toContain("averaged over 6 h without readings");
+    expect(facts).toContain("↑ is at least: 3 requests had no length");
+  });
+
   it("lists each machine's own relay warning, also one whose last link went while another is the Home", () => {
     const base = inventory("none");
     const warning = { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 };

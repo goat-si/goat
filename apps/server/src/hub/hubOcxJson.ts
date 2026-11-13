@@ -46,6 +46,7 @@ export const LinkRowObservationFields = {
       generation: Count,
       toHomeBytes: Count,
       fromHomeBytes: Count,
+      toHomeUncounted: Schema.optional(Count),
     }),
   ),
   // Kept raw: either key marks a multi-route row even when its value does not decode.

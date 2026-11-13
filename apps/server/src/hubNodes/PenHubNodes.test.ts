@@ -18,6 +18,7 @@ import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import migration from "../persistence/Migrations/106_HubNodes.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
 import * as PenHubNodes from "./PenHubNodes.ts";
@@ -107,6 +108,14 @@ const fixture = Effect.gen(function* () {
       onAliasInvalidated: () => Effect.void,
     } as unknown as CloudMachineService.CloudMachineService["Service"]),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+    Effect.provideService(
+      DisposableMachineStore.DisposableMachineStore,
+      DisposableMachineStore.DisposableMachineStore.of({
+        records: Effect.succeed([]),
+        recordsOrKept: Effect.succeed([]),
+        commitForward: () => Effect.die("no disposable machine commits in Pen tests"),
+      }),
+    ),
     Effect.provideService(ServerEnvironment.ServerEnvironment, {
       getEnvironmentId: Effect.succeed(hub),
       getDescriptor: Effect.succeed(descriptor),

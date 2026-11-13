@@ -15,11 +15,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -544,6 +546,17 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		t.Fatal(err)
 	}
 	// A node that registers and then, like a v1.2 node, ignores the ops and ends the registration at the half-close.
+	// It learns of the half-close from the grace seam, which the child reaches once it half-closed, since a read on
+	// Windows may miss the half-close itself. Off Windows the child has no grace here, so only its read of the node's
+	// close ends it, with the closed-before-answering message. On Windows that read may miss the close too, so the
+	// grace ends once the node has closed, and either message counts the op.
+	nodeClosed := make(chan time.Time)
+	var grace <-chan time.Time
+	want := "before answering 1 forwarded op(s)"
+	if runtime.GOOS == "windows" {
+		grace, want = nodeClosed, "1 forwarded op(s)"
+	}
+	halfClosed := halfCloseSeam(t, grace)
 	ln, err := net.Listen("unix", daemon.SocketPath(st))
 	if err != nil {
 		t.Fatal(err)
@@ -554,11 +567,13 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 		if err != nil {
 			return
 		}
-		defer c.Close()
 		r := bufio.NewReader(c)
 		r.ReadBytes('\n')
 		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
-		io.Copy(io.Discard, r)
+		r.ReadBytes('\n')
+		<-halfClosed
+		c.Close()
+		close(nodeClosed)
 	}()
 	t.Setenv("PEN_HOME", dir)
 	key := make([]byte, 32)
@@ -566,8 +581,8 @@ func TestServiceRegisterFailsWhenTheNodeClosesBeforeAnsweringEveryForwardedOp(t 
 	Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
 	defer func() { Stdin = os.Stdin }()
 	var out, errOut bytes.Buffer
-	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), "before answering 1") {
-		t.Fatalf("exit %d, stderr %q; want 1 and the unanswered op named", rc, errOut.String())
+	if rc := RunService([]string{"register", "goat", "--port", "1"}, &out, &errOut); rc != 1 || !strings.Contains(errOut.String(), want) {
+		t.Fatalf("exit %d, stderr %q; want 1 and %q", rc, errOut.String(), want)
 	}
 }
 
@@ -602,5 +617,142 @@ func TestServiceRegisterExitsWhenItCannotForwardAnOpOrHalfClose(t *testing.T) {
 				t.Fatalf("forwardOps ended with %d (decided %v), stderr %q; want exit 2 and the reason", code, ok, errOut.String())
 			}
 		})
+	}
+}
+
+// halfCloseSeam replaces the child's end grace timer with grace and returns a channel that closes when the child
+// starts that timer, which it does right after it half-closed.
+func halfCloseSeam(t *testing.T, grace <-chan time.Time) <-chan struct{} {
+	t.Helper()
+	halfClosed := make(chan struct{})
+	was := afterEndGrace
+	afterEndGrace = func() <-chan time.Time {
+		close(halfClosed)
+		return grace
+	}
+	t.Cleanup(func() { afterEndGrace = was })
+	return halfClosed
+}
+
+// fakeNodeThatMissesTheEnd is a node that registers, reads one op, answers it when answer is true, and then keeps its
+// side open, as a node whose read missed the half-close does on Windows. It closes only when the test ends.
+func fakeNodeThatMissesTheEnd(t *testing.T, answer bool) {
+	t.Helper()
+	dir, err := os.MkdirTemp(tmpRoot(), "pen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	st, err := state.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", daemon.SocketPath(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release); ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		r.ReadBytes('\n')
+		c.Write([]byte(`{"t":"registered","id":"r","name":"goat","port":1}` + "\n"))
+		r.ReadBytes('\n')
+		if answer {
+			c.Write([]byte(`{"t":"clients","gen":1}` + "\n"))
+		}
+		<-release
+	}()
+	t.Setenv("PEN_HOME", dir)
+}
+
+// printSignal collects what is written and closes printed once a write contains want.
+type printSignal struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	want    string
+	once    sync.Once
+	printed chan struct{}
+}
+
+func (w *printSignal) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf.Write(p)
+	if strings.Contains(string(p), w.want) {
+		w.once.Do(func() { close(w.printed) })
+	}
+	return len(p), nil
+}
+
+// Regression (a hang on goat-test-pen-windows): a node that never closes after the half-close, as one whose read
+// missed it, leaves the child waiting only until the end of its grace; then it exits 1 counting the unanswered ops, or 0
+// when every op was answered.
+func TestServiceRegisterEndsAtTheGraceWhenTheNodeMissesItsHalfClose(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		answer bool
+		rc     int
+		stderr string
+	}{
+		{"op unanswered", false, 1, "did not answer 1 forwarded op(s)"},
+		{"op answered", true, 0, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fakeNodeThatMissesTheEnd(t, c.answer)
+			grace := make(chan time.Time)
+			halfClosed := halfCloseSeam(t, grace)
+			key := make([]byte, 32)
+			rand.Read(key)
+			Stdin = strings.NewReader(b64.EncodeToString(key) + "\n" + `{"op":"service.clients","gen":1,"clients":[]}` + "\n")
+			defer func() { Stdin = os.Stdin }()
+			out := &printSignal{want: `"t":"clients"`, printed: make(chan struct{})}
+			go func() {
+				<-halfClosed
+				if c.answer {
+					<-out.printed
+				}
+				close(grace)
+			}()
+			var errOut bytes.Buffer
+			rc := RunService([]string{"register", "goat", "--port", "1"}, out, &errOut)
+			if rc != c.rc || !strings.Contains(errOut.String(), c.stderr) {
+				t.Fatalf("exit %d, stderr %q; want %d and %q", rc, errOut.String(), c.rc, c.stderr)
+			}
+		})
+	}
+}
+
+// timeoutOnce returns its first part, then one read timeout, then the rest.
+type timeoutOnce struct{ parts []string }
+
+func (r *timeoutOnce) Read(p []byte) (int, error) {
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	part := r.parts[0]
+	r.parts = r.parts[1:]
+	if part == "" {
+		return 0, &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}
+	}
+	return copy(p, part), nil
+}
+
+// A read that reaches its recheck deadline in the middle of a node line is replaced by a fresh one that keeps the
+// part already read.
+func TestANodeLineSurvivesARecheckInItsMiddle(t *testing.T) {
+	r := bufio.NewReader(&timeoutOnce{parts: []string{`{"t":"cli`, "", `ents"}` + "\n"}})
+	rechecks := 0
+	line, err := readCappedLine(r, serviceAnswerCap, func(err error) bool {
+		rechecks++
+		return errors.Is(err, os.ErrDeadlineExceeded)
+	})
+	if err != nil || string(line) != `{"t":"clients"}`+"\n" || rechecks != 1 {
+		t.Fatalf("line %q, err %v after %d recheck(s); want the whole line after 1", line, err, rechecks)
 	}
 }

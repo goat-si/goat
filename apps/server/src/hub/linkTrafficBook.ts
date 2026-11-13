@@ -2,6 +2,7 @@
  * Two readings of OpenCodex's link counters subtract only under the same epoch and generation;
  * a delta spreads evenly over the time between them. Relay or direct bytes need the same route,
  * classified, at both readings. At most MAX_LINKS series of SLOTS five-minute slots are held.
+ * Only pairs at most MAX_PAIR_MS apart count as measured time; a longer gap is averaged.
  */
 export const SLOT_MS = 5 * 60_000;
 const HOUR_MS = 3_600_000;
@@ -9,7 +10,9 @@ const DAY_MS = 24 * HOUR_MS;
 // One slot more than a day, so the oldest partial slot of a 24-hour window is still held.
 const SLOTS = DAY_MS / SLOT_MS + 1;
 const MAX_LINKS = 256;
-const FIELDS = 7;
+// Readings come only while something reads host status: a longer gap spreads its bytes evenly.
+const MAX_PAIR_MS = SLOT_MS;
+const FIELDS = 10;
 const [
   TO_HOME,
   FROM_HOME,
@@ -18,18 +21,25 @@ const [
   DIRECT_TO_HOME,
   DIRECT_FROM_HOME,
   MEASURED,
-] = [0, 1, 2, 3, 4, 5, 6] as const;
+  AVERAGED,
+  UNCOUNTED,
+  WEBSOCKET,
+] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export interface LinkTrafficCounters {
   readonly epoch: string;
   readonly generation: number;
   readonly toHomeBytes: number;
   readonly fromHomeBytes: number;
+  /** Requests whose body OpenCodex could not count (no Content-Length); absent when not reported. */
+  readonly toHomeUncounted?: number | undefined;
 }
 
 export interface LinkTrafficReading {
   readonly linkId: string;
   readonly traffic: LinkTrafficCounters;
+  /** A link WebSocket was open at this reading; OpenCodex counts none of its payloads. */
+  readonly webSocket?: boolean | undefined;
   /** The route in use at this reading; undefined when none is proven or it is not reported. */
   readonly route?: { readonly name: string; readonly via?: "relay" | "direct" } | undefined;
 }
@@ -41,7 +51,14 @@ export interface LinkTrafficWindow {
   readonly relayFromHomeBytes: number;
   readonly directToHomeBytes: number;
   readonly directFromHomeBytes: number;
+  /** Time covered by readings at most one slot apart. */
   readonly measuredMs: number;
+  /** Time covered by longer gaps, whose bytes are averaged over the gap. */
+  readonly averagedMs: number;
+  /** Requests in the window whose body bytes are missing from toHomeBytes. */
+  readonly uncountedRequests: number;
+  /** Time in the window between readings where a link WebSocket was open at either one. */
+  readonly webSocketMs: number;
 }
 
 export interface LinkTrafficView {
@@ -53,6 +70,7 @@ interface Last extends LinkTrafficCounters {
   readonly at: number;
   /** "relay:name" or "direct:name"; undefined when no route is classified. */
   readonly routeKey: string | undefined;
+  readonly webSocket: boolean;
 }
 
 interface Series {
@@ -115,6 +133,9 @@ function sum(series: Series, at: number, windowMs: number): LinkTrafficWindow {
     directToHomeBytes: whole(DIRECT_TO_HOME),
     directFromHomeBytes: whole(DIRECT_FROM_HOME),
     measuredMs: Math.min(windowMs, whole(MEASURED)),
+    averagedMs: Math.min(windowMs, whole(AVERAGED)),
+    uncountedRequests: Math.max(0, Math.ceil((totals[UNCOUNTED] ?? 0) - 1e-9)),
+    webSocketMs: whole(WEBSOCKET),
   };
 }
 
@@ -134,7 +155,12 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
   };
 
   const record = (reading: LinkTrafficReading, at: number, inPass: ReadonlySet<string>) => {
-    const next: Last = { ...reading.traffic, at, routeKey: routeKeyOf(reading) };
+    const next: Last = {
+      ...reading.traffic,
+      at,
+      routeKey: routeKeyOf(reading),
+      webSocket: reading.webSocket === true,
+    };
     const series = book.get(reading.linkId);
     if (series === undefined) {
       if (!admit(inPass)) return;
@@ -153,6 +179,11 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
         const same = last.routeKey !== undefined && last.routeKey === next.routeKey;
         const relay = same && next.routeKey?.startsWith("relay:") === true;
         const direct = same && next.routeKey?.startsWith("direct:") === true;
+        const gap = at - last.at;
+        const uncounted =
+          last.toHomeUncounted === undefined || next.toHomeUncounted === undefined
+            ? 0
+            : Math.max(0, next.toHomeUncounted - last.toHomeUncounted);
         spread(series, last.at, at, [
           toHome,
           fromHome,
@@ -160,8 +191,17 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
           relay ? fromHome : 0,
           direct ? toHome : 0,
           direct ? fromHome : 0,
-          at - last.at,
+          gap <= MAX_PAIR_MS ? gap : 0,
+          gap <= MAX_PAIR_MS ? 0 : gap,
+          uncounted,
+          last.webSocket || next.webSocket ? gap : 0,
         ]);
+      } else if (at > last.at && (last.webSocket || next.webSocket)) {
+        // Counters that reset still leave a WebSocket's uncounted time in the window.
+        const websocketOnly = Array.from({ length: FIELDS }, (_, field) =>
+          field === WEBSOCKET ? at - last.at : 0,
+        );
+        spread(series, last.at, at, websocketOnly);
       }
       series.last = next;
       book.delete(reading.linkId);
@@ -186,7 +226,7 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
       const series = book.get(linkId);
       if (series === undefined) return undefined;
       const day = sum(series, at, DAY_MS);
-      if (day.measuredMs === 0) return undefined;
+      if (day.measuredMs + day.averagedMs === 0) return undefined;
       return { hour: sum(series, at, HOUR_MS), day };
     },
     /** Relay bytes both ways in the last 24 hours over every link held, including removed ones. */

@@ -196,7 +196,7 @@ const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   worker: 131,
   manager: 145,
   "merge-manager": 147,
-  owner: 181,
+  owner: 182,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {
@@ -346,6 +346,7 @@ it.effect("applies the host allowlist to every argument a write declares names a
       "hub.device_leave",
       "hub.device_move",
       "hub.device_repair",
+      "hub.device_routes_update",
       "hub.device_setup",
       "ssh.host_forget",
       "ssh.host_prepare",

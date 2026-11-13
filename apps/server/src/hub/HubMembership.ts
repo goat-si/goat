@@ -3,6 +3,10 @@ import {
   OrchestratorMcpFailure,
   type HubDeviceMcpResult,
   type HubDeviceMoveInput,
+  type HubDeviceRoutesInput,
+  type HubDeviceRoutesResult,
+  type HubDeviceRoutesUpdateInput,
+  type HubDeviceRoutesUpdateResult,
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
   type HubDeviceStep,
@@ -37,6 +41,7 @@ import {
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeMove } from "./hubMove.ts";
+import { makeRoutes } from "./hubRoutes.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
   deviceExit,
@@ -126,6 +131,17 @@ export class HubMembership extends Context.Service<
       input: HubDeviceMoveInput,
       person?: HubPerson,
     ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
+    /** A Remote Link Child's SSH routes on this Home, and a change to them under move's approval rules. */
+    readonly routes: (
+      scope: McpInvocationScope,
+      input: HubDeviceRoutesInput,
+      person?: HubPerson,
+    ) => Effect.Effect<HubDeviceRoutesResult, OrchestratorMcpFailure>;
+    readonly updateRoutes: (
+      scope: McpInvocationScope,
+      input: HubDeviceRoutesUpdateInput,
+      person?: HubPerson,
+    ) => Effect.Effect<HubDeviceRoutesUpdateResult, OrchestratorMcpFailure>;
     /**
      * Joins a cloud machine GOAT created as a Remote Link Child, with no person to ask. It links
      * only when OpenCodex offers exactly the host key GOAT pinned from the provider's API, and
@@ -385,6 +401,18 @@ const make = Effect.gen(function* () {
     revokeOnHome,
     link: (scope, caller, alias, fingerprint, decisionId, steps) =>
       link(scope, caller, "move", alias, fingerprint, decisionId, steps),
+  });
+  const routes = makeRoutes({
+    ocx,
+    authorize,
+    permitHost: (scope, host) => profiles.require(scope, "hub.manage", { host }),
+    readHomeLinks,
+    request: (caller, input) => consent.request(caller, "routes", input),
+    approved: (caller, decisionId, binding) =>
+      consent.approved(caller, "routes", decisionId, binding),
+    used: (caller, decisionId) => consent.used(caller, "routes", decisionId),
+    audit: (caller, target, outcome, decisionId) =>
+      audit(caller, "hub.routes", target, outcome, decisionId),
   });
 
   /** False when the caller's standing permission no longer holds; an unreadable one does not. */
@@ -902,6 +930,9 @@ const make = Effect.gen(function* () {
     leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
     repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
     move: (scope, input, person) => permit.withPermits(1)(move(scope, input, person)),
+    routes: routes.list,
+    updateRoutes: (scope, input, person) =>
+      permit.withPermits(1)(routes.update(scope, input, person)),
     joinProvisioned: (scope, alias, gate) =>
       SAFE_ALIAS.test(alias) && hasCloudMachineAliasPrefix(alias)
         ? permit.withPermits(1)(

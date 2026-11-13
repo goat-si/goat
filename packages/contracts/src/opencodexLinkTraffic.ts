@@ -19,12 +19,18 @@ export const OpenCodexLinkTrafficWindow = Schema.Struct({
   directToHomeBytes: Count,
   directFromHomeBytes: Count,
   measuredMs: Count,
+  /** Time in the window between readings more than five minutes apart; their bytes are averaged. */
+  averagedMs: Schema.optional(Count),
+  /** Requests whose body bytes OpenCodex could not count, so toHomeBytes is a lower bound. */
+  uncountedRequests: Schema.optional(Count),
 });
 export type OpenCodexLinkTrafficWindow = typeof OpenCodexLinkTrafficWindow.Type;
 
 export const OpenCodexLinkTraffic = Schema.Struct({
   hour: OpenCodexLinkTrafficWindow,
   day: OpenCodexLinkTrafficWindow,
+  /** A link WebSocket was open: only relayed HTTP bodies are counted, so the figures are lower bounds. */
+  httpBodiesOnly: ForwardCompatibleOptional(Schema.Literal(true)),
   /** Relay bytes both ways in the last 24 hours reached the Home's per-device threshold. */
   warning: ForwardCompatibleOptional(Schema.Struct({ thresholdBytes: Count })),
 });

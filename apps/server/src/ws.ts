@@ -2827,6 +2827,14 @@ export const layerWsRpc = (
         [WS_METHODS.hubDeviceJoin]: hubMembershipOperation("join"),
         [WS_METHODS.hubDeviceLeave]: hubMembershipOperation("leave"),
         [WS_METHODS.hubDeviceRepair]: hubMembershipOperation("repair"),
+        [WS_METHODS.hubDeviceRoutes]: (input) =>
+          hubScope("full-access").pipe(
+            Effect.flatMap((scope) => hubMembership.routes(scope, input, hubPerson)),
+          ),
+        [WS_METHODS.hubDeviceRoutesUpdate]: (input) =>
+          hubScope("full-access").pipe(
+            Effect.flatMap((scope) => hubMembership.updateRoutes(scope, input, hubPerson)),
+          ),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>

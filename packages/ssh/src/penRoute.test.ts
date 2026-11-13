@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { penExactAliasDecision, penExactRoute, penKnownHostsFile } from "./penRoute.ts";
+import { penExactAliasDecision, penExactAliasRoute, penKnownHostsFile } from "./penRoute.ts";
 
 const node = "a".repeat(26);
 const alias = `pen-${node}`;
@@ -30,7 +30,7 @@ const facts = () => ({
 describe("exact Pen route", () => {
   it("accepts Pen's Unix command and binds a revision", () => {
     const f = facts();
-    expect(penExactRoute(f.settings)).toEqual({
+    expect(penExactAliasRoute(f.settings)).toEqual({
       nodeId: node,
       noisePub: noise,
       knownHostsFile: file,
@@ -44,7 +44,7 @@ describe("exact Pen route", () => {
       "proxycommand",
       `env PEN_HOME='/a b' '/a/it'\\''s/pen' pipe --node ${node} --noise ${noise} 22`,
     );
-    expect(penExactRoute(f.settings)).toBeDefined();
+    expect(penExactAliasRoute(f.settings)).toBeDefined();
   });
   it.each([
     ["proxycommand", "'/bin/pen' pipe %n 22"],

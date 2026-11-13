@@ -31,6 +31,7 @@ import * as FleetHealth from "./fleet/health/layer.ts";
 import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
 import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
+import * as DisposableMachineStore from "./hub/disposable/DisposableMachineStore.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
@@ -825,6 +826,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
+      Layer.provide(DisposableMachineStore.layer),
       Layer.provide(SshRemoteDispatchLive.layer),
       Layer.provide(SshRemoteDispatchLive.layerPenRoutes),
     ),

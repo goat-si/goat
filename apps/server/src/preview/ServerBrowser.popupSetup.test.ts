@@ -30,6 +30,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { SessionControl } from "./SessionControl.ts";
+import { failedAdoptionClosesPopup, refusedPopupCloses } from "./PopupAdmission.testkit.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -212,6 +213,7 @@ const fixture = Effect.gen(function* () {
     input: unknown,
   ) => broker.invoke({ scope, tabId: id, operation, input });
   return {
+    scope,
     service,
     manager,
     broker,
@@ -227,6 +229,16 @@ const fixture = Effect.gen(function* () {
     slowGate,
   };
 });
+
+export type PopupFixture = Effect.Success<typeof fixture>;
+
+it.effect("a failed popup adoption falls back to page close when CDP close fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* failedAdoptionClosesPopup(yield* fixture);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 const popupSetup = Effect.gen(function* () {
   const f = yield* fixture;
@@ -277,6 +289,16 @@ it.effect("a blocked agent popup closes without setup and is not adopted", () =>
       expect((yield* f.service.sessions).map((tab) => tab.tabId)).toEqual([f.tabId]);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a popup refused at the tab limit is closed when its CDP close fails (#2565 regression)",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* refusedPopupCloses(yield* fixture);
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 it.effect("an allowed popup receives clipboard instrumentation", () =>

@@ -1,5 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botHomeWork, presentTaskStatus, type BotWorkTask } from "@goat/client-runtime/goatBot";
+import {
+  accessDenied,
+  botHomeWork,
+  COLLAPSED_FINISHED,
+  presentTaskStatus,
+  type BotWorkTask,
+} from "@goat/client-runtime/goatBot";
 import type {
   BotRemoteWork,
   BotThreadRow,
@@ -29,18 +35,7 @@ import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 
-/** Finished work past this many rows waits behind Show more. */
-const COLLAPSED_FINISHED = 5;
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
-
-/** A refusal that reading again cannot change, so no Retry is offered for it. */
-function accessDenied(failure: unknown): boolean {
-  return (
-    typeof failure === "object" &&
-    failure !== null &&
-    (failure as { readonly _tag?: unknown })._tag === "EnvironmentAuthorizationError"
-  );
-}
 
 const MARK = {
   running: "bg-info",
@@ -48,18 +43,6 @@ const MARK = {
   finished: "text-muted-foreground",
 } as const;
 type Mark = keyof typeof MARK;
-
-/** Whether Back's row now sits behind Show more, so the list opens to give it focus again. */
-export function workRowCollapsed(
-  rows: ReadonlyArray<BotThreadRow>,
-  environmentId: EnvironmentId,
-  remoteWork: ReadonlyArray<BotRemoteWork>,
-  taskId: ChannelTaskId,
-): boolean {
-  return botHomeWork(rows, [], environmentId, remoteWork)
-    .finished.slice(COLLAPSED_FINISHED)
-    .some((task) => task.row.task.taskId === taskId);
-}
 
 /**
  * Home's Work card: going, then waiting on a person, then finished. Rows come from the bot's task

@@ -3,6 +3,7 @@ import {
   type BotRemoteWork,
   type BotThreadRow,
   type ChannelChildWork,
+  type ChannelTaskId,
   type ChannelChildWorkGroup,
   type EnvironmentId,
   type ThreadId,
@@ -111,4 +112,28 @@ export function botHomeWork(
     else running.push(task);
   }
   return { running, waiting, finished: work.done };
+}
+
+/** Finished work past this many rows waits behind Show more. */
+export const COLLAPSED_FINISHED = 5;
+
+/** Whether a task's row now sits behind Show more, so a view opens the list to give it focus. */
+export function workRowCollapsed(
+  rows: ReadonlyArray<BotThreadRow>,
+  environmentId: EnvironmentId,
+  remoteWork: ReadonlyArray<BotRemoteWork>,
+  taskId: ChannelTaskId,
+): boolean {
+  return botHomeWork(rows, [], environmentId, remoteWork)
+    .finished.slice(COLLAPSED_FINISHED)
+    .some((task) => task.row.task.taskId === taskId);
+}
+
+/** A refusal that reading again cannot change, so no retry is offered for it. */
+export function accessDenied(failure: unknown): boolean {
+  return (
+    typeof failure === "object" &&
+    failure !== null &&
+    (failure as { readonly _tag?: unknown })._tag === "EnvironmentAuthorizationError"
+  );
 }

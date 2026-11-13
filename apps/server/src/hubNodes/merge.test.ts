@@ -51,6 +51,7 @@ const merge = (input: Partial<Parameters<typeof mergeHubNodes>[0]> = {}) =>
     cloud: [],
     routeState: [],
     notices: [],
+    disposable: [],
     ...input,
   });
 
@@ -77,6 +78,41 @@ describe("mergeHubNodes", () => {
     }).nodes[0]!;
     expect(legacyConnection(node)?.addedBy).toBeUndefined();
   });
+
+  it("projects a disposable record's class onto its node and leaves every other node kept", () => {
+    const node = "a".repeat(26);
+    const snapshot = merge({
+      registrations: [
+        registration("pen-" + node),
+        registration("cc-01", EnvironmentId.make("env-kept")),
+      ],
+      disposable: [
+        {
+          attachId: "attach-1",
+          nodeId: node,
+          state: "attached",
+          stateSince: at,
+          createdAt: at,
+          provisioner: { kind: "person" },
+          final: false,
+          environmentId: remote,
+          machineInstallId: null,
+          sshdPin: null,
+          linkId: null,
+          conflicts: [],
+          penMember: true,
+        },
+      ],
+    });
+    const byEnvironment = new Map(snapshot.nodes.map((entry) => [entry.environmentId, entry]));
+    expect(byEnvironment.get(remote)?.machineClass).toMatchObject({
+      class: "disposable",
+      attachId: "attach-1",
+      penMember: true,
+    });
+    expect(byEnvironment.get(EnvironmentId.make("env-kept"))).not.toHaveProperty("machineClass");
+  });
+
   it("deduplicates identity, orders routes, and exposes linked access without credentials", () => {
     const snapshot = merge({
       registrations: [registration()],

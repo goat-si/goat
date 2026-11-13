@@ -59,9 +59,12 @@ describe("link traffic book", () => {
       relayFromHomeBytes: 0,
       directToHomeBytes: 0,
       directFromHomeBytes: 0,
-      measuredMs: 2 * HOUR,
+      measuredMs: 0,
+      averagedMs: 2 * HOUR,
+      uncountedRequests: 0,
+      webSocketMs: 0,
     });
-    expect(view?.hour).toMatchObject({ toHomeBytes: 3_600_000, measuredMs: HOUR });
+    expect(view?.hour).toMatchObject({ toHomeBytes: 3_600_000, averagedMs: HOUR });
   });
 
   it("counts relay bytes only while both readings had the same Pen route in use", () => {
@@ -85,7 +88,7 @@ describe("link traffic book", () => {
     book.observe([reading(1_000)], T0 + 2 * HOUR);
     const at = T0 + 25.5 * HOUR;
     book.observe([reading(1_000)], at);
-    expect(book.view("link-a", at)?.day).toMatchObject({ toHomeBytes: 0, measuredMs: 24 * HOUR });
+    expect(book.view("link-a", at)?.day).toMatchObject({ toHomeBytes: 0, averagedMs: 24 * HOUR });
   });
 
   it("keeps a removed link's relay bytes in the hub total for a day, then forgets it", () => {
@@ -137,5 +140,31 @@ describe("link traffic book", () => {
       directToHomeBytes: 1_000,
       directFromHomeBytes: 250,
     });
+  });
+  it("counts only readings at most one slot apart as measured; a longer gap is averaged, and the day stays exact", () => {
+    const book = makeLinkTrafficBook();
+    book.observe([reading(0)], T0);
+    book.observe([reading(6_000)], T0 + 6 * HOUR);
+    book.observe([reading(6_600)], T0 + 6 * HOUR + 60_000);
+    const view = book.view("link-a", T0 + 6 * HOUR + 60_000);
+    expect(view?.day).toMatchObject({
+      toHomeBytes: 6_600,
+      measuredMs: 60_000,
+      averagedMs: 6 * HOUR,
+    });
+    expect(view?.hour).toMatchObject({ measuredMs: 60_000, averagedMs: HOUR - 60_000 });
+  });
+
+  it("counts requests whose body OpenCodex could not measure between two readings", () => {
+    const book = makeLinkTrafficBook();
+    const uncounted = (bytes: number, count: number) => ({
+      ...reading(bytes),
+      traffic: { ...reading(bytes).traffic, toHomeUncounted: count },
+    });
+    book.observe([uncounted(0, 2)], T0);
+    book.observe([uncounted(1_000, 2)], T0 + 60_000);
+    expect(book.view("link-a", T0 + 60_000)?.day.uncountedRequests).toBe(0);
+    book.observe([uncounted(1_500, 5)], T0 + 120_000);
+    expect(book.view("link-a", T0 + 120_000)?.day.uncountedRequests).toBe(3);
   });
 });

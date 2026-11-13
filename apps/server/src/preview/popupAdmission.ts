@@ -1,6 +1,5 @@
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type { CDPSession, Page } from "playwright-core";
-import { constVoid } from "effect/Function";
 import * as AgentTabState from "./agentTabState.ts";
 import type { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
 import type { makeBlockedTabFence } from "./blockedTabFence.ts";
@@ -45,6 +44,8 @@ type Opener = Parameters<Fence["signal"]>[0] & {
   readonly agentOperating: boolean;
   readonly cdp: CDPSession;
 };
+
+export const popupAdmission = { refuse: (close: () => Promise<void>) => close() };
 
 export const inspectPopup = async (
   opener: Opener,
@@ -114,7 +115,7 @@ export const inspectPopup = async (
     if (refused) {
       removeAuthorityListener();
       origin?.release();
-      await close();
+      await popupAdmission.refuse(close);
     }
     return {
       agentId,
@@ -143,17 +144,27 @@ export interface AdoptedPage {
   readonly visits: ReadonlyArray<{ readonly url: string; readonly run: BlockedTabRun }>;
 }
 
+/** Closes a popup whose adoption failed; failures while it is still open are unexpected, so they are logged. */
+export const closeUnadoptedPopup =
+  (popup: Page, runFork: (effect: Effect.Effect<void>) => unknown) => async (cause: unknown) => {
+    const warn = (message: string) => (failure: unknown) => {
+      if (!popup.isClosed()) runFork(Effect.logWarning(message, { cause: failure }));
+    };
+    warn("server preview could not adopt a popup")(cause);
+    await popup.close().catch(warn("server preview could not close a popup it failed to adopt"));
+  };
+
 export const closePopupOnAbort = (
-  page: Page,
-  signal?: AbortSignal,
-  releaseOrigin?: () => void,
-  closePage: () => Promise<void> = () => page.close(),
+  signal: AbortSignal | undefined,
+  releaseOrigin: (() => void) | undefined,
+  closePage: () => Promise<void>,
+  onCloseError: (cause: unknown) => Promise<void>,
 ) => {
   if (!signal)
     return () => {
       releaseOrigin?.();
     };
-  const close = () => void closePage().catch(constVoid);
+  const close = () => void closePage().catch(onCloseError);
   if (signal.aborted) close();
   else signal.addEventListener("abort", close, { once: true });
   return () => {

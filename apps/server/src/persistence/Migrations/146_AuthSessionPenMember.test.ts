@@ -8,10 +8,10 @@ import { runMigrations } from "../Migrations.ts";
 it.effect("preserves existing sessions and prevents changing a member marker", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 144 });
+    yield* runMigrations({ toMigrationInclusive: 145 });
     yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at, client_device_type) VALUES ('ordinary', 'browser', '[]', 'bearer-access-token', '2026-01-01T00:00:00.000Z', '2027-01-01T00:00:00.000Z', 'unknown')`;
-    expect(yield* runMigrations({ toMigrationInclusive: 145 })).toEqual([
-      [145, "AuthSessionPenMember"],
+    expect(yield* runMigrations({ toMigrationInclusive: 146 })).toEqual([
+      [146, "AuthSessionPenMember"],
     ]);
     yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at, client_device_type, pen_member_node) VALUES ('member', 'pen-member:aaaaaaaaaaaaaaaaaaaaaaaaaa', '[]', 'bearer-access-token', '2026-01-01T00:00:00.000Z', '2027-01-01T00:00:00.000Z', 'unknown', 'aaaaaaaaaaaaaaaaaaaaaaaaaa')`;
     expect(

@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 )
@@ -24,6 +27,17 @@ const (
 const (
 	serviceOpCap     = 4096
 	serviceAnswerCap = 64 << 10
+)
+
+// After stdin ends and the child half-closes, the node answers the ops it was sent and closes; the child waits for
+// that close at most serviceEndGrace (afterEndGrace is its timer, a variable for tests). While it holds the
+// registration, each read of the node's lines waits at most serviceRecheck before a fresh read replaces it: on
+// Windows a pending AF_UNIX read may miss the node's half-close or close (one CI hang suggests it), and a fresh read
+// may see it. The grace needs no close notice: its deadline ends the read once the driver completes the cancel.
+var (
+	serviceEndGrace = 30 * time.Second
+	serviceRecheck  = 30 * time.Second
+	afterEndGrace   = func() <-chan time.Time { return time.After(serviceEndGrace) }
 )
 
 // RunService runs "pen service register <name> --port <P>", the child a program keeps for as long as it
@@ -79,20 +93,39 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 		return die(fmt.Errorf("unexpected answer %q", reg.T))
 	}
 	fmt.Fprintf(stdout, "pen-service v1 registered %s %s\n", name, reg.ID)
+	graceTimer := afterEndGrace
 	var s serviceCount
+	var live nodeReads
+	live.arm(cl)
+	finished := make(chan struct{})
+	defer close(finished)
 	ended := make(chan int, 3)
 	go func() {
 		if code, ok := forwardOps(stdin, cl, &s, stderr); ok {
 			ended <- code
+			return
+		}
+		select {
+		case <-graceTimer():
+			live.endGrace(cl)
+		case <-finished:
 		}
 	}()
 	go func() {
 		node := bufio.NewReaderSize(cl.Rest(), 4096)
 		for {
-			b, err := readCappedLine(node, serviceAnswerCap)
+			b, err := readCappedLine(node, serviceAnswerCap, func(err error) bool {
+				return errors.Is(err, os.ErrDeadlineExceeded) && live.arm(cl)
+			})
 			if err != nil {
 				if s.released.Load() && s.allAnswered() {
 					ended <- serviceReleased
+					return
+				}
+				if s.released.Load() && errors.Is(err, os.ErrDeadlineExceeded) {
+					fmt.Fprintf(stderr, "pen service: the pen daemon did not answer %d forwarded op(s) of %s within %v after stdin ended\n",
+						s.forwarded.Load()-s.answered.Load(), name, serviceEndGrace)
+					ended <- serviceDaemonGone
 					return
 				}
 				if s.released.Load() {
@@ -124,6 +157,28 @@ func RunService(args []string, stdout, stderr io.Writer) int {
 	return <-ended
 }
 
+// nodeReads sets the deadline of each read of the node's lines: serviceRecheck while the registration is held, and
+// none to wait for once the end grace is over, so the read that waits then returns at once.
+type nodeReads struct {
+	mu        sync.Mutex
+	graceOver bool
+}
+
+// arm gives the next read serviceRecheck and reports whether it may wait (false once the grace is over).
+func (n *nodeReads) arm(cl *daemon.Client) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return !n.graceOver && cl.SetReadDeadline(time.Now().Add(serviceRecheck)) == nil
+}
+
+// endGrace ends the wait for the node's close: the read in progress returns.
+func (n *nodeReads) endGrace(cl *daemon.Client) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.graceOver = true
+	cl.SetReadDeadline(time.Now())
+}
+
 // serviceCount counts both sides: the node answers every op once, in order, and events (invite-burned,
 // invite-exhausted) are not answers, so the end of stdin succeeds only once every forwarded op was answered.
 type serviceCount struct {
@@ -144,7 +199,7 @@ type opSink interface {
 // half-close that fails with an op unanswered, ends the child: the node could not answer it or end the registration.
 func forwardOps(stdin *bufio.Reader, node opSink, s *serviceCount, stderr io.Writer) (int, bool) {
 	for {
-		op, err := readCappedLine(stdin, serviceOpCap)
+		op, err := readCappedLine(stdin, serviceOpCap, nil)
 		if errors.Is(err, io.EOF) {
 			// Released: the node answers what it was sent, then ends the registration and closes.
 			s.released.Store(true)
@@ -170,8 +225,8 @@ func forwardOps(stdin *bufio.Reader, node opSink, s *serviceCount, stderr io.Wri
 }
 
 // readCappedLine reads one line with its LF, at most limit bytes; io.EOF means the input ended (a partial last line is
-// dropped).
-func readCappedLine(r *bufio.Reader, limit int) ([]byte, error) {
+// dropped). An error retry accepts is followed by a fresh read that keeps what was read.
+func readCappedLine(r *bufio.Reader, limit int, retry func(error) bool) ([]byte, error) {
 	var out []byte
 	for {
 		b, err := r.ReadSlice('\n')
@@ -186,6 +241,8 @@ func readCappedLine(r *bufio.Reader, limit int) ([]byte, error) {
 			continue
 		case errors.Is(err, io.EOF):
 			return nil, io.EOF
+		case retry != nil && retry(err):
+			continue
 		default:
 			return nil, err
 		}

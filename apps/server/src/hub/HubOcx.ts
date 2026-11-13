@@ -37,8 +37,14 @@ import {
   isPlainRoute,
   penConfigHosts,
   penGlobalFiles,
+  penExactCommands,
+  penHostOption,
+  penRunCommand,
+  isRouteUser,
   penKnownHostsFile,
   penRevision,
+  type PenInstall,
+  type PenNode,
   sshSettings,
 } from "@goat/ssh/penRoute";
 
@@ -71,6 +77,8 @@ export interface OcxOutput {
   readonly stdout: string;
   /** OpenCodex's machine-readable failure code from stderr, never free text. */
   readonly phase?: string;
+  /** The class word OpenCodex names beside route_unproven, such as transient or hostkey. */
+  readonly cause?: string;
   /** A sentence OpenCodex is known to print for this refusal; see ocxMessage. */
   readonly message?: string;
   /** OpenCodex's management API answered 403, as `ocx link status` does on a Hub (opencodex#8184). */
@@ -82,7 +90,8 @@ export interface OcxOutput {
 }
 
 export class HubOcxError extends Data.TaggedError("HubOcxError")<{
-  readonly reason: "ocx_missing" | "unreachable";
+  /** ocx_unstartable: the process could not be spawned, so nothing reached the Home. */
+  readonly reason: "ocx_missing" | "ocx_unstartable" | "unreachable";
   readonly message: string;
 }> {}
 
@@ -132,6 +141,28 @@ export type HubClientHandoff =
       readonly dataUrl: string;
       readonly expiresAt: string;
       readonly connect: OcxOutput;
+    };
+
+/** A disposable machine's route as Pen defines it, or why Pen's files name none. */
+export type PenExactRoute =
+  | {
+      readonly kind: "route";
+      readonly alias: string;
+      readonly proxyCommand: string;
+      readonly user: string;
+      /** "ssh-ed25519 <base64>", as Pen's known_hosts holds it. */
+      readonly hostKey: string;
+      readonly fingerprint: string;
+    }
+  | {
+      readonly kind: "refused";
+      readonly reason:
+        | "no_exact_block"
+        | "other_pen"
+        | "unsafe_pen_path"
+        | "no_user"
+        | "no_key"
+        | "several_keys";
     };
 
 /** The only seam to OpenCodex and SSH; tests replace it with a scripted runner. */
@@ -210,6 +241,15 @@ export class HubOcx extends Context.Service<
      * person's consent to set it up as a Child; undefined for any other alias.
      */
     readonly penAliasRevision: (alias: string) => Effect.Effect<string | undefined, HubOcxError>;
+    /**
+     * Reads the route of a Pen member GOAT addresses by node id: Pen's exact pen-<nodeId> block for
+     * that node and Noise key run by the confirmed Pen, the User Pen wrote for it, and the one
+     * ed25519 host key Pen recorded.
+     */
+    readonly penExactRoute: (
+      node: PenNode,
+      pen: PenInstall,
+    ) => Effect.Effect<PenExactRoute, HubOcxError>;
     /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
@@ -229,7 +269,13 @@ export class HubOcx extends Context.Service<
 >()("goat/hub/HubOcx") {}
 
 const phaseOf = (stderr: string) =>
-  /\b((?:remote|child|home)_[a-z_]{2,60}|link_not_found)\b/u.exec(stderr)?.[1];
+  /\b((?:remote|child|home|route)_[a-z_]{2,60}|routes_stored_reload_failed|link_not_found|link_changed|link_exclusive|link_not_home_initiated|link_operation_in_progress|pin_changed|pin_mismatch|trust_file_unexpected|invalid_body|invalid_link_id)\b/u.exec(
+    stderr,
+  )?.[1];
+const causeOf = (stderr: string) =>
+  /\broute_unproven \((transient|readiness|grant_unobserved|forward|auth|hostkey)\)/u.exec(
+    stderr,
+  )?.[1];
 /** Home commands whose refusal is worth naming; `hub invite` mints a pairing code and is never read. */
 const explained = (args: ReadonlyArray<string>) =>
   args[0] === "link" && ["add", "probe", "reconnect", "revoke"].includes(args[1] ?? "");
@@ -387,11 +433,17 @@ const make = Effect.gen(function* () {
     workingDirectory: string | null = cwd,
   ) {
     const output = yield* run(binary, args, timeoutMs, workingDirectory).pipe(
-      Effect.mapError(
-        () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+      Effect.mapError((error) =>
+        error._tag === "ProcessSpawnError"
+          ? new HubOcxError({
+              reason: "ocx_unstartable",
+              message: "ocx could not be started on this hub.",
+            })
+          : new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       ),
     );
     const phase = phaseOf(output.stderr);
+    const cause = causeOf(output.stderr);
     const forbidden = /\brequest failed \(403\)/u.test(output.stderr);
     const code = output.timedOut ? 124 : (output.code ?? 1);
     const message = code !== 0 && explained(args) ? ocxMessage(output.stderr) : undefined;
@@ -399,6 +451,7 @@ const make = Effect.gen(function* () {
       code,
       stdout: output.stdoutTruncated ? "" : output.stdout,
       ...(phase === undefined ? {} : { phase }),
+      ...(cause === undefined ? {} : { cause }),
       ...(message === undefined ? {} : { message }),
       ...(forbidden ? { forbidden: true as const } : {}),
     } satisfies OcxOutput;
@@ -585,7 +638,7 @@ const make = Effect.gen(function* () {
     Exit.isSuccess(exit) ? 0 : "10 seconds",
   );
 
-  const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string) {
+  const penMember = Effect.fn("HubOcx.penMember")(function* (alias: string, node?: PenNode) {
     if (!SAFE_ALIAS.test(alias)) return undefined;
     const directory = path.join(homeDirectory, ".ssh", "pen");
     const config = yield* penConfig;
@@ -603,7 +656,7 @@ const make = Effect.gen(function* () {
       settings.get("hostname") === alias &&
       settings.get("port") === "22" &&
       ["", "none", undefined].includes(settings.get("hostkeyalias"));
-    if (!keyedByAlias || penKnownHostsFile(settings) !== knownHosts) return undefined;
+    if (!keyedByAlias || penKnownHostsFile(settings, node) !== knownHosts) return undefined;
     // ssh also accepts a key its global known_hosts holds for the alias, so there must be none.
     const globals = penGlobalFiles(settings);
     if (globals === undefined) return undefined;
@@ -626,7 +679,7 @@ const make = Effect.gen(function* () {
     const lines = recorded.code === 0 ? recorded.stdout : "";
     // A @cert-authority or @revoked line changes what ssh accepts, and Pen never writes one.
     if (lines.split(/\r?\n/u).some((line) => line.trimStart().startsWith("@"))) return undefined;
-    return { settings, knownHosts, recorded: lines };
+    return { settings, knownHosts, recorded: lines, config };
   });
 
   return HubOcx.of({
@@ -729,6 +782,42 @@ const make = Effect.gen(function* () {
       const member = yield* penMember(alias);
       if (member === undefined) return undefined;
       return penRevision(member.settings, member.recorded);
+    }),
+    penExactRoute: Effect.fn("HubOcx.penExactRoute")(function* (node, pen) {
+      const alias = `pen-${node.nodeId}`;
+      const member = yield* penMember(alias, node);
+      const proxyCommand = member?.settings.get("proxycommand");
+      if (member === undefined || proxyCommand === undefined)
+        return { kind: "refused", reason: "no_exact_block" } as const;
+      // An ssh_config entry read before Pen's could name another pen or Pen home.
+      const trusted = penExactCommands(node, pen, path.join(homeDirectory, ".pen"));
+      if (
+        !trusted.includes(proxyCommand) ||
+        penHostOption(member.config, alias, "ProxyCommand") !== proxyCommand
+      )
+        return { kind: "refused", reason: "other_pen" } as const;
+      const run = penRunCommand(node, pen);
+      if (run === undefined) return { kind: "refused", reason: "unsafe_pen_path" } as const;
+      const user = penHostOption(member.config, alias, "User");
+      if (user === undefined || !isRouteUser(user) || member.settings.get("user") !== user)
+        return { kind: "refused", reason: "no_user" } as const;
+      const keys = member.recorded
+        .split(/\r?\n/u)
+        .map((line) => /^\S+ (ssh-ed25519 ([A-Za-z0-9+/]+={0,2}))$/u.exec(line.trim()))
+        .filter((match) => match !== null);
+      if (keys.length > 1) return { kind: "refused", reason: "several_keys" } as const;
+      const [, hostKey, blob] = keys[0] ?? [];
+      if (hostKey === undefined || blob === undefined)
+        return { kind: "refused", reason: "no_key" } as const;
+      const digest = NodeCrypto.createHash("sha256").update(Buffer.from(blob, "base64"));
+      return {
+        kind: "route",
+        alias,
+        proxyCommand: run,
+        user,
+        hostKey,
+        fingerprint: `SHA256:${digest.digest("base64").replace(/=+$/u, "")}`,
+      } as const;
     }),
     runningTurns: Effect.fn("HubOcx.runningTurns")(
       function* (alias, scope) {

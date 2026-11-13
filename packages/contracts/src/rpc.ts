@@ -421,6 +421,8 @@ import {
   WsHubDeviceJoinRpc,
   WsHubDeviceLeaveRpc,
   WsHubDeviceRepairRpc,
+  WsHubDeviceRoutesRpc,
+  WsHubDeviceRoutesUpdateRpc,
   WsHubDeviceSetupRpc,
   WsHubDeviceVerifyRpc,
 } from "./hubDeviceRpc.ts";
@@ -2544,6 +2546,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsHubDeviceRepairRpc,
   WsHubDeviceChildOptInRpc,
   WsHubDeviceSetupRpc,
+  WsHubDeviceRoutesRpc,
+  WsHubDeviceRoutesUpdateRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

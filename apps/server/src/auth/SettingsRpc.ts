@@ -21,8 +21,13 @@ export const make = Effect.fn("SettingsRpc.make")(function* (session: Authentica
   }) {
     if (input.providerInstanceMutation !== undefined && input.agentTerminalBinding !== undefined)
       return yield* new ServerSettingsError({ settingsPath: "settings", operation: "normalize" });
+    // The disposable machines switch admits machines to the owner's Pen mesh; only a person sets it.
+    const changesDisposableSwitch = input.patch.hub?.attachDisposableMachines !== undefined;
+    if (changesDisposableSwitch && input.providerInstanceMutation !== undefined)
+      return yield* new ServerSettingsError({ settingsPath: "settings", operation: "normalize" });
     const updatePolicy = settings.updateAgentWorkspaceTerminalPolicy;
     const usesAgentPolicy =
+      changesDisposableSwitch ||
       input.agentTerminalBinding !== undefined ||
       input.patch.agentWorkspaceAccess !== undefined ||
       input.patch.agentTerminalAccess !== undefined ||

@@ -11,6 +11,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { CloudMachineAlias } from "./cloudMachines.ts";
+import { HubNodeMachineClass } from "./disposableMachines.ts";
 import { PenId } from "./penSettings.ts";
 
 /**
@@ -130,6 +131,8 @@ export const HubNode = Schema.Struct({
   lastSeenAt: Schema.NullOr(IsoDateTime),
   /** Who registered it; null for a node known only from a linked host or cloud machine. */
   addedBy: Schema.NullOr(HubNodeAddedBy),
+  /** Set when a disposable machine record matches the node; absent for kept machines. */
+  machineClass: Schema.optionalKey(HubNodeMachineClass),
 });
 export type HubNode = typeof HubNode.Type;
 

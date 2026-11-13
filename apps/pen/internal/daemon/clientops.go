@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"time"
@@ -37,6 +38,11 @@ const (
 var holderDrainTime = 5 * time.Second
 
 const holderDrainCap = 64 << 10
+
+// holderRecheck is how long one read of a registration's ops waits before a fresh read replaces it (a variable for
+// tests). On Windows a pending AF_UNIX read may miss the holder's half-close or close (one CI hang suggests it); a
+// fresh read that sees the end ends a registration whose holder is gone, and an idle one only reads again.
+var holderRecheck = 30 * time.Second
 
 // serviceInvite is one service invite; its identity is the pointer, so a replacement never revives it.
 type serviceInvite struct {
@@ -112,16 +118,39 @@ func jsonLine(v any) []byte {
 	return append(b, '\n')
 }
 
-// readOpLine reads one op line of at most opLineCap bytes with its LF from r.
-func readOpLine(r *bufio.Reader) ([]byte, error) {
-	b, err := r.ReadSlice('\n')
-	if errors.Is(err, bufio.ErrBufferFull) || (err == nil && len(b) > opLineCap) {
-		return nil, errors.New("an op line is over 4096 bytes")
+// readOpLine reads one op line of at most opLineCap bytes with its LF from r. rearm sets the next read's deadline and
+// reports whether it did; a read that reaches that deadline is replaced by a fresh one, keeping what it read.
+func readOpLine(r *bufio.Reader, rearm func() bool) ([]byte, error) {
+	var line []byte
+	armed := rearm()
+	for {
+		b, err := r.ReadSlice('\n')
+		line = append(line, b...)
+		if errors.Is(err, bufio.ErrBufferFull) || len(line) > opLineCap {
+			return nil, errors.New("an op line is over 4096 bytes")
+		}
+		if err == nil {
+			return line, nil
+		}
+		if !armed || !errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, err
+		}
+		armed = rearm()
 	}
-	if err != nil {
-		return nil, err
-	}
-	return append([]byte(nil), b...), nil
+}
+
+// rearm gives the next read of reg's ops holderRecheck, until the holder's drain owns the connection's deadline.
+func (reg *serviceReg) rearm() bool {
+	reg.liveMu.Lock()
+	defer reg.liveMu.Unlock()
+	return !reg.draining && reg.holder.SetReadDeadline(time.Now().Add(holderRecheck)) == nil
+}
+
+// drainStarts stops rearm before the drain sets its own deadline, so the drain keeps holderDrainTime.
+func (reg *serviceReg) drainStarts() {
+	reg.liveMu.Lock()
+	reg.draining = true
+	reg.liveMu.Unlock()
 }
 
 // serveOps reads the holder's ops one at a time until the connection ends, the daemon stops, or the queue fails. Each
@@ -137,7 +166,7 @@ func (d *Daemon) serveOps(ctx context.Context, reg *serviceReg, r *bufio.Reader)
 	defer close(stop)
 	go func() {
 		for {
-			b, err := readOpLine(r)
+			b, err := readOpLine(r, reg.rearm)
 			select {
 			case lines <- read{b, err}:
 			case <-stop:
