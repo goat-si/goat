@@ -232,6 +232,39 @@ it("does not take focus that moved to the page after Back left it on an element"
   }
 });
 
+it("uses Back's return once: a later peek of the same task returns focus to its row and drops the mark", async () => {
+  setup([], [], [runningTask]);
+  const focusFrom = document.createElement("button");
+  document.body.append(focusFrom);
+  using _scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  const consumed = vi.fn();
+  try {
+    focusFrom.focus();
+    await using screen = await render(
+      <GoatBotWorkPanel
+        onOpenFile={() => {}}
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+        homeReturn={{ taskId: ChannelTaskId.make("task-a"), focusFrom }}
+        onHomeReturnConsumed={consumed}
+      />,
+    );
+    const row = screen.getByRole("button", { name: /^Stop the port 3774 server/ });
+    await expect.element(row).toHaveFocus();
+    await userEvent.click(row);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Back to Home from Stop the port 3774 server" }),
+    );
+    const again = screen.getByRole("button", { name: /^Stop the port 3774 server/ });
+    await expect.element(again).toHaveFocus();
+    expect(again.element().closest("[data-home-return]")).toBeNull();
+    expect(consumed).toHaveBeenCalledTimes(1);
+  } finally {
+    focusFrom.remove();
+  }
+});
+
 it("focuses the Work heading if the returned task no longer exists", async () => {
   setup([], [], []);
   if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
