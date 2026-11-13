@@ -36,21 +36,29 @@ function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string
 }
 
 /**
- * "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h", plus the bytes that went
- * direct when there were any, and how long a short measurement covered.
+ * "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h", then what went another way. A link
+ * that sent nothing through a relay reads "↑…↓… last hour · ↑…↓… in 24 h, none through a relay".
  */
 function hubLinkTrafficFacts(traffic: OpenCodexLinkTraffic): ReadonlyArray<string> {
   const { hour, day } = traffic;
+  const relayDay = day.relayToHomeBytes + day.relayFromHomeBytes;
   const directDayTo = day.toHomeBytes - day.relayToHomeBytes;
   const directDayFrom = day.fromHomeBytes - day.relayFromHomeBytes;
   const measured = measuredFor(day, 24 * 3_600_000);
-  return [
-    `relay ${eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes)} last hour · ${eachWay(day.relayToHomeBytes, day.relayFromHomeBytes)} in 24 h`,
-    directDayTo + directDayFrom > 0
-      ? `not via relay ${eachWay(directDayTo, directDayFrom)} in 24 h`
-      : null,
-    measured === null ? null : `measured over ${measured}`,
-  ].filter((part) => part !== null);
+  const parts =
+    relayDay === 0
+      ? [
+          `${eachWay(hour.toHomeBytes, hour.fromHomeBytes)} last hour · ${eachWay(day.toHomeBytes, day.fromHomeBytes)} in 24 h, none through a relay`,
+        ]
+      : [
+          `relay ${eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes)} last hour · ${eachWay(day.relayToHomeBytes, day.relayFromHomeBytes)} in 24 h`,
+          directDayTo + directDayFrom > 0
+            ? `not via relay ${eachWay(directDayTo, directDayFrom)} in 24 h`
+            : null,
+        ];
+  return [...parts, measured === null ? null : `measured over ${measured}`].filter(
+    (part) => part !== null,
+  );
 }
 
 /** "via relay pen-mac", "direct mac-ts", or the name alone when the Home could not tell. */

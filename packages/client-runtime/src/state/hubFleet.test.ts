@@ -297,7 +297,7 @@ describe("link traffic", () => {
     expect(facts[0]).toContain("link traffic not measured");
     expect(facts[1]).toEqual([
       "route lan",
-      "relay ↑0 B ↓0 B last hour · ↑0 B ↓0 B in 24 h",
+      "↑0 B ↓0 B last hour · ↑0 B ↓0 B in 24 h, none through a relay",
       "measured over 10 min",
     ]);
     expect(hubDeviceFacts(hub!.devices[2]!).join(" ")).not.toContain("measured");
