@@ -1,5 +1,5 @@
 import type { BotThreadRow, ChannelListBotThreadsResult } from "@goat/contracts";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -36,7 +36,10 @@ import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 type Props = Parameters<typeof useMobileBotWorkHistory>[0];
 const seen = { current: null as ReturnType<typeof useMobileBotWorkHistory> | null };
 function Probe(props: Props) {
-  seen.current = useMobileBotWorkHistory(props);
+  const view = useMobileBotWorkHistory(props);
+  useEffect(() => {
+    seen.current = view;
+  });
   return null;
 }
 

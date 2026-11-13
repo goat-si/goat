@@ -70,7 +70,7 @@ opens it in full. A task's menu pins it, marks it done or marks it read.
 **Show more** under the tasks reads older work page by page while the home stays open. An older
 task can be shown, opened and pinned from its menu; pinned, it joins the recent tasks, where it can
 be marked done or read, and opening it marks it read. Its full view says its status and actions are
-on the home, with **Open Home** to go there. While no Slack channel is
+on the home, with **Open Home** to go there; on mobile it opens the home over the task's view. While no Slack channel is
 connected, GOAT Bot's home also suggests connecting one; **Hide** removes the suggestion on this
 device, and **Settings → GOAT Bot → Suggestions on the bot's home** brings it back.
 **Library** holds the files the bot saved and its memory. On mobile, **Work** opens a sheet of the

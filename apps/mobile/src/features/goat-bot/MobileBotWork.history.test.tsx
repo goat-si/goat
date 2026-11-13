@@ -376,8 +376,8 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
           const input = (args[2] as { input: { history?: { cursor?: string } } }).input;
           state.pages.push({
             cursor: input.history?.cursor,
-            answer: (value) => act(async () => resolve({ _tag: "Success", value })),
-            fail: () => act(async () => resolve({ _tag: "Failure", cause: "down" })),
+            answer: (value) => act(async () => resolve({ _tag: "Success", value } as never)),
+            fail: () => act(async () => resolve({ _tag: "Failure", cause: "down" } as never)),
           });
         })
       : ["readThrough", "pinned", "clientRequestId"].some(
@@ -616,6 +616,8 @@ it("keeps the Show more entry in place as Show less once older work ends", async
   state.rows = Array.from({ length: 6 }, (_, index) => older(`f${index}`, `Finished ${index}`));
   await open();
   await showOlder();
+  expect(state.pages).toHaveLength(1);
+  expect(button("Old report")).toBeDefined();
   expect(button("Show more")).toBeUndefined();
   expect(button("Show less")).toBeDefined();
 });

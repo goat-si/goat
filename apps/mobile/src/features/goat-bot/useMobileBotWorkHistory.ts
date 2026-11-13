@@ -93,40 +93,22 @@ export function useMobileBotWorkHistory(input: {
     running.current = press;
     const valid = () => same(press);
     update(press.scope, (state) => ({ ...state, loading: true, failed: false }));
-    try {
-      const result = await readBotThreadHistory({
-        from: walk.cursor,
-        listed: new Set(view.pressRows.map(botThreadKey)),
-        wanted: 5,
-        read: async (cursor) => {
-          if (!valid()) throw CANCELLED;
-          const request = botThreadsHistoryInput(
-            capabilities as ExecutionEnvironmentCapabilities,
-            botId,
-            cursor,
-          );
-          if (request === null) throw new Error("History is unavailable");
-          const answer = await runAtomCommand(
-            appAtomRegistry,
-            channelEnvironment.listBotThreadsPage,
-            { environmentId, input: request },
-            { label: "GOAT Bot older work", reportFailure: false },
-          );
-          if (!valid()) throw CANCELLED;
-          if (answer._tag !== "Success") throw new Error("History could not be read");
-          return answer.value;
-        },
-      });
-      if (!valid()) throw CANCELLED;
-      update(press.scope, (state) => applyHistoryPress(state, result));
-    } catch (error) {
-      const cancelled = error === CANCELLED || !valid();
+    const outcome = await readPress({
+      environmentId,
+      botId,
+      capabilities: capabilities as ExecutionEnvironmentCapabilities | undefined,
+      cursor: walk.cursor,
+      listed: new Set(view.pressRows.map(botThreadKey)),
+      valid,
+    });
+    if (outcome.kind === "applied")
+      update(press.scope, (state) => applyHistoryPress(state, outcome.result));
+    else
       update(press.scope, (state) => ({
         ...state,
         loading: false,
-        failed: state.failed || !cancelled,
+        failed: state.failed || outcome.kind === "failed",
       }));
-    }
     if (running.current === press) running.current = null;
   }
   return {
@@ -142,4 +124,46 @@ export function useMobileBotWorkHistory(input: {
     failed: walk.failed,
     loadMore,
   };
+}
+
+/**
+ * Reads one press of history pages. It stops before each request, after each answer and before
+ * returning when the press is no longer valid, so a cancelled press applies nothing and does not
+ * count as a failure.
+ */
+async function readPress(input: {
+  readonly environmentId: EnvironmentId;
+  readonly botId: BotId | null;
+  readonly capabilities: ExecutionEnvironmentCapabilities | undefined;
+  readonly cursor: string | undefined;
+  readonly listed: ReadonlySet<string>;
+  readonly valid: () => boolean;
+}): Promise<
+  | { readonly kind: "applied"; readonly result: Parameters<typeof applyHistoryPress>[1] }
+  | { readonly kind: "cancelled" | "failed" }
+> {
+  try {
+    const result = await readBotThreadHistory({
+      from: input.cursor,
+      listed: input.listed,
+      wanted: 5,
+      read: async (cursor) => {
+        if (!input.valid()) throw CANCELLED;
+        const request = botThreadsHistoryInput(input.capabilities, input.botId, cursor);
+        if (request === null) throw new Error("History is unavailable");
+        const answer = await runAtomCommand(
+          appAtomRegistry,
+          channelEnvironment.listBotThreadsPage,
+          { environmentId: input.environmentId, input: request },
+          { label: "GOAT Bot older work", reportFailure: false },
+        );
+        if (!input.valid()) throw CANCELLED;
+        if (answer._tag !== "Success") throw new Error("History could not be read");
+        return answer.value;
+      },
+    });
+    return input.valid() ? { kind: "applied", result } : { kind: "cancelled" };
+  } catch (error) {
+    return { kind: error === CANCELLED || !input.valid() ? "cancelled" : "failed" };
+  }
 }
