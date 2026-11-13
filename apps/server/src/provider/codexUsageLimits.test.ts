@@ -1,5 +1,6 @@
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { isWindowExhausted } from "@goat/shared/quotaVerdict";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -95,6 +96,40 @@ describe("codexRateLimitsToLimits", () => {
       }),
     ).toEqual({ checkedAt, windows });
     expect(codexRateLimitsToUpdate(snapshot)).toEqual({ windows });
+  });
+
+  it("keeps a seat-based workspace with a zero credit cap usable while its plan windows have room", () => {
+    const usageLimits = codexRateLimitsToLimits({
+      checkedAt,
+      snapshot: {
+        limitId: "codex",
+        planType: "team",
+        rateLimitReachedType: null,
+        primary: { usedPercent: 0, resetsAt: 1_784_000_000, windowDurationMins: 300 },
+        secondary: { usedPercent: 14, resetsAt: 1_784_500_000, windowDurationMins: 10080 },
+        individualLimit: { remainingPercent: 0, resetsAt: 1_796_083_200 },
+      },
+    });
+    expect(
+      usageLimits.windows.some((window) => isWindowExhausted(window, Date.parse(checkedAt))),
+    ).toBe(false);
+    const creditOnly = codexRateLimitsToLimits({
+      checkedAt,
+      snapshot: { individualLimit: { remainingPercent: 0, resetsAt: 1_796_083_200 } },
+    });
+    expect(
+      creditOnly.windows.some((window) => isWindowExhausted(window, Date.parse(checkedAt))),
+    ).toBe(true);
+    const planSpent = codexRateLimitsToLimits({
+      checkedAt,
+      snapshot: {
+        primary: { usedPercent: 100, resetsAt: 1_796_083_200, windowDurationMins: 300 },
+        individualLimit: { remainingPercent: 0, resetsAt: 1_796_083_200 },
+      },
+    });
+    expect(
+      planSpent.windows.some((window) => isWindowExhausted(window, Date.parse(checkedAt))),
+    ).toBe(true);
   });
 
   it("maps primary and secondary onto the session and weekly windows", () => {
