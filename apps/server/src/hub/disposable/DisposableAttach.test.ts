@@ -100,6 +100,22 @@ it.effect("with the switch off or the thread unnamed, attach asks neither Pen no
   ),
 );
 
+it.effect(
+  "reissue answers a missing attach or a closed switch before it asks Pen or OpenCodex",
+  () =>
+    world((pen) =>
+      Effect.gen(function* () {
+        const first = yield* attach(1);
+        pen.control.features = new Set();
+        pen.control.featuresAsked = 0;
+        expect(yield* reason(reissue("no-such-attach", "re-1"))).toBe("not_found");
+        yield* switchTo({ enabled: false });
+        expect(yield* reason(reissue(first.attachId, "re-2"))).toBe("switch_off");
+        expect(pen.control.featuresAsked).toBe(0);
+      }),
+    ),
+);
+
 it.effect("a name Pen would refuse is refused before anything is reserved or minted", () =>
   world((pen) =>
     Effect.gen(function* () {

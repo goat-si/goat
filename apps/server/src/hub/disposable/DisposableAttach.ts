@@ -90,6 +90,8 @@ const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
 const MAX_INVITES_PER_ATTACH = 32;
+const INVITES_USED =
+  "This attach has used all its invites; attach the machine again with a new request.";
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,
@@ -700,68 +702,78 @@ export const make = Effect.gen(function* () {
     return { outcome: "ok", status: yield* dispatchMint(fresh, intent) } as const;
   });
 
+  /**
+   * Reissue's checks that need neither Pen nor OpenCodex: the record, its provisioner, a replay of
+   * this request, an open invite, and the invite limit. Run before the probes and again under the
+   * attach lock; a replay answers the stored outcome.
+   */
+  const reissueGate = Effect.fn("DisposableAttach.reissueGate")(function* (
+    attachId: string,
+    caller: AttachCaller,
+    requestKey: string,
+  ) {
+    const row = yield* read(attachId);
+    if (row === undefined) return yield* fail("not_found", "No attach has that id.");
+    if (
+      !sameProvisioner(provisionerOf(row), caller.provisioner) &&
+      caller.provisioner.kind !== "person"
+    )
+      return yield* fail(
+        "provisioner_refused",
+        "Only the provisioner or a person may reissue this invite.",
+      );
+    const [earlier] = yield* sql<{
+      readonly attach_id: string;
+      readonly outcome: string;
+      readonly detail: string | null;
+    }>`SELECT attach_id, outcome, detail FROM disposable_machine_requests
+        WHERE request_key = ${requestKey}`.pipe(Effect.mapError(storageFailed));
+    if (earlier !== undefined) {
+      if (earlier.attach_id !== row.attach_id)
+        return yield* fail("invalid_request", "This clientRequestId was used for another attach.");
+      if (earlier.outcome === "ok" || earlier.outcome === "settled")
+        return { replay: status(row) } as const;
+      if (earlier.outcome === "running")
+        return yield* fail(
+          "unknown_outcome",
+          "An earlier reissue with this request did not finish. Refresh the machine list, then reissue as a new request.",
+        );
+      return yield* new HubMachinesError({ reason: earlier.outcome, detail: earlier.detail ?? "" });
+    }
+    const open = openEffects(effectsOf(row));
+    const latest = open.at(-1);
+    if (
+      row.pen_admitted_at !== null ||
+      latest === undefined ||
+      open.some((effect) => effect.withdrawn === true || effect.seen === "burned-without-admit")
+    )
+      return yield* fail("conflict", "Only an open invite can be reissued.");
+    if (effectsOf(row).length >= MAX_INVITES_PER_ATTACH)
+      return yield* fail("conflict", INVITES_USED);
+    return { row, latest } as const;
+  });
+
   const reissue = Effect.fn("DisposableAttach.reissue")(function* (
     caller: AttachCaller,
     principal: string,
     input: HubMachineReissueInput,
   ) {
     const requestKey = digest(principal + "\n" + input.clientRequestId);
-    // Probed before the lock, which a slow ocx spawn would hold; a replay needs neither probe.
-    const seen = yield* sql`SELECT 1 FROM disposable_machine_requests
-      WHERE request_key = ${requestKey}`.pipe(Effect.mapError(storageFailed));
-    if (seen.length === 0) yield* requireFeatures;
+    const before = yield* reissueGate(input.attachId, caller, requestKey);
+    if ("replay" in before) return before.replay;
+    // A closed switch is refused before the probes; the grant is checked again under the lock.
+    const current = yield* settingsNow;
+    if (current === undefined) return yield* storageFailed();
+    const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+    if (!gate.open) return yield* fail(gate.reason, refusalText[gate.reason]);
+    // Probed before the lock, which a slow ocx spawn would hold.
+    yield* requireFeatures;
     return yield* exclusive(
       Effect.gen(function* () {
-        const row = yield* read(input.attachId);
-        if (row === undefined) return yield* fail("not_found", "No attach has that id.");
-        if (
-          !sameProvisioner(provisionerOf(row), caller.provisioner) &&
-          caller.provisioner.kind !== "person"
-        )
-          return yield* fail(
-            "provisioner_refused",
-            "Only the provisioner or a person may reissue this invite.",
-          );
-        const [earlier] = yield* sql<{
-          readonly attach_id: string;
-          readonly outcome: string;
-          readonly detail: string | null;
-        }>`SELECT attach_id, outcome, detail FROM disposable_machine_requests
-            WHERE request_key = ${requestKey}`.pipe(Effect.mapError(storageFailed));
-        if (earlier !== undefined) {
-          if (earlier.attach_id !== row.attach_id)
-            return yield* fail(
-              "invalid_request",
-              "This clientRequestId was used for another attach.",
-            );
-          if (earlier.outcome === "ok" || earlier.outcome === "settled") return status(row);
-          if (earlier.outcome === "running")
-            return yield* fail(
-              "unknown_outcome",
-              "An earlier reissue with this request did not finish. Refresh the machine list, then reissue as a new request.",
-            );
-          return yield* new HubMachinesError({
-            reason: earlier.outcome,
-            detail: earlier.detail ?? "",
-          });
-        }
-        const open = openEffects(effectsOf(row));
-        const latest = open.at(-1);
-        if (
-          row.pen_admitted_at !== null ||
-          latest === undefined ||
-          open.some((effect) => effect.withdrawn === true || effect.seen === "burned-without-admit")
-        )
-          return yield* fail("conflict", "Only an open invite can be reissued.");
-        if (effectsOf(row).length >= MAX_INVITES_PER_ATTACH)
-          return yield* fail(
-            "conflict",
-            "This attach has used all its invites; attach the machine again with a new request.",
-          );
-        const ended = yield* authorityEnded(
-          row,
-          yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
-        );
+        const checked = yield* reissueGate(input.attachId, caller, requestKey);
+        if ("replay" in checked) return checked.replay;
+        const { row, latest } = checked;
+        const ended = yield* authorityEnded(row, yield* settingsNow);
         if (ended !== undefined) return yield* fail(ended, refusalText[ended]);
         const now = yield* nowIso;
         yield* sql`INSERT INTO disposable_machine_requests ${sql.insert({
