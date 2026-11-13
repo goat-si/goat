@@ -627,3 +627,19 @@ it.effect(
       }),
     ),
 );
+
+it.effect("an attach that loses its authority after the machine joined says so in that order", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      yield* TestClock.adjust(60_000);
+      yield* switchTo({ enabled: false });
+      yield* enroll;
+      const machine = yield* listed(attachId);
+      expect(machine).toMatchObject({ state: "paused" });
+      expect(machine?.message).toContain("then lost its authority");
+      expect(machine?.message).not.toContain("joined Pen after");
+    }),
+  ),
+);

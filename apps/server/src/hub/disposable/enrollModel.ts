@@ -308,6 +308,8 @@ export const enrollMessage = (
   state: string,
   name: string,
   enroll: Enroll,
+  /** The record was paused after its machine joined, not by a join after the withdrawal. */
+  pausedAfterJoin = false,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   const keyStep =
     "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet. Settings → Hub shows it with the machine on web and desktop.";
@@ -316,6 +318,14 @@ export const enrollMessage = (
       message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),
       nextAction:
         "A person decides what happens to it. Detaching is not available yet; it stays a Pen member until a person removes it from Pen.",
+    };
+  if (state === "paused" && pausedAfterJoin)
+    return {
+      message:
+        name +
+        " joined Pen; its attach then lost its authority (the consent changed or ended, or the provisioner's grant did) before it was linked.",
+      nextAction:
+        "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
     };
   switch (state) {
     case "admitted":

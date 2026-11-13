@@ -127,7 +127,9 @@ export const status = (
     (leftWithLink
       ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
       : undefined) ??
-    (row.pen_admitted_at === null ? undefined : enrollMessage(row.state, row.name, enroll)) ??
+    (row.pen_admitted_at === null
+      ? undefined
+      : enrollMessage(row.state, row.name, enroll, row.pen_admitted_at < row.state_since)) ??
     stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);
   return {
