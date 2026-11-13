@@ -13,6 +13,8 @@ import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
   canEdit: false,
+  historySupported: false,
+  readHistory: vi.fn(),
   tasks: [] as unknown[],
   routinesError: null as string | null,
   routinesLoaded: true,
@@ -27,8 +29,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => ({
-    connection: { phase: "disconnected" },
-    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+    connection: { phase: mocks.historySupported ? "connected" : "disconnected" },
+    serverConfig: {
+      environment: {
+        capabilities: { goatBotProfileEdit: true, goatBotTaskThreadsPaged: mocks.historySupported },
+      },
+    },
   }),
 }));
 vi.mock("./GoatBotEditBotDialog", () => ({
@@ -94,6 +100,7 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    listBotThreadsPage: { execute: mocks.readHistory },
     updateBot: { permissionAtom: () => Atom.make(mocks.canEdit) },
     listBotNotes: () => null,
     listBotArtifacts: () => null,
@@ -114,6 +121,8 @@ import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   mocks.canEdit = false;
+  mocks.historySupported = false;
+  mocks.readHistory.mockReset();
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
@@ -770,4 +779,123 @@ it("offers Back to chat on the sheet's Home and inside a peek", async () => {
   await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
   await userEvent.click(screen.getByRole("button", { name: "Back to chat" }));
   expect(onShowChat).toHaveBeenCalledOnce();
+});
+
+function historyPanel() {
+  return (
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+      peekRows={() => []}
+    />
+  );
+}
+
+function historyPage(rows: unknown[], history?: Record<string, unknown>) {
+  return {
+    _tag: "Success",
+    value: { rows, mainMessageCount: 0, ...(history === undefined ? {} : { history }) },
+  };
+}
+
+function showMore(screen: Awaited<ReturnType<typeof render>>) {
+  const button = [...screen.container.querySelectorAll("button")].find(
+    (item) => item.textContent?.trim() === "Show more",
+  );
+  expect(button, "Work offers history paging").toBeDefined();
+  if (!button) throw new Error("Work offers history paging");
+  return button;
+}
+
+it("walks through an empty history page, and stops only without a cursor", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory
+    .mockResolvedValueOnce(historyPage([], { nextCursor: "after-empty" }))
+    .mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  expect(mocks.readHistory).toHaveBeenCalledTimes(2);
+  expect(mocks.readHistory.mock.calls[1]?.[0].input.history.cursor).toBe("after-empty");
+  expect(
+    [...screen.container.querySelectorAll("button")].some(
+      (item) => item.textContent?.trim() === "Show more",
+    ),
+  ).toBe(false);
+});
+
+it("bounds empty history requests per press and lets the person continue", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  for (let i = 1; i <= 4; i++)
+    mocks.readHistory.mockResolvedValueOnce(historyPage([], { nextCursor: `cursor-${i}` }));
+  mocks.readHistory.mockResolvedValueOnce(historyPage([], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(4));
+  await userEvent.click(showMore(screen));
+  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(5));
+  expect(mocks.readHistory.mock.calls[4]?.[0].input.history.cursor).toBe("cursor-4");
+});
+
+it("falls back to current work when the server omits the history marker", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValue(historyPage([], undefined));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(1));
+  await expect.element(screen.getByText("Stop the port 3774 server")).toBeVisible();
+  expect(screen.container.textContent?.toLowerCase()).not.toContain("all work loaded");
+  expect(
+    [...screen.container.querySelectorAll("button")].some(
+      (item) => item.textContent?.trim() === "Show more",
+    ),
+  ).toBe(false);
+});
+
+it.each(["partial", "endedEarly"])("warns when history has %s", async (flag) => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValue(historyPage([], { [flag]: true }));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  expect(mocks.readHistory).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a paged-in task in the peek and exposes its work threads", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+    worker: { environmentId: "env", threadId: "channel-worker:older" },
+  };
+  mocks.readHistory.mockResolvedValue(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  const row = screen
+    .getByRole("button", { name: /^Older task/ })
+    .element()
+    .closest(".border-t");
+  const expand = row?.querySelector<HTMLButtonElement>('button[aria-label="Show work"]');
+  expect(expand).not.toBeNull();
+  if (!expand) throw new Error("Missing Show work");
+  await userEvent.click(expand);
+  await expect.element(screen.getByRole("link", { name: "Open work thread" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: /^Older task/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Go to thread" }).element().getAttribute("href"),
+  ).toContain("taskTitle=Older");
 });

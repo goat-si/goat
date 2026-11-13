@@ -55,6 +55,7 @@ const childWork = Atom.make(() => {
       });
 });
 
+const decodeRemoteWork = Schema.decodeSync(BotRemoteWork);
 const at = "2026-11-09T00:00:00.000Z";
 const rows = [
   Schema.decodeSync(BotThreadRow)({
@@ -67,7 +68,7 @@ const rows = [
   }),
 ];
 const remoteWork = [
-  Schema.decodeSync(BotRemoteWork)({
+  decodeRemoteWork({
     childWorkId: "cw-restart",
     taskId: "task-1",
     callerThreadId: "channel-worker:task-1",
@@ -119,3 +120,34 @@ it("retries a failed sub-work read and shows the returned subagent", async () =>
   await expect.element(screen.getByText(/recovered host/)).toBeVisible();
   expect(state.reads).toBe(2);
 });
+it.each(["failed", "cancelled", "released"] as const)(
+  "shows an ended remote launch as %s without a link",
+  async (remoteState) => {
+    state.connected = new Set();
+    const item = decodeRemoteWork({
+      childWorkId: "ended",
+      taskId: "task-1",
+      callerThreadId: "channel-worker:task-1",
+      host: "remote",
+      state: remoteState,
+      lastActivityAt: at,
+      workKind: "chore",
+    });
+    await using screen = await render(
+      <GoatBotWorkDetails
+        environmentId={EnvironmentId.make("env-studio")}
+        taskId={ChannelTaskId.make("task-1")}
+        rows={rows}
+        remoteWork={[item]}
+      />,
+    );
+    expect(screen.container.textContent).toContain(
+      remoteState === "failed"
+        ? "Failed"
+        : remoteState === "cancelled"
+          ? "Cancelled"
+          : "Not started",
+    );
+    expect(screen.container.querySelector("a")).toBeNull();
+  },
+);

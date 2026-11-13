@@ -13,6 +13,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
+  noRows: false,
   send: vi.fn(() => true),
   // One command function serves both commands; a retry is told apart by its clientRequestId.
   update: vi.fn(async (call?: { readonly input?: { readonly clientRequestId?: string } }) =>
@@ -83,22 +84,24 @@ vi.mock("./useBotRoster", () => ({
   useBotThreads: (_environmentId: string, bot: { botId: string } | null) => {
     state.lists.push(bot?.botId ?? null);
     return {
-      rows: [
-        decodeBotThreadRow({
-          kind: "task",
-          task: {
-            taskId: "task-1",
-            title: bot === null ? "Review work" : "Find sources",
-            status: state.row.status,
-            updatedAt: "2026-11-04T10:00:00.000Z",
-            ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
-          },
-          view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
-          lastActivityAt: "2026-11-04T10:00:00.000Z",
-          unread: state.row.unread,
-          mainMessagesSinceQuiet: 0,
-        }),
-      ],
+      rows: state.noRows
+        ? []
+        : [
+            decodeBotThreadRow({
+              kind: "task",
+              task: {
+                taskId: "task-1",
+                title: bot === null ? "Review work" : "Find sources",
+                status: state.row.status,
+                updatedAt: "2026-11-04T10:00:00.000Z",
+                ...(state.row.generation === undefined ? {} : { generation: state.row.generation }),
+              },
+              view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+              lastActivityAt: "2026-11-04T10:00:00.000Z",
+              unread: state.row.unread,
+              mainMessagesSinceQuiet: 0,
+            }),
+          ],
       refresh: state.refresh,
     };
   },
@@ -313,4 +316,25 @@ it("offers no retry for work still going or on a server without it", async () =>
   await screen.rerender(<Pane onClose={() => {}} />);
   await expect.element(screen.getByText("Failed")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+});
+
+it("uses the title carried from a history row when the current list no longer contains it", async () => {
+  state.noRows = true;
+  try {
+    const session = useGoatBotSession();
+    await using screen = await render(
+      <GoatBotTaskPane
+        environmentId={EnvironmentId.make("env")}
+        session={session}
+        taskId={ChannelTaskId.make("task-1")}
+        narrow
+        onClose={() => {}}
+        {...{ taskTitle: "Older task" }}
+      />,
+    );
+    expect(screen.container.textContent).toContain("Older task");
+    expect(screen.container.textContent).not.toContain("Task thread");
+  } finally {
+    state.noRows = false;
+  }
 });

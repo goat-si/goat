@@ -272,3 +272,20 @@ it("the row's chevron opens the task, and Show work and Hide work live in its me
   expect(onOpenTask).toHaveBeenCalledOnce();
   expect(actions.update).not.toHaveBeenCalled();
 });
+
+it("offers history continuation and explains incomplete older work and truncated launches", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const loadMore = vi.fn();
+  await using screen = await render(
+    view(rows, {
+      historyAvailable: true,
+      historyIncomplete: true,
+      launchesTruncated: new Set(["task-a"]),
+      onLoadHistory: loadMore,
+    }),
+  );
+  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  expect(loadMore).toHaveBeenCalledOnce();
+});
