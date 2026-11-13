@@ -372,8 +372,8 @@ type Status struct {
 	MeshID      string       `json:"meshId"`
 	Members     int          `json:"members"`
 	PID         int          `json:"pid"`
-	// Features lists what this node supports beyond its version's base (contract "Bound invites"); only the status op
-	// carries it, so the relays and login-bind answers keep their shape.
+	// Features lists what this node supports beyond its version's base (contract "Bound invites"). Only the status op
+	// carries it: name, reconnect, relays, login-bind and account-unbind answer with the same struct and keep their shape.
 	Features []string `json:"features,omitempty"`
 }
 
@@ -448,15 +448,15 @@ type InviteReply struct {
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
-	return d.createInviteNotify(ttlMs, nil)
+	return d.createInviteNotify(d.inviteBook(), ttlMs, nil)
 }
 
-func (d *Daemon) createInviteNotify(ttlMs int64, cancelled chan struct{}) (InviteReply, string, error) {
+func (d *Daemon) createInviteNotify(book *mesh.Invites, ttlMs int64, sig *mesh.Signals) (InviteReply, string, error) {
 	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), cancelled)
+	inv, err := book.CreateNotify(ttl, d.now(), sig)
 	if err != nil {
 		return InviteReply{}, "", err
 	}
@@ -471,20 +471,19 @@ func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	cancelled := make(chan struct{})
-	r, id, err := d.createInviteNotify(req.TTLMs, cancelled)
+	sig, book := mesh.NewSignals(), d.inviteBook()
+	r, id, err := d.createInviteNotify(book, req.TTLMs, sig)
 	if err != nil {
 		fail(err)
 		return
 	}
-	d.awaitJoin(ctx, c, r, id, cancelled, reply)
+	d.awaitJoin(ctx, c, r, book, id, sig, reply)
 }
 
-// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
-// the invite's cancel signal, attached when the invite was made. Admission needs no
-// such care: nobody holds the token before r is answered, after the waiter is registered.
-func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
-	wait := make(chan *mesh.Member, 1)
+// awaitJoin answers r, then what became of the invite (a join's outcome, its cancel or its expiry) until the client
+// hangs up. sig is the invite's Cancelled and Burned pair, attached when it was made.
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, book *mesh.Invites, id string, sig *mesh.Signals, reply func(any)) {
+	wait := make(chan joinOutcome, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
 	d.mu.Unlock()
@@ -495,18 +494,72 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	}()
 	reply(r)
 	gone := clientGone(c)
-	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))
-	defer t.Stop()
+	expiry, stop := inviteExpiry(time.Until(time.UnixMilli(r.ExpiresAt)))
+	defer func() { stop() }()
+	outcome := func(o joinOutcome) {
+		switch {
+		case o.delivered:
+			reply(map[string]any{"t": "admitted", "member": *o.member})
+		case o.member != nil:
+			reply(map[string]any{"t": "admitted", "member": *o.member, "delivered": false})
+		default:
+			reply(map[string]any{"t": "burned"})
+		}
+	}
+waiting:
+	for {
+		select {
+		case o := <-wait:
+			outcome(o)
+			return
+		case <-sig.Cancelled:
+			reply(map[string]any{"t": "cancelled"})
+			return
+		case <-expiry:
+			state, left, err := book.WaitExpiry(id, sig, d.now)
+			switch {
+			case err != nil:
+				reply(map[string]string{"error": "could not record the invite's expiry: " + err.Error()})
+				return
+			case state == mesh.InviteLive:
+				// Fired early by the node's clock (it was set back): wait for the time left.
+				stop()
+				expiry, stop = inviteExpiry(left)
+				continue
+			case state == mesh.InviteBurned:
+				break waiting
+			case state == mesh.InviteCancelled:
+				reply(map[string]any{"t": "cancelled"})
+			default:
+				reply(map[string]any{"t": "expired"})
+			}
+			return
+		case <-sig.Burned:
+			break waiting
+		case <-gone:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+	// A join used the invite: its outcome is the answer, for as long as that join may run, counted from here; past
+	// that the invite was used and this wait cannot say whom it admitted.
+	joinDone, stopJoin := inviteExpiry(meshSessionTimeout)
+	defer stopJoin()
 	select {
-	case m := <-wait:
-		reply(map[string]any{"t": "admitted", "member": *m})
-	case <-cancelled:
-		reply(map[string]any{"t": "cancelled"})
-	case <-t.C:
-		reply(map[string]any{"t": "expired"})
+	case o := <-wait:
+		outcome(o)
+	case <-joinDone:
+		reply(map[string]any{"t": "burned"})
 	case <-gone:
 	case <-ctx.Done():
 	}
+}
+
+// inviteExpiry is the timer of a wait on an invite; tests fire it by hand.
+var inviteExpiry = func(d time.Duration) (<-chan time.Time, func() bool) {
+	t := time.NewTimer(d)
+	return t.C, t.Stop
 }
 
 // clientGone closes when the control client hangs up.

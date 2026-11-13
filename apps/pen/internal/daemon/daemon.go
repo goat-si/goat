@@ -149,8 +149,8 @@ type Daemon struct {
 	versions map[string]string
 	// acct are the running kind 0x04 sessions, oldest first.
 	acct []*acctSlot
-	// inviteWait holds the callers waiting on an invite's admission.
-	inviteWait map[string]chan *mesh.Member
+	// inviteWait holds the callers waiting on an invite's join.
+	inviteWait map[string]chan joinOutcome
 	// boundCreated, when set, runs after a bound invite is made and before its waiter is registered (tests).
 	boundCreated func(id string)
 	lastView     *mesh.View
@@ -308,7 +308,7 @@ func New(opt Options) (*Daemon, error) {
 		opt: opt, st: st, id: id, nodeID: id.NodeID(), cfg: cfg, store: store, invites: invites, pending: pending, forgets: forgets,
 		sessions: map[uint64]*live{}, watchers: map[chan []byte]struct{}{}, snapWatchers: map[chan []byte]struct{}{}, snapGen: 1,
 		seen:     map[string]seenInfo{},
-		versions: versions, inviteWait: map[string]chan *mesh.Member{}, stopCh: make(chan struct{}),
+		versions: versions, inviteWait: map[string]chan joinOutcome{}, stopCh: make(chan struct{}),
 	}
 	d.svc.onPhones = opt.PhoneSlots
 	switch opt.SSHUser {

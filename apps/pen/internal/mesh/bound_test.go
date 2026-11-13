@@ -836,15 +836,15 @@ func TestACancelSignalsOnlyItsOwnInvite(t *testing.T) {
 	f, s, iv := joinFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	j := detID(3)
-	closed := func(ch chan struct{}) bool {
+	closed := func(sig *Signals) bool {
 		select {
-		case <-ch:
+		case <-sig.Cancelled:
 			return true
 		default:
 			return false
 		}
 	}
-	first, second, burned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	first, second, burned := NewSignals(), NewSignals(), NewSignals()
 	x, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), first)
 	if err != nil {
 		t.Fatal(err)
@@ -892,7 +892,8 @@ func TestLoadingRewritesABoundEntryInTheEarlierFileForm(t *testing.T) {
 	if err := st.WriteJSON("offers.json", old, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadInvites(st); err != nil {
+	iv, err := LoadInvites(st)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var dev []devInvite
@@ -901,5 +902,117 @@ func TestLoadingRewritesABoundEntryInTheEarlierFileForm(t *testing.T) {
 	}
 	if len(dev[0].Secret) != 0 || dev[0].ExpiresAt != 0 {
 		t.Fatalf("after loading, dev's struct still reads %+v; want no secret and no expiry", dev[0])
+	}
+	// This node still has the invite, before and after reading the rewritten file again.
+	again, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, book := range []*Invites{iv, again} {
+		if x, ok := book.Lookup("AAAAAAAAAAAAAAAA", now); !ok || len(x.Secret) != 32 || x.ExpiresAt != now.Add(time.Minute).UnixMilli() {
+			t.Fatalf("lookup %+v (found %v); want the live invite with its 32-byte secret and expiry", x, ok)
+		}
+	}
+}
+
+// recordsFail is a Link whose sends fail once the inviter starts sending the record set: the admit is signed and
+// stored, and the joiner never receives it.
+type recordsFail struct{ Link }
+
+func (l recordsFail) Send(p []byte) error {
+	if bytes.Contains(p, []byte(`"t":"records"`)) {
+		l.Link.Close(4400)
+		return errors.New("send failed after the admit")
+	}
+	return l.Link.Send(p)
+}
+
+// A join that fails after its burn committed says so and names the joiner it admitted: the invite admits nobody
+// else, and a caller waiting on it must not be told it expired.
+func TestAJoinThatFailsAfterItsBurnNamesWhomItAdmitted(t *testing.T) {
+	f, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	j := detID(3)
+	inv, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, cli := pipe()
+	served := make(chan error, 1)
+	go func() {
+		_, err := ServeJoin(context.Background(), recordsFail{srv}, j.NoisePub, Admission{ID: f, Store: s, Invites: iv, InviteID: inv.ID, Now: at(now)})
+		served <- err
+	}()
+	Join(context.Background(), cli, j, "j")
+	serveErr := <-served
+	var burned *BurnedError
+	if !errors.As(serveErr, &burned) || burned.Member == nil || burned.Member.SignPub != pub(j) {
+		t.Fatalf("serve %v; want a BurnedError naming the joiner", serveErr)
+	}
+	if got := mustStatus(t, s, iv, inv.ID, "", at(now)); got.State != InviteBurned || got.Member == nil || !*got.Member {
+		t.Fatalf("status %+v; want burned with the joiner a member", got)
+	}
+}
+
+// When mesh.json cannot be written after the admit is stored, the join fails, yet the joiner is a member of this
+// node's view: the failure names it.
+func TestAJoinWhoseAdmitIsNotSavedNamesWhomItAdmitted(t *testing.T) {
+	st := tmpState(t)
+	f, j := detID(1), detID(3)
+	b, found := newMesh(t, f)
+	s := NewStore(st, b.meshID)
+	if _, err := s.Merge([]*Record{found}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(st.Path("mesh.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(st.Path("mesh.json"), "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	serveErr, _ := serveOne(f, s, iv, x.ID, now, j, "j")
+	var burned *BurnedError
+	if !errors.As(serveErr, &burned) || burned.Member == nil || burned.Member.SignPub != pub(j) {
+		t.Fatalf("serve %v; want a BurnedError naming the joiner", serveErr)
+	}
+}
+
+// An ordinary invite that a failed burn left out of memory but live in offers.json is not reported expired by a
+// wait unless the book is written first: a failed write is an error, never expired.
+func TestAWaitDoesNotCallAnUnwrittenRemovalExpired(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	sig := NewSignals()
+	x, err := iv.CreateNotify(time.Minute, now, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(st.Path("offers.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(st.Path("offers.json"), "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := iv.Burn(x.ID, now, CardBody{}, at(now)); err == nil {
+		t.Fatal("a burn that could not be saved succeeded")
+	}
+	if state, _, err := iv.WaitExpiry(x.ID, sig, at(now.Add(2*time.Minute))); err == nil {
+		t.Fatalf("wait expiry answered %q with no error; want the failed write reported", state)
 	}
 }
