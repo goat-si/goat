@@ -1,5 +1,6 @@
 import * as Layer from "effect/Layer";
 
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as HubOcx from "../HubOcx.ts";
 import * as DisposableAttach from "./DisposableAttach.ts";
 import * as DisposableMachineStore from "./DisposableMachineStore.ts";
@@ -15,5 +16,5 @@ export const layerDisposableAttach = DisposableAttach.layer.pipe(
   Layer.provide(DisposableMachineStore.layer),
   Layer.provide(PenInvitesSocket.layer),
   Layer.provide(homeContractsLayer.pipe(Layer.provide(HubOcx.layer))),
-  Layer.provide(DisposableProvisioners.layer),
+  Layer.provide(DisposableProvisioners.layer.pipe(Layer.provide(Profiles.layer))),
 );

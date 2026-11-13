@@ -124,7 +124,6 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
           threadId: threadId,
           ...(input.cloudRunId === undefined ? {} : { cloudRunId: input.cloudRunId }),
         },
-        delegation: { threadId: threadId },
       };
       return yield* (yield* DisposableAttach.DisposableAttach)
         .attach(caller, "thread:" + threadId, input)
@@ -135,11 +134,16 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const threadId = yield* threadOf(scope);
-      const caller = {
-        provisioner: { kind: "thread" as const, threadId: threadId },
-        delegation: { threadId: threadId },
-      };
-      return yield* (yield* DisposableAttach.DisposableAttach)
+      const machines = yield* DisposableAttach.DisposableAttach;
+      const [record] = (yield* machines
+        .list({ attachId: input.attachId })
+        .pipe(Effect.mapError(machineFailure))).machines;
+      if (record !== undefined)
+        yield* (yield* Profiles.PermissionProfiles).require(scope, "hub.manage", {
+          host: "pen-" + record.nodeId,
+        });
+      const caller = { provisioner: { kind: "thread" as const, threadId: threadId } };
+      return yield* machines
         .reissue(caller, "thread:" + threadId, input)
         .pipe(Effect.mapError(machineFailure));
     }),

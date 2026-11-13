@@ -31,17 +31,26 @@ const Minted = Schema.Struct({
 });
 const Cancelled = Schema.Struct({
   t: Schema.Literal("invite-cancel"),
+  inviteId: Schema.optional(Schema.String),
+  mintId: Schema.optional(Schema.String),
   state: Schema.Literals(["cancelled", "burned", "expired", "absent"]),
 });
 const InviteStatus = Schema.Struct({
   t: Schema.Literal("invite-status"),
+  inviteId: Schema.optional(Schema.String),
+  mintId: Schema.optional(Schema.String),
   state: Schema.Literals(["live", "cancelled", "expired", "burned", "burned-unsaved", "absent"]),
   expiresAt: Schema.optional(Schema.Number),
   nonce: Schema.optional(Schema.String),
   admit: Schema.optional(Schema.String),
   member: Schema.optional(Schema.Boolean),
 });
-const Acked = Schema.Struct({ state: Schema.Literals(["acked", "absent"]) });
+const Acked = Schema.Struct({
+  t: Schema.Literal("invite-ack"),
+  inviteId: Schema.optional(Schema.String),
+  mintId: Schema.optional(Schema.String),
+  state: Schema.Literals(["acked", "absent"]),
+});
 const decode = <S extends Schema.Top>(schema: S) =>
   Schema.decodeUnknownOption(Schema.fromJsonString(schema) as never) as (
     line: string,
@@ -96,6 +105,18 @@ export const make = Effect.gen(function* () {
     );
   const named = (ref: PenInviteRef) =>
     "mintId" in ref ? { mintId: ref.mintId } : { inviteId: ref.inviteId };
+  /**
+   * Pen repeats the id each op names (CONTRACT "Bound invites"); an answer that names another
+   * invite, or none, says nothing about this one.
+   */
+  const about =
+    (ref: PenInviteRef, what: string) =>
+    <A extends { readonly inviteId?: string | undefined; readonly mintId?: string | undefined }>(
+      reply: A,
+    ) =>
+      ("mintId" in ref ? reply.mintId === ref.mintId : reply.inviteId === ref.inviteId)
+        ? Effect.succeed(reply)
+        : Effect.fail(unknown(what + " answered another invite"));
 
   return PenInvites.of({
     features: ask({ op: "status" }).pipe(
@@ -130,12 +151,14 @@ export const make = Effect.gen(function* () {
     cancel: Effect.fn("PenInvites.cancel")(function* (ref) {
       return yield* ask({ op: "invite.cancel", ...named(ref) }).pipe(
         Effect.flatMap((line) => answer(decodeCancelled(line), "invite.cancel")),
+        Effect.flatMap(about(ref, "invite.cancel")),
         Effect.map((reply) => reply.state),
       );
     }),
     status: Effect.fn("PenInvites.status")(function* (ref) {
       return yield* ask({ op: "invite.status", ...named(ref) }).pipe(
         Effect.flatMap((line) => answer(decodeInviteStatus(line), "invite.status")),
+        Effect.flatMap(about(ref, "invite.status")),
         Effect.flatMap((reply): Effect.Effect<PenInviteState, PenInviteUnknown> => {
           switch (reply.state) {
             case "live":
@@ -164,6 +187,7 @@ export const make = Effect.gen(function* () {
     ack: Effect.fn("PenInvites.ack")(function* (ref) {
       return yield* ask({ op: "invite.ack", ...named(ref) }).pipe(
         Effect.flatMap((line) => answer(decodeAcked(line), "invite.ack")),
+        Effect.flatMap(about(ref, "invite.ack")),
         Effect.map((reply) => reply.state),
       );
     }),

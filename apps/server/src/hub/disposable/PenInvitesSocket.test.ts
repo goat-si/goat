@@ -88,7 +88,10 @@ it.live("speaks Pen's bound-invite ops on its control socket and reads only what
               member: true,
             });
           case "invite.cancel":
-            return JSON.stringify({ t: "invite-cancel", inviteId: "inv-1", state: "burned" });
+            return JSON.stringify({ t: "invite-cancel", mintId: "m-1", state: "burned" });
+          case "invite.ack":
+            // Names no invite at all.
+            return JSON.stringify({ t: "invite-ack", state: "acked" });
           default:
             return JSON.stringify({ error: "bad request" });
         }
@@ -110,11 +113,16 @@ it.live("speaks Pen's bound-invite ops on its control socket and reads only what
         admit: "h1",
         member: true,
       });
-      expect(yield* invites.cancel({ inviteId: "inv-1" })).toBe("burned");
-      // A refusal, or an answer for another mint, is never read as an invite.
-      expect((yield* invites.ack({ inviteId: "inv-1" }).pipe(Effect.flip))._tag).toBe(
-        "PenInviteUnknown",
-      );
+      expect(yield* invites.cancel({ mintId: "m-1" })).toBe("burned");
+      // A refusal, or an answer that names another invite or none, is never read as this one.
+      const unread = <A, R>(op: Effect.Effect<A, { readonly _tag: string }, R>) =>
+        op.pipe(
+          Effect.flip,
+          Effect.map((error) => error._tag),
+        );
+      expect(yield* unread(invites.cancel({ mintId: "m-2" }))).toBe("PenInviteUnknown");
+      expect(yield* unread(invites.status({ mintId: "m-2" }))).toBe("PenInviteUnknown");
+      expect(yield* unread(invites.ack({ mintId: "m-1" }))).toBe("PenInviteUnknown");
     }),
   ),
 );

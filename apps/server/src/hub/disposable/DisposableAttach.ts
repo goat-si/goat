@@ -1,4 +1,4 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- attach ids, mint ids and request keys.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- attach ids and request keys.
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -10,6 +10,7 @@ import {
   type HubMachinesErrorReason,
   type HubMachineStatus,
   matchesDisposableNameRule,
+  type ServerSettings,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -17,46 +18,59 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Settings from "../../serverSettings.ts";
 import {
   type AttachEffect,
+  ackable,
   conflictCount,
+  coversDelegation,
+  decodeDelegation,
   decodeEffects,
   decodeProvisioner,
-  decodeUnknown,
+  type Delegation,
+  encodeDelegation,
   encodeEffects,
   encodeProvisioner,
-  encodeUnknown,
   mintSteps,
+  observe,
+  openEffects,
   penNodeId,
+  stateFromEffects,
   type StoredProvisioner,
   stateMessage,
 } from "./attachModel.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { disposableSwitch } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
-import { PEN_ATTACH_FEATURES, type PenInviteRef, PenInvites } from "./PenInvites.ts";
+import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvites.ts";
 
 export type { StoredProvisioner };
 
 export interface AttachCaller {
   readonly provisioner: StoredProvisioner;
-  /** The caller's grant as recorded at attach start; re-checked before every effect. */
-  readonly delegation: unknown;
 }
 
-/** Whether a provisioner still holds at least the grant recorded with it (design section 4). */
+/** A provisioner's grant now (design section 4); undefined when it holds none for this node. */
 export class Provisioners extends Context.Service<
   Provisioners,
   {
-    readonly alive: (provisioner: StoredProvisioner, delegation: unknown) => Effect.Effect<boolean>;
+    readonly grantOf: (
+      provisioner: StoredProvisioner,
+      nodeId: string,
+    ) => Effect.Effect<Delegation | undefined>;
   }
 >()("goat/hub/disposable/DisposableAttach/Provisioners") {}
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const OPEN = "final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')";
+const IN_PEN = "pen_admitted_at IS NOT NULL AND pen_removed_at IS NULL";
+// A final record still owes Pen an ack for a terminal entry GOAT stored.
+const OWES_ACK = `EXISTS (SELECT 1 FROM json_each(effects_json)
+  WHERE json_extract(value, '$.settled') IN ('cancelled', 'expired', 'burned')
+    AND json_extract(value, '$.acked') IS NULL)`;
 
 interface Row {
   readonly attach_id: string;
@@ -79,6 +93,13 @@ interface Row {
   readonly pen_removed_at: string | null;
   readonly final_at: string | null;
 }
+type Columns = Record<string, string | number | null>;
+type Refusal =
+  | "conflict"
+  | "switch_off"
+  | "switch_expired"
+  | "provisioner_refused"
+  | "delegation_lost";
 
 const fail = (reason: HubMachinesErrorReason, detail: string) =>
   Effect.fail(new HubMachinesError({ reason, detail }));
@@ -97,14 +118,24 @@ const isCanonicalKey = (key: string) => {
   const bytes = Buffer.from(key, "base64url");
   return bytes.length === 32 && bytes.toString("base64url") === key;
 };
-const refusalReason = (reason: Store.ForwardRefusal): HubMachinesErrorReason =>
-  reason === "switch_off" || reason === "switch_expired"
+const replace = (effects: ReadonlyArray<AttachEffect>, next: AttachEffect) =>
+  effects.map((effect) => (effect.id === next.id ? next : effect));
+/** A cancel's answer settles the mint only when it names a terminal state without a burn. */
+const afterCancel = (effect: AttachEffect, answer: string): AttachEffect =>
+  answer === "cancelled" || answer === "expired" ? { ...effect, settled: answer } : effect;
+const refusalText: Record<Refusal, string> = {
+  conflict: "The record changed while the invite was being made.",
+  switch_off: "Attach disposable machines no longer allows this attach.",
+  switch_expired: "Attach disposable machines has expired on this hub.",
+  provisioner_refused: "This thread is not named in Attach disposable machines.",
+  delegation_lost: "The provisioner no longer holds the grant this attach started with.",
+};
+const refusalOf = (reason: Store.ForwardRefusal): Refusal =>
+  reason === "switch_expired" || reason === "delegation_lost"
     ? reason
-    : reason === "fence_moved"
+    : reason === "fence_moved" || reason === "not_found"
       ? "conflict"
-      : reason === "not_found"
-        ? "not_found"
-        : "switch_off";
+      : "switch_off";
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,
@@ -121,8 +152,9 @@ export class DisposableAttach extends Context.Service<
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly list: (input: HubMachineListInput) => Effect.Effect<HubMachineList, HubMachinesError>;
     /**
-     * One pass over open records: settles each invite from what Pen saved, and cancels the open
-     * invites of records whose grant is no longer the switch's.
+     * One pass over open records and admitted keys: withdraws the open mints of records whose
+     * provisioner's authority ended, settles each mint from what Pen saved, lets Pen forget what
+     * GOAT has stored, and confirms admitted keys are still members.
      */
     readonly reconcile: Effect.Effect<void, HubMachinesError>;
   }
@@ -136,6 +168,9 @@ export const make = Effect.gen(function* () {
   const home = yield* HomeContracts;
   const provisioners = yield* Provisioners;
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+  // One attach mutation at a time, each rereading its record: mint, reissue, settlement and
+  // withdrawal never interleave. Lock order: this, the settings write lock, the SQL transaction.
+  const exclusive = (yield* Semaphore.make(1)).withPermits(1);
 
   const read = (attachId: string) =>
     sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${attachId}`.pipe(
@@ -151,26 +186,44 @@ export const make = Effect.gen(function* () {
         VALUES (${yield* nowIso}, 'goat:disposable', 'hub', ${action}, ${attachId}, ${outcome}, NULL)`;
   }, Effect.mapError(storageFailed));
 
-  /** A fact Pen or the machine settled: written under the record's fence, with no switch needed. */
-  const writeFacts = Effect.fn("DisposableAttach.writeFacts")(function* (
-    attachId: string,
-    fence: number,
-    facts: Record<string, string | number | null>,
+  /**
+   * Stores a record's mints with the state they give it, under its fence and with no switch
+   * needed: these are facts Pen reported. An admitted record keeps its state unless told.
+   */
+  const save = Effect.fn("DisposableAttach.save")(function* (
+    row: Row,
+    effects: ReadonlyArray<AttachEffect>,
+    extra: Columns = {},
   ) {
     const now = yield* nowIso;
-    const columns = { ...facts, updated_at: now };
-    yield* sql.withTransaction(
-      sql`UPDATE disposable_machines SET ${sql.update(columns)}
-          WHERE attach_id = ${attachId} AND fence = ${fence}`,
-    );
+    const state =
+      typeof extra.state === "string"
+        ? extra.state
+        : row.pen_admitted_at === null
+          ? stateFromEffects(effects)
+          : row.state;
+    yield* sql`UPDATE disposable_machines SET ${sql.update({
+      ...extra,
+      effects_json: encodeEffects(effects),
+      state,
+      ...(state === row.state ? {} : { state_since: now }),
+      ...(state === "failed" && row.final_at === null ? { final_at: now } : {}),
+      updated_at: now,
+    })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence}`;
+    const fresh = yield* read(row.attach_id);
+    return fresh ?? row;
   }, Effect.mapError(storageFailed));
 
   const status = (
     row: Row,
     invite?: { readonly token: string; readonly expiresAt: string },
   ): HubMachineStatus => {
-    const effects = effectsOf(row);
-    const { message, nextAction } = stateMessage(row.state, row.name, row.invite_expires_at);
+    const { message, nextAction } = stateMessage(
+      row.state,
+      row.name,
+      row.invite_expires_at,
+      row.pen_removed_at !== null,
+    );
     const provisioner = provisionerOf(row);
     return {
       attachId: row.attach_id,
@@ -178,7 +231,7 @@ export const make = Effect.gen(function* () {
       nodeId: row.node_id,
       state: row.state,
       step: row.step,
-      steps: mintSteps(effects),
+      steps: mintSteps(effectsOf(row)),
       message,
       nextAction,
       class:
@@ -212,99 +265,89 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Admits one side effect inside the settings write lock: the switch still holds the record's grant,
-   * the record's fence is unchanged and a thread provisioner is still named. The intent is written
-   * before the effect is dispatched; no lock is held across it.
+   * Why this record's provisioner may no longer move it on (design section 4, Withdrawal), or
+   * undefined while it may: the switch is on, unexpired and still the record's grant, a thread is
+   * still named, and the provisioner still holds at least the grant recorded at attach start.
    */
-  const admitEffect = Effect.fn("DisposableAttach.admitEffect")(function* (
+  const provisionerEnded = Effect.fn("DisposableAttach.provisionerEnded")(function* (
     row: Row,
-    effect: AttachEffect,
+    current: ServerSettings,
   ) {
-    const effects = [...effectsOf(row), effect];
-    const provisioner = provisionerOf(row);
-    const admitted = yield* settings
-      .withSettingsSnapshot((current) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-            const [now] =
-              yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
-            if (now === undefined || now.fence !== row.fence) return "conflict" as const;
-            if (!gate.open) return gate.reason;
-            if (gate.grant !== now.grant_id) return "switch_off" as const;
-            if (provisioner === undefined) return "provisioner_refused" as const;
-            if (
-              provisioner.kind === "thread" &&
-              !current.hub.attachDisposableMachines.provisioners.includes(
-                provisioner.threadId as never,
-              )
-            )
-              return "provisioner_refused" as const;
-            yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
-                updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
-            return "admitted" as const;
-          }),
-        ),
-      )
-      .pipe(Effect.mapError(storageFailed));
-    return admitted;
-  });
-
-  const setEffect = (
-    effects: ReadonlyArray<AttachEffect>,
-    id: string,
-    patch: Partial<AttachEffect>,
-  ) => effects.map((effect) => (effect.id === id ? { ...effect, ...patch } : effect));
-
-  /** Mints the next bound invite for a record and returns the token once; never stores it. */
-  const mint = Effect.fn("DisposableAttach.mint")(function* (
-    row: Row,
-    seq: number,
-    requestKey: string | undefined,
-  ) {
-    const nowMs = yield* Clock.currentTimeMillis;
-    const mintId = row.attach_id + "." + seq;
-    const expiresAtMs = nowMs + INVITE_LIFETIME_MS;
-    const intent: AttachEffect = {
-      id: mintId,
-      kind: "mint",
-      state: "intent",
-      expiresAtMs,
-      ...(requestKey === undefined ? {} : { requestKey }),
-    };
     const provisioner = provisionerOf(row);
     if (
       provisioner === undefined ||
-      !(yield* provisioners.alive(provisioner, decodeUnknown(row.delegation_json)))
-    ) {
-      yield* writeFacts(row.attach_id, row.fence, {
-        state: "paused",
-        state_since: yield* nowIso,
-      });
-      return yield* fail(
-        "delegation_lost",
-        "The provisioner no longer holds the grant this attach started with.",
-      );
-    }
-    const admitted = yield* admitEffect(row, intent);
-    if (admitted !== "admitted") {
-      if (
-        admitted === "provisioner_refused" ||
-        admitted === "switch_off" ||
-        admitted === "switch_expired"
+      (provisioner.kind === "thread" &&
+        !current.hub.attachDisposableMachines.provisioners.includes(provisioner.threadId as never))
+    )
+      return "provisioner_refused" as const;
+    const now = yield* provisioners.grantOf(provisioner, row.node_id);
+    if (!coversDelegation(now, decodeDelegation(row.delegation_json)))
+      return "delegation_lost" as const;
+    return undefined;
+  });
+  const authorityEnded = Effect.fn("DisposableAttach.authorityEnded")(function* (
+    row: Row,
+    current: ServerSettings | undefined,
+  ) {
+    if (current === undefined) return "switch_off" as const;
+    const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+    if (!gate.open) return gate.reason;
+    if (gate.grant !== row.grant_id) return "switch_off" as const;
+    return yield* provisionerEnded(row, current);
+  });
+  // The forward commit checks the switch itself; this is the provisioner's part.
+  const holdsNow = (row: Row) =>
+    settings.getSettings.pipe(
+      Effect.flatMap((current) => provisionerEnded(row, current)),
+      Effect.map((ended) => ended === undefined),
+      Effect.orElseSucceed(() => false),
+    );
+
+  /**
+   * Admits the next mint inside the settings write lock (design section 2, Effect admission): the
+   * provisioner's authority holds, and the record is exactly as read. Only the mints are written; no
+   * lock is held across the dispatch that follows.
+   */
+  const admitMint = Effect.fn("DisposableAttach.admitMint")(function* (
+    row: Row,
+    effects: ReadonlyArray<AttachEffect>,
+  ) {
+    return yield* settings
+      .withSettingsSnapshot((current) =>
+        Effect.gen(function* () {
+          const ended = yield* authorityEnded(row, current);
+          if (ended !== undefined) return ended;
+          return yield* sql.withTransaction(
+            Effect.gen(function* () {
+              const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+              if (!gate.open) return gate.reason;
+              const [now] =
+                yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
+              if (
+                now === undefined ||
+                now.fence !== row.fence ||
+                now.effects_json !== row.effects_json
+              )
+                return "conflict" as const;
+              yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
+                  updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
+              return "admitted" as const;
+            }),
+          );
+        }),
       )
-        yield* writeFacts(row.attach_id, row.fence, {
-          state: "paused",
-          state_since: yield* nowIso,
-        });
-      return yield* fail(
-        admitted,
-        admitted === "conflict"
-          ? "The record changed while the invite was being made."
-          : "The switch no longer allows this attach.",
-      );
-    }
-    const effects = [...effectsOf(row), intent];
+      .pipe(Effect.mapError(storageFailed));
+  });
+
+  /**
+   * Dispatches an admitted mint and returns its token once; GOAT never stores it. When the forward
+   * commit is refused, that exact mintId is cancelled before anyone sees the token.
+   */
+  const dispatchMint = Effect.fn("DisposableAttach.dispatchMint")(function* (
+    row: Row,
+    intent: AttachEffect,
+  ) {
+    const effects = effectsOf(row);
     const minted = yield* pen
       .mint({
         subject: {
@@ -312,16 +355,12 @@ export const make = Effect.gen(function* () {
           noisePub: row.expected_noise_pub,
           name: row.name,
         },
-        mintId,
-        expiresAtMs,
+        mintId: intent.id,
+        expiresAtMs: intent.expiresAtMs,
       })
       .pipe(Effect.result);
     if (minted._tag === "Failure") {
-      yield* writeFacts(row.attach_id, row.fence, {
-        effects_json: encodeEffects(setEffect(effects, mintId, { state: "unknown" })),
-        state: "unknown",
-        state_since: yield* nowIso,
-      });
+      yield* save(row, replace(effects, { ...intent, state: "unknown" }));
       yield* audit(row.attach_id, "hub.machine_mint", "unknown");
       return yield* fail(
         "unknown_outcome",
@@ -330,37 +369,36 @@ export const make = Effect.gen(function* () {
     }
     const invite = minted.success;
     const expiresAt = DateTime.formatIso(DateTime.makeUnsafe(invite.expiresAtMs));
-    const done = setEffect(effects, mintId, { state: "done", inviteId: invite.inviteId });
+    const done = replace(effects, { ...intent, state: "done", inviteId: invite.inviteId });
     const committed = yield* store
       .commitForward(
         { attachId: row.attach_id, fence: row.fence },
         Effect.gen(function* () {
           const now = yield* nowIso;
-          yield* sql`UPDATE disposable_machines SET invite_id = ${invite.inviteId}, mint_id = ${mintId},
+          yield* sql`UPDATE disposable_machines SET invite_id = ${invite.inviteId}, mint_id = ${intent.id},
               invite_expires_at = ${expiresAt}, state = 'invited', step = 'invite',
               effects_json = ${encodeEffects(done)}, state_since = ${now}, updated_at = ${now}
               WHERE attach_id = ${row.attach_id}`;
         }),
+        holdsNow(row),
       )
       .pipe(Effect.mapError(storageFailed));
     if (!committed.committed) {
-      // The switch changed after admission: this exact invite is cancelled before its token is seen.
-      const cancelled = yield* pen.cancel({ inviteId: invite.inviteId }).pipe(Effect.result);
-      yield* writeFacts(row.attach_id, row.fence, {
-        effects_json: encodeEffects(
-          setEffect(effects, mintId, { state: "late", inviteId: invite.inviteId }),
-        ),
-        invite_id: invite.inviteId,
-        mint_id: mintId,
-        state:
-          cancelled._tag === "Success" && cancelled.success !== "burned" ? "paused" : "unknown",
-        state_since: yield* nowIso,
-      });
-      yield* audit(row.attach_id, "hub.machine_mint", "withdrawn");
-      return yield* fail(
-        refusalReason(committed.reason),
-        "The switch changed while the invite was being made; it was cancelled.",
+      const late: AttachEffect = {
+        ...intent,
+        state: "late",
+        inviteId: invite.inviteId,
+        withdrawn: true,
+      };
+      const cancelled = yield* pen.cancel({ mintId: intent.id }).pipe(Effect.option);
+      yield* save(
+        row,
+        replace(effects, cancelled._tag === "Some" ? afterCancel(late, cancelled.value) : late),
+        { invite_id: invite.inviteId, mint_id: intent.id },
       );
+      yield* audit(row.attach_id, "hub.machine_mint", "withdrawn");
+      const reason = refusalOf(committed.reason);
+      return yield* fail(reason, refusalText[reason] + " The new invite was cancelled.");
     }
     yield* audit(row.attach_id, "hub.machine_mint", "invited");
     const fresh = yield* read(row.attach_id);
@@ -373,6 +411,12 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows[0]),
       Effect.mapError(storageFailed),
     );
+  const replayAttach = (earlier: Row, input: HubMachineAttachInput) =>
+    earlier.expected_sign_pub !== input.signPub ||
+    earlier.expected_noise_pub !== input.noisePub ||
+    earlier.name !== input.name
+      ? fail("invalid_request", "This clientRequestId was used for another machine.")
+      : Effect.succeed(status(earlier));
 
   const attach = Effect.fn("DisposableAttach.attach")(function* (
     caller: AttachCaller,
@@ -387,15 +431,7 @@ export const make = Effect.gen(function* () {
       );
     const requestKey = digest(principal + "\n" + input.clientRequestId);
     const earlier = yield* byRequest(requestKey);
-    if (earlier !== undefined) {
-      if (
-        earlier.expected_sign_pub !== input.signPub ||
-        earlier.expected_noise_pub !== input.noisePub ||
-        earlier.name !== input.name
-      )
-        return yield* fail("invalid_request", "This clientRequestId was used for another machine.");
-      return status(earlier);
-    }
+    if (earlier !== undefined) return yield* replayAttach(earlier, input);
     yield* requireFeatures;
     const member = yield* pen.isMember(input.signPub);
     if (member === undefined)
@@ -405,200 +441,298 @@ export const make = Effect.gen(function* () {
         "key_in_use",
         "That key is already a Pen member; remove it from Pen first.",
       );
-    if (!(yield* provisioners.alive(caller.provisioner, caller.delegation)))
-      return yield* fail("provisioner_refused", "This caller may not attach machines.");
-    const attachId = NodeCrypto.randomUUID();
-    const reserved = yield* settings
-      .withSettingsSnapshot((current) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-            if (!gate.open) return gate.reason;
-            const value = current.hub.attachDisposableMachines;
-            if (
-              caller.provisioner.kind === "thread" &&
-              !value.provisioners.includes(caller.provisioner.threadId as never)
-            )
-              return "provisioner_refused" as const;
-            if (!matchesDisposableNameRule(value.nameRule, input.name)) return "name_rule" as const;
-            const [taken] = yield* sql<{
-              readonly n: number;
-            }>`SELECT COUNT(*) AS n FROM disposable_machines
-              WHERE ${sql.unsafe(OPEN)} AND (node_id = ${nodeId} OR expected_sign_pub = ${input.signPub}
-                OR expected_noise_pub = ${input.noisePub})`;
-            if ((taken?.n ?? 0) > 0) return "key_in_use" as const;
-            // A slot is held by every open record and by every admitted key still in Pen.
-            const [held] = yield* sql<{
-              readonly n: number;
-            }>`SELECT COUNT(*) AS n FROM disposable_machines
-              WHERE (${sql.unsafe(OPEN)}) OR (pen_admitted_at IS NOT NULL AND pen_removed_at IS NULL)`;
-            if ((held?.n ?? 0) >= value.cap) return "cap_reached" as const;
-            const now = yield* nowIso;
-            yield* sql`INSERT INTO disposable_machines ${sql.insert({
-              attach_id: attachId,
-              provisioner_json: encodeProvisioner(caller.provisioner),
-              delegation_json: encodeUnknown(caller.delegation ?? null),
-              name: input.name,
-              label: input.label ?? null,
-              expected_sign_pub: input.signPub,
-              expected_noise_pub: input.noisePub,
-              node_id: nodeId,
-              grant_id: gate.grant,
-              state: "reserved",
-              step: "reserve",
-              request_key: requestKey,
-              created_at: now,
-              state_since: now,
-              updated_at: now,
-            })}`;
-            return "reserved" as const;
-          }),
-        ),
-      )
-      .pipe(Effect.mapError(storageFailed));
-    if (reserved !== "reserved")
-      return yield* fail(
-        reserved,
-        {
-          switch_off: "Attach disposable machines is off on this hub.",
-          switch_expired: "Attach disposable machines has expired on this hub.",
-          provisioner_refused: "This thread is not named in Attach disposable machines.",
-          name_rule: "The name does not match the switch's name rule.",
-          key_in_use: "Another attach already holds these keys.",
-          cap_reached: "The switch's cap of disposable machines is reached.",
-        }[reserved],
-      );
-    yield* audit(attachId, "hub.machine_attach", "reserved");
-    const row = yield* read(attachId);
-    if (row === undefined) return yield* storageFailed();
-    return yield* mint(row, 1, undefined);
+    return yield* exclusive(
+      Effect.gen(function* () {
+        const again = yield* byRequest(requestKey);
+        if (again !== undefined) return yield* replayAttach(again, input);
+        const attachId = NodeCrypto.randomUUID();
+        // The first mint's intent is written with the reservation, so no crash leaves a slot held
+        // by a record with nothing to settle.
+        const intent: AttachEffect = {
+          id: attachId + ".1",
+          kind: "mint",
+          state: "intent",
+          expiresAtMs: (yield* Clock.currentTimeMillis) + INVITE_LIFETIME_MS,
+        };
+        const reserved = yield* settings
+          .withSettingsSnapshot((current) =>
+            Effect.gen(function* () {
+              const value = current.hub.attachDisposableMachines;
+              if (
+                caller.provisioner.kind === "thread" &&
+                !value.provisioners.includes(caller.provisioner.threadId as never)
+              )
+                return "provisioner_refused" as const;
+              if (!matchesDisposableNameRule(value.nameRule, input.name))
+                return "name_rule" as const;
+              const delegation = yield* provisioners.grantOf(caller.provisioner, nodeId);
+              if (delegation === undefined) return "provisioner_refused" as const;
+              return yield* sql.withTransaction(
+                Effect.gen(function* () {
+                  const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+                  if (!gate.open) return gate.reason;
+                  const [taken] = yield* sql<{
+                    readonly n: number;
+                  }>`SELECT COUNT(*) AS n FROM disposable_machines
+                    WHERE ${sql.unsafe(OPEN)} AND (node_id = ${nodeId} OR expected_sign_pub = ${input.signPub}
+                      OR expected_noise_pub = ${input.noisePub})`;
+                  if ((taken?.n ?? 0) > 0) return "key_in_use" as const;
+                  // A slot is held by every open record and by every admitted key still in Pen.
+                  const [held] = yield* sql<{
+                    readonly n: number;
+                  }>`SELECT COUNT(*) AS n FROM disposable_machines
+                    WHERE (${sql.unsafe(OPEN)}) OR (${sql.unsafe(IN_PEN)})`;
+                  if ((held?.n ?? 0) >= value.cap) return "cap_reached" as const;
+                  const now = yield* nowIso;
+                  yield* sql`INSERT INTO disposable_machines ${sql.insert({
+                    attach_id: attachId,
+                    provisioner_json: encodeProvisioner(caller.provisioner),
+                    delegation_json: encodeDelegation(delegation),
+                    name: input.name,
+                    label: input.label ?? null,
+                    expected_sign_pub: input.signPub,
+                    expected_noise_pub: input.noisePub,
+                    node_id: nodeId,
+                    grant_id: gate.grant,
+                    state: "reserved",
+                    step: "reserve",
+                    effects_json: encodeEffects([intent]),
+                    request_key: requestKey,
+                    created_at: now,
+                    state_since: now,
+                    updated_at: now,
+                  })}`;
+                  return "reserved" as const;
+                }),
+              );
+            }),
+          )
+          .pipe(Effect.mapError(storageFailed));
+        if (reserved !== "reserved")
+          return yield* fail(
+            reserved,
+            {
+              switch_off: "Attach disposable machines is off on this hub.",
+              switch_expired: "Attach disposable machines has expired on this hub.",
+              provisioner_refused:
+                "This caller is not named in Attach disposable machines or lacks hub.manage for this machine.",
+              name_rule: "The name does not match the switch's name rule.",
+              key_in_use: "Another attach already holds these keys.",
+              cap_reached: "The switch's cap of disposable machines is reached.",
+            }[reserved],
+          );
+        yield* audit(attachId, "hub.machine_attach", "reserved");
+        const row = yield* read(attachId);
+        if (row === undefined) return yield* storageFailed();
+        return yield* dispatchMint(row, intent);
+      }),
+    );
   });
 
-  const latestMint = (row: Row) =>
-    effectsOf(row)
-      .filter((effect) => effect.kind === "mint")
-      .at(-1);
-  const refOf = (effect: AttachEffect): PenInviteRef =>
-    effect.inviteId === undefined ? { mintId: effect.id } : { inviteId: effect.inviteId };
-
-  /** Settles one record's latest invite from what Pen saved. */
-  const settle = Effect.fn("DisposableAttach.settle")(function* (row: Row) {
-    const effect = latestMint(row);
-    if (effect === undefined) return;
-    const nowMs = yield* Clock.currentTimeMillis;
-    const current = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-    const gate = current === undefined ? undefined : disposableSwitch(current.hub, nowMs);
-    const withdrawn = gate === undefined || !gate.open || gate.grant !== row.grant_id;
-    const answer = yield* pen.status(refOf(effect)).pipe(Effect.option);
-    if (answer._tag === "None") return;
-    const found = answer.value;
-    const now = yield* nowIso;
-    const finish = (state: string) =>
-      writeFacts(row.attach_id, row.fence, {
-        state,
-        state_since: now,
-        final_at: state === "failed" ? now : null,
-      });
-    switch (found.state) {
-      case "live": {
-        if (!withdrawn) return;
-        const cancelled = yield* pen.cancel(refOf(effect)).pipe(Effect.option);
-        if (
-          cancelled._tag === "Some" &&
-          (cancelled.value === "cancelled" || cancelled.value === "expired")
-        ) {
-          yield* finish("failed");
-          yield* audit(row.attach_id, "hub.machine_withdraw", cancelled.value);
-        }
-        return;
-      }
-      case "cancelled":
-      case "expired":
-        yield* finish("failed");
-        yield* pen.ack(refOf(effect)).pipe(Effect.ignore);
-        return;
-      case "absent":
-        // A mint never seen by Pen is final once its absolute expiry has passed.
-        if (
-          effect.inviteId === undefined &&
-          effect.expiresAtMs !== undefined &&
-          nowMs > effect.expiresAtMs
-        )
-          yield* finish("failed");
-        return;
-      case "burned-unsaved":
-        return;
-      case "burned":
-        if (found.admit === undefined) {
-          // Burned without a saved admit: nobody can say who joined, so the slot stays held.
-          if (row.state !== "unknown")
-            yield* writeFacts(row.attach_id, row.fence, { state: "unknown", state_since: now });
-          return;
-        }
-        yield* writeFacts(row.attach_id, row.fence, {
-          state: withdrawn ? "paused" : "admitted",
-          step: "admitted",
-          offer_nonce: found.nonce,
-          admit_hash: found.admit,
-          pen_admitted_at: row.pen_admitted_at ?? now,
-          pen_removed_at: found.member === false ? now : null,
-          state_since: now,
+  /**
+   * Settles one record from what Pen saved; the caller holds the attach lock. A withdrawal is
+   * stored before any cancel is sent, a terminal state before Pen is told to forget it, and an
+   * admitted key is released only when Pen's view no longer has it.
+   */
+  const settleRecord = Effect.fn("DisposableAttach.settleRecord")(function* (start: Row) {
+    let row = start;
+    let effects = effectsOf(row);
+    if (row.pen_admitted_at !== null && row.pen_removed_at === null) {
+      if ((yield* pen.isMember(row.expected_sign_pub)) === false) {
+        row = yield* save(row, effects, {
+          pen_removed_at: yield* nowIso,
+          ...(row.final_at === null ? { state: "failed" } : {}),
         });
+        yield* audit(row.attach_id, "hub.machine_left_pen", "removed");
+      }
+    }
+    if (openEffects(effects).length > 0) {
+      const current = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
+      const ended = yield* authorityEnded(row, current);
+      if (ended !== undefined && openEffects(effects).some((effect) => effect.withdrawn !== true)) {
+        effects = effects.map((effect) =>
+          effect.settled === undefined ? { ...effect, withdrawn: true } : effect,
+        );
+        row = yield* save(row, effects);
+        yield* audit(row.attach_id, "hub.machine_withdraw", ended);
+      }
+      let admitted: Extract<PenInviteState, { state: "burned" }> | undefined;
+      for (const effect of openEffects(effects)) {
+        let next = effect;
+        if (next.withdrawn === true) {
+          // By mintId: a mint Pen has not seen yet is fenced, and a late create makes nothing.
+          const cancelled = yield* pen.cancel({ mintId: next.id }).pipe(Effect.option);
+          if (cancelled._tag === "Some") next = afterCancel(next, cancelled.value);
+        }
+        if (next.settled === undefined) {
+          const answer = yield* pen.status({ mintId: next.id }).pipe(Effect.option);
+          if (answer._tag === "Some") {
+            next = observe(next, answer.value, yield* Clock.currentTimeMillis);
+            if (answer.value.state === "burned" && answer.value.admit !== undefined)
+              admitted = answer.value;
+          }
+        }
+        effects = replace(effects, next);
+      }
+      const withdrawn = effects.some((effect) => effect.withdrawn === true);
+      const now = yield* nowIso;
+      row = yield* save(
+        row,
+        effects,
+        admitted === undefined
+          ? {}
+          : {
+              state: admitted.member === false ? "failed" : withdrawn ? "paused" : "admitted",
+              step: "admitted",
+              offer_nonce: admitted.nonce,
+              admit_hash: admitted.admit ?? null,
+              pen_admitted_at: row.pen_admitted_at ?? now,
+              pen_removed_at: admitted.member === false ? now : null,
+            },
+      );
+      if (admitted !== undefined)
         yield* audit(
           row.attach_id,
           "hub.machine_admitted",
           withdrawn ? "joined_after_withdrawal" : "admitted",
         );
-        yield* pen.ack(refOf(effect)).pipe(Effect.ignore);
-        return;
     }
+    const nowMs = yield* Clock.currentTimeMillis;
+    if (!effects.some((effect) => ackable(effect, nowMs))) return row;
+    for (const effect of effects.filter((entry) => ackable(entry, nowMs))) {
+      const acked = yield* pen.ack({ mintId: effect.id }).pipe(Effect.option);
+      if (acked._tag === "Some") effects = replace(effects, { ...effect, acked: true });
+    }
+    return yield* save(row, effects);
   });
 
   const reconcile = Effect.gen(function* () {
-    const rows = yield* sql<Row>`SELECT * FROM disposable_machines
-      WHERE ${sql.unsafe(OPEN)} AND state IN ('reserved', 'invited', 'unknown', 'paused')
+    const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
+      WHERE (${sql.unsafe(OPEN)}) OR (${sql.unsafe(IN_PEN)}) OR ${sql.unsafe(OWES_ACK)}
       ORDER BY created_at LIMIT 1000`.pipe(Effect.mapError(storageFailed));
-    for (const row of rows) if (row.pen_admitted_at === null) yield* settle(row);
+    for (const { attach_id } of due)
+      yield* exclusive(
+        Effect.flatMap(read(attach_id), (row) =>
+          row === undefined ? Effect.void : Effect.asVoid(settleRecord(row)),
+        ),
+      );
   }).pipe(Effect.withSpan("DisposableAttach.reconcile"));
+
+  const recordRequest = (requestKey: string, outcome: string, detail: string | null) =>
+    Effect.flatMap(
+      nowIso,
+      (now) =>
+        sql`UPDATE disposable_machine_requests SET outcome = ${outcome}, detail = ${detail},
+          updated_at = ${now} WHERE request_key = ${requestKey}`,
+    ).pipe(Effect.mapError(storageFailed));
+
+  /**
+   * Cancels the record's open mint by its mintId: cancelled mints the next invite for the same keys;
+   * burned, expired or absent gives no token, and Pen's status settles the record.
+   */
+  const reissueOpen = Effect.fn("DisposableAttach.reissueOpen")(function* (
+    row: Row,
+    open: AttachEffect,
+  ) {
+    const cancelled = yield* pen
+      .cancel({ mintId: open.id })
+      .pipe(
+        Effect.catch(() =>
+          fail(
+            "unknown_outcome",
+            "Pen's answer to the cancel was lost; goat_hub_machine_list settles it, and a new clientRequestId reissues.",
+          ),
+        ),
+      );
+    const effects = replace(effectsOf(row), afterCancel(open, cancelled));
+    if (cancelled !== "cancelled") {
+      const settled = yield* settleRecord(yield* save(row, effects));
+      return { outcome: "settled", status: status(settled) } as const;
+    }
+    const intent: AttachEffect = {
+      id: row.attach_id + "." + (effects.length + 1),
+      kind: "mint",
+      state: "intent",
+      expiresAtMs: (yield* Clock.currentTimeMillis) + INVITE_LIFETIME_MS,
+    };
+    const admitted = yield* admitMint(row, [...effects, intent]);
+    if (admitted !== "admitted") {
+      yield* save(row, effects);
+      return yield* fail(admitted, refusalText[admitted]);
+    }
+    const fresh = yield* read(row.attach_id);
+    if (fresh === undefined) return yield* storageFailed();
+    return { outcome: "ok", status: yield* dispatchMint(fresh, intent) } as const;
+  });
 
   const reissue = Effect.fn("DisposableAttach.reissue")(function* (
     caller: AttachCaller,
     principal: string,
     input: HubMachineReissueInput,
   ) {
-    const row = yield* read(input.attachId);
-    if (row === undefined) return yield* fail("not_found", "No attach has that id.");
-    if (
-      !sameProvisioner(provisionerOf(row), caller.provisioner) &&
-      caller.provisioner.kind !== "person"
-    )
-      return yield* fail(
-        "provisioner_refused",
-        "Only the provisioner or a person may reissue this invite.",
-      );
     const requestKey = digest(principal + "\n" + input.clientRequestId);
-    if (effectsOf(row).some((effect) => effect.requestKey === requestKey)) return status(row);
-    const effect = latestMint(row);
-    if (row.state !== "invited" || effect === undefined)
-      return yield* fail("conflict", "Only an open invite can be reissued.");
-    yield* requireFeatures;
-    const cancelled = yield* pen
-      .cancel(refOf(effect))
-      .pipe(
-        Effect.catch(() =>
-          fail(
-            "unknown_outcome",
-            "Pen's answer to the cancel was lost; try again with a new clientRequestId.",
-          ),
-        ),
-      );
-    if (cancelled === "burned" || cancelled === "absent") {
-      yield* settle(row);
-      const settled = yield* read(row.attach_id);
-      return settled === undefined ? yield* storageFailed() : status(settled);
-    }
-    const seq = effectsOf(row).filter((entry) => entry.kind === "mint").length + 1;
-    return yield* mint(row, seq, requestKey);
+    return yield* exclusive(
+      Effect.gen(function* () {
+        const row = yield* read(input.attachId);
+        if (row === undefined) return yield* fail("not_found", "No attach has that id.");
+        if (
+          !sameProvisioner(provisionerOf(row), caller.provisioner) &&
+          caller.provisioner.kind !== "person"
+        )
+          return yield* fail(
+            "provisioner_refused",
+            "Only the provisioner or a person may reissue this invite.",
+          );
+        const [earlier] = yield* sql<{
+          readonly attach_id: string;
+          readonly outcome: string;
+          readonly detail: string | null;
+        }>`SELECT attach_id, outcome, detail FROM disposable_machine_requests
+            WHERE request_key = ${requestKey}`.pipe(Effect.mapError(storageFailed));
+        if (earlier !== undefined) {
+          if (earlier.attach_id !== row.attach_id)
+            return yield* fail(
+              "invalid_request",
+              "This clientRequestId was used for another attach.",
+            );
+          if (earlier.outcome === "ok" || earlier.outcome === "settled") return status(row);
+          if (earlier.outcome === "running")
+            return yield* fail(
+              "unknown_outcome",
+              "An earlier reissue with this key did not finish; goat_hub_machine_list settles it, and a new clientRequestId reissues.",
+            );
+          return yield* fail(earlier.outcome as HubMachinesErrorReason, earlier.detail ?? "");
+        }
+        const open = openEffects(effectsOf(row));
+        const latest = open.at(-1);
+        if (
+          row.pen_admitted_at !== null ||
+          latest === undefined ||
+          open.some((effect) => effect.withdrawn === true || effect.seen === "burned-without-admit")
+        )
+          return yield* fail("conflict", "Only an open invite can be reissued.");
+        yield* requireFeatures;
+        const ended = yield* authorityEnded(
+          row,
+          yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
+        );
+        if (ended !== undefined) return yield* fail(ended, refusalText[ended]);
+        const now = yield* nowIso;
+        yield* sql`INSERT INTO disposable_machine_requests ${sql.insert({
+          request_key: requestKey,
+          attach_id: row.attach_id,
+          outcome: "running",
+          detail: null,
+          created_at: now,
+          updated_at: now,
+        })}`.pipe(Effect.mapError(storageFailed));
+        const done = yield* reissueOpen(row, latest).pipe(
+          Effect.tapError((error) => recordRequest(requestKey, error.reason, error.detail)),
+        );
+        yield* recordRequest(requestKey, done.outcome, null);
+        return done.status;
+      }),
+    );
   });
 
   const list = Effect.fn("DisposableAttach.list")(function* (input: HubMachineListInput) {
@@ -615,7 +749,7 @@ export const make = Effect.gen(function* () {
   return DisposableAttach.of({ attach, reissue, list, reconcile });
 });
 
-// Settles invites and withdraws ones whose grant ended, also when no client is reading.
+// Settles invites and withdraws ones whose authority ended, also when no client is reading.
 const RECONCILE_EVERY = "30 seconds";
 
 export const layer = Layer.effect(

@@ -1,0 +1,206 @@
+import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
+
+import {
+  attach,
+  GRANT,
+  INVITE_MS,
+  input,
+  key,
+  listed,
+  reason,
+  reconcile,
+  reissue,
+  rows,
+  switchTo,
+  world,
+} from "./DisposableAttach.testkit.ts";
+
+const attachIdOf = Effect.map(rows, (all) => String(all[0]?.attach_id));
+const liveMints = (book: ReadonlyMap<string, { state: string }>) =>
+  [...book.entries()].filter(([, entry]) => entry.state === "live").map(([mintId]) => mintId);
+
+it.effect("a reissue of an expired invite mints nothing, and the record frees its slot", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      yield* TestClock.adjust(INVITE_MS + 1);
+      const settled = yield* reissue(first.attachId, "re-1");
+      expect(settled).not.toHaveProperty("invite");
+      expect(liveMints(pen.book)).toEqual([]);
+      expect(settled.state).toBe("failed");
+    }),
+  ),
+);
+
+it.effect("a settlement that read the record before a reissue never drops the new mint", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.statusGate = yield* Deferred.make<void>();
+      pen.control.statusStarted = yield* Deferred.make<void>();
+      const settling = yield* reconcile.pipe(Effect.forkChild);
+      yield* Deferred.await(pen.control.statusStarted);
+      const reissuing = yield* reissue(first.attachId, "re-1").pipe(Effect.forkChild);
+      yield* Deferred.succeed(pen.control.statusGate, undefined);
+      yield* Fiber.join(settling);
+      const again = yield* Fiber.join(reissuing);
+      expect(again.invite?.token).toBe("pen1_TOKEN_" + first.attachId + ".2");
+      expect(liveMints(pen.book)).toEqual([first.attachId + ".2"]);
+      expect(yield* listed(first.attachId)).toMatchObject({
+        state: "invited",
+        steps: [
+          { step: "invite", outcome: "cancelled" },
+          { step: "invite", outcome: "ok" },
+        ],
+      });
+    }),
+  ),
+);
+
+it.effect(
+  "lost authority withdraws an open invite, and one burned before the cancel shows joined after",
+  () =>
+    world((pen, _home, grant) =>
+      Effect.gen(function* () {
+        const open = yield* attach(1);
+        const joined = yield* attach(2);
+        pen.control.join(joined.attachId + ".1", true);
+        grant.value = { ...GRANT, goatclaw: { ...GRANT.goatclaw, capabilities: [] } };
+        yield* reconcile;
+        expect(liveMints(pen.book)).toEqual([]);
+        expect(yield* listed(open.attachId)).toMatchObject({ state: "failed", penMember: false });
+        expect(yield* listed(joined.attachId)).toMatchObject({ state: "paused", penMember: true });
+      }),
+    ),
+);
+
+it.effect("a key removed from Pen after admission frees its slot", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      yield* switchTo({ cap: 1 });
+      const first = yield* attach(1);
+      pen.control.join(first.attachId + ".1", true);
+      yield* reconcile;
+      expect(yield* listed(first.attachId)).toMatchObject({ state: "admitted", penMember: true });
+      expect(yield* reason(attach(2))).toBe("cap_reached");
+      pen.members.delete(key(1));
+      yield* reconcile;
+      expect(yield* listed(first.attachId)).toMatchObject({ state: "failed", penMember: false });
+      expect((yield* attach(2)).state).toBe("invited");
+    }),
+  ),
+);
+
+it.effect("Pen forgets each terminal entry once GOAT has stored it", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      yield* reissue(first.attachId, "re-1");
+      const joined = yield* attach(2);
+      pen.control.join(joined.attachId + ".1", true);
+      yield* reconcile;
+      expect(pen.control.acked.sort()).toEqual(
+        [first.attachId + ".1", joined.attachId + ".1"].sort(),
+      );
+      expect([...pen.book.keys()]).toEqual([first.attachId + ".2"]);
+    }),
+  ),
+);
+
+it.effect(
+  "an attach stopped after Pen minted, before it committed, holds its slot only until Pen settles",
+  () =>
+    world((pen, _home, grant) =>
+      Effect.gen(function* () {
+        yield* switchTo({ cap: 1 });
+        grant.gate = yield* Deferred.make<void>();
+        grant.reached = yield* Deferred.make<void>();
+        grant.gateOnCall = 2;
+        const stopped = yield* attach(1).pipe(Effect.forkChild);
+        yield* Deferred.await(grant.reached);
+        yield* Fiber.interrupt(stopped);
+        grant.gate = undefined;
+        yield* reconcile;
+        expect(yield* reason(attach(2))).toBe("cap_reached");
+        yield* TestClock.adjust(INVITE_MS + 1);
+        yield* reconcile;
+        expect((yield* attach(2)).state).toBe("invited");
+      }),
+    ),
+);
+
+it.effect("a withdrawal fences a mint Pen has not seen, so its late arrival makes nothing", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      pen.control.mintGate = yield* Deferred.make<void>();
+      pen.control.mintStarted = yield* Deferred.make<void>();
+      const stopped = yield* attach(1).pipe(Effect.forkChild);
+      yield* Deferred.await(pen.control.mintStarted);
+      yield* Fiber.interrupt(stopped);
+      pen.control.mintGate = undefined;
+      const attachId = yield* attachIdOf;
+      yield* switchTo({ enabled: false });
+      yield* reconcile;
+      expect(yield* listed(attachId)).toMatchObject({ state: "failed" });
+      const late = yield* pen.service
+        .mint({
+          subject: { signPub: key(1), noisePub: key(101), name: "cc-1" },
+          mintId: attachId + ".1",
+          expiresAtMs: INVITE_MS,
+        })
+        .pipe(Effect.flip);
+      expect(late._tag).toBe("PenInviteUnknown");
+      expect(liveMints(pen.book)).toEqual([]);
+      // The fence is acknowledged only once the mint's own expiry refuses a late create.
+      expect(pen.control.acked).toEqual([]);
+      yield* TestClock.adjust(INVITE_MS + 1);
+      yield* reconcile;
+      expect(pen.control.acked).toEqual([attachId + ".1"]);
+    }),
+  ),
+);
+
+it.effect("concurrent reissues of one invite run one after the other, each with its own mint", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.mintGate = yield* Deferred.make<void>();
+      pen.control.mintStarted = yield* Deferred.make<void>();
+      const one = yield* reissue(first.attachId, "a").pipe(Effect.forkChild);
+      const two = yield* reissue(first.attachId, "b").pipe(Effect.forkChild);
+      yield* Deferred.await(pen.control.mintStarted);
+      yield* Deferred.succeed(pen.control.mintGate, undefined);
+      const a = yield* Fiber.join(one);
+      const b = yield* Fiber.join(two);
+      expect(new Set([a.invite?.token, b.invite?.token])).toEqual(
+        new Set(["pen1_TOKEN_" + first.attachId + ".2", "pen1_TOKEN_" + first.attachId + ".3"]),
+      );
+      expect(liveMints(pen.book)).toEqual([first.attachId + ".3"]);
+    }),
+  ),
+);
+
+it.effect("a reissue that finds the invite burned mints nothing, and its key replays that", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.join(first.attachId + ".1", true);
+      const settled = yield* reissue(first.attachId, "re-1");
+      expect(settled).toMatchObject({ state: "admitted", penMember: true });
+      expect(settled).not.toHaveProperty("invite");
+      expect(yield* reissue(first.attachId, "re-1")).toMatchObject({ state: "admitted" });
+      expect(pen.control.tokensSeen).toHaveLength(1);
+      const sql = yield* SqlClient.SqlClient;
+      expect(yield* sql`SELECT outcome FROM disposable_machine_requests`).toEqual([
+        { outcome: "settled" },
+      ]);
+      expect(yield* reason(reissue(first.attachId, "re-2"))).toBe("conflict");
+      expect(input(1).signPub).toBe(key(1));
+    }),
+  ),
+);

@@ -17,7 +17,6 @@ export const makeHubNodesHandlers = Effect.fn("HubNodes.rpcHandlers")(function* 
   const person = canResolveHumanStep(sessionResolver(session), "person_only")
     ? Effect.succeed({
         provisioner: { kind: "person" as const, sessionId: session.sessionId },
-        delegation: { scopes: session.scopes },
       })
     : Effect.fail(
         new HubMachinesError({
