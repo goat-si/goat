@@ -226,3 +226,13 @@ shared process. Subagents always run in their parent thread's app-server.
 
 The setting applies to new threads. Existing threads keep the process they started
 with, so switching back to **Shared** takes effect for threads you start afterwards.
+
+An app-server reads Codex's model catalog (`model_catalog_json`, which OpenCodex
+writes) only when it starts. When the catalog changes a model, for example its
+context window, a new thread on that model gets its own app-server that reads the
+change. A thread already open on the shared app-server gets it on its next turn once
+that app-server has no running work, when GOAT restarts it; until then the thread's
+turns keep the details the app-server started with.
+After GOAT itself restarts, an app-server kept running across the restart serves the
+first turn sent to it, because it may still hold that earlier work. The next turn
+restarts it once it is idle.

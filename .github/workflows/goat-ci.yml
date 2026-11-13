@@ -264,13 +264,42 @@ jobs:
       - name: PostgreSQL prerequisite for relay tests
         if: matrix.task == 'test-relay' || (matrix.task == 'test-changed' && contains(needs.scope.outputs.changed_tests, 'infra/relay/'))
         run: |
-          if ! command -v pg_config >/dev/null; then
-            if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
-              echo "::error::Relay tests require pre-provisioned PostgreSQL binaries on $RUNNER_NAME (pg_config, initdb, postgres, pg_ctl, psql)"
+          # The relay fixture runs these from PG_BIN or pg_config --bindir (PostgresFixture.ts).
+          missing_postgres() {
+            if [ "${PG_BIN+x}" = x ]; then
+              [ -n "$PG_BIN" ] || { echo PG_BIN; return; }
+              bindir=$PG_BIN
+            else
+              command -v pg_config >/dev/null || { echo pg_config; return; }
+              if ! bindir=$(pg_config --bindir) || [ -z "$bindir" ]; then
+                echo pg_config
+                return
+              fi
+            fi
+            missing=
+            for name in initdb postgres pg_ctl psql; do
+              [ -x "$bindir/$name" ] || missing="$missing $name"
+            done
+            echo $missing
+          }
+          missing=$(missing_postgres)
+          if [ -n "$missing" ]; then
+            if [ "$missing" = PG_BIN ]; then
+              echo "::error::PG_BIN is set but empty"
               exit 1
             fi
+            if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+              echo "::error::Relay tests need PostgreSQL binaries pre-provisioned on $RUNNER_NAME; missing: $missing"
+              exit 1
+            fi
+            echo "::notice::Relay PostgreSQL prerequisite missing: $missing"
             sudo apt-get update -qq
             sudo apt-get install -y -qq postgresql
+            missing=$(missing_postgres)
+            if [ -n "$missing" ]; then
+              echo "::error::Installing postgresql did not provide: $missing"
+              exit 1
+            fi
           fi
           node infra/relay/scripts/test-postgres.ts check
 

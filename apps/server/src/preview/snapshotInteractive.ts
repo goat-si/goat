@@ -29,6 +29,14 @@ const EDITABLE: ReadonlySet<string> = new Set([
   "spinbutton",
   "slider",
 ]);
+// Roles whose part of an ancestor's name is aria-valuetext or aria-valuenow, which the tree omits.
+const VALUED: ReadonlySet<string> = new Set([
+  "slider",
+  "spinbutton",
+  "progressbar",
+  "meter",
+  "scrollbar",
+]);
 const NAME_LIMIT = 100;
 const SCAN_LIMIT = 50;
 
@@ -48,7 +56,11 @@ const FRAME_REF = /(?:^|-)f\d+e\d+$/;
 const unquote = (text: string) => {
   if (!text.startsWith('"')) return text;
   try {
-    return String(JSON.parse(text));
+    // Playwright writes other control characters as YAML \xNN, which JSON does not read.
+    const json = text.replace(/\\(x[0-9a-fA-F]{2}|.)/g, (escape, code: string) =>
+      code.length === 3 ? `\\u00${code.slice(1)}` : escape,
+    );
+    return String(JSON.parse(json));
   } catch {
     return text;
   }
@@ -117,8 +129,6 @@ const squash = (text: string) => text.replace(/\s+/g, " ").trim();
  * options. Playwright leaves out the text inside a role=textbox editor, whatever else it draws there.
  */
 const showsContent = (rows: ReadonlyArray<Row>, index: number, field: Entry) => {
-  // Their part of a name is aria-valuetext or aria-valuenow, which the tree does not show.
-  if (field.role === "slider" || field.role === "spinbutton") return false;
   if (field.value !== undefined) return true;
   const depth = rows[index]?.indent ?? 0;
   const child = rows[index + 1]?.indent;
@@ -132,10 +142,9 @@ const showsContent = (rows: ReadonlyArray<Row>, index: number, field: Entry) => 
 };
 
 /**
- * Whether a name may hold text from under the element: text a line there shows, a field's hidden
- * content, or what a cut tree left out. Beside a field, a name built from the element's content
- * (holding its own text lines, or with none to hold) may carry the field's text in a form the tree
- * omits, such as CSS generated content.
+ * Whether a name may hold text from under the element: text shown there (a field's value when they
+ * share a word, as Playwright adds CSS content to it), a field's hidden content, or a cut tree's lost
+ * lines. Beside a field, a name holding its own text lines, or with none, came from content.
  */
 const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut: boolean) => {
   const depth = rows[index]?.indent ?? 0;
@@ -144,12 +153,23 @@ const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut:
   let fromContent = false;
   let field = false;
   let nested = Infinity;
+  let inField = Infinity;
   const settled = () => field && (fromContent || ownLines === 0);
+  const holds = (text: string | undefined) => {
+    const shown = text === undefined ? "" : squash(text);
+    return shown !== "" && own.includes(shown);
+  };
+  const overlaps = (text: string | undefined) => {
+    const shown = text === undefined ? "" : squash(text);
+    if (shown === "") return false;
+    return shown.includes(own) || shown.split(" ").some((word) => own.includes(word));
+  };
   for (let next = index + 1; ; next++) {
     const row = rows[next];
     if (row === undefined) return cut || settled();
     if (row.indent <= depth) return settled();
     if (row.indent <= nested) nested = Infinity;
+    if (row.indent <= inField) inField = Infinity;
     const { entry } = row;
     if (nested === Infinity && entry?.role === "text") {
       const line = squash(entry.value ?? "");
@@ -160,14 +180,14 @@ const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut:
     nested = Math.min(nested, row.indent);
     // An image's name is its alt text, which the page writes.
     if (entry === undefined || entry.role === "img") continue;
+    if (VALUED.has(entry.role)) return true;
     if (EDITABLE.has(entry.role)) {
       field = true;
+      inField = Math.min(inField, row.indent);
       if (!showsContent(rows, next, entry)) return true;
     }
-    for (const text of [entry.name, entry.value]) {
-      const shown = text === undefined ? "" : squash(text);
-      if (shown && own.includes(shown)) return true;
-    }
+    if (holds(entry.name) || holds(entry.value)) return true;
+    if (inField !== Infinity && overlaps(entry.value)) return true;
   }
 };
 

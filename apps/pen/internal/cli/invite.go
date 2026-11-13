@@ -57,6 +57,14 @@ func RunInvite(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pen: the invite expired unused")
 		return 1
 	}
+	if ev.T == "cancelled" {
+		fmt.Fprintln(stderr, "pen: the invite was cancelled")
+		return 1
+	}
+	if ev.T != "admitted" {
+		fmt.Fprintf(stderr, "pen: the invite ended with %q, not a join\n", ev.T)
+		return 1
+	}
 	noise := ev.Member.NoisePub
 	fmt.Fprintf(stdout, "admitted %s (%s), fingerprint %s\n", ev.Member.Name, short(ev.Member.NodeID), fingerprintOf(noise))
 	return 0

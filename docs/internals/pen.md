@@ -185,6 +185,24 @@ pipe is ssh's ProxyCommand: a report must never change its output, its exit code
 counts in memory only, in fixed buckets with a cap on pairs (`apps/pen/internal/traffic`): losing a day of counts on
 restart costs less than another state file whose format must stay readable.
 
+## Bound invites
+
+An invite token is a bearer secret: whoever holds it joins. GOAT admits disposable machines whose keys it already
+has, so a bound invite names its subject and the inviter refuses any other card before the burn (`Subject` in
+`apps/pen/internal/mesh/bound.go`). The refusal has to come before the burn: a leaked token must not let another
+machine use the invite up. The op keeps the member name `subject`, which an older node decodes as the string of
+`revoke` and refuses, so a version gap fails closed instead of minting an unbound token.
+
+GOAT must be able to tell afterwards which machine an invite admitted, or that it admitted none. A bound invite is
+therefore never deleted silently: its entry becomes `burned` (with the offer nonce the admitted card repeats),
+`cancelled` or `expired` in the same save as the event, and stays until GOAT acknowledges it. Each such transition
+is computed on a copy and becomes the book only once `offers.json` is written, so a failed save leaves the invite as
+it was; an ordinary invite keeps its old behaviour. A bound entry keeps its secret and expiry under `boundSecret` and
+`boundExpiresAt` (`inviteFile`), which an older binary does not read: after a downgrade it sees no secret and no expiry,
+takes every bound entry for expired and prunes it, instead of admitting any machine with a live bound invite's token. `invite.status`
+takes `Store.mu` and then `Invites.mu` (`mesh.StatusOf`), the order of a burn, so it never sees a burn without its
+admit; `invite.cancel` and `invite.ack` take `Invites.mu` alone.
+
 ## Relay cuts and typed ssh names
 
 A relay can drop a stream, open more sessions than the contract allows, or carry a host name nobody checked. None of

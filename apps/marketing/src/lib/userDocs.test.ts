@@ -20,6 +20,8 @@ async function appGuideLinks(directory: string): Promise<string[]> {
       const source = await NodeFSP.readFile(path, "utf8");
       for (const match of source.matchAll(/https:\/\/trygoat\.ai\/docs\/user\/([^\s"'`<>]*)/g)) {
         const target = match[1]!;
+        // A bare base URL, such as the server's guide URL prefix, names no guide.
+        if (target === "") continue;
         if (!target.includes("${")) {
           links.push(target);
         } else {

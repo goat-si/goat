@@ -88,6 +88,7 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-name-untracked-"));
   try {
     fs.mkdirSync(path.join(dir, "scripts/lib"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "scripts/agent-surface"), { recursive: true });
     fs.cpSync(
       path.join(root, "scripts/lib/goat-rename"),
       path.join(dir, "scripts/lib/goat-rename"),
@@ -97,6 +98,7 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
       "goat-rename.ts",
       "check-changed.ts",
       "check-changed-command.ts",
+      "agent-surface/auditInputs.ts",
       "lib/changed-tests.ts",
       "lib/split-tests.ts",
     ]) {

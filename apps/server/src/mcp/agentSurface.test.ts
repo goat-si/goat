@@ -731,7 +731,9 @@ it.effect("a tools/list that returns an RPC error fails with that error", () =>
   Effect.gen(function* () {
     const http = yield* serveCatalogOverHttp(callers, "full");
     const listed = yield* Effect.exit(http.listTools("thread", () => "{"));
-    expect(Exit.isFailure(listed) && Cause.pretty(listed.cause)).toMatch(/tools\/list failed: /);
+    expect(Exit.isFailure(listed) && Cause.pretty(listed.cause)).toMatch(
+      /tools\/list failed: .*-32700.*Parse error/,
+    );
   }).pipe(Effect.scoped, Effect.provide(layerTestLoopback)),
 );
 

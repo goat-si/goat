@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -137,17 +138,20 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	return ln, nil
 }
 
-// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
-// included; controlRequestTimeout bounds the wait for a connection's request line, and controlWriteTimeout
-// each write to a client, so one that stops reading frees its slot (variables for tests).
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations) and ended
+// registrations still draining included; controlRequestTimeout bounds the wait for a connection's request line, and
+// controlWriteTimeout each write to a client, so one that stops reading frees its slot (variables for tests).
 var (
 	controlConnCap        = 512
 	controlRequestTimeout = 10 * time.Second
 	controlWriteTimeout   = 5 * time.Second
 )
 
-// boundedConn gives every write its own deadline.
-type boundedConn struct{ net.Conn }
+// boundedConn gives every write its own deadline; closed runs after its Close and frees its control slot.
+type boundedConn struct {
+	net.Conn
+	closed func()
+}
 
 func (b boundedConn) Write(p []byte) (int, error) {
 	if err := b.Conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
@@ -156,8 +160,23 @@ func (b boundedConn) Write(p []byte) (int, error) {
 	return b.Conn.Write(p)
 }
 
+// CloseWrite half-closes the connection when the one it wraps can.
+func (b boundedConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.ErrUnsupported
+}
+
+func (b boundedConn) Close() error {
+	err := b.Conn.Close()
+	b.closed()
+	return err
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 	slots := make(chan struct{}, controlConnCap)
+	d.controlSlots = slots
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -169,15 +188,20 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 			c.Close()
 			continue
 		}
-		d.spawn(func() {
-			defer func() { <-slots }()
-			d.handleControl(ctx, boundedConn{c})
-		})
+		// The slot is freed when the connection closes, which for a registration's holder may be after
+		// handleControl returns (holderQueue.failWith).
+		d.spawn(func() { d.handleControl(ctx, boundedConn{c, sync.OnceFunc(func() { <-slots })}) })
 	}
 }
 
 func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
-	defer c.Close()
+	// A registration's holder queue ends its connection itself, after its last line (holderQueue.failWith).
+	owned := false
+	defer func() {
+		if !owned {
+			c.Close()
+		}
+	}()
 	lr := &io.LimitedReader{R: c, N: 64 << 10}
 	r := bufio.NewReader(lr)
 	if c.SetReadDeadline(time.Now().Add(controlRequestTimeout)) != nil {
@@ -187,21 +211,26 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 	if err != nil || c.SetReadDeadline(time.Time{}) != nil {
 		return
 	}
-	var req Request
 	enc := json.NewEncoder(c)
+	reply := func(v any) { enc.Encode(v) }
+	fail := func(err error) { reply(map[string]string{"error": err.Error()}) }
+	// Control socket only, like the ops below: the dashboard reaches do, never handleControl.
+	if boundOp(line) {
+		d.controlBound(ctx, c, line, reply, fail)
+		return
+	}
+	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
 		enc.Encode(map[string]string{"error": "bad request"})
 		return
 	}
-	reply := func(v any) { enc.Encode(v) }
-	fail := func(err error) { reply(map[string]string{"error": err.Error()}) }
 	switch req.Op {
 	case "watch":
 		d.controlWatch(ctx, c)
 		return
 	// These two run on the control socket only: the dashboard reaches do, never handleControl.
 	case "service.register":
-		d.controlRegister(ctx, c, r, lr, req, reply, fail)
+		owned = d.controlRegister(ctx, c, r, lr, req, reply, fail)
 		return
 	case "watch.snapshot":
 		d.controlSnapshot(ctx, c, fail)
@@ -234,7 +263,9 @@ func (d *Daemon) handleControl(ctx context.Context, c net.Conn) {
 func (d *Daemon) do(ctx context.Context, req Request) (any, error) {
 	switch req.Op {
 	case "status":
-		return d.status(), nil
+		s := d.status()
+		s.Features = Features
+		return s, nil
 	case "ls":
 		return d.ls(), nil
 	case "invite":
@@ -341,6 +372,9 @@ type Status struct {
 	MeshID      string       `json:"meshId"`
 	Members     int          `json:"members"`
 	PID         int          `json:"pid"`
+	// Features lists what this node supports beyond its version's base (contract "Bound invites"); only the status op
+	// carries it, so the relays and login-bind answers keep their shape.
+	Features []string `json:"features,omitempty"`
 }
 
 func (d *Daemon) status() Status {
@@ -407,30 +441,50 @@ type InviteReply struct {
 	Command string `json:"command"`
 	// WindowsCommand does the same from PowerShell on Windows.
 	WindowsCommand string `json:"windowsCommand"`
+	// ID is a bound invite's id (contract "Bound invites"); an ordinary invite's answer has none.
+	ID string `json:"id,omitempty"`
+	// MintID repeats a bound invite's mintId.
+	MintID string `json:"mintId,omitempty"`
 }
 
 func (d *Daemon) createInvite(ttlMs int64) (InviteReply, string, error) {
+	return d.createInviteNotify(ttlMs, nil)
+}
+
+func (d *Daemon) createInviteNotify(ttlMs int64, cancelled chan struct{}) (InviteReply, string, error) {
 	ttl := time.Duration(ttlMs) * time.Millisecond
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}
-	inv, err := d.inviteBook().Create(ttl, d.now())
+	inv, err := d.inviteBook().CreateNotify(ttl, d.now(), cancelled)
 	if err != nil {
 		return InviteReply{}, "", err
 	}
+	return d.inviteReply(inv), inv.ID, nil
+}
+
+func (d *Daemon) inviteReply(inv mesh.Invite) InviteReply {
 	tok := mesh.Token{SignPub: d.id.SignPub, NoisePub: d.id.NoisePub, Secret: inv.Secret, Relays: d.relays()}
 	s := tok.String()
 	return InviteReply{Token: s, Relay: tok.Relays[0], ExpiresAt: inv.ExpiresAt, Command: InstallCommand(d.downloadRelay(), s),
-		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}, inv.ID, nil
+		WindowsCommand: InstallCommandWindows(d.downloadRelay(), s)}
 }
 
 func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, reply func(any), fail func(error)) {
-	r, id, err := d.createInvite(req.TTLMs)
+	cancelled := make(chan struct{})
+	r, id, err := d.createInviteNotify(req.TTLMs, cancelled)
 	if err != nil {
 		fail(err)
 		return
 	}
-	wait := make(chan mesh.Member, 1)
+	d.awaitJoin(ctx, c, r, id, cancelled, reply)
+}
+
+// awaitJoin answers r, then the invite's admission, cancel or expiry, unless the client hangs up first. cancelled is
+// the invite's cancel signal, attached when the invite was made. Admission needs no
+// such care: nobody holds the token before r is answered, after the waiter is registered.
+func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
+	wait := make(chan *mesh.Member, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
 	d.mu.Unlock()
@@ -445,7 +499,9 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 	defer t.Stop()
 	select {
 	case m := <-wait:
-		reply(map[string]any{"t": "admitted", "member": m})
+		reply(map[string]any{"t": "admitted", "member": *m})
+	case <-cancelled:
+		reply(map[string]any{"t": "cancelled"})
 	case <-t.C:
 		reply(map[string]any{"t": "expired"})
 	case <-gone:

@@ -208,7 +208,7 @@ func TestPipeReportsWhileItRunsAndCountsNothingTwice(t *testing.T) {
 	if _, err := inW.Write(make([]byte, 100)); err != nil {
 		t.Fatal(err)
 	}
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
 		t.Fatalf("interval report: %v", err)
@@ -420,7 +420,7 @@ func TestPipeDoesNotReportBytesTwiceWhenAnAnswerIsLost(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	if err := <-reported; err == nil {
 		t.Fatal("the report whose answer was dropped succeeded")
@@ -543,7 +543,7 @@ func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsItsAnswers(t *testing.T)
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	<-got
 	// More bytes after the periodic report took its count, so the end has a report of its own to send.
@@ -595,12 +595,12 @@ func TestPipeDropsBytesTheDaemonDidNotTakeWithinOneBucket(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: those 100 bytes wait
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	// The daemon answers again only a bucket after the refused bytes began: they are dropped, not counted now.
 	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now()
@@ -685,12 +685,12 @@ func TestPipeKeepsNewerRefusedBytesWhenAnOlderBatchExpires(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 100 bytes from the start
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	set(start.Add(14*time.Minute), 14*time.Minute)
 	ticks <- time.Now()
 	<-reported // refused: 150, of which 50 from +2 min
@@ -742,7 +742,7 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(start.Add(traffic.Span+time.Minute), traffic.Span+time.Minute)
 	ticks <- time.Now() // the first report comes a bucket late
 	ticks <- time.Now() // taken only once the late report has finished
@@ -831,7 +831,7 @@ func TestPipeDropsBytesPendingWhenTheWallClockGoesBack(t *testing.T) {
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	set(noon.Add(2*time.Minute), 2*time.Minute)
 	ticks <- time.Now()
 	if err := <-reported; err != nil {
@@ -839,12 +839,12 @@ func TestPipeDropsBytesPendingWhenTheWallClockGoesBack(t *testing.T) {
 	}
 	// The wall clock goes back to 11:58 a minute later; 50 bytes cross at 11:59.
 	inW.Write(make([]byte, 50))
-	out.wait(150)
+	echoedAndCounted(out, inW, 150)
 	set(noon.Add(-time.Minute), 4*time.Minute)
 	ticks <- time.Now()
 	ticks <- time.Now() // taken once the report above returned
 	inW.Write(make([]byte, 30))
-	out.wait(180)
+	echoedAndCounted(out, inW, 180)
 	set(noon.Add(time.Minute), 6*time.Minute)
 	ticks <- time.Now()
 	if err := <-reported; err == nil {
@@ -903,7 +903,7 @@ func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadlin
 	code := make(chan int, 1)
 	go func() { code <- RunPipe([]string{"a", strconv.Itoa(port)}, out, &errOut) }()
 	inW.Write(make([]byte, 100))
-	out.wait(100)
+	echoedAndCounted(out, inW, 100)
 	ticks <- time.Now()
 	<-lines // the periodic report, held
 	inW.Write(make([]byte, 50))
@@ -922,5 +922,149 @@ func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadlin
 	}
 	if len(began) != 0 {
 		t.Fatal("the end of the session took more than one shutdown deadline")
+	}
+}
+
+// reportOnly drives one session's reporter directly against a fake daemon that answers each report with answer(n),
+// n counting from 1, and returns the session, the clock and the reports the daemon received.
+func reportOnly(t *testing.T, answer func(n int) string) (s *sessionTraffic, set func(time.Time, time.Duration), got func() []daemon.TrafficReport) {
+	t.Helper()
+	st := tmpStore(t)
+	var mu sync.Mutex
+	var reports []daemon.TrafficReport
+	fakeDaemonFunc(t, st, func(line []byte) string {
+		var r daemon.TrafficReport
+		json.Unmarshal(line, &r)
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, r)
+		return answer(len(reports))
+	})
+	set = testClock(t)
+	set(time.Unix(1_800_000_000, 0), 0)
+	s = &sessionTraffic{st: st, node: "n", relay: "r", lastTry: trafficNow()}
+	return s, set, func() []daemon.TrafficReport {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]daemon.TrafficReport(nil), reports...)
+	}
+}
+
+func counted(int) string { return `{"t":"counted"}` }
+
+// The node buckets a report when it handles it, normally within trafficWithin of the reporter's reading. Bytes
+// pending since a report the wall clock puts keepFor or more ago are dropped, even when the monotonic gap is shorter
+// than keepFor and the step is within clockStep: counted at arrival they could land two buckets after they began.
+func TestPipeDropsPendingBytesTheWallClockPutsABucketBack(t *testing.T) {
+	s, set, got := reportOnly(t, counted)
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(traffic.Span-500*time.Millisecond), traffic.Span-1500*time.Millisecond)
+	s.report(context.Background())
+	if r := got(); len(r) != 0 {
+		t.Fatalf("reports %+v; want the bytes pending across a bucket dropped, never sent", r)
+	}
+}
+
+// Refused bytes wait less than a bucket minus the report bound: counted at arrival, a batch that began a bucket minus
+// half a second ago could land two buckets after it began.
+func TestPipeDropsRefusedBytesWhoseReportWouldArriveABucketLate(t *testing.T) {
+	s, set, got := reportOnly(t, func(n int) string {
+		if n == 1 {
+			return `{"error":"unknown op \"traffic.report\""}`
+		}
+		return `{"t":"counted"}`
+	})
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(2*time.Minute), 2*time.Minute)
+	s.report(context.Background()) // refused: those 100 bytes wait, from the start
+	s.in.Store(150)
+	s.out.Store(150)
+	set(start.Add(traffic.Span-500*time.Millisecond), traffic.Span-500*time.Millisecond)
+	s.report(context.Background())
+	if r := got(); len(r) != 2 || r[1].In != 50 || r[1].Out != 50 {
+		t.Fatalf("reports %+v; want the second report to carry only the 50 bytes from +2 min", r)
+	}
+}
+
+// Ordinary clock slew keeps bytes: a wall clock that moves 500 ms ahead of the monotonic one between two reports, and
+// then 500 ms back, is under clockStep, so every report is counted. Guards a later tightening of clockStep.
+func TestPipeKeepsBytesWhenTheWallClockSlewsHalfASecond(t *testing.T) {
+	s, set, got := reportOnly(t, counted)
+	start := s.lastTry.wall
+	s.in.Store(100)
+	s.out.Store(100)
+	set(start.Add(2*time.Minute+500*time.Millisecond), 2*time.Minute)
+	s.report(context.Background())
+	s.in.Store(150)
+	s.out.Store(150)
+	set(start.Add(4*time.Minute), 4*time.Minute)
+	s.report(context.Background())
+	if r := got(); len(r) != 2 || r[0].In != 100 || r[0].Out != 100 || r[1].In != 50 || r[1].Out != 50 {
+		t.Fatalf("reports %+v; want 100 then 50 bytes each way counted across a 500 ms slew", r)
+	}
+}
+
+// echoedAndCounted waits until the echo of n bytes in all reached stdout and the pipe has read its stdin again. The pipe
+// reads stdin, sends, then reads again, and the session counts a send before the call returns, so once that empty
+// write is taken every byte written before it is counted both ways; the echo alone can come back first.
+func echoedAndCounted(out *signalWriter, inW *io.PipeWriter, n int) {
+	out.wait(n)
+	inW.Write(nil)
+}
+
+// The limits are exact and use both clocks: bytes are kept one nanosecond short of keepFor and dropped at it, when
+// only the monotonic clock or only the wall clock says so, for pending bytes and for a refused batch alike. The
+// other clock lags by 500 ms, within clockStep.
+func TestTrafficLimitsAreExactOnEitherClock(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		held, mono bool // held: a refused batch, else pending bytes; mono: the monotonic clock is the long one
+		age        time.Duration
+		kept       bool
+	}{
+		{"pending, monotonic just short", false, true, keepFor - 1, true},
+		{"pending, monotonic at keepFor", false, true, keepFor, false},
+		{"pending, wall just short", false, false, keepFor - 1, true},
+		{"pending, wall at keepFor", false, false, keepFor, false},
+		{"held, monotonic just short", true, true, keepFor - 1, true},
+		{"held, monotonic at keepFor", true, true, keepFor, false},
+		{"held, wall just short", true, false, keepFor - 1, true},
+		{"held, wall at keepFor", true, false, keepFor, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, set, got := reportOnly(t, func(n int) string {
+				if c.held && n == 1 {
+					return `{"error":"unknown op \"traffic.report\""}`
+				}
+				return `{"t":"counted"}`
+			})
+			start := s.lastTry.wall
+			s.in.Store(100)
+			s.out.Store(100)
+			if c.held {
+				set(start.Add(time.Minute), time.Minute)
+				s.report(context.Background()) // refused: 100 bytes wait, from the start
+			}
+			wall, mono := c.age-500*time.Millisecond, c.age
+			if !c.mono {
+				wall, mono = c.age, c.age-500*time.Millisecond
+			}
+			set(start.Add(wall), mono)
+			s.report(context.Background())
+			r := got()
+			refused := 0
+			if c.held {
+				refused = 1
+			}
+			kept := len(r) == refused+1 && r[refused].In == 100 && r[refused].Out == 100
+			dropped := len(r) == refused
+			if !(c.kept && kept) && !(!c.kept && dropped) {
+				t.Fatalf("reports %+v; want the 100 bytes each way kept %v", r, c.kept)
+			}
+		})
 	}
 }

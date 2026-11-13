@@ -179,6 +179,30 @@ func (s *Store) EnsureIdentityClearing(marker string) (id *ident.Identity, creat
 			return nil, false, err
 		}
 	}
+	return s.ensureIdentityLocked()
+}
+
+// ErrMarked is EnsureIdentityUnless's refusal: the marker is present.
+var ErrMarked = errors.New("state: marker present")
+
+// EnsureIdentityUnless is EnsureIdentity that refuses (ErrMarked) while marker exists, in the same hold of the
+// state lock: pen identity makes a node's keys without starting it, so it must neither clear a pen leave's marker
+// nor make keys that the resumed leave would delete.
+func (s *Store) EnsureIdentityUnless(marker string) (id *ident.Identity, created bool, err error) {
+	unlock, err := s.Lock()
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
+	if _, err := os.Stat(s.Path(marker)); err == nil {
+		return nil, false, ErrMarked
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+	return s.ensureIdentityLocked()
+}
+
+func (s *Store) ensureIdentityLocked() (id *ident.Identity, created bool, err error) {
 	id, err = s.LoadIdentity()
 	if err == nil {
 		return id, false, nil

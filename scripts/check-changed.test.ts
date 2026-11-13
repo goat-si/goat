@@ -30,8 +30,8 @@ it("selects Astro components as code for lint and knip", async () => {
   expect(lintChangedArgs([astro])).toEqual(["lint", "--no-error-on-unmatched-pattern", astro]);
 });
 
-it("checks the agent surface audit and context budget as CI does when code or the audit page changes (#2828)", async () => {
-  const { agentSurfaceCheckSteps } = await import("./check-changed-command.ts");
+it("checks the agent surface audit and context budget as CI does when code or a doc the audit scans changes (#2828, #2926)", async () => {
+  const { agentSurfaceCheckSteps } = await import("./agent-surface/auditInputs.ts");
   const steps = [
     { name: "agent surface audit", args: ["run", "agent-surface:check"] },
     { name: "agent context budget", args: ["run", "agent-surface:context-budget-check"] },
@@ -40,5 +40,17 @@ it("checks the agent surface audit and context budget as CI does when code or th
     steps,
   );
   expect(agentSurfaceCheckSteps(["docs/internals/agent-surface-audit.md"])).toEqual(steps);
-  expect(agentSurfaceCheckSteps(["docs/user/threads.md"])).toEqual([]);
+  for (const doc of [
+    "docs/user/install.md",
+    "structure/INDEX.md",
+    ".agents/skills/goat-dev/SKILL.md",
+    "AGENTS.md",
+  ])
+    expect(agentSurfaceCheckSteps([doc]), doc).toEqual(steps);
+  for (const other of [
+    "devlog/_chase/010_fork_delta.md",
+    ".github/workflows/goat-ci.yml",
+    "apps/server/src/provider/model-manifest.json",
+  ])
+    expect(agentSurfaceCheckSteps([other]), other).toEqual([]);
 });
