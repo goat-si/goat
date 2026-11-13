@@ -181,7 +181,7 @@ export function useGoatBotFollow({
     const extra = Math.max(0, target - (scroll.scrollHeight - scroll.clientHeight));
     const list = listRef.current;
     if (list && extra > 0) {
-      jumpPadding.current ??= list.style.paddingBottom;
+      if (jumpPadding.current === null) jumpPadding.current = list.style.paddingBottom;
       list.style.paddingBottom = `${parseFloat(getComputedStyle(list).paddingBottom) + extra}px`;
     }
     scroll.scrollTop = target;
