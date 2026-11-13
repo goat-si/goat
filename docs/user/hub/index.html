@@ -115,15 +115,27 @@ Only a person can change this consent, and it lasts 30 days: when it ends,
 rule cancels invites that were not used yet.</p>
 <p>To attach a machine yourself, choose <strong>Attach a machine</strong>, paste the line
 <code>pen identity --json</code> prints on that machine, and name it. GOAT shows the invite
-token once; run <code>pen join</code> with it on that machine within 10 minutes. While it
+token once, with this hub’s machine key. Add the key to <code>authorized_keys</code> of the
+machine’s SSH user, then run <code>pen join</code> with the token on that machine within
+10 minutes. While it
 waits, <strong>Reissue</strong> cancels that invite and makes a new one for the same keys;
 once it has expired, attach the machine again. A provisioner
 thread does the same with <code>goat_hub_machine_attach</code>; its invite token appears in
 that thread’s tool output and history, so treat the thread as holding a secret
 until the invite is used or expires.</p>
+<p>Once the machine joins, the hub checks the route Pen recorded for it, reaches
+it with the machine key alone, and links it to OpenCodex as a lightweight Child
+on that route only. The machine list says where each machine is and what to do
+next. On web and desktop, a machine GOAT cannot reach yet shows the machine key
+with <strong>Copy machine key</strong>; on mobile its text says where to find the key. The link
+needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
+release can yet; until one can, the machine waits at the link step. A machine with a full OpenCodex install, or one that shares its
+SSH host key with another disposable machine, stops for you to decide.</p>
 <p>Each machine is a full Pen member and can reach services on your machines’
-loopback. GOAT does not link it as a Child yet, and it stays a Pen member until
-you remove it with <a href="/goat/docs/user/pen/#remove-a-machine"><code>pen revoke</code></a>. An older GOAT on the
+loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
+it with <a href="/goat/docs/user/pen/#remove-a-machine"><code>pen revoke</code></a>. Removing a linked machine from Pen leaves its
+link on the hub; the machine list names the link and the <code>ocx link revoke</code>
+command that removes it. An older GOAT on the
 hub shows <strong>Update GOAT on this hub</strong> instead of these settings.</p>
 <h2 id="sync-opencodex-models">Sync OpenCodex models</h2>
 <p><strong>Sync OpenCodex</strong> loads OpenCodex’s current models into Codex, on the hub first
