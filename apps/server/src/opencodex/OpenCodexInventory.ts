@@ -385,8 +385,11 @@ const make = Effect.gen(function* () {
       .trim()
       .slice(0, 255);
     const homeRows = linkRole === "home" ? (link?.links ?? []) : [];
+    // A Home whose last link went reports standalone; its relay bytes still count for a day.
     const observed =
-      link !== undefined && linkRole === "home" ? yield* linkTraffic.observe(homeRows) : undefined;
+      link !== undefined && link.role !== "child"
+        ? yield* linkTraffic.observe(homeRows)
+        : undefined;
     let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
     if (parity) {
       const observedAt = yield* Clock.currentTimeMillis;

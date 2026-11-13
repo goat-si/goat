@@ -109,4 +109,18 @@ describe("link traffic book", () => {
     expect(book.view("a", T0 + 60_000)?.day.toHomeBytes).toBe(500);
     expect(book.view("b", T0 + 60_000)).toBeUndefined();
   });
+
+  it("keeps a stable set of links when more than its bound report each pass, so they still pair", () => {
+    const book = makeLinkTrafficBook(2);
+    const pass = (bytes: number, at: number) =>
+      book.observe(
+        ["a", "b", "c"].map((linkId) => reading(bytes, { linkId })),
+        at,
+      );
+    pass(0, T0);
+    pass(600, T0 + 60_000);
+    const measured = ["a", "b", "c"].filter((id) => book.view(id, T0 + 60_000) !== undefined);
+    expect(measured).toHaveLength(2);
+    expect(book.size()).toBe(2);
+  });
 });

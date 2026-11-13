@@ -108,10 +108,23 @@ function sum(series: Series, at: number, windowMs: number): LinkTrafficWindow {
 export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
   const book = new Map<string, Series>();
 
-  const record = (reading: LinkTrafficReading, at: number) => {
+  /** Room for a new link: the stalest one this pass does not report gives way, else none does. */
+  const admit = (inPass: ReadonlySet<string>) => {
+    if (book.size < maxLinks) return true;
+    // A Map iterates in insertion order and each reading re-inserts its link: the first is the stalest.
+    for (const linkId of book.keys()) {
+      if (inPass.has(linkId)) continue;
+      book.delete(linkId);
+      return true;
+    }
+    return false;
+  };
+
+  const record = (reading: LinkTrafficReading, at: number, inPass: ReadonlySet<string>) => {
     const next: Last = { ...reading.traffic, at, relayRoute: relayRouteOf(reading) };
     const series = book.get(reading.linkId);
     if (series === undefined) {
+      if (!admit(inPass)) return;
       book.set(reading.linkId, {
         last: next,
         values: new Float64Array(SLOTS * FIELDS),
@@ -137,11 +150,6 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
       book.delete(reading.linkId);
       book.set(reading.linkId, series);
     }
-    // A Map iterates in insertion order and each reading re-inserts its link: the first is the stalest.
-    for (const linkId of book.keys()) {
-      if (book.size <= maxLinks) break;
-      book.delete(linkId);
-    }
   };
 
   const prune = (at: number) => {
@@ -153,7 +161,8 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
     /** Records one `ocx link status` pass taken at `at` (epoch ms). */
     observe(readings: ReadonlyArray<LinkTrafficReading>, at: number) {
       prune(at);
-      for (const reading of readings) record(reading, at);
+      const inPass = new Set(readings.map(({ linkId }) => linkId));
+      for (const reading of readings) record(reading, at, inPass);
     },
     /** The last hour and day for a link; undefined before its first paired reading. */
     view(linkId: string, at: number): LinkTrafficView | undefined {

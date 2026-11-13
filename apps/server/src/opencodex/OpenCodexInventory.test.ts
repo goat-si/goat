@@ -917,3 +917,50 @@ it.effect(
       expect(yield* decodeSnapshot(result)).toEqual(result);
     }),
 );
+
+it.effect(
+  "a relay warning outlives the Home's last link, which OpenCodex then reports as standalone",
+  () =>
+    Effect.gen(function* () {
+      const linkTraffic = yield* HubLinkTraffic.make(Effect.succeed(new Set(["pen-mac"]))).pipe(
+        Effect.provide(Settings.ServerSettingsService.layerTest()),
+      );
+      const link: { role: string; links: Array<unknown> } = {
+        role: "home",
+        links: [trafficRow(0)],
+      };
+      const { inventory } = yield* setup({ fixture: fleet.home, link, linkTraffic });
+      yield* inventory.read;
+      link.links[0] = trafficRow(30_000_000_000);
+      yield* TestClock.adjust("10 minutes");
+      expect((yield* inventory.read).link.relayWarning).toEqual({
+        relayBytes: 33_000_000_000,
+        thresholdBytes: 30_000_000_000,
+      });
+      link.role = "standalone";
+      link.links = [];
+      yield* TestClock.adjust("10 minutes");
+      expect((yield* inventory.read).link.relayWarning).toEqual({
+        relayBytes: 33_000_000_000,
+        thresholdBytes: 30_000_000_000,
+      });
+    }),
+);
+
+it.effect(
+  "a multi-route row whose route blocks do not decode reads as route not measured, never as its alias",
+  () =>
+    Effect.gen(function* () {
+      const linkTraffic = yield* HubLinkTraffic.make(Effect.succeed(new Set(["mac-ts"]))).pipe(
+        Effect.provide(Settings.ServerSettingsService.layerTest()),
+      );
+      const row = { ...trafficRow(0), routes: [{ label: "future shape" }], route: { label: "x" } };
+      const { inventory } = yield* setup({
+        fixture: fleet.home,
+        link: { role: "home", links: [row] },
+        linkTraffic,
+      });
+      const result = yield* inventory.read;
+      expect(result.link.links[0]?.route).toBeUndefined();
+    }),
+);

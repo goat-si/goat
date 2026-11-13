@@ -10,11 +10,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as Schema from "effect/Schema";
 
 import * as Settings from "../serverSettings.ts";
-import type { LinkRowObservationFields } from "./hubOcxJson.ts";
+import { decodeLinkRowRoute, type LinkRowObservationFields } from "./hubOcxJson.ts";
 import { makeLinkTrafficBook, type LinkTrafficView } from "./linkTrafficBook.ts";
 import { readPenConfig } from "./penConfigFile.ts";
 import { penConfigHosts } from "./penSshRoute.ts";
@@ -43,18 +44,19 @@ export const baseLinkRow = ({
 }: LinkStatusRow) => base;
 
 /**
- * The route the row's proven tunnel uses. A link with several routes names it; a one-route link,
- * as every older Home has, can only use its alias, and does once its tunnel is connected.
+ * The route the row's proven tunnel uses. A link with several routes names it, and one whose
+ * route does not decode has none known; a one-route link, as every older Home has, can only use
+ * its alias, and does once its tunnel is connected.
  */
 function routeOf(row: LinkStatusRow, penAliases: ReadonlySet<string> | undefined) {
   const multi = row.routes !== undefined || row.route !== undefined;
-  const proven = multi
-    ? row.route == null
-      ? undefined
-      : { name: row.route.name, since: Date.parse(row.route.since) }
-    : row.state === "connected"
-      ? { name: row.alias, since: Number.NaN }
-      : undefined;
+  const named = multi ? Option.getOrNull(decodeLinkRowRoute(row.route)) : null;
+  const proven =
+    named !== null
+      ? { name: named.name, since: Date.parse(named.since) }
+      : !multi && row.state === "connected"
+        ? { name: row.alias, since: Number.NaN }
+        : undefined;
   if (proven === undefined) return undefined;
   return {
     name: proven.name,

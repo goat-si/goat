@@ -48,10 +48,12 @@ export const LinkRowObservationFields = {
       fromHomeBytes: Count,
     }),
   ),
-  routes: ForwardCompatibleOptional(Schema.Array(Schema.Struct({ name: Schema.String }))),
-  /** null while none of a multi-route link's routes is proven. */
-  route: ForwardCompatibleOptional(
-    Schema.NullOr(Schema.Struct({ name: Schema.String, since: Schema.String })),
-  ),
+  // Kept raw: either key marks a multi-route row even when its value does not decode.
+  routes: Schema.optional(Schema.Unknown),
+  route: Schema.optional(Schema.Unknown),
   ws: ForwardCompatibleOptional(Schema.Struct({ open: Count })),
 };
+/** The route a multi-route row's proven tunnel uses; null while none is proven. */
+export const decodeLinkRowRoute = Schema.decodeUnknownOption(
+  Schema.NullOr(Schema.Struct({ name: Schema.String, since: Schema.String })),
+);
