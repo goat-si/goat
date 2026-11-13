@@ -49,6 +49,22 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history", () => {
+  it.effect("looks up an owner and bot scoped task without exposing its instruction", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("lookup", { status: "running", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.getBotTask(
+          { taskId: ChannelTaskId.make("lookup"), botId: BotId.make("main") },
+          owner,
+        );
+        assert.strictEqual(result.task.state, "known");
+        assert.notProperty(result, "instruction");
+      }),
+    ),
+  );
+
   it.effect("walks every task once, in creation order, while tasks change between pages", () =>
     provide(
       Effect.gen(function* () {
