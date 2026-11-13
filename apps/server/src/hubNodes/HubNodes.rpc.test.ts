@@ -30,7 +30,7 @@ const session = (principalKind: AuthenticatedSession["principalKind"]) =>
     method: "browser-session-cookie",
     scopes: ["orchestration:read", "settings:write"],
     principalKind,
-  }) as AuthenticatedSession;
+  }) as unknown as AuthenticatedSession;
 
 const input = {
   kind: "ssh" as const,

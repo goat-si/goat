@@ -155,7 +155,7 @@ const attach = (n: number, overrides: Partial<HubMachineAttachInput> = {}) =>
   Effect.flatMap(Attach.DisposableAttach, (service) =>
     service.attach(caller, "thread:" + THREAD, input(n, overrides)),
   );
-const reason = <A>(effect: Effect.Effect<A, { readonly reason: string }, never>) =>
+const reason = <A, R>(effect: Effect.Effect<A, { readonly reason: string }, R>) =>
   effect.pipe(
     Effect.flip,
     Effect.map((error) => error.reason),

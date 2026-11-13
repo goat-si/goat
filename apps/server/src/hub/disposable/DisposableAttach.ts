@@ -16,19 +16,30 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Settings from "../../serverSettings.ts";
-import { type AttachEffect, mintSteps, penNodeId, stateMessage } from "./attachModel.ts";
+import {
+  type AttachEffect,
+  conflictCount,
+  decodeEffects,
+  decodeProvisioner,
+  decodeUnknown,
+  encodeEffects,
+  encodeProvisioner,
+  encodeUnknown,
+  mintSteps,
+  penNodeId,
+  type StoredProvisioner,
+  stateMessage,
+} from "./attachModel.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { disposableSwitch } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
 import { PEN_ATTACH_FEATURES, type PenInviteRef, PenInvites } from "./PenInvites.ts";
 
-/** Who asks, as stored: a thread the switch names, or a person's session. */
-export type StoredProvisioner =
-  | { readonly kind: "thread"; readonly threadId: string; readonly cloudRunId?: string }
-  | { readonly kind: "person"; readonly sessionId: string };
+export type { StoredProvisioner };
 
 export interface AttachCaller {
   readonly provisioner: StoredProvisioner;
@@ -42,7 +53,7 @@ export class Provisioners extends Context.Service<
   {
     readonly alive: (provisioner: StoredProvisioner, delegation: unknown) => Effect.Effect<boolean>;
   }
->()("goat/hub/disposable/Provisioners") {}
+>()("goat/hub/disposable/DisposableAttach/Provisioners") {}
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const OPEN = "final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')";
@@ -77,16 +88,11 @@ const storageFailed = () =>
     detail: "The hub's disposable machine records are unavailable.",
   });
 const digest = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
-const effectsOf = (row: Row): ReadonlyArray<AttachEffect> => {
-  try {
-    const parsed: unknown = JSON.parse(row.effects_json);
-    return Array.isArray(parsed) ? (parsed as ReadonlyArray<AttachEffect>) : [];
-  } catch {
-    return [];
-  }
-};
-const provisionerOf = (row: Row): StoredProvisioner =>
-  JSON.parse(row.provisioner_json) as StoredProvisioner;
+const effectsOf = (row: Row) => decodeEffects(row.effects_json);
+const provisionerOf = (row: Row) => decodeProvisioner(row.provisioner_json);
+const sameProvisioner = (a: StoredProvisioner | undefined, b: StoredProvisioner) =>
+  a !== undefined &&
+  (a.kind === "thread" ? b.kind === "thread" && a.threadId === b.threadId : b.kind === "person");
 const isCanonicalKey = (key: string) => {
   const bytes = Buffer.from(key, "base64url");
   return bytes.length === 32 && bytes.toString("base64url") === key;
@@ -166,7 +172,6 @@ export const make = Effect.gen(function* () {
     const effects = effectsOf(row);
     const { message, nextAction } = stateMessage(row.state, row.name, row.invite_expires_at);
     const provisioner = provisionerOf(row);
-    const conflicts: unknown = JSON.parse(row.conflicts_json);
     return {
       attachId: row.attach_id,
       name: row.name,
@@ -179,12 +184,12 @@ export const make = Effect.gen(function* () {
       class:
         row.final_at !== null
           ? "kept"
-          : Array.isArray(conflicts) && conflicts.length > 0
+          : conflictCount(row.conflicts_json) > 0
             ? "conflict"
             : "disposable",
       penMember: row.pen_admitted_at !== null && row.pen_removed_at === null,
       provisioner:
-        provisioner.kind === "thread"
+        provisioner?.kind === "thread"
           ? { kind: "thread", threadId: provisioner.threadId as never }
           : { kind: "person" },
       stateSince: row.state_since,
@@ -227,6 +232,7 @@ export const make = Effect.gen(function* () {
             if (now === undefined || now.fence !== row.fence) return "conflict" as const;
             if (!gate.open) return gate.reason;
             if (gate.grant !== now.grant_id) return "switch_off" as const;
+            if (provisioner === undefined) return "provisioner_refused" as const;
             if (
               provisioner.kind === "thread" &&
               !current.hub.attachDisposableMachines.provisioners.includes(
@@ -234,7 +240,7 @@ export const make = Effect.gen(function* () {
               )
             )
               return "provisioner_refused" as const;
-            yield* sql`UPDATE disposable_machines SET effects_json = ${JSON.stringify(effects)},
+            yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
                 updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
             return "admitted" as const;
           }),
@@ -266,7 +272,11 @@ export const make = Effect.gen(function* () {
       expiresAtMs,
       ...(requestKey === undefined ? {} : { requestKey }),
     };
-    if (!(yield* provisioners.alive(provisionerOf(row), JSON.parse(row.delegation_json)))) {
+    const provisioner = provisionerOf(row);
+    if (
+      provisioner === undefined ||
+      !(yield* provisioners.alive(provisioner, decodeUnknown(row.delegation_json)))
+    ) {
       yield* writeFacts(row.attach_id, row.fence, {
         state: "paused",
         state_since: yield* nowIso,
@@ -308,7 +318,7 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.result);
     if (minted._tag === "Failure") {
       yield* writeFacts(row.attach_id, row.fence, {
-        effects_json: JSON.stringify(setEffect(effects, mintId, { state: "unknown" })),
+        effects_json: encodeEffects(setEffect(effects, mintId, { state: "unknown" })),
         state: "unknown",
         state_since: yield* nowIso,
       });
@@ -328,7 +338,7 @@ export const make = Effect.gen(function* () {
           const now = yield* nowIso;
           yield* sql`UPDATE disposable_machines SET invite_id = ${invite.inviteId}, mint_id = ${mintId},
               invite_expires_at = ${expiresAt}, state = 'invited', step = 'invite',
-              effects_json = ${JSON.stringify(done)}, state_since = ${now}, updated_at = ${now}
+              effects_json = ${encodeEffects(done)}, state_since = ${now}, updated_at = ${now}
               WHERE attach_id = ${row.attach_id}`;
         }),
       )
@@ -337,7 +347,7 @@ export const make = Effect.gen(function* () {
       // The switch changed after admission: this exact invite is cancelled before its token is seen.
       const cancelled = yield* pen.cancel({ inviteId: invite.inviteId }).pipe(Effect.result);
       yield* writeFacts(row.attach_id, row.fence, {
-        effects_json: JSON.stringify(
+        effects_json: encodeEffects(
           setEffect(effects, mintId, { state: "late", inviteId: invite.inviteId }),
         ),
         invite_id: invite.inviteId,
@@ -354,7 +364,7 @@ export const make = Effect.gen(function* () {
     }
     yield* audit(row.attach_id, "hub.machine_mint", "invited");
     const fresh = yield* read(row.attach_id);
-    if (fresh === undefined) return yield* Effect.fail(storageFailed());
+    if (fresh === undefined) return yield* storageFailed();
     return status(fresh, { token: invite.token, expiresAt });
   });
 
@@ -426,8 +436,8 @@ export const make = Effect.gen(function* () {
             const now = yield* nowIso;
             yield* sql`INSERT INTO disposable_machines ${sql.insert({
               attach_id: attachId,
-              provisioner_json: JSON.stringify(caller.provisioner),
-              delegation_json: JSON.stringify(caller.delegation ?? null),
+              provisioner_json: encodeProvisioner(caller.provisioner),
+              delegation_json: encodeUnknown(caller.delegation ?? null),
               name: input.name,
               label: input.label ?? null,
               expected_sign_pub: input.signPub,
@@ -460,7 +470,7 @@ export const make = Effect.gen(function* () {
       );
     yield* audit(attachId, "hub.machine_attach", "reserved");
     const row = yield* read(attachId);
-    if (row === undefined) return yield* Effect.fail(storageFailed());
+    if (row === undefined) return yield* storageFailed();
     return yield* mint(row, 1, undefined);
   });
 
@@ -559,7 +569,7 @@ export const make = Effect.gen(function* () {
     const row = yield* read(input.attachId);
     if (row === undefined) return yield* fail("not_found", "No attach has that id.");
     if (
-      JSON.stringify(provisionerOf(row)) !== JSON.stringify(caller.provisioner) &&
+      !sameProvisioner(provisionerOf(row), caller.provisioner) &&
       caller.provisioner.kind !== "person"
     )
       return yield* fail(
@@ -585,7 +595,7 @@ export const make = Effect.gen(function* () {
     if (cancelled === "burned" || cancelled === "absent") {
       yield* settle(row);
       const settled = yield* read(row.attach_id);
-      return settled === undefined ? yield* Effect.fail(storageFailed()) : status(settled);
+      return settled === undefined ? yield* storageFailed() : status(settled);
     }
     const seq = effectsOf(row).filter((entry) => entry.kind === "mint").length + 1;
     return yield* mint(row, seq, requestKey);
@@ -605,4 +615,22 @@ export const make = Effect.gen(function* () {
   return DisposableAttach.of({ attach, reissue, list, reconcile });
 });
 
-export const layer = Layer.effect(DisposableAttach, make);
+// Settles invites and withdraws ones whose grant ended, also when no client is reading.
+const RECONCILE_EVERY = "30 seconds";
+
+export const layer = Layer.effect(
+  DisposableAttach,
+  Effect.gen(function* () {
+    const service = yield* make;
+    yield* service.reconcile.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Disposable machine reconcile failed").pipe(
+          Effect.annotateLogs({ reason: error.detail }),
+        ),
+      ),
+      Effect.repeat(Schedule.spaced(RECONCILE_EVERY)),
+      Effect.forkScoped,
+    );
+    return service;
+  }),
+);

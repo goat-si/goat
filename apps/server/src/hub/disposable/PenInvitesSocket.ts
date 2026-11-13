@@ -1,0 +1,173 @@
+// @effect-diagnostics nodeBuiltinImport:off -- bound-invite ops run on Pen's control socket.
+import * as NodeNet from "node:net";
+import * as NodePath from "node:path";
+
+import { guardErrors } from "@goat/shared/errorGuards";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+import { lineReader } from "../../pen/penHandshake.ts";
+import * as Settings from "../../serverSettings.ts";
+import {
+  PenInviteUnknown,
+  PenInvites,
+  type PenInviteRef,
+  type PenInviteState,
+} from "./PenInvites.ts";
+
+// One answer line; a status reply carries a few small fields, ls every member with host keys.
+const LINE_CAP = 1 << 20;
+const OP_TIMEOUT = "10 seconds";
+
+const Status = Schema.Struct({ features: Schema.optional(Schema.Array(Schema.String)) });
+const Ls = Schema.Struct({ members: Schema.Array(Schema.Struct({ signPub: Schema.String })) });
+const Minted = Schema.Struct({
+  token: Schema.String,
+  expiresAt: Schema.Number,
+  id: Schema.String,
+  mintId: Schema.String,
+});
+const Cancelled = Schema.Struct({
+  t: Schema.Literal("invite-cancel"),
+  state: Schema.Literals(["cancelled", "burned", "expired", "absent"]),
+});
+const InviteStatus = Schema.Struct({
+  t: Schema.Literal("invite-status"),
+  state: Schema.Literals(["live", "cancelled", "expired", "burned", "burned-unsaved", "absent"]),
+  expiresAt: Schema.optional(Schema.Number),
+  nonce: Schema.optional(Schema.String),
+  admit: Schema.optional(Schema.String),
+  member: Schema.optional(Schema.Boolean),
+});
+const Acked = Schema.Struct({ state: Schema.Literals(["acked", "absent"]) });
+const decode = <S extends Schema.Top>(schema: S) =>
+  Schema.decodeUnknownOption(Schema.fromJsonString(schema) as never) as (
+    line: string,
+  ) => Option.Option<S["Type"]>;
+const decodeStatus = decode(Status);
+const decodeLs = decode(Ls);
+const decodeMinted = decode(Minted);
+const decodeCancelled = decode(Cancelled);
+const decodeInviteStatus = decode(InviteStatus);
+const decodeAcked = decode(Acked);
+
+const unknown = (reason: string) => new PenInviteUnknown({ reason });
+const encodeLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+export const make = Effect.gen(function* () {
+  const settings = yield* Settings.ServerSettingsService;
+
+  /** Sends one op to the confirmed Pen's control socket and reads its one answer line. */
+  const ask = Effect.fn("PenInvitesSocket.ask")(function* (op: Record<string, unknown>) {
+    const pen = (yield* settings.getSettings.pipe(
+      Effect.mapError(() => unknown("settings unreadable")),
+    )).pen;
+    if (pen === null) return yield* unknown("no confirmed Pen");
+    const path = NodePath.join(pen.stateDir, "control.sock");
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const socket = yield* Effect.acquireRelease(
+          Effect.callback<NodeNet.Socket, PenInviteUnknown>((resume) => {
+            const connection = guardErrors(NodeNet.createConnection(path), () =>
+              resume(Effect.fail(unknown("control socket unreachable"))),
+            );
+            connection.once("connect", () => resume(Effect.succeed(connection)));
+          }),
+          (connection) => Effect.sync(() => connection.destroy()),
+        );
+        const reader = lineReader(socket);
+        socket.write(encodeLine(op) + "\n");
+        const line = yield* reader.read(LINE_CAP).pipe(Effect.mapError(() => unknown("no answer")));
+        return line.toString("utf8");
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: OP_TIMEOUT,
+        orElse: () => Effect.fail(unknown("timed out")),
+      }),
+    );
+  });
+
+  const answer = <A>(decoded: Option.Option<A>, what: string) =>
+    Effect.fromOption(decoded).pipe(
+      Effect.mapError(() => unknown(what + " unreadable or refused")),
+    );
+  const named = (ref: PenInviteRef) =>
+    "mintId" in ref ? { mintId: ref.mintId } : { inviteId: ref.inviteId };
+
+  return PenInvites.of({
+    features: ask({ op: "status" }).pipe(
+      Effect.map((line) => Option.getOrUndefined(decodeStatus(line))?.features),
+      Effect.map((features) => (features === undefined ? new Set<string>() : new Set(features))),
+      Effect.orElseSucceed(() => undefined),
+    ),
+    isMember: Effect.fn("PenInvites.isMember")(function* (signPub) {
+      return yield* ask({ op: "ls" }).pipe(
+        Effect.map((line) =>
+          Option.getOrUndefined(
+            Option.map(decodeLs(line), (ls) => ls.members.some((m) => m.signPub === signPub)),
+          ),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      );
+    }),
+    mint: Effect.fn("PenInvites.mint")(function* ({ subject, mintId, expiresAtMs }) {
+      return yield* ask({ op: "invite", subject, mintId, expiresAt: expiresAtMs }).pipe(
+        Effect.flatMap((line) => answer(decodeMinted(line), "invite")),
+        Effect.flatMap((minted) =>
+          minted.mintId === mintId
+            ? Effect.succeed({
+                inviteId: minted.id,
+                token: minted.token,
+                expiresAtMs: minted.expiresAt,
+              })
+            : Effect.fail(unknown("invite answered another mint")),
+        ),
+      );
+    }),
+    cancel: Effect.fn("PenInvites.cancel")(function* (ref) {
+      return yield* ask({ op: "invite.cancel", ...named(ref) }).pipe(
+        Effect.flatMap((line) => answer(decodeCancelled(line), "invite.cancel")),
+        Effect.map((reply) => reply.state),
+      );
+    }),
+    status: Effect.fn("PenInvites.status")(function* (ref) {
+      return yield* ask({ op: "invite.status", ...named(ref) }).pipe(
+        Effect.flatMap((line) => answer(decodeInviteStatus(line), "invite.status")),
+        Effect.flatMap((reply): Effect.Effect<PenInviteState, PenInviteUnknown> => {
+          switch (reply.state) {
+            case "live":
+              return reply.expiresAt === undefined
+                ? Effect.fail(unknown("live without expiry"))
+                : Effect.succeed({ state: "live", expiresAtMs: reply.expiresAt });
+            case "burned":
+              return reply.nonce === undefined
+                ? Effect.fail(unknown("burned without nonce"))
+                : Effect.succeed({
+                    state: "burned",
+                    nonce: reply.nonce,
+                    ...(reply.admit === undefined ? {} : { admit: reply.admit }),
+                    ...(reply.member === undefined ? {} : { member: reply.member }),
+                  });
+            case "burned-unsaved":
+              return reply.nonce === undefined
+                ? Effect.fail(unknown("burned without nonce"))
+                : Effect.succeed({ state: "burned-unsaved", nonce: reply.nonce });
+            default:
+              return Effect.succeed({ state: reply.state });
+          }
+        }),
+      );
+    }),
+    ack: Effect.fn("PenInvites.ack")(function* (ref) {
+      return yield* ask({ op: "invite.ack", ...named(ref) }).pipe(
+        Effect.flatMap((line) => answer(decodeAcked(line), "invite.ack")),
+        Effect.map((reply) => reply.state),
+      );
+    }),
+  });
+});
+
+export const layer = Layer.effect(PenInvites, make);

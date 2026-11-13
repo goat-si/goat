@@ -16,7 +16,7 @@ export const HOME_ATTACH_CONTRACTS = [
 export class HomeContracts extends Context.Service<
   HomeContracts,
   { readonly contracts: Effect.Effect<ReadonlySet<string> | undefined> }
->()("goat/hub/disposable/HomeContracts") {}
+>()("goat/hub/disposable/features/HomeContracts") {}
 
 export const homeContractsLayer = Layer.effect(
   HomeContracts,

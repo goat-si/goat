@@ -2,6 +2,8 @@
 import * as NodeCrypto from "node:crypto";
 
 import type { HubMachineStatus, HubMachineStep } from "@goat/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -28,16 +30,48 @@ export const penNodeId = (signPub: string) => {
 };
 
 /** One side effect an attach started, with what settled it. */
-export interface AttachEffect {
-  readonly id: string;
-  readonly kind: "mint";
-  readonly state: "intent" | "done" | "unknown" | "late";
-  readonly inviteId?: string;
+const AttachEffect = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literal("mint"),
+  state: Schema.Literals(["intent", "done", "unknown", "late"]),
+  inviteId: Schema.optionalKey(Schema.String),
   /** The absolute expiry GOAT sent with the mint; after it, Pen can no longer create that invite. */
-  readonly expiresAtMs?: number;
+  expiresAtMs: Schema.optionalKey(Schema.Number),
   /** The reissue request that started it, so a repeat replays instead of minting again. */
-  readonly requestKey?: string;
-}
+  requestKey: Schema.optionalKey(Schema.String),
+});
+export type AttachEffect = typeof AttachEffect.Type;
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const EffectsJson = Schema.fromJsonString(Schema.Array(AttachEffect));
+/** A record's effects; an unreadable list reads as none started, which keeps nothing settled. */
+const decodeEffectsJson = Schema.decodeOption(EffectsJson);
+export const decodeEffects = (json: string): ReadonlyArray<AttachEffect> =>
+  Option.getOrElse(decodeEffectsJson(json), () => []);
+export const encodeEffects = Schema.encodeSync(EffectsJson);
+
+/** Who asks, as stored: a thread the switch names, or a person's session. */
+const StoredProvisioner = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("thread"),
+    threadId: Schema.String,
+    cloudRunId: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({ kind: Schema.Literal("person"), sessionId: Schema.String }),
+]);
+export type StoredProvisioner = typeof StoredProvisioner.Type;
+const ProvisionerJson = Schema.fromJsonString(StoredProvisioner);
+const decodeProvisionerJson = Schema.decodeOption(ProvisionerJson);
+export const decodeProvisioner = (json: string) =>
+  Option.getOrUndefined(decodeProvisionerJson(json));
+export const encodeProvisioner = Schema.encodeSync(ProvisionerJson);
+export const encodeUnknown = Schema.encodeSync(UnknownJson);
+const decodeUnknownJson = Schema.decodeOption(UnknownJson);
+export const decodeUnknown = (json: string) => Option.getOrUndefined(decodeUnknownJson(json));
+const decodeStrings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+export const conflictCount = (json: string) =>
+  Option.match(decodeStrings(json), { onNone: () => 1, onSome: (list) => list.length });
 
 /** The fixed text a caller sees per state (design section 2, "What the caller sees"). */
 export const stateMessage = (

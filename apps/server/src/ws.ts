@@ -199,6 +199,7 @@ import { makeOpenCodexRpcHandlers } from "./hub/opencodexRpc.ts";
 import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
 import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
+import * as DisposableAttach from "./hub/disposable/DisposableAttach.ts";
 import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
@@ -3581,6 +3582,7 @@ export const layer = Layer.unwrap(
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
     const hubParityService = yield* HubParity.HubParity;
     const hubMembershipService = yield* HubMembership.HubMembership;
+    const disposableAttach = yield* DisposableAttach.DisposableAttach;
     const opencodexUpdateService = yield* Effect.serviceOption(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
@@ -3669,6 +3671,7 @@ export const layer = Layer.unwrap(
               Layer.provide(
                 Layer.mergeAll(
                   Layer.succeed(HubMembership.HubMembership, hubMembershipService),
+                  Layer.succeed(DisposableAttach.DisposableAttach, disposableAttach),
                   Layer.succeed(OpenCodexSync.OpenCodexSync, opencodexSync),
                   Layer.succeed(ChildBootstrap.OpenCodexChildBootstrap, childBootstrap),
                   Option.match(opencodexUpdateService, {
