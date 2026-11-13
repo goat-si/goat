@@ -1,3 +1,4 @@
+import { isServerNetworkAccessible } from "./serverNetworkAccessible";
 import { NoLocalEnvironmentSettings } from "./SavedEnvironmentAccess";
 import {
   ADVANCED_CONNECTION_SETTING_IDS,
@@ -23,7 +24,6 @@ import {
 } from "@goat/contracts";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
-
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
   applyWslEnableSelection,
@@ -268,7 +268,7 @@ export function ConnectionsSettings() {
   })();
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
-    : currentAuthPolicy === "remote-reachable";
+    : isServerNetworkAccessible(currentAuthPolicy, primaryServerConfig);
   const trimmedTailscaleServePortInput = tailscaleServePortInput.trim();
   const parsedTailscaleServePort = Number(trimmedTailscaleServePortInput);
   const isTailscaleServePortValid =
@@ -860,7 +860,7 @@ export function ConnectionsSettings() {
       description={
         desktopBridge
           ? "This connection cannot view or change network exposure."
-          : currentAuthPolicy === "remote-reachable"
+          : isLocalBackendNetworkAccessible
             ? "Remote access is already configured. Change network exposure where the server starts."
             : currentAuthPolicy === "loopback-browser"
               ? "Only this machine can connect. Restart with a non-loopback host for remote pairing."
