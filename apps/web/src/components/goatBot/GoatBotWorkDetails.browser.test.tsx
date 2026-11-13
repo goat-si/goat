@@ -1,4 +1,10 @@
-import { BotRemoteWork, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import {
+  BotRemoteWork,
+  BotThreadRow,
+  BotWorkResult,
+  ChannelTaskId,
+  EnvironmentId,
+} from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -23,7 +29,7 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 
-import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
+import { GoatBotUnavailableWork, GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 const childWork = Atom.make(() => {
   state.reads += 1;
@@ -56,6 +62,7 @@ const childWork = Atom.make(() => {
 });
 
 const decodeRemoteWork = Schema.decodeSync(BotRemoteWork);
+const decodeLookupWork = Schema.decodeUnknownSync(BotWorkResult);
 const at = "2026-11-09T00:00:00.000Z";
 const rows = [
   Schema.decodeSync(BotThreadRow)({
@@ -155,4 +162,36 @@ it("retries a failed sub-work read and shows the returned subagent", async () =>
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
   await expect.element(screen.getByText(/recovered host/)).toBeVisible();
   expect(state.reads).toBe(2);
+});
+
+it("shows lookup coding and remote work even when the task view is unavailable", async () => {
+  setup(["env-macbook"]);
+  const work = decodeLookupWork({
+    task: {
+      state: "unavailable",
+      task: { taskId: "task-1", title: "Older work", status: "running", updatedAt: at },
+    },
+    codingRows: [
+      {
+        kind: "coding",
+        taskId: "task-1",
+        environmentId: "env-studio",
+        threadId: "code-1",
+        title: "Local work",
+        state: "bound",
+        lastActivityAt: at,
+      },
+    ],
+    remoteWork,
+    launchesTruncated: false,
+    partial: true,
+  });
+  await using screen = await render(<GoatBotUnavailableWork work={work} />);
+  await userEvent.click(screen.getByText("Show work"));
+  await expect
+    .element(screen.getByRole("link", { name: "Local work" }))
+    .toHaveAttribute("href", "/env-studio/code-1");
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on macbookpro2" }))
+    .toHaveAttribute("href", "/env-macbook/restart-3774");
 });

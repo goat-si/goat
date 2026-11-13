@@ -16,6 +16,8 @@ import "~/index.css";
 
 const state = vi.hoisted(() => ({
   noRows: false,
+  lookupSupported: false,
+  lookup: vi.fn(),
   showMenu: vi.fn(),
   send: vi.fn(() => true),
   // One command function serves both commands; a retry is told apart by its clientRequestId.
@@ -54,14 +56,24 @@ vi.mock("~/localApi", async (original) => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    getBotTask: { permissionAtom: () => null },
     updateTaskView: { permissionAtom: () => null },
     retryTask: { permissionAtom: () => null },
   },
 }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.update }));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) =>
+    command === channelEnvironment.getBotTask ? state.lookup : state.update,
+}));
 vi.mock("~/state/entities", async (original) => ({
   ...(await original<typeof import("~/state/entities")>()),
-  useServerConfigs: () => new Map(),
+  useServerConfigs: () =>
+    new Map([
+      [
+        "env",
+        { environment: { capabilities: { goatBotTaskLookupSearch: state.lookupSupported } } },
+      ],
+    ]),
   useThreadShell: () => ({}),
   resolveThreadDetailRef: () => null,
   useThreadVisibleTurnItems: () => [],
@@ -70,7 +82,10 @@ vi.mock("~/hooks/useResizableWidth", () => ({
   RESIZABLE_WIDTH_PROPERTY: "--resizable-width",
   useResizableWidth: () => ({ width: 480, handlers: {} }),
 }));
-vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("./GoatBotWorkDetails", () => ({
+  GoatBotWorkDetails: () => null,
+  GoatBotUnavailableWork: () => null,
+}));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -134,6 +149,8 @@ vi.mock("./useBotRoster", () => ({
             }),
           ],
       remoteWork: [],
+      loaded: true,
+      failed: false,
       refresh: state.refresh,
     };
   },
@@ -162,6 +179,7 @@ vi.mock("./useGoatBotSession", () => ({
     };
   },
 }));
+import { channelEnvironment } from "~/state/channels";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
@@ -169,13 +187,13 @@ import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead"
 import { GoatBotChatView } from "./GoatBotChatView";
 import { useGoatBotSession } from "./useGoatBotSession";
 
-function Pane({ onClose }: { onClose: () => void }) {
+function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: string }) {
   const session = useGoatBotSession();
   return (
     <GoatBotTaskPane
       environmentId={EnvironmentId.make("env")}
       session={session}
-      taskId={ChannelTaskId.make("task-1")}
+      taskId={ChannelTaskId.make(taskId)}
       narrow
       onClose={onClose}
     />
@@ -522,6 +540,8 @@ it("failing-first: a task-pane answer follows its own folded question without mo
 /** Resets the shared acknowledgement record and the mocks this test reads. */
 function setup() {
   state.noRows = false;
+  state.lookupSupported = false;
+  state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
   resetTaskReadAcknowledgementsForTests();

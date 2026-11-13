@@ -38,7 +38,10 @@ vi.mock("@effect/atom-react", async (original) => ({
 }));
 vi.mock("~/state/channels", async (original) => ({
   ...(await original<typeof import("~/state/channels")>()),
-  channelEnvironment: { updateTaskView: { permissionAtom: () => null } },
+  channelEnvironment: {
+    updateTaskView: { permissionAtom: () => null },
+    getBotTask: { permissionAtom: () => null },
+  },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => async () => ({ _tag: "Success" }),
@@ -54,7 +57,10 @@ vi.mock("./useBotRoster", () => ({
     refresh: () => {},
   }),
 }));
-vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("./GoatBotWorkDetails", () => ({
+  GoatBotWorkDetails: () => null,
+  GoatBotUnavailableWork: () => null,
+}));
 vi.mock("~/hooks/useResizableWidth", () => ({
   RESIZABLE_WIDTH_PROPERTY: "--resizable-width",
   useResizableWidth: () => ({ width: 480, handlers: {} }),

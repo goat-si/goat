@@ -55,6 +55,11 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
       {props.groups.map((group) => (
         <CommandGroup items={group.items} key={group.value}>
           {group.label ? <CommandGroupLabel>{group.label}</CommandGroupLabel> : null}
+          {group.note ? (
+            <div aria-hidden="true" className="px-2 text-xs text-muted-foreground">
+              {group.note}
+            </div>
+          ) : null}
           <CommandCollection>
             {(item) =>
               item.disabled ? (
@@ -122,6 +127,11 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
           row.kind === "label" ? (
             <div className={row.first ? undefined : "pt-1.5"}>
               <CommandListHeading>{row.label}</CommandListHeading>
+              {row.note ? (
+                <div aria-hidden="true" className="px-2 text-xs text-muted-foreground">
+                  {row.note}
+                </div>
+              ) : null}
             </div>
           ) : row.itemIndex === null ? (
             <DisabledCommandPaletteResultRow item={row.item} />

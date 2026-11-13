@@ -17,32 +17,44 @@ export function useAcknowledgeTaskRead({
   environmentId,
   taskId,
   readThrough,
+  identity,
   onAcknowledged,
 }: {
   readonly environmentId: EnvironmentId;
   readonly taskId: ChannelTaskId;
   /** The activity the task is unread through; null when nothing is unread. */
   readonly readThrough: string | null;
-  /** Called with exactly the task and read-through the accepted request carried. */
-  readonly onAcknowledged?: ((taskId: ChannelTaskId, readThrough: string) => void) | undefined;
+  /** The caller's name for what it showed when the request was sent; returned with the result. */
+  readonly identity?: string | undefined;
+  /** Called with exactly the task, read-through and identity the accepted request carried. */
+  readonly onAcknowledged?:
+    | ((taskId: ChannelTaskId, readThrough: string, identity?: string) => void)
+    | undefined;
 }) {
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const acknowledge = useEffectEvent(
-    (environment: EnvironmentId, task: ChannelTaskId, through: string) => {
+    (
+      environment: EnvironmentId,
+      task: ChannelTaskId,
+      through: string,
+      sent: string | undefined,
+    ) => {
       void acknowledgeTaskRead({
         environmentId: environment,
         taskId: task,
         readThrough: through,
         update,
       }).then((outcome) => {
-        if (outcome === "accepted") onAcknowledged?.(task, through);
+        if (outcome !== "accepted") return;
+        if (sent === undefined) onAcknowledged?.(task, through);
+        else onAcknowledged?.(task, through, sent);
       });
     },
   );
   // oxlint-disable-next-line goat/react-effect-budget -- Keeps the server's read cursor at the activity the open task shows, including activity that arrives while it is open.
   useEffect(() => {
     if (!canUpdate || readThrough === null) return;
-    acknowledge(environmentId, taskId, readThrough);
-  }, [canUpdate, environmentId, taskId, readThrough]);
+    acknowledge(environmentId, taskId, readThrough, identity);
+  }, [canUpdate, environmentId, taskId, readThrough, identity]);
 }
