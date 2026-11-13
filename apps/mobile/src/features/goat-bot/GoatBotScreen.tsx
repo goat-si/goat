@@ -103,22 +103,10 @@ import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
 import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
+import { availabilityCopy } from "./goatBotAvailabilityCopy";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (item: GoatBotChatItem) => item.id;
-function availabilityCopy(mainName: string, openName: string) {
-  return {
-    ready: "Answers here, works in its own threads",
-    connecting: `Connecting to ${mainName}…`,
-    home_offline: `${mainName}’s computer is offline.`,
-    offline: `${mainName}'s computer is offline. Messages will be available when it reconnects.`,
-    unsupported: "Update the server to use GOAT Bot here.",
-    permission: "This connection does not have permission to message GOAT Bot.",
-    legacy_active: "Your global agent is still working. Check again when it finishes.",
-    error: `Couldn't reach ${openName}`,
-  };
-}
-
 type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
 type ListMetrics = Parameters<typeof goatBotFooterInView>[0];
 
@@ -321,6 +309,8 @@ export function GoatBotScreen(props: {
   /** Focused and the app active: what the screen shows has been seen. */
   readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
+  /** The title the screen that opened this task carried, for a task the list no longer holds. */
+  readonly taskTitle?: string | undefined;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
   /** Where the person had read the main chat up to when this visit began. */
@@ -371,9 +361,13 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const onSelectTask = useCallback(
-    (taskId: ChannelTaskId) =>
+    (taskId: ChannelTaskId, taskTitle?: string) =>
       navigation.dispatch(
-        StackActions.push("GoatBot", member ? { taskId, botId: member.botId } : { taskId }),
+        StackActions.push("GoatBot", {
+          taskId,
+          ...(member ? { botId: member.botId } : {}),
+          ...(taskTitle ? { taskTitle } : {}),
+        }),
       ),
     [navigation, member],
   );
@@ -732,6 +726,7 @@ export function GoatBotScreen(props: {
             workRevision={session.workRevision}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
+            taskTitle={props.taskTitle}
             taskCard={
               taskCard ? (
                 <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />

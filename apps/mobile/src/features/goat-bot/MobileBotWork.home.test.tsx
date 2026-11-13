@@ -473,7 +473,7 @@ it("peeks at a task on Home, opens its thread or its conversation, and comes bac
   await press("Work");
   await press("Check the disks");
   await press("Open task");
-  expect(state.openTask).toHaveBeenCalledWith("t1");
+  expect(state.openTask).toHaveBeenCalledWith("t1", "Check the disks");
 });
 
 it("lists every thread a peeked task started, remote work and subagents included", async () => {
@@ -532,7 +532,7 @@ it("peeks at a task with no thread: its state and Open task only", async () => {
   await press("Plan the week");
   expect(button("Go to thread")).toBeUndefined();
   await press("Open task");
-  expect(state.openTask).toHaveBeenCalledWith("t1");
+  expect(state.openTask).toHaveBeenCalledWith("t1", "Plan the week");
 });
 
 it("says why a peek has no messages: loading, not connected, deleted, failed or empty", async () => {

@@ -21,20 +21,33 @@ export function useMobileAcknowledgeTaskRead(props: {
   readonly taskId: ChannelTaskId | null;
   /** The activity the shown task is unread through; null when nothing should be sent. */
   readonly readThrough: string | null;
-  readonly onAcknowledged?: (() => void) | undefined;
+  /** The task and read-through this request carried, and the scope it was sent for. */
+  readonly onAcknowledged?:
+    | ((taskId: ChannelTaskId, readThrough: string, scope: string) => void)
+    | undefined;
+  /** What the caller's view belonged to when the request was sent; passed back as sent. */
+  readonly scope?: string | undefined;
   /** The task's own screen says so; a peek on Home stays quiet. */
   readonly onFailed?: (() => void) | undefined;
 }) {
   const { environmentId, taskId, readThrough } = props;
-  const settle = useEffectEvent((outcome: "skipped" | "accepted" | "failed") => {
-    if (outcome === "accepted") props.onAcknowledged?.();
-    else if (outcome === "failed") props.onFailed?.();
-  });
+  const scope = props.scope ?? "";
+  const settle = useEffectEvent(
+    (
+      outcome: "skipped" | "accepted" | "failed",
+      sent: { taskId: ChannelTaskId; readThrough: string; scope: string },
+    ) => {
+      if (outcome === "accepted") props.onAcknowledged?.(sent.taskId, sent.readThrough, sent.scope);
+      else if (outcome === "failed") props.onFailed?.();
+    },
+  );
   // oxlint-disable-next-line goat/react-effect-budget -- Keeps the server's read cursor at the activity the shown task displays, including activity that arrives while it is shown.
   useEffect(() => {
     if (environmentId === null || taskId === null || readThrough === null) return;
-    void acknowledgeTaskRead({ environmentId, taskId, readThrough, update }).then(settle);
-  }, [environmentId, taskId, readThrough]);
+    void acknowledgeTaskRead({ environmentId, taskId, readThrough, update }).then((outcome) =>
+      settle(outcome, { taskId, readThrough, scope }),
+    );
+  }, [environmentId, taskId, readThrough, scope]);
 }
 
 type ReadRow = {
@@ -53,7 +66,9 @@ export function useMobileHomeTaskReads(props: {
   readonly task: ReadRow | null;
   /** The peeked task while the sheet shows it. */
   readonly peek: ReadRow | null;
-  readonly onAcknowledged: () => void;
+  readonly onAcknowledged: (taskId: ChannelTaskId, readThrough: string, scope: string) => void;
+  /** The Home walk the peek belongs to; an acknowledgement settles into that walk only. */
+  readonly scope?: string | undefined;
 }) {
   const through = (row: ReadRow | null) => (props.seen && row?.unread ? row.lastActivityAt : null);
   useMobileAcknowledgeTaskRead({
@@ -67,6 +82,7 @@ export function useMobileHomeTaskReads(props: {
     environmentId: props.environmentId,
     taskId: props.peek?.task.taskId ?? null,
     readThrough: through(props.peek),
+    scope: props.scope,
     onAcknowledged: props.onAcknowledged,
   });
 }

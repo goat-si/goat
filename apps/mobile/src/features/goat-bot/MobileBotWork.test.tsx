@@ -481,7 +481,10 @@ it("distinguishes task thread loading, missing, offline, and retry states", asyn
   expect(container.textContent).toContain("Loading task");
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
   await render(ChannelTaskId.make("task"));
-  expect(container.textContent).toContain("Task not found");
+  // A settled list without the task: it is older work, whose status and actions are in Home.
+  expect(container.textContent).toContain(
+    "Status and actions for older work are in GOAT Bot's Home.",
+  );
   Object.assign(state.task, { error: "failed", isSuccess: false });
   await render(ChannelTaskId.make("task"));
   await press("Couldn't load task");
@@ -499,7 +502,7 @@ it("shows task details in the header when a card is available", async () => {
   expect(container.textContent).toContain("Task summary");
 });
 
-it("names a task the server no longer lists from its conversation card, not as missing", async () => {
+it("names a task the server no longer lists from its conversation card, as older work", async () => {
   reset();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
   if (!root) root = createRoot(container);
@@ -516,7 +519,9 @@ it("names a task the server no longer lists from its conversation card, not as m
     ),
   );
   expect(container.textContent).toContain("Summarize the README");
-  expect(container.textContent).toContain("Needs your input");
+  expect(container.textContent).toContain(
+    "Status and actions for older work are in GOAT Bot's Home.",
+  );
   expect(container.textContent).toContain("Connect mac-mini to open");
   expect(container.textContent).not.toContain("Task not found");
 });
