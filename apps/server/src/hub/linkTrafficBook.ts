@@ -12,7 +12,7 @@ const SLOTS = DAY_MS / SLOT_MS + 1;
 const MAX_LINKS = 256;
 // Readings come only while something reads host status: a longer gap spreads its bytes evenly.
 const MAX_PAIR_MS = SLOT_MS;
-const FIELDS = 9;
+const FIELDS = 10;
 const [
   TO_HOME,
   FROM_HOME,
@@ -23,7 +23,8 @@ const [
   MEASURED,
   AVERAGED,
   UNCOUNTED,
-] = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
+  WEBSOCKET,
+] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export interface LinkTrafficCounters {
   readonly epoch: string;
@@ -37,6 +38,8 @@ export interface LinkTrafficCounters {
 export interface LinkTrafficReading {
   readonly linkId: string;
   readonly traffic: LinkTrafficCounters;
+  /** A link WebSocket was open at this reading; OpenCodex counts none of its payloads. */
+  readonly webSocket?: boolean | undefined;
   /** The route in use at this reading; undefined when none is proven or it is not reported. */
   readonly route?: { readonly name: string; readonly via?: "relay" | "direct" } | undefined;
 }
@@ -54,6 +57,8 @@ export interface LinkTrafficWindow {
   readonly averagedMs: number;
   /** Requests in the window whose body bytes are missing from toHomeBytes. */
   readonly uncountedRequests: number;
+  /** Time in the window between readings where a link WebSocket was open at either one. */
+  readonly webSocketMs: number;
 }
 
 export interface LinkTrafficView {
@@ -65,6 +70,7 @@ interface Last extends LinkTrafficCounters {
   readonly at: number;
   /** "relay:name" or "direct:name"; undefined when no route is classified. */
   readonly routeKey: string | undefined;
+  readonly webSocket: boolean;
 }
 
 interface Series {
@@ -129,6 +135,7 @@ function sum(series: Series, at: number, windowMs: number): LinkTrafficWindow {
     measuredMs: Math.min(windowMs, whole(MEASURED)),
     averagedMs: Math.min(windowMs, whole(AVERAGED)),
     uncountedRequests: Math.max(0, Math.ceil((totals[UNCOUNTED] ?? 0) - 1e-9)),
+    webSocketMs: whole(WEBSOCKET),
   };
 }
 
@@ -148,7 +155,12 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
   };
 
   const record = (reading: LinkTrafficReading, at: number, inPass: ReadonlySet<string>) => {
-    const next: Last = { ...reading.traffic, at, routeKey: routeKeyOf(reading) };
+    const next: Last = {
+      ...reading.traffic,
+      at,
+      routeKey: routeKeyOf(reading),
+      webSocket: reading.webSocket === true,
+    };
     const series = book.get(reading.linkId);
     if (series === undefined) {
       if (!admit(inPass)) return;
@@ -182,6 +194,7 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
           gap <= MAX_PAIR_MS ? gap : 0,
           gap <= MAX_PAIR_MS ? 0 : gap,
           uncounted,
+          last.webSocket || next.webSocket ? gap : 0,
         ]);
       }
       series.last = next;

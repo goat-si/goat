@@ -38,14 +38,6 @@ describe("deriveLinkRows", () => {
     deriveLinkRows(book, [row(ws, 0)], T0, pen, thresholds);
     const [link] = deriveLinkRows(book, [row(ws, 1_000)], T0 + 60_000, pen, thresholds).links;
     expect(link).toMatchObject({ transport: "websocket", traffic: { httpBodiesOnly: true } });
-    const [http] = deriveLinkRows(
-      book,
-      [row({ ws: { open: 0 } }, 2_000)],
-      T0 + 120_000,
-      pen,
-      thresholds,
-    ).links;
-    expect(http?.traffic?.httpBodiesOnly).toBeUndefined();
   });
 
   it("carries requests whose body OpenCodex could not count into the window", () => {
@@ -63,5 +55,29 @@ describe("deriveLinkRows", () => {
     deriveLinkRows(book, [row({}, 1_000)], T0 + 60_000, pen, thresholds);
     const [link] = deriveLinkRows(book, [row({}, 3_000)], T0 + 180_000, pen, thresholds).links;
     expect(link?.traffic?.day.toHomeBytes).toBe(3_000);
+  });
+
+  it("keeps saying HTTP bodies only after the WebSocket closes, while that time is still in the window", () => {
+    const book = makeLinkTrafficBook();
+    deriveLinkRows(book, [row({ ws: { open: 1 } }, 0)], T0, pen, thresholds);
+    deriveLinkRows(book, [row({ ws: { open: 0 } }, 1_000)], T0 + 60_000, pen, thresholds);
+    const [closed] = deriveLinkRows(
+      book,
+      [row({ ws: { open: 0 } }, 2_000)],
+      T0 + 120_000,
+      pen,
+      thresholds,
+    ).links;
+    expect(closed?.traffic?.httpBodiesOnly).toBe(true);
+    deriveLinkRows(book, [row({ ws: { open: 0 } }, 3_000)], T0 + 12 * 3_600_000, pen, thresholds);
+    const [later] = deriveLinkRows(
+      book,
+      [row({ ws: { open: 0 } }, 4_000)],
+      T0 + 24 * 3_600_000 + 10 * 60_000,
+      pen,
+      thresholds,
+    ).links;
+    expect(later?.traffic).toBeDefined();
+    expect(later?.traffic?.httpBodiesOnly).toBeUndefined();
   });
 });

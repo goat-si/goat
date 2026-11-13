@@ -62,6 +62,7 @@ describe("link traffic book", () => {
       measuredMs: 0,
       averagedMs: 2 * HOUR,
       uncountedRequests: 0,
+      webSocketMs: 0,
     });
     expect(view?.hour).toMatchObject({ toHomeBytes: 3_600_000, averagedMs: HOUR });
   });

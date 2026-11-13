@@ -15,7 +15,11 @@ import type * as Schema from "effect/Schema";
 
 import * as Settings from "../serverSettings.ts";
 import { decodeLinkRowRoute, type LinkRowObservationFields } from "./hubOcxJson.ts";
-import { makeLinkTrafficBook, type LinkTrafficView } from "./linkTrafficBook.ts";
+import {
+  makeLinkTrafficBook,
+  type LinkTrafficView,
+  type LinkTrafficWindow,
+} from "./linkTrafficBook.ts";
 import { readPenConfig } from "./penConfigFile.ts";
 import { penConfigHosts } from "./penSshRoute.ts";
 
@@ -69,6 +73,9 @@ function routeOf(row: LinkStatusRow, penAliases: ReadonlySet<string> | undefined
   };
 }
 
+/** A window as the contract carries it; webSocketMs only decides httpBodiesOnly. */
+const windowOf = ({ webSocketMs: _webSocketMs, ...window }: LinkTrafficWindow) => window;
+
 const relayBytes = (view: LinkTrafficView) =>
   view.day.relayToHomeBytes + view.day.relayFromHomeBytes;
 
@@ -83,7 +90,9 @@ export function deriveLinkRows(
   const routed = rows.map((row) => ({ row, route: routeOf(row, penAliases) }));
   book.observe(
     routed.flatMap(({ row, route }) =>
-      row.traffic === undefined ? [] : [{ linkId: row.id, traffic: row.traffic, route }],
+      row.traffic === undefined
+        ? []
+        : [{ linkId: row.id, traffic: row.traffic, route, webSocket: (row.ws?.open ?? 0) > 0 }],
     ),
     at,
   );
@@ -99,9 +108,13 @@ export function deriveLinkRows(
         ? {}
         : {
             traffic: {
-              ...view,
-              // OpenCodex's Home book counts relayed HTTP bodies, never link WebSocket payloads.
-              ...(row.ws !== undefined && row.ws.open > 0 ? { httpBodiesOnly: true as const } : {}),
+              hour: windowOf(view.hour),
+              day: windowOf(view.day),
+              // OpenCodex's Home book counts relayed HTTP bodies, never link WebSocket payloads:
+              // say so while a WebSocket is open or its time is still inside the day.
+              ...((row.ws?.open ?? 0) > 0 || view.day.webSocketMs > 0
+                ? { httpBodiesOnly: true as const }
+                : {}),
               ...(warned ? { warning: { thresholdBytes: thresholds.deviceBytes } } : {}),
             },
           }),
