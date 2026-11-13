@@ -28,13 +28,37 @@ const unset = (value: string | undefined) =>
 
 // The ProxyCommand `pen ssh-config` writes: the binary, optionally under its own PEN_HOME.
 const QUOTED = "'(?:[^']|'\\\\'')*'";
-const PEN_PIPE = new RegExp(
-  `^(?:env PEN_HOME=${QUOTED} )?'(?:[^']|'\\\\'')*/pen' pipe %n 22$`,
-  "u",
-);
+const PEN_BINARY = `(?:env PEN_HOME=${QUOTED} )?'(?:[^']|'\\\\'')*/pen' pipe`;
+const PEN_PIPE = new RegExp(`^${PEN_BINARY} %n 22$`, "u");
 
-const penRoute = (settings: ReadonlyMap<string, string>) =>
-  unset(settings.get("proxyjump")) && PEN_PIPE.test(settings.get("proxycommand") ?? "");
+/** A Pen member addressed by node id, with the Noise key GOAT recorded for it. */
+export interface PenNode {
+  readonly nodeId: string;
+  readonly noisePub: string;
+}
+
+const NODE_ID = /^[a-z2-7]{26}$/u;
+const NOISE_PUB = /^[A-Za-z0-9_-]{43}$/u;
+
+/**
+ * The ProxyCommand of Pen's exact block for `node` ("pipe --node <id> --noise <key> 22"), when
+ * the alias resolves to it with no jump chain. Pen writes no exact block for an id another member
+ * uses as its name, so that alias carries the name block's "pipe %n 22" and is refused here.
+ */
+export const penExactRoute = (settings: ReadonlyMap<string, string>, node: PenNode) => {
+  if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return undefined;
+  const command = settings.get("proxycommand") ?? "";
+  const exact = new RegExp(
+    `^${PEN_BINARY} --node ${node.nodeId} --noise ${node.noisePub} 22$`,
+    "u",
+  );
+  return unset(settings.get("proxyjump")) && exact.test(command) ? command : undefined;
+};
+
+const penRoute = (settings: ReadonlyMap<string, string>, node?: PenNode) =>
+  node === undefined
+    ? unset(settings.get("proxyjump")) && PEN_PIPE.test(settings.get("proxycommand") ?? "")
+    : penExactRoute(settings, node) !== undefined;
 
 /** No jump chain or proxy command: a jump chain is what missed OpenCodex's link admission window. */
 export const isPlainRoute = (settings: ReadonlyMap<string, string>) =>
@@ -42,14 +66,15 @@ export const isPlainRoute = (settings: ReadonlyMap<string, string>) =>
 
 /**
  * The known_hosts file a Pen alias names, when ssh holds every connection to it strictly to that
- * file's key: StrictHostKeyChecking yes and no KnownHostsCommand.
+ * file's key: StrictHostKeyChecking yes and no KnownHostsCommand. With `node`, only Pen's exact block
+ * for that node and Noise key counts; without it, only a name block.
  */
-export const penKnownHostsFile = (settings: ReadonlyMap<string, string>) => {
+export const penKnownHostsFile = (settings: ReadonlyMap<string, string>, node?: PenNode) => {
   const file = settings.get("userknownhostsfile");
   const strict =
     settings.get("stricthostkeychecking") === "true" && unset(settings.get("knownhostscommand"));
   // ssh -G separates several files with spaces; a path with one is not a single file.
-  return penRoute(settings) && strict && file !== undefined && /^\/\S+$/u.test(file)
+  return penRoute(settings, node) && strict && file !== undefined && /^\/\S+$/u.test(file)
     ? file
     : undefined;
 };
@@ -69,6 +94,20 @@ export const penConfigHosts = (config: string) =>
     .split(/\r?\n/u)
     .map((line) => /^Host\s+(\S+)\s*$/u.exec(line.trim())?.[1])
     .filter((alias): alias is string => alias !== undefined && !alias.includes("*"));
+
+/** The User line of Pen's own Host block for `alias`; Pen writes one only for a member that published it. */
+export const penHostUser = (config: string, alias: string) => {
+  let inBlock = false;
+  for (const line of config.split(/\r?\n/u)) {
+    const host = /^Host\s+(\S+)\s*$/u.exec(line.trim());
+    if (host !== null) inBlock = host[1] === alias;
+    else if (inBlock) {
+      const user = /^User\s+(\S+)$/u.exec(line.trim())?.[1];
+      if (user !== undefined) return user;
+    }
+  }
+  return undefined;
+};
 
 // The settings that decide which machine an alias reaches and which key ssh accepts for it.
 const BOUND = [

@@ -1,0 +1,135 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+
+import * as ProcessRunner from "../../processRunner.ts";
+import { sshSettings } from "../penSshRoute.ts";
+import { disposableKnownHosts, disposableSshOptions } from "./routeContract.ts";
+
+const NODE = "abcdefghijklmnopqrstuvwxyz";
+const NOISE = "N".repeat(43);
+const PROXY = "'/opt/pen' pipe --node " + NODE + " --noise " + NOISE + " 22";
+const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFcDqbodCFNuBkK2emUwDpZghtdTw4e9ROT+jlVvIhId";
+
+// Everything a person's ssh_config could set to move or loosen the route, for every pen-* alias.
+const HOSTILE = [
+  "Host pen-*",
+  "    User mallory",
+  "    Port 2222",
+  "    HostName elsewhere.example",
+  "    ControlMaster auto",
+  "    ControlPath /tmp/goat-cm-%C",
+  "    KnownHostsCommand /bin/echo pen-x ssh-ed25519 AAAA",
+  "    ProxyJump evil@jump",
+  "    HostKeyAlias other",
+  "    HostKeyAlgorithms ssh-rsa",
+  "    GlobalKnownHostsFile /etc/evil_known_hosts",
+  "    UserKnownHostsFile /tmp/evil_known_hosts",
+  "    StrictHostKeyChecking no",
+  "    UpdateHostKeys yes",
+  "    CheckHostIP yes",
+  "    ForwardAgent yes",
+  "    PermitLocalCommand yes",
+  "    LocalCommand id",
+  "",
+].join("\n");
+
+// ssh -G reads the config and the command line without connecting anywhere.
+it.live(
+  "ControlMaster, KnownHostsCommand, Port, User or a proxy in ssh_config do not change the run",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-disposable-route-" });
+      yield* fs.writeFileString(dir + "/config", HOSTILE);
+      const knownHostsFile = dir + "/pen-" + NODE + ".known_hosts";
+      const options = disposableSshOptions({
+        nodeId: NODE,
+        noisePub: NOISE,
+        proxyCommand: PROXY,
+        user: "runner",
+        knownHostsFile,
+      });
+      expect(options).toBeDefined();
+      const runner = yield* ProcessRunner.ProcessRunner;
+      const printed = yield* runner.run({
+        command: "ssh",
+        args: ["-G", "-F", dir + "/config", ...(options ?? []), "pen-" + NODE],
+        timeout: "10 seconds",
+      });
+      expect(printed.code).toBe(0);
+      const settings = sshSettings(printed.stdout);
+      expect({
+        user: settings.get("user"),
+        port: settings.get("port"),
+        proxycommand: settings.get("proxycommand"),
+        proxyjump: settings.get("proxyjump"),
+        controlmaster: settings.get("controlmaster"),
+        controlpath: settings.get("controlpath"),
+        knownhostscommand: settings.get("knownhostscommand"),
+        hostkeyalias: settings.get("hostkeyalias"),
+        hostkeyalgorithms: settings.get("hostkeyalgorithms"),
+        globalknownhostsfile: settings.get("globalknownhostsfile"),
+        userknownhostsfile: settings.get("userknownhostsfile"),
+        stricthostkeychecking: settings.get("stricthostkeychecking"),
+        updatehostkeys: settings.get("updatehostkeys"),
+        checkhostip: settings.get("checkhostip"),
+        forwardagent: settings.get("forwardagent"),
+        permitlocalcommand: settings.get("permitlocalcommand"),
+        batchmode: settings.get("batchmode"),
+      }).toEqual({
+        user: "runner",
+        port: "22",
+        proxycommand: PROXY,
+        // ssh -G leaves out options that are none.
+        proxyjump: undefined,
+        controlmaster: "false",
+        controlpath: undefined,
+        knownhostscommand: undefined,
+        hostkeyalias: "pen-" + NODE,
+        hostkeyalgorithms: "ssh-ed25519",
+        globalknownhostsfile: "none",
+        userknownhostsfile: knownHostsFile,
+        stricthostkeychecking: "true",
+        updatehostkeys: "false",
+        checkhostip: "no",
+        forwardagent: "no",
+        permitlocalcommand: "no",
+        batchmode: "yes",
+      });
+    }).pipe(Effect.scoped, Effect.provide(ProcessRunner.layer), Effect.provide(NodeServices.layer)),
+);
+
+it.effect("the private known_hosts names the node's alias and its one recorded key", () =>
+  Effect.sync(() => {
+    expect(disposableKnownHosts(NODE, KEY)).toBe("pen-" + NODE + " " + KEY + "\n");
+    expect(disposableKnownHosts(NODE, "ssh-rsa AAAAB3Nza")).toBeUndefined();
+    expect(disposableKnownHosts(NODE, KEY + "\npen-x " + KEY)).toBeUndefined();
+    expect(disposableKnownHosts("pen-box", KEY)).toBeUndefined();
+  }),
+);
+
+it.effect("refuses a route it cannot pass to ssh unchanged", () =>
+  Effect.sync(() => {
+    const route = {
+      nodeId: NODE,
+      noisePub: NOISE,
+      proxyCommand: PROXY,
+      user: "runner",
+      knownHostsFile: "/s/kh",
+    };
+    expect(disposableSshOptions(route)).toBeDefined();
+    expect(
+      disposableSshOptions({ ...route, proxyCommand: "'/opt/pen' pipe %n 22" }),
+    ).toBeUndefined();
+    expect(
+      disposableSshOptions({ ...route, proxyCommand: PROXY.replace(NODE, "b".repeat(26)) }),
+    ).toBeUndefined();
+    expect(disposableSshOptions({ ...route, noisePub: "M".repeat(43) })).toBeUndefined();
+    expect(disposableSshOptions({ ...route, user: "-oProxyCommand=x" })).toBeUndefined();
+    expect(disposableSshOptions({ ...route, knownHostsFile: "/s/a b" })).toBeUndefined();
+    expect(disposableSshOptions({ ...route, knownHostsFile: "/s/%d" })).toBeUndefined();
+    expect(disposableSshOptions({ ...route, knownHostsFile: "relative" })).toBeUndefined();
+  }),
+);

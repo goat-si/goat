@@ -664,3 +664,87 @@ it.effect("aliases read in turn share one deadline when Pen's config never answe
     expect(failures.map((failure) => failure._tag)).toEqual(Array(5).fill("HubOcxError"));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+const EXACT_NODE = "abcdefghijklmnopqrstuvwxyz";
+const EXACT_NOISE = "N".repeat(43);
+const EXACT_ALIAS = "pen-" + EXACT_NODE;
+const EXACT_PROXY =
+  "'/home/u/.local/bin/pen' pipe --node " + EXACT_NODE + " --noise " + EXACT_NOISE + " 22";
+const EXACT_BLOCK =
+  "Host " + EXACT_ALIAS + "\n    User runner\n    ProxyCommand " + EXACT_PROXY + "\n";
+const ED_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIFcDqbodCFNuBkK2emUwDpZghtdTw4e9ROT+jlVvIhId";
+const exactKeys = (...lines: ReadonlyArray<string>) =>
+  lines
+    .map(
+      (line, index) =>
+        "# Host " + EXACT_ALIAS + " found: line " + (index + 1) + " \n" + line + "\n",
+    )
+    .join("");
+const exactMachine = Effect.fn("HubOcxPenTest.exactMachine")(function* (
+  config: string,
+  proxy: string,
+) {
+  const machine = {
+    config,
+    sshG: (_: string) => "",
+    keys: exactKeys(
+      "pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY,
+      "pen-box," + EXACT_ALIAS + " ecdsa-sha2-nistp256 AAAAE2VjZHNh",
+    ),
+  };
+  const { ocx, home } = yield* penHome(machine);
+  machine.sshG = penSshG(home, { proxycommand: proxy, user: "runner" });
+  return { ocx, machine };
+});
+
+it.effect("Pen's exact block for a node is a route only with the Noise key GOAT recorded", () =>
+  Effect.gen(function* () {
+    const { ocx } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual({
+      kind: "route",
+      alias: EXACT_ALIAS,
+      proxyCommand: EXACT_PROXY,
+      user: "runner",
+      hostKey: "ssh-ed25519 " + ED_KEY,
+      fingerprint: "SHA256:nz9cVTpQx8PimslFh9CITEcWGb7QKBXpUlHyEaSApSw",
+    });
+    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: "M".repeat(43) })).toEqual({
+      kind: "refused",
+      reason: "no_exact_block",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Pen gives an id another member uses as a name only that member's name block.
+it.effect("a node id another member uses as its name stays refused", () =>
+  Effect.gen(function* () {
+    const { ocx } = yield* exactMachine(
+      PEN_BLOCK(EXACT_ALIAS),
+      "'/home/u/.local/bin/pen' pipe %n 22",
+    );
+    expect(yield* ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual({
+      kind: "refused",
+      reason: "no_exact_block",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("an exact block with two ed25519 keys, none, or no User of Pen's names no route", () =>
+  Effect.gen(function* () {
+    const { ocx, machine } = yield* exactMachine(PEN_BLOCK("pen-box") + EXACT_BLOCK, EXACT_PROXY);
+    const read = ocx.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE });
+    machine.keys = exactKeys(
+      "pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY,
+      EXACT_ALIAS + ",pen-other ssh-ed25519 " + ED_KEY.replace("IFc", "IGc"),
+    );
+    expect(yield* read).toEqual({ kind: "refused", reason: "several_keys" });
+    machine.keys = exactKeys("pen-box," + EXACT_ALIAS + " ecdsa-sha2-nistp256 AAAAE2VjZHNh");
+    expect(yield* read).toEqual({ kind: "refused", reason: "no_key" });
+    machine.keys = exactKeys("pen-box," + EXACT_ALIAS + " ssh-ed25519 " + ED_KEY);
+    machine.config = PEN_BLOCK("pen-box") + EXACT_BLOCK.replace("    User runner\n", "");
+    const { ocx: withoutUser } = yield* exactMachine(machine.config, EXACT_PROXY);
+    expect(yield* withoutUser.penExactRoute({ nodeId: EXACT_NODE, noisePub: EXACT_NOISE })).toEqual(
+      { kind: "refused", reason: "no_user" },
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
