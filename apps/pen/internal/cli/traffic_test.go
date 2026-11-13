@@ -426,7 +426,7 @@ func TestPipeDoesNotReportBytesTwiceWhenAnAnswerIsLost(t *testing.T) {
 		t.Fatal("the report whose answer was dropped succeeded")
 	}
 	inW.Write(make([]byte, 50))
-	echoedAndCounted(out, inW, 150)
+	out.wait(150)
 	inW.Close()
 	if got := <-code; got != 0 {
 		t.Fatalf("pipe exit %d, stderr %q", got, errOut.String())
@@ -548,7 +548,7 @@ func TestPipeShutdownEndsAtOneDeadlineWhenTheDaemonHoldsItsAnswers(t *testing.T)
 	<-got
 	// More bytes after the periodic report took its count, so the end has a report of its own to send.
 	inW.Write(make([]byte, 50))
-	echoedAndCounted(out, inW, 150)
+	out.wait(150)
 	inW.Close()
 	endShutdown()
 	if c := <-code; c != 0 || errOut.Len() != 0 {
@@ -747,7 +747,7 @@ func TestPipeDropsBytesWhoseReportCameABucketLate(t *testing.T) {
 	ticks <- time.Now() // the first report comes a bucket late
 	ticks <- time.Now() // taken only once the late report has finished
 	inW.Write(make([]byte, 50))
-	echoedAndCounted(out, inW, 150)
+	out.wait(150)
 	inW.Close()
 	if c := <-code; c != 0 {
 		t.Fatalf("pipe exit %d, stderr %q", c, errOut.String())
@@ -907,7 +907,7 @@ func TestPipeShutdownWaitsForThePeriodicReportThenEndsTheLastOneOnTheSameDeadlin
 	ticks <- time.Now()
 	<-lines // the periodic report, held
 	inW.Write(make([]byte, 50))
-	echoedAndCounted(out, inW, 150)
+	out.wait(150)
 	inW.Close()
 	<-began // the end of the session has begun while the periodic report is still held
 	answers <- `{"t":"counted"}`
