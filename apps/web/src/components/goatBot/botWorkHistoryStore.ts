@@ -56,7 +56,7 @@ export function rememberHistoryRows(
         : row;
     if (!entries.has(id) && entries.size >= LIMIT) {
       const evict = [...entries.keys()].find((candidate) => !inUse.has(candidate));
-      if (evict === undefined) continue;
+      if (evict === undefined) throw new Error("History cache is full of open tasks.");
       entries.delete(evict);
     }
     entries.delete(id);
