@@ -285,12 +285,12 @@ func TestBoundInviteTerminalStatesSurviveARestart(t *testing.T) {
 	for _, c := range []struct {
 		mint, want string
 	}{{"burn", InviteBurned}, {"cancel", InviteCancelled}, {"expire", InviteExpired}} {
-		got := StatusOf(s, again, "", c.mint, at(later))
+		got := mustStatus(t, s, again, "", c.mint, at(later))
 		if got.State != c.want {
 			t.Fatalf("after a restart, mint %s is %+v; want %s", c.mint, got, c.want)
 		}
 	}
-	if got := StatusOf(s, again, lapsed.ID, "", at(later)); got.MintID != "expire" {
+	if got := mustStatus(t, s, again, lapsed.ID, "", at(later)); got.MintID != "expire" {
 		t.Fatalf("the expired entry lost its mintId: %+v", got)
 	}
 	var onDisk []Invite
@@ -317,14 +317,14 @@ func TestAReissuedMintIsFoundByItsOwnMintID(t *testing.T) {
 	if _, err := iv.Cancel("", "attach-1.1", at(now)); err != nil {
 		t.Fatal(err)
 	}
-	if got := StatusOf(s, iv, "", "attach-1.2", at(now)); got.State != InviteAbsent {
+	if got := mustStatus(t, s, iv, "", "attach-1.2", at(now)); got.State != InviteAbsent {
 		t.Fatalf("the second mint before its create: %+v; want absent", got)
 	}
 	second, err := iv.CreateBound(sub, "attach-1.2", now.Add(time.Minute), at(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := StatusOf(s, iv, "", "attach-1.2", at(now))
+	got := mustStatus(t, s, iv, "", "attach-1.2", at(now))
 	if got.State != InviteLive || got.InviteID != second.ID || got.InviteID == first.ID {
 		t.Fatalf("second mint: %+v; want live invite %s", got, second.ID)
 	}
@@ -362,7 +362,7 @@ func TestOnlyTheBoundInvitesNonceMatchesItsSubjectsAdmit(t *testing.T) {
 	if serveErr, joinErr := serveOne(f, s, iv, bound.ID, now, j, "j"); serveErr != nil || joinErr != nil {
 		t.Fatalf("bound join: %v, %v", serveErr, joinErr)
 	}
-	got := StatusOf(s, iv, bound.ID, "", at(now))
+	got := mustStatus(t, s, iv, bound.ID, "", at(now))
 	if got.State != InviteBurned || got.Member == nil || !*got.Member {
 		t.Fatalf("bound invite after its join: %+v; want burned with its subject a member", got)
 	}
@@ -379,7 +379,7 @@ func TestOnlyTheBoundInvitesNonceMatchesItsSubjectsAdmit(t *testing.T) {
 	if got.Admit != admitted["j"] || got.Admit == admitted["k"] {
 		t.Fatalf("admit %s; want j's %s, never k's %s", got.Admit, admitted["j"], admitted["k"])
 	}
-	if st := StatusOf(s, iv, ordinary.ID, "", at(now)); st.State != InviteAbsent {
+	if st := mustStatus(t, s, iv, ordinary.ID, "", at(now)); st.State != InviteAbsent {
 		t.Fatalf("the used ordinary invite: %+v; want absent (ordinary invites are not kept)", st)
 	}
 }
@@ -401,7 +401,7 @@ func TestAckForgetsSettledEntriesAndRefusesALiveOne(t *testing.T) {
 		if got, err := iv.Ack(ref[0], ref[1], at(now)); err != nil || got != "acked" {
 			t.Fatalf("ack %v: %q, %v", ref, got, err)
 		}
-		if got := StatusOf(s, iv, ref[0], ref[1], at(now)); got.State != InviteAbsent {
+		if got := mustStatus(t, s, iv, ref[0], ref[1], at(now)); got.State != InviteAbsent {
 			t.Fatalf("after its ack %v is %+v", ref, got)
 		}
 	}
@@ -469,7 +469,7 @@ func TestABurnWhoseAdmitIsNotSavedReportsBurnedUnsaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	serveOne(f, s, iv, x.ID, now, j, "j")
-	if got := StatusOf(s, iv, x.ID, "", at(now)); got.State != InviteBurnedUnsaved || got.Admit == "" {
+	if got := mustStatus(t, s, iv, x.ID, "", at(now)); got.State != InviteBurnedUnsaved || got.Admit == "" {
 		t.Fatalf("status %+v; want burned-unsaved naming the admit", got)
 	}
 }
@@ -485,7 +485,7 @@ func TestAnEmptyReferenceNamesNoInvite(t *testing.T) {
 	if got, err := iv.Cancel("", "", at(now)); err != nil || got != InviteAbsent {
 		t.Fatalf("cancel of nothing: %q, %v; want absent", got, err)
 	}
-	if got := StatusOf(s, iv, "", "", at(now)); got.State != InviteAbsent {
+	if got := mustStatus(t, s, iv, "", "", at(now)); got.State != InviteAbsent {
 		t.Fatalf("status of nothing: %+v; want absent", got)
 	}
 	if _, ok := iv.Lookup(x.ID, now); !ok {
@@ -494,6 +494,15 @@ func TestAnEmptyReferenceNamesNoInvite(t *testing.T) {
 }
 
 func at(t time.Time) func() time.Time { return func() time.Time { return t } }
+
+func mustStatus(t *testing.T, s *Store, iv *Invites, id, mintID string, clock func() time.Time) InviteStatus {
+	t.Helper()
+	st, err := StatusOf(s, iv, id, mintID, clock)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	return st
+}
 
 // fakeClock is a clock a test moves while a join or a create waits.
 type fakeClock struct {
@@ -526,7 +535,7 @@ func TestABoundInviteThatExpiresBeforeItsBurnIsNotBurned(t *testing.T) {
 	if serveErr := <-served; serveErr == nil || joinErr == nil || s.Len() != 1 {
 		t.Fatalf("serve %v, join %v, records %d; want the expired invite refused and nothing signed", serveErr, joinErr, s.Len())
 	}
-	if got := StatusOf(s, iv, inv.ID, "", clk.now); got.State != InviteExpired {
+	if got := mustStatus(t, s, iv, inv.ID, "", clk.now); got.State != InviteExpired {
 		t.Fatalf("status %+v; want expired", got)
 	}
 }
@@ -691,10 +700,184 @@ func TestCancelAckAndStatusReadTheirClockUnderTheBooksLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	StatusOf(s, iv, x.ID, "", clockFor("status"))
+	mustStatus(t, s, iv, x.ID, "", clockFor("status"))
 	iv.Cancel(x.ID, "", clockFor("cancel"))
 	iv.Ack(x.ID, "", clockFor("ack"))
 	if outside != "" {
 		t.Fatalf("%s read its clock without holding the book's lock", outside)
+	}
+}
+
+// invite.status settles an expired bound invite before it answers expired, so a wall clock stepped back afterwards
+// cannot make it live again.
+func TestStatusSettlesAnExpiredBoundInvite(t *testing.T) {
+	_, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustStatus(t, s, iv, x.ID, "", at(now.Add(2*time.Minute))); got.State != InviteExpired {
+		t.Fatalf("past its expiry: %+v", got)
+	}
+	back := now.Add(30 * time.Second)
+	if got := mustStatus(t, s, iv, x.ID, "", at(back)); got.State != InviteExpired {
+		t.Fatalf("after the clock went back: %+v; want still expired", got)
+	}
+	if _, ok := iv.Lookup(x.ID, back); ok {
+		t.Fatal("the invite is usable again after the clock went back")
+	}
+}
+
+// devInvite is an offers.json entry exactly as dev wrote it before bound invites.
+type devInvite struct {
+	ID        string `json:"id"`
+	Secret    []byte `json:"secret"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+// An ordinary invite's entry in offers.json is byte for byte what dev wrote: bound invites change nothing for it.
+func TestAnOrdinaryInvitesEntryIsUnchanged(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.Create(time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteJSON("dev.json", []devInvite{{ID: x.ID, Secret: x.Secret, ExpiresAt: x.ExpiresAt}}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err1 := os.ReadFile(st.Path("offers.json"))
+	want, err2 := os.ReadFile(st.Path("dev.json"))
+	if err1 != nil || err2 != nil || string(got) != string(want) {
+		t.Fatalf("offers.json\n%s\nwant\n%s (%v, %v)", got, want, err1, err2)
+	}
+}
+
+// After a downgrade a node older than bound invites reads offers.json with dev's struct: a live bound invite must look
+// expired to it, with no secret, so it prunes the entry instead of admitting any machine with it. This node still uses it.
+func TestALiveBoundInviteIsUnusableToAnOlderBinary(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old []devInvite
+	if _, err := st.ReadJSON("offers.json", &old); err != nil || len(old) != 1 {
+		t.Fatalf("offers.json as dev reads it: %+v (%v)", old, err)
+	}
+	if len(old[0].Secret) != 0 || old[0].ExpiresAt > now.UnixMilli() {
+		t.Fatalf("dev's struct reads %+v; want no secret and an expiry already passed", old[0])
+	}
+	again, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y, ok := again.Lookup(x.ID, now); !ok || string(y.Secret) != string(x.Secret) || y.ExpiresAt != x.ExpiresAt {
+		t.Fatalf("reloaded %+v (found %v); want the live bound invite with its secret and expiry", y, ok)
+	}
+}
+
+// When the settle of an expired bound invite cannot be saved, invite.status answers the error, never expired: the
+// invite would still be live after a clock set back.
+func TestStatusAnswersAnErrorWhenItCannotSettleAnExpiry(t *testing.T) {
+	st := tmpState(t)
+	_, s, _ := joinFixture(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(st.Path("offers.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(st.Path("offers.json"), "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StatusOf(s, iv, x.ID, "", at(now.Add(2*time.Minute))); err == nil {
+		t.Fatalf("status %+v with no error; want the failed save reported", got)
+	}
+}
+
+// A live bound entry in the earlier file form (secret and expiresAt beside the subject) still loads with its secret.
+func TestABoundEntryInTheEarlierFileFormStillLoads(t *testing.T) {
+	st := tmpState(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	sub := subjectOf(detID(3), "j")
+	old := []map[string]any{{"id": "AAAAAAAAAAAAAAAA", "secret": make([]byte, 32), "expiresAt": now.Add(time.Minute).UnixMilli(), "subject": sub, "mintId": "m"}}
+	if err := st.WriteJSON("offers.json", old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, ok := iv.Lookup("AAAAAAAAAAAAAAAA", now); !ok || len(x.Secret) != 32 || x.Subject == nil {
+		t.Fatalf("loaded %+v (found %v); want the live bound invite with its secret", x, ok)
+	}
+}
+
+// A bound invite's cancel signal belongs to that invite alone: a cancel closes exactly its channel, a later invite made
+// with the same mintId after an ack has its own, and a burn closes none.
+func TestACancelSignalsOnlyItsOwnInvite(t *testing.T) {
+	f, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	j := detID(3)
+	closed := func(ch chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	first, second, burned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	x, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), second); !errors.Is(err, ErrMintUsed) {
+		t.Fatalf("a second create with the same mintId: %v", err)
+	}
+	iv.Cancel("", "m", at(now))
+	if !closed(first) || closed(second) {
+		t.Fatalf("after the cancel: first closed %v, second closed %v; want only the first", closed(first), closed(second))
+	}
+	if _, err := iv.Ack(x.ID, "", at(now)); err != nil {
+		t.Fatal(err)
+	}
+	y, err := iv.CreateBoundNotify(subjectOf(j, "j"), "m", now.Add(time.Minute), at(now), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed(second) {
+		t.Fatal("the reused mintId's invite is signalled before any cancel")
+	}
+	z, err := iv.CreateBoundNotify(subjectOf(j, "j"), "b", now.Add(time.Minute), at(now), burned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serveErr, joinErr := serveOne(f, s, iv, z.ID, now, j, "j"); serveErr != nil || joinErr != nil {
+		t.Fatalf("join: %v, %v", serveErr, joinErr)
+	}
+	if closed(burned) || closed(second) {
+		t.Fatal("a burn signalled a cancel")
+	}
+	iv.Cancel(y.ID, "", at(now))
+	if !closed(second) {
+		t.Fatal("the reused mintId's invite was not signalled by its own cancel")
 	}
 }

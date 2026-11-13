@@ -867,9 +867,13 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
 - Control op `invite` with a `subject`, on the control socket only (the dashboard cannot send it):
   `{"op":"invite","subject":{"signPub":S,"noisePub":N,"name":X},"ttlMs":T,"wait":W}`. S and N are canonical base64url
   32-byte keys and X a valid node name; the subject has exactly these three members and the line no unknown member.
-  `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes when absent). The answer is the ordinary
-  invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and makes nothing.
-- The invite's entry in `offers.json` keeps the subject. A joiner whose Noise key is not the subject's gets no psk for
+  An invite line that carries a `subject` member at all is a bound request: a null, a string or any malformed subject is
+  refused, and so is any member that is null. `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes
+  when absent); a caller waiting on an invite that is cancelled is answered `{"t":"cancelled"}` and the wait ends. The
+  answer is the ordinary invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and
+  makes nothing.
+- The invite's entry in `offers.json` keeps the subject, and keeps its secret and expiry under `boundSecret` and
+  `boundExpiresAt` instead of `secret` and `expiresAt`; an ordinary invite's entry is exactly as before. A joiner whose Noise key is not the subject's gets no psk for
   it and closes 4401 at the handshake, so another machine holding the token cannot hold a join session open. In
   "Join" step 3 the inviter refuses (`refused`, then 4401) a card whose signPub, noisePub or name differs from the
   subject, keys compared exactly as the subject spells them (canonical base64url), before it burns the invite, so a
@@ -893,8 +897,9 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   absolute expiry in milliseconds since the Unix epoch, at most 24 hours past the node's clock, and becomes the
   invite's expiry. Under the invite book's lock a create whose E is not later than the node's clock is refused. A mint
   that reaches the node after its E, or after a cancel of its mintId, therefore makes nothing.
-- A bound invite whose expiry passes becomes an `expired` entry: invite.status answers `expired` from that moment, and
-  the entry is written when the node next saves the book (it prunes at start and every minute). Terminal entries and
+- A bound invite whose expiry passes becomes an `expired` entry: the node writes it when it next saves the book (it
+  prunes at start and every minute), and invite.status writes it before it answers `expired`, so a wall clock set back
+  later cannot make it live again; when that write fails, status answers `{"error":"..."}` instead. Terminal entries and
   fences are kept, and pruning skips them, until `invite.ack` forgets them. Leaving the mesh or replacing it (`pen
   leave`, a join that replaces a solo mesh) deletes `offers.json` with them, and status then answers `absent`.
 - Control op `invite.status`, `{"op":"invite.status","inviteId":I}` or `{"op":"invite.status","mintId":M}`, answers
@@ -912,6 +917,11 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   is none. A live invite is refused. After an ack the node no longer knows the mintId, so a caller acknowledges a
   fence only once that mint's expiresAt has passed, when the expiry alone refuses a late create.
 - At most 256 bound entries are kept, and 512 counting fences; past either a create is refused, and past 512 a fence.
+- The answer of the control op `status` gains a last member `features`, an array of strings naming what the node supports
+  of this section: `invite.subject/1` (a subject on `invite`), `invite.cancel/1` (`invite.cancel`), `invite.mint/1` (`mintId` with an
+  absolute `expiresAt`) and `invite.status/1` (`invite.status`, kept terminal entries and `invite.ack`). The rest of the answer
+  is unchanged, and the answers that embed the same status object (`relays`, `login-bind`) do not carry it. An older node's
+  answer has no such member; a caller checks the features it needs before each mint and cancel.
 - `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
   `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
   `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to. A
@@ -921,9 +931,9 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   makes nothing, so a caller never gets an unbound token in place of a bound one; it answers the other ops of this
   section that it does not know the op. An older node takes a `null` or string `subject` as an ordinary invite, so a
   caller sends the subject object and uses a token only from an answer that carries `id` and the `mintId` it sent.
-  A caller always sends the subject: an older node ignores a `mintId` and an
-  `expiresAt` without one. After a downgrade an older node prunes terminal entries (they have no `expiresAt`) and treats live
-  bound invites as ordinary ones.
+  A caller always sends the subject: an older node ignores a `mintId` and an `expiresAt` without one. After a
+  downgrade an older node sees no `secret` and no `expiresAt` in any bound entry, live or terminal, takes it for expired
+  and prunes it, so it never admits a machine with a bound invite's token.
 
 ## Close codes
 
@@ -1033,7 +1043,7 @@ v1.2 member-only reader refuses both valid new forms.
   keys before it joins; bound invites carry a caller's mintId and are kept as `burned` or `cancelled` entries, and control op
   `invite.cancel` cancels one by id or mintId, or fences a mintId before its create. A mint carries an absolute `expiresAt`,
   an expired bound invite stays as an `expired` entry, `invite.status` reads an entry and the admit its nonce produced,
-  and `invite.ack` forgets a settled one.
+  and `invite.ack` forgets a settled one. The `status` answer lists these as `features`.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.

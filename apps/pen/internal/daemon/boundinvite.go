@@ -12,6 +12,10 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
+// Features is the status op's feature list: P1 subject, P3 cancel, P4 mint (mintId with an absolute expiresAt) and
+// P4 status (invite.status, kept terminal entries, invite.ack).
+var Features = []string{"invite.subject/1", "invite.cancel/1", "invite.mint/1", "invite.status/1"}
+
 // boundInviteRequest is an invite op that names its subject (contract "Bound invites").
 type boundInviteRequest struct {
 	Op      string        `json:"op"`
@@ -39,8 +43,9 @@ type InviteCancelReply struct {
 }
 
 // boundOp reports whether a control line is a bound-invite op, which handleControl serves before decoding a
-// Request: Request.Subject is a string, so an older node answers an invite with a subject object "bad request" and
-// makes nothing, and it answers the other ops "unknown op".
+// Request: an invite carrying a subject, mintId or expiresAt member, or one of the other ops. Request.Subject is a
+// string, so an older node answers an invite with a subject object "bad request" and makes nothing, and it answers
+// the other ops "unknown op".
 func boundOp(line []byte) bool {
 	var head struct {
 		Op        string          `json:"op"`
@@ -55,7 +60,8 @@ func boundOp(line []byte) bool {
 	case "invite.cancel", "invite.status", "invite.ack":
 		return true
 	case "invite":
-		return len(head.MintID) > 0 || len(head.ExpiresAt) > 0 || len(head.Subject) > 0 && head.Subject[0] == '{'
+		// Any subject member at all, null or a string included, asks for a bound invite and is refused there if malformed.
+		return len(head.MintID) > 0 || len(head.ExpiresAt) > 0 || len(head.Subject) > 0
 	}
 	return false
 }
@@ -78,21 +84,30 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			fail(errBadRequest)
 			return
 		}
-		if head.Op == "invite.status" {
+		switch head.Op {
+		case "invite.status":
 			store, book := d.meshAndBook()
-			reply(mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now))
-			return
+			s, err := mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			reply(s)
+		case "invite.ack":
+			state, err := d.inviteBook().Ack(ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			reply(InviteCancelReply{T: "invite-ack", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
+		default:
+			state, err := d.inviteBook().Cancel(ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			reply(InviteCancelReply{T: "invite-cancel", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		}
-		do, t := d.inviteBook().Cancel, "invite-cancel"
-		if head.Op == "invite.ack" {
-			do, t = d.inviteBook().Ack, "invite-ack"
-		}
-		state, err := do(ref.InviteID, ref.MintID, d.now)
-		if err != nil {
-			fail(err)
-			return
-		}
-		reply(InviteCancelReply{T: t, InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		return
 	}
 	var req boundInviteRequest
@@ -106,18 +121,25 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		fail(err)
 		return
 	}
-	inv, err := d.inviteBook().CreateBound(*req.Subject, req.MintID, expiresAt, d.now)
+	var cancelled chan struct{}
+	if req.Wait {
+		cancelled = make(chan struct{})
+	}
+	inv, err := d.inviteBook().CreateBoundNotify(*req.Subject, req.MintID, expiresAt, d.now, cancelled)
 	if err != nil {
 		fail(err)
 		return
 	}
 	r := d.inviteReply(inv)
 	r.ID, r.MintID = inv.ID, inv.MintID
+	if d.boundCreated != nil {
+		d.boundCreated(inv.ID)
+	}
 	if !req.Wait {
 		reply(r)
 		return
 	}
-	d.awaitJoin(ctx, c, r, inv.ID, reply)
+	d.awaitJoin(ctx, c, r, inv.ID, cancelled, reply)
 }
 
 // maxBoundExpiry bounds how far ahead a caller's expiresAt may be.

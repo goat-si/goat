@@ -2,15 +2,19 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 	"github.com/goat-si/goat/apps/pen/internal/relaytest"
+	"github.com/goat-si/goat/apps/pen/internal/session"
 	"github.com/goat-si/goat/apps/pen/internal/state"
+	"github.com/goat-si/goat/apps/pen/internal/strictjson"
 )
 
 // rawCall sends one control line as written and decodes one answer.
@@ -108,11 +112,13 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
 	jst := shortDir(t)
 	jid := identity(t, jst, rs.URL, "j")
 	var r InviteReply
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
 		t.Fatal(err)
 	}
 	if r.MintID != "m1" || r.ID == "" {
@@ -139,7 +145,7 @@ func TestInviteCancelOpEndsABoundInviteAndFencesAMint(t *testing.T) {
 	if c := cancelOp(`{"op":"invite.cancel","mintId":"m2"}`); c.State != "cancelled" {
 		t.Fatalf("cancel of an unmade mint: %+v", c)
 	}
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m2","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err == nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m2","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err == nil {
 		t.Fatalf("the fenced mint made an invite: %+v", r)
 	}
 	if c := cancelOp(`{"op":"invite.cancel","inviteId":"AAAAAAAAAAAAAAAA"}`); c.State != "absent" {
@@ -245,10 +251,12 @@ func TestInviteRefOpsRefuseALineCarryingBothReferences(t *testing.T) {
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
-	a := founder(t, ctx, rs, "a", nil)
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
 	jid := newIdentity(t)
 	var r InviteReply
-	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
 		t.Fatal(err)
 	}
 	for _, op := range []string{"invite.cancel", "invite.status", "invite.ack"} {
@@ -265,5 +273,182 @@ func TestInviteRefOpsRefuseALineCarryingBothReferences(t *testing.T) {
 	}
 	if s := statusOp(t, a.st, `"mintId":"fresh"`); s.State != "absent" {
 		t.Fatalf("a refused cancel left a fence: %+v", s)
+	}
+}
+
+// The status answer names the bound-invite features as its last member, and is otherwise exactly the answer an older
+// node gives, so a caller can check support before it mints and older readers see nothing new but one member.
+func TestStatusNamesTheBoundInviteFeatures(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "status"}); err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil {
+		t.Fatal(err)
+	}
+	const suffix = `,"features":["invite.subject/1","invite.cancel/1","invite.mint/1","invite.status/1"]}`
+	var s Status
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Features = nil
+	old, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := string(old[:len(old)-1]) + suffix; string(raw) != want {
+		t.Fatalf("status answered\n%s\nwant\n%s", raw, want)
+	}
+}
+
+// A caller that sends a subject member at all asked for a bound invite: a null or string subject is refused and makes
+// nothing, never an ordinary token any machine could use.
+func TestAnInviteWithANullOrStringSubjectIsRefused(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	for _, line := range []string{
+		`{"op":"invite","subject":null}`,
+		`{"op":"invite","subject":"x"}`,
+		`{"op":"invite","ttlMs":60000,"subject":""}`,
+	} {
+		var r InviteReply
+		if err := rawCall(t, a.st, line, &r); err == nil {
+			t.Fatalf("%s: answered %+v; want a refusal", line, r)
+		}
+	}
+	var offers []mesh.Invite
+	if _, err := a.st.ReadJSON("offers.json", &offers); err != nil || len(offers) != 0 {
+		t.Fatalf("offers.json holds %d invite(s) (%v); want none", len(offers), err)
+	}
+}
+
+// A caller waiting on an invite (wait:true) is told when the invite is cancelled and its connection ends, instead of
+// waiting until the expiry and then answering expired.
+func TestCancelEndsAWaitOnTheInvite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	var c InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.cancel","mintId":"m1"}`, &c); err != nil || c.State != "cancelled" {
+		t.Fatalf("cancel: %+v, %v", c, err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// An ordinary invite's answer has exactly dev's members: bound invites add id and mintId only to their own answers.
+func TestAnOrdinaryInvitesAnswerIsUnchanged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	var raw json.RawMessage
+	if err := Call(a.st, Request{Op: "invite", TTLMs: 60000}, &raw); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := strictjson.Keys(raw)
+	if err != nil || strings.Join(keys, ",") != "token,relay,expiresAt,command,windowsCommand" {
+		t.Fatalf("answer members %v (%v); want token,relay,expiresAt,command,windowsCommand", keys, err)
+	}
+}
+
+// A cancel (and even its ack) that lands after a bound invite is made but before its waiter is registered still ends
+// the wait: a minted wait is registered under its mintId before the invite exists.
+func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	// Between the create and the waiter: a cancel by mintId and its ack, which leave no trace of the invite.
+	a.d.boundCreated = func(string) {
+		var c InviteCancelReply
+		if err := rawCall(t, a.st, `{"op":"invite.cancel","mintId":"m1"}`, &c); err != nil || c.State != "cancelled" {
+			t.Errorf("cancel: %+v, %v", c, err)
+		}
+		if err := rawCall(t, a.st, `{"op":"invite.ack","mintId":"m1"}`, &c); err != nil || c.State != "acked" {
+			t.Errorf("ack: %+v, %v", c, err)
+		}
+	}
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// A caller waiting on an ordinary invite (pen invite) is told when invite.cancel removes it by id.
+func TestCancelEndsAWaitOnAnOrdinaryInvite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := mesh.ParseToken(r.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c InviteCancelReply
+	if err := rawCall(t, a.st, `{"op":"invite.cancel","inviteId":"`+session.InviteID(tok.Secret)+`"}`, &c); err != nil || c.State != "cancelled" {
+		t.Fatalf("cancel: %+v, %v", c, err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
 	}
 }

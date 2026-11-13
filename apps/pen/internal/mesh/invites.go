@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"maps"
 	"sync"
@@ -11,21 +12,65 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
-// Invite is an entry of offers.json: a live single-use invite, or the terminal state a bound invite reached.
+// Invite is an entry of offers.json: a live single-use invite, or the terminal state a bound invite reached. Its file
+// form is inviteFile.
 type Invite struct {
-	ID        string `json:"id,omitempty"`
-	Secret    []byte `json:"secret,omitempty"`
-	ExpiresAt int64  `json:"expiresAt,omitempty"`
+	ID        string
+	Secret    []byte
+	ExpiresAt int64
 	// Subject, when set, is the only machine the invite admits (a bound invite).
-	Subject *Subject `json:"subject,omitempty"`
+	Subject *Subject
 	// MintID is the caller's name for the request that made a bound invite, or for a cancel that came first.
-	MintID string `json:"mintId,omitempty"`
+	MintID string
 	// State is empty for a live invite, else burned, cancelled or expired. A terminal entry keeps no secret and no
-	// expiresAt, so a node older than bound invites reads it as expired and prunes it.
-	State string `json:"state,omitempty"`
+	// expiry.
+	State string
 	// Nonce is a burned invite's offer nonce, which the admitted card repeats; At is when it reached State.
-	Nonce string `json:"nonce,omitempty"`
-	At    int64  `json:"at,omitempty"`
+	Nonce string
+	At    int64
+}
+
+// inviteFile is an Invite as offers.json stores it. An ordinary invite has exactly dev's members (id, secret,
+// expiresAt). A bound one keeps its secret and expiry under boundSecret and boundExpiresAt, which a node older than
+// bound invites does not read: after a downgrade it sees no secret and no expiry, takes the entry for expired and
+// prunes it instead of admitting any machine with it.
+type inviteFile struct {
+	ID             string   `json:"id,omitempty"`
+	Secret         []byte   `json:"secret,omitempty"`
+	ExpiresAt      int64    `json:"expiresAt,omitempty"`
+	Subject        *Subject `json:"subject,omitempty"`
+	MintID         string   `json:"mintId,omitempty"`
+	BoundSecret    []byte   `json:"boundSecret,omitempty"`
+	BoundExpiresAt int64    `json:"boundExpiresAt,omitempty"`
+	State          string   `json:"state,omitempty"`
+	Nonce          string   `json:"nonce,omitempty"`
+	At             int64    `json:"at,omitempty"`
+}
+
+// MarshalJSON writes the file form.
+func (x Invite) MarshalJSON() ([]byte, error) {
+	f := inviteFile{ID: x.ID, Secret: x.Secret, ExpiresAt: x.ExpiresAt, Subject: x.Subject, MintID: x.MintID, State: x.State,
+		Nonce: x.Nonce, At: x.At}
+	if x.Subject != nil {
+		f.Secret, f.ExpiresAt, f.BoundSecret, f.BoundExpiresAt = nil, 0, x.Secret, x.ExpiresAt
+	}
+	return json.Marshal(f)
+}
+
+// UnmarshalJSON reads the file form.
+func (x *Invite) UnmarshalJSON(b []byte) error {
+	var f inviteFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return err
+	}
+	*x = Invite{ID: f.ID, Secret: f.Secret, ExpiresAt: f.ExpiresAt, Subject: f.Subject, MintID: f.MintID, State: f.State,
+		Nonce: f.Nonce, At: f.At}
+	if f.Subject != nil && (f.BoundSecret != nil || f.BoundExpiresAt != 0) {
+		// A bound entry written before its secret moved to boundSecret keeps secret and expiresAt; the next save moves
+		// them.
+		x.Secret, x.ExpiresAt = f.BoundSecret, f.BoundExpiresAt
+	}
+	return nil
 }
 
 // Invite states as cancel answers them.
@@ -51,13 +96,16 @@ type Invites struct {
 	// byID holds live invites and bound terminal entries; fences holds cancels by mintId that no invite answered.
 	byID   map[string]Invite
 	fences map[string]Invite
+	// cancelled holds, in memory only, the channel a live invite's maker waits on: closed when that invite is
+	// cancelled, dropped when it ends otherwise. Made and closed under mu with the invite itself.
+	cancelled map[string]chan struct{}
 	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
 	retired bool
 }
 
 // LoadInvites reads offers.json (st may be nil for in-memory use).
 func LoadInvites(st *state.Store) (*Invites, error) {
-	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}}
+	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}, cancelled: map[string]chan struct{}{}}
 	if st == nil {
 		return iv, nil
 	}
@@ -108,6 +156,11 @@ func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) e
 		}
 	}
 	iv.byID, iv.fences = byID, fences
+	for id := range iv.cancelled {
+		if x, ok := byID[id]; !ok || x.State != "" {
+			delete(iv.cancelled, id)
+		}
+	}
 	return nil
 }
 
@@ -125,6 +178,11 @@ func (iv *Invites) Retire() {
 
 // Create makes an invite valid for ttl.
 func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
+	return iv.CreateNotify(ttl, now, nil)
+}
+
+// CreateNotify is Create that, when cancelled is not nil, closes it if invite.cancel removes this invite.
+func (iv *Invites) CreateNotify(ttl time.Duration, now time.Time, cancelled chan struct{}) (Invite, error) {
 	x, err := newInvite(now.Add(ttl))
 	if err != nil {
 		return Invite{}, err
@@ -135,6 +193,9 @@ func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
 		return Invite{}, errInviteRetired
 	}
 	iv.byID[x.ID] = x
+	if cancelled != nil {
+		iv.cancelled[x.ID] = cancelled
+	}
 	return x, iv.saveLocked(now)
 }
 
@@ -239,8 +300,12 @@ func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, er
 	default:
 		byID[x.ID] = terminal(x, InviteCancelled, now, "")
 	}
+	ch := iv.cancelled[x.ID]
 	if err := iv.commitLocked(now, byID, fences); err != nil {
 		return "", err
+	}
+	if ch != nil {
+		close(ch)
 	}
 	return InviteCancelled, nil
 }
