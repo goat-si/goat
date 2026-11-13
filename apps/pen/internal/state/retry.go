@@ -16,8 +16,8 @@ var (
 	retryBudget   = 2 * time.Second
 )
 
-// retryTransient runs op until it succeeds or fails with an error isTransient rejects, for up to
-// retryBudget with growing waits: the rule Go's cmd/internal/robustio uses.
+// retryTransient runs op until it succeeds or fails with an error isTransient rejects, waiting more
+// each time, until the waits would pass retryBudget (time spent in op is not counted).
 func retryTransient(op func() error, isTransient func(error) bool) error {
 	var waited time.Duration
 	next := time.Millisecond
