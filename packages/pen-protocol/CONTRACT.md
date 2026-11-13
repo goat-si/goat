@@ -832,13 +832,15 @@ member's sessions load which relay.
   the last report) shares one deadline of 1 s, so a daemon that takes reports and never answers delays the end of a
   session by at most 1 s. A report whose answer never came may have been counted, so its bytes are not sent again.
   Bytes the node certainly did not take (the line never reached it whole, or it refused the report) are kept per
-  report that carried them and wait for later reports while less than one bucket (15 minutes) has passed since they
-  began, by the monotonic clock and by the wall clock alike; after that they are dropped. At every report the
-  reporter compares both clocks since the previous report: when that was a bucket or more ago, or the wall clock
-  moved more than 1 s apart from the monotonic one (it was set, or the machine slept where the monotonic clock
-  stops), where the pending bytes belong is unknown, and they are dropped, never sent. Counts are lost while no
-  daemon counts or the clock is unsure, never moved to a bucket more than one bucket later than the one their bytes
-  crossed the relay in.
+  report that carried them and wait for later reports while less than one bucket minus the 1 s report bound
+  (14 min 59 s) has passed since they began, by the monotonic clock and by the wall clock alike; after that they are
+  dropped. At every report the reporter compares both clocks since the previous report: when that was 14 min 59 s or
+  more ago by either clock, or the wall clock moved more than 1 s apart from the monotonic one (it was set, or the
+  machine slept where the monotonic clock stops), where the pending bytes belong is unknown, and they are dropped,
+  never sent. Both limits stop 1 s short of a bucket because the node places a report in a bucket when it arrives,
+  up to 1 s after the reporter read its clocks. Counts are lost while no daemon counts or the clock is unsure, never
+  moved to a bucket more than one bucket later than the one their bytes crossed the relay in; a clock set during the
+  at most 1 s one report is in flight is not seen.
 - Window: 96 buckets of 15 minutes by the node's wall clock, so bytes leave the total between 23 h 45 min and 24 h
   after they were counted. A wall clock set back by less than 23 h 45 min keeps every count; set back further, it can
   drop the counts of the buckets it skips (bucket indices, not elapsed time, decide). A node holds at most 512
