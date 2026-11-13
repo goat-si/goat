@@ -68,6 +68,20 @@ interface Walk {
 }
 
 /**
+ * The folders GOAT may tighten: its state folder, the key's folder, and its base folder unless a
+ * person chose it (GOAT_HOME or --home-dir), who may share it on purpose; that one it only names.
+ */
+export const goatFolders = (config: {
+  readonly baseDir: string;
+  readonly stateDir: string;
+  readonly baseDirIsExplicit?: boolean | undefined;
+}) => [
+  ...(config.baseDirIsExplicit === true ? [] : [config.baseDir]),
+  config.stateDir,
+  NodePath.join(config.stateDir, "disposable"),
+];
+
+/**
  * Removes group and other write from the very folder the walk judged: opened without following a
  * link, and changed only while it is still that folder (device and inode) and this user's.
  */

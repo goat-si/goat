@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { keyPathFor } from "./keyPath.ts";
+import { goatFolders, keyPathFor } from "./keyPath.ts";
 
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 
@@ -57,9 +57,26 @@ it.live.skipIf(WINDOWS)("a 0755 or 0700 chain is usable and nothing is changed",
 it.live.skipIf(WINDOWS)("GOAT's own base folder left 0775 by a umask of 002 is tightened", () =>
   Effect.gen(function* () {
     const at = yield* layout({ shared: 0o755, base: 0o775 });
-    expect(yield* keyPathFor(at.key, at.own)).toEqual({ kind: "ok" });
+    const own = goatFolders({ baseDir: at.base, stateDir: at.state });
+    expect(yield* keyPathFor(at.key, own)).toEqual({ kind: "ok" });
     expect(yield* at.mode(at.base)).toBe(0o755);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)(
+  "a base folder a person chose with GOAT_HOME or --home-dir is named and never changed",
+  () =>
+    Effect.gen(function* () {
+      // Pointed at on purpose, it may be a folder its group shares; its state folder is GOAT's.
+      const at = yield* layout({ shared: 0o755, base: 0o775 });
+      yield* Effect.promise(() => NodeFSP.chmod(at.state, 0o770));
+      const own = goatFolders({ baseDir: at.base, stateDir: at.state, baseDirIsExplicit: true });
+      expect(yield* keyPathFor(at.key, own)).toEqual(writable(at.base, true));
+      expect(yield* at.mode(at.base)).toBe(0o775);
+      yield* Effect.promise(() => NodeFSP.chmod(at.base, 0o755));
+      expect(yield* keyPathFor(at.key, own)).toEqual({ kind: "ok" });
+      expect(yield* at.mode(at.state)).toBe(0o750);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.live.skipIf(WINDOWS)("a group-writable folder above GOAT's own is named and never changed", () =>

@@ -15,7 +15,7 @@ import * as ProcessRunner from "../../processRunner.ts";
 import * as Settings from "../../serverSettings.ts";
 import { HubOcx, type OcxOutput, type PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
-import { type KeyPathAnswer, keyPathFor } from "./keyPath.ts";
+import { goatFolders, type KeyPathAnswer, keyPathFor } from "./keyPath.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
 /** How a reach ended; ssh's own lines decide it, and none of them is kept. */
@@ -162,8 +162,7 @@ export const layer = Layer.effect(
     const environment = yield* HostProcess.Environment;
     const config = yield* ServerConfig;
     const directory = path.join(config.stateDir, "disposable", "known_hosts");
-    // The folders GOAT made and may tighten; anything above them it only names.
-    const own = [config.baseDir, config.stateDir, path.join(config.stateDir, "disposable")];
+    const own = goatFolders(config);
     return EnrollHost.of({
       route: Effect.fn("EnrollHost.route")(
         function* (node) {
