@@ -91,18 +91,19 @@ export function MobileTaskHeader(props: {
       ) : props.loading ? (
         <Text className="text-foreground-muted">Loading task…</Text>
       ) : null}
-      {props.older && lookup.state === "loading" ? (
+      {lookup.state === "loading" ? (
         <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
           Loading task…
         </Text>
       ) : null}
-      {props.older && lookup.state === "missing" ? (
+      {lookup.state === "missing" ? (
         <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
           This task isn't available.
         </Text>
       ) : null}
-      {props.older &&
-      (lookup.state === "off" || lookup.state === "denied" || lookup.state === "failed") ? (
+      {(props.older && lookup.state === "off") ||
+      lookup.state === "denied" ||
+      lookup.state === "failed" ? (
         <View className="flex-row flex-wrap items-center gap-3">
           <Text className="text-foreground-muted">
             Status and actions for older work are in {props.botName}'s Home.
@@ -120,13 +121,13 @@ export function MobileTaskHeader(props: {
           </Pressable>
         </View>
       ) : null}
-      {props.older && lookup.state === "denied" ? (
+      {lookup.state === "denied" ? (
         <Text className="text-foreground-muted">This connection can't look up older tasks.</Text>
       ) : null}
-      {props.older && lookup.state === "failed" ? (
+      {lookup.state === "failed" ? (
         <Pressable
           accessibilityRole="button"
-          onPress={lookup.reload}
+          onPress={() => lookup.retry()}
           className="min-h-[44px] justify-center"
         >
           <Text className="text-danger-foreground">Couldn't load this task. Try again</Text>

@@ -55,7 +55,7 @@ const knownTask = {
 } as unknown as BotWorkTask;
 
 const container = document.createElement("div");
-const reload = vi.fn();
+const retry = vi.fn();
 const openHome = vi.fn();
 async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = null) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -94,7 +94,6 @@ it("a looked-up task shows its status and actions instead of the older-work expl
     state: "known",
     task: knownTask,
     result: result({ state: "known", row } as never, { launchesTruncated: true, partial: true }),
-    reload,
   });
   expect(text()).toContain("Old report…");
   expect(text()).toContain("Done");
@@ -115,7 +114,6 @@ it("an unavailable task shows its status and work but nothing that needs its rea
       worker: { environmentId: "env", threadId: "w-1" },
     } as never,
     result: result({ state: "unavailable" } as never, { launchesTruncated: true, partial: true }),
-    reload,
   });
   expect(text()).toContain("Failed");
   expect(text()).toContain("Its read, pinned and done state couldn't be read.");
@@ -136,11 +134,11 @@ it("a task the server does not have says so once, with no way to Home", async ()
 });
 
 it("a failed lookup keeps the explanation and offers Try again", async () => {
-  reload.mockClear();
-  const root = await render({ state: "failed", reload });
+  retry.mockClear();
+  const root = await render({ state: "failed", retry });
   expect(text()).toContain("Status and actions for older work are in GOAT Bot's Home.");
   await act(async () => button("Couldn't load this task. Try again")?.click());
-  expect(reload).toHaveBeenCalledTimes(1);
+  expect(retry).toHaveBeenCalledTimes(1);
   await act(async () => root.unmount());
 });
 

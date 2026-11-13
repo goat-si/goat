@@ -214,13 +214,14 @@ export function MobileBotWork(props: {
   );
   const botId = member?.botId ?? BotId.make("main");
   const older = !task && listData !== null && (offline || threads.successResult !== null);
-  const lookup = useMobileBotTaskLookup({
+  const { lookup, invalidate } = useMobileBotTaskLookup({
     environmentId,
     botId: botId,
     taskId: props.taskId ?? null,
-    needed: older && enabled,
-    holding: !task && enabled && threads.isPending && threads.data !== null,
-    supported: capabilities?.goatBotTaskLookupSearch === true,
+    supported: enabled && capabilities?.goatBotTaskLookupSearch === true,
+    established: threads.data !== null,
+    refreshing: threads.isPending,
+    holdsTask: task !== undefined,
     childGroups: childData?.groups ?? [],
   });
   const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
@@ -229,7 +230,7 @@ export function MobileBotWork(props: {
   };
   const reread = () => {
     threads.refresh();
-    if (lookup.state === "known" || lookup.state === "unavailable") lookup.reload();
+    invalidate();
   };
   // What the work list says about each task and thread; the machines follow its changes.
   const workKey = rows
@@ -420,7 +421,7 @@ export function MobileBotWork(props: {
     onAcknowledged: (taskId, through, scope, sent) => {
       if (history.markRead(scope, taskId, through) && sent) threads.refresh();
       const shown = lookup.state === "known" && lookup.task.row.task.taskId === taskId;
-      if (sent && shown && scope === workOwner) lookup.reload();
+      if (sent && shown && scope === workOwner) invalidate();
     },
   });
   const now = useNowMinuteMs();

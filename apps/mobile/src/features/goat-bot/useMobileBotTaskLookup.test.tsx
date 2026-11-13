@@ -43,14 +43,20 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   };
 });
 
-import { useMobileBotTaskLookup, type MobileTaskLookup } from "./useMobileBotTaskLookup";
+import {
+  taskLookupDecision,
+  useMobileBotTaskLookup,
+  type MobileTaskLookup,
+  type TaskLookupFacts,
+} from "./useMobileBotTaskLookup";
 
 type Props = Parameters<typeof useMobileBotTaskLookup>[0];
-const seen = { current: null as MobileTaskLookup | null };
+const seen = { current: null as MobileTaskLookup | null, invalidate: () => {} };
 function Probe(props: Props) {
   const value = useMobileBotTaskLookup(props);
   useEffect(() => {
-    seen.current = value;
+    seen.current = value.lookup;
+    seen.invalidate = value.invalidate;
   });
   return null;
 }
@@ -90,18 +96,57 @@ const base: Props = {
   environmentId: "env" as Props["environmentId"],
   botId: "main" as Props["botId"],
   taskId: "t1" as Props["taskId"],
-  needed: true,
   supported: true,
+  established: true,
+  refreshing: false,
+  holdsTask: false,
   childGroups: [],
 };
 async function show(props: Partial<Props> = {}) {
   await act(async () => root?.render(<Probe {...base} {...props} />));
 }
 const state = () => seen.current?.state;
+const asked = () => net.calls.map((call) => call.input.taskId);
 
-it("asks nothing when the list holds the task, the server cannot look up, or the device may not read", async () => {
+it("decides the view and whether a read starts from one set of facts", () => {
+  const facts: TaskLookupFacts = {
+    able: true,
+    permitted: true,
+    established: true,
+    refreshing: false,
+    holdsTask: false,
+    held: false,
+    failed: false,
+    stale: false,
+    inFlight: false,
+  };
+  const decide = (change: Partial<TaskLookupFacts>) => taskLookupDecision({ ...facts, ...change });
+  expect(decide({})).toEqual({ view: "loading", read: true });
+  expect(decide({ established: false })).toEqual({ view: "off", read: false });
+  expect(decide({ able: false })).toEqual({ view: "off", read: false });
+  expect(decide({ holdsTask: true, held: true, stale: true })).toEqual({
+    view: "row",
+    read: false,
+  });
+  expect(decide({ permitted: false })).toEqual({ view: "denied", read: false });
+  expect(decide({ refreshing: true })).toEqual({ view: "loading", read: false });
+  expect(decide({ inFlight: true })).toEqual({ view: "loading", read: false });
+  expect(decide({ held: true })).toEqual({ view: "answer", read: false });
+  expect(decide({ held: true, stale: true })).toEqual({ view: "answer", read: true });
+  expect(decide({ held: true, stale: true, refreshing: true })).toEqual({
+    view: "answer",
+    read: false,
+  });
+  expect(decide({ failed: true })).toEqual({ view: "failed", read: false });
+  expect(decide({ failed: true, inFlight: true })).toEqual({ view: "loading", read: false });
+});
+
+it("asks nothing before a list settles, when it holds the task, without the lookup, or without permission", async () => {
   setup();
-  await show({ needed: false });
+  await show({ established: false });
+  expect(state()).toBe("off");
+  await show({ holdsTask: true });
+  expect(state()).toBe("off");
   await show({ supported: false });
   expect(state()).toBe("off");
   net.permitted = false;
@@ -143,7 +188,7 @@ it("passes an unavailable view through without inventing one", async () => {
   expect("view" in value.task).toBe(false);
 });
 
-it("says a task is missing on not_found, and a failure can be read again", async () => {
+it("says a task is missing on not_found; a failure waits for Try again, which reads once", async () => {
   setup();
   await show();
   await net.calls[0]?.fail("not_found");
@@ -151,43 +196,18 @@ it("says a task is missing on not_found, and a failure can be read again", async
   setup();
   await show();
   await net.calls[0]?.fail("persistence_failed");
+  await show();
+  expect(net.calls).toHaveLength(1);
   const failed = seen.current;
   expect(failed?.state).toBe("failed");
   if (failed?.state !== "failed") return;
-  await act(async () => failed.reload());
+  await act(async () => {
+    failed.retry();
+    failed.retry();
+  });
   expect(net.calls).toHaveLength(2);
   await net.calls[1]?.answer(known("t1"));
   expect(state()).toBe("known");
-});
-
-it("keeps only the newest read: a late answer for another task or an earlier read lands nowhere", async () => {
-  setup();
-  await show();
-  await show({ taskId: "t2" as Props["taskId"] });
-  await net.calls[0]?.answer(known("t1"));
-  expect(state()).toBe("loading");
-  await net.calls[1]?.answer(known("t2"));
-  const value = seen.current;
-  expect(value?.state === "known" && value.task.row.task.taskId).toBe("t2");
-  if (value?.state !== "known") return;
-  await act(async () => value.reload());
-  await act(async () => (seen.current as { reload: () => void }).reload());
-  await net.calls[3]?.answer(known("t2", { partial: true }));
-  await net.calls[2]?.answer(known("t2"));
-  expect((seen.current as { result: BotWorkResult }).result.partial).toBe(true);
-});
-
-it("a reload kept by an earlier task's screen does not displace the task shown now", async () => {
-  setup();
-  await show();
-  await net.calls[0]?.answer(known("t1"));
-  const earlier = seen.current;
-  await show({ taskId: "t2" as Props["taskId"] });
-  if (earlier?.state === "known") earlier.reload();
-  expect(net.calls.map((call) => call.input.taskId)).toEqual(["t1", "t2"]);
-  await net.calls[1]?.answer(known("t2"));
-  expect(state()).toBe("known");
-  expect(seen.current?.state === "known" && seen.current.task.row.task.taskId).toBe("t2");
 });
 
 it("a read the server refuses for this device's access says so instead of offering a retry", async () => {
@@ -200,45 +220,61 @@ it("a read the server refuses for this device's access says so instead of offeri
   expect(state()).toBe("denied");
 });
 
-it("a reload kept from before the lookup stopped asking sends nothing", async () => {
+it("only the newest read answers: a task left behind lands nowhere", async () => {
   setup();
   await show();
-  await net.calls[0]?.answer(known("t1"));
-  const earlier = seen.current;
-  await show({ supported: false });
-  if (earlier?.state === "known") earlier.reload();
-  await show({ needed: false });
-  if (earlier?.state === "known") earlier.reload();
-  await act(async () => root?.unmount());
-  root = null;
-  if (earlier?.state === "known") earlier.reload();
-  expect(net.calls).toHaveLength(1);
-});
-
-it("after leaving a task and coming back, an earlier reload rereads that same task and its answer lands", async () => {
-  setup();
-  await show();
-  await net.calls[0]?.answer(known("t1"));
-  const earlier = seen.current;
   await show({ taskId: "t2" as Props["taskId"] });
-  await show();
-  if (earlier?.state === "known") earlier.reload();
-  expect(net.calls.map((call) => call.input.taskId)).toEqual(["t1", "t2", "t1", "t1"]);
-  await net.calls[3]?.answer(known("t1"));
-  expect(state()).toBe("known");
+  expect(asked()).toEqual(["t1", "t2"]);
+  await net.calls[0]?.answer(known("t1"));
+  expect(state()).toBe("loading");
+  await net.calls[1]?.answer(known("t2"));
+  expect(seen.current?.state === "known" && seen.current.task.row.task.taskId).toBe("t2");
 });
 
-it("Try again pressed twice before the screen shows it loading reads once", async () => {
+it("a task change during a refresh waits for it; a refresh that returns the task reads nothing", async () => {
   setup();
   await show();
-  await net.calls[0]?.fail("persistence_failed");
-  const failed = seen.current;
-  expect(failed?.state).toBe("failed");
+  await net.calls[0]?.answer(known("t1"));
+  await show({ taskId: "t2" as Props["taskId"], refreshing: true });
+  expect(asked()).toEqual(["t1"]);
+  await show({ taskId: "t2" as Props["taskId"], holdsTask: true });
+  expect(asked()).toEqual(["t1"]);
+  await show({ taskId: "t2" as Props["taskId"] });
+  expect(asked()).toEqual(["t1", "t2"]);
+});
+
+it("an answer stays through a refresh, also a failed one, and is read again only once it is stale", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  await show({ refreshing: true });
+  expect(state()).toBe("known");
+  await show();
+  expect(net.calls).toHaveLength(1);
+  // An action rereads the list and marks the task stale in one update.
   await act(async () => {
-    if (failed?.state === "failed") {
-      failed.reload();
-      failed.reload();
-    }
+    seen.invalidate();
+    root?.render(<Probe {...base} refreshing />);
   });
+  expect(net.calls).toHaveLength(1);
+  expect(state()).toBe("known");
+  await show();
   expect(net.calls).toHaveLength(2);
+  await show();
+  expect(net.calls).toHaveLength(2);
+});
+
+it("a stale mark for a task the screen left is dropped", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  await act(async () => {
+    seen.invalidate();
+    root?.render(<Probe {...base} taskId={"t2" as Props["taskId"]} refreshing />);
+  });
+  await show({ taskId: "t2" as Props["taskId"], holdsTask: true });
+  await show({ holdsTask: true });
+  await show();
+  // Back on t1 after the list held it: its answer was dropped, so it reads again, once.
+  expect(asked()).toEqual(["t1", "t1"]);
 });
