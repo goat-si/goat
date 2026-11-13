@@ -9,6 +9,7 @@ import { Pressable, Text, View } from "react-native";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
+import { accessDenied } from "./mobileBotWorkShared";
 
 /** The machines GOAT Bot's running work uses, from its task list. */
 export function MobileBotComputer(props: {
@@ -46,6 +47,10 @@ export function MobileBotComputer(props: {
       <Text className="text-foreground-muted">
         Machines are unavailable while {botName} is offline.
       </Text>
+    );
+  if (accessDenied(tasks.cause))
+    return (
+      <Text className="text-foreground-muted">This device can't read {botName}'s machines.</Text>
     );
   if (tasks.cause !== null)
     return (
