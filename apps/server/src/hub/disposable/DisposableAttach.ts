@@ -11,6 +11,7 @@ import {
   isPenNodeName,
   matchesDisposableNameRule,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,8 @@ import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
 import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvites.ts";
 import { makeSharedPasses } from "./sharedPasses.ts";
 import { makeAuthority, Provisioners } from "./attachAuthority.ts";
+import { makeEnroll } from "./DisposableEnroll.ts";
+import { MachineKey } from "./machineKey.ts";
 import {
   afterCancel,
   type Columns,
@@ -73,6 +76,9 @@ export interface AttachCaller {
 }
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
+// Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
+const ENROLL_LIMIT = 100;
+const ENROLL_CONCURRENCY = 4;
 /** How long a list waits for Pen's answers before it reads what GOAT has stored. */
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
@@ -103,6 +109,11 @@ export class DisposableAttach extends Context.Service<
      * joined; its failures are logged, never returned.
      */
     readonly reconcile: Effect.Effect<void>;
+    /**
+     * One pass that moves admitted attaches on (route, reach, link); joined if running. Reconcile
+     * starts it without waiting, so a slow link never holds back invites and withdrawals.
+     */
+    readonly enroll: Effect.Effect<void>;
   }
 >()("goat/hub/disposable/DisposableAttach") {}
 
@@ -113,6 +124,7 @@ export const make = Effect.gen(function* () {
   const pen = yield* PenInvites;
   const home = yield* HomeContracts;
   const provisioners = yield* Provisioners;
+  const machineKey = yield* MachineKey;
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   // One attach mutation at a time, each rereading its record: mint, reissue, settlement and
   // withdrawal never interleave. Lock order: this, the settings write lock, the SQL transaction.
@@ -178,6 +190,12 @@ export const make = Effect.gen(function* () {
   });
 
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
+  const enrollment = yield* makeEnroll(exclusive);
+  /** The public line a machine must trust; attach makes the key before its first record. */
+  const knownKey = machineKey.identity.pipe(
+    Effect.map((identity) => identity.publicLine),
+    Effect.orElseSucceed(() => undefined),
+  );
 
   /**
    * Admits the next mint (design section 2, Effect admission): the provisioner's grant is checked
@@ -314,7 +332,7 @@ export const make = Effect.gen(function* () {
     const lost = yield* finalCheck(fresh);
     if (lost !== undefined)
       return yield* withdrawMinted(fresh, { ...intent, state: "done" }, invite.inviteId, lost);
-    return status(fresh, { token: invite.token, expiresAt });
+    return status(fresh, { token: invite.token, expiresAt }, yield* knownKey);
   });
 
   const unrecorded = Effect.fn("DisposableAttach.unrecorded")(function* (inviteId: string) {
@@ -337,7 +355,7 @@ export const make = Effect.gen(function* () {
     earlier.expected_noise_pub !== input.noisePub ||
     earlier.name !== input.name
       ? fail("invalid_request", "This clientRequestId was used for another machine.")
-      : Effect.succeed(status(earlier));
+      : Effect.map(knownKey, (key) => status(earlier, undefined, key));
 
   const attach = Effect.fn("DisposableAttach.attach")(function* (
     caller: AttachCaller,
@@ -371,6 +389,9 @@ export const make = Effect.gen(function* () {
     )
       return yield* fail("provisioner_refused", refusalText.provisioner_refused);
     yield* requireFeatures;
+    // The machine trusts this key alone, so it exists before any invite does.
+    if ((yield* machineKey.identity.pipe(Effect.option))._tag === "None")
+      return yield* fail("storage_failed", "GOAT could not make this hub's machine key.");
     const members = yield* pen.members;
     if (members === undefined)
       return yield* fail("pen_unsupported", "This hub's Pen member list could not be read.");
@@ -575,7 +596,29 @@ export const make = Effect.gen(function* () {
         row === undefined ? Effect.void : Effect.asVoid(settleRecord(row, members)),
       ),
     );
-  const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await);
+  const enrollPass = Effect.gen(function* () {
+    const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
+      WHERE final_at IS NULL AND ${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching')
+      ORDER BY created_at LIMIT ${ENROLL_LIMIT}`.pipe(Effect.mapError(storageFailed));
+    // One record's failure is logged and never stops the others.
+    yield* Effect.forEach(
+      due,
+      ({ attach_id }) =>
+        enrollment
+          .advance(attach_id)
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Disposable machine enrollment step failed", Cause.squash(cause)),
+            ),
+          ),
+      { concurrency: ENROLL_CONCURRENCY, discard: true },
+    );
+  }).pipe(Effect.withSpan("DisposableAttach.enroll"));
+  const enroll = Effect.flatMap(shared("enroll", enrollPass), Deferred.await);
+  const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await).pipe(
+    Effect.andThen(shared("enroll", enrollPass)),
+    Effect.asVoid,
+  );
 
   const recordRequest = (requestKey: string, outcome: string, detail: string | null) =>
     Effect.flatMap(
@@ -606,7 +649,7 @@ export const make = Effect.gen(function* () {
     const effects = replace(effectsOf(row), afterCancel(open, cancelled));
     if (cancelled !== "cancelled") {
       const settled = yield* settleRecord(yield* save(row, effects));
-      return { outcome: "settled", status: status(settled) } as const;
+      return { outcome: "settled", status: status(settled, undefined, yield* knownKey) } as const;
     }
     const intent: AttachEffect = {
       id: row.attach_id + "." + (effects.length + 1),
@@ -654,7 +697,7 @@ export const make = Effect.gen(function* () {
       if (earlier.attach_id !== row.attach_id)
         return yield* fail("invalid_request", "This clientRequestId was used for another attach.");
       if (earlier.outcome === "ok" || earlier.outcome === "settled")
-        return { replay: status(row) } as const;
+        return { replay: status(row, undefined, yield* knownKey) } as const;
       if (earlier.outcome === "running")
         return yield* fail(
           "unknown_outcome",
@@ -730,12 +773,13 @@ export const make = Effect.gen(function* () {
             Effect.mapError(storageFailed),
           )
         : [yield* read(input.attachId)].filter((row) => row !== undefined);
-    return { machines: rows.map((row) => status(row)) };
+    const key = yield* knownKey;
+    return { machines: rows.map((row) => status(row, undefined, key)) };
   });
 
   const nodeOf = (attachId: string) => Effect.map(read(attachId), (row) => row?.node_id);
 
-  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile });
+  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile, enroll });
 });
 
 // Settles invites and withdraws ones whose authority ended, also when no client is reading.

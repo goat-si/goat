@@ -11,6 +11,9 @@ import * as Settings from "../../serverSettings.ts";
 import type { Delegation } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import * as Store from "./DisposableMachineStore.ts";
+import { fakeEnrollHost, fakeMachineKey } from "./DisposableEnroll.testkit.ts";
+import { EnrollHost } from "./EnrollHost.ts";
+import { MachineKey } from "./machineKey.ts";
 import { withPersonConsent } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts } from "./features.ts";
 import {
@@ -224,13 +227,15 @@ export const world = <A, E>(
     pen: ReturnType<typeof fakePen>,
     home: { contracts: Set<string>; settingsUnreadable: boolean },
     grant: Grant,
+    host: ReturnType<typeof fakeEnrollHost>,
   ) => Effect.Effect<A, E, World>,
 ) => {
   const pen = fakePen();
+  const host = fakeEnrollHost();
   const home = { contracts: new Set<string>(HOME_ATTACH_CONTRACTS), settingsUnreadable: false };
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 146 });
+    yield* runMigrations({ toMigrationInclusive: 147 });
     const settings = yield* Settings.ServerSettingsService;
     yield* withPersonConsent(
       settings.updateSettings({
@@ -240,11 +245,13 @@ export const world = <A, E>(
         },
       }),
     );
-    return yield* body(pen, home, grant);
+    return yield* body(pen, home, grant, host);
   }).pipe(
     Effect.provideServiceEffect(Attach.DisposableAttach, Attach.make),
     Effect.provideServiceEffect(Store.DisposableMachineStore, Store.make),
     Effect.provideService(PenInvites, pen.service),
+    Effect.provideService(EnrollHost, host.service),
+    Effect.provideService(MachineKey, fakeMachineKey),
     Effect.provideService(
       HomeContracts,
       HomeContracts.of({ contracts: Effect.sync(() => home.contracts) }),
