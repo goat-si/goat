@@ -85,6 +85,17 @@ beforeEach(() => {
   expect(ipc.listeners.size).toBe(0);
 });
 
+it("invokes Pen route open and close with the pin only", async () => {
+  const pin = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "a".repeat(43) };
+  ipc.invoke.mockResolvedValue({ kind: "refused", reason: "unavailable" });
+  await ipc.bridge?.openPenRoute?.(pin);
+  await ipc.bridge?.closePenRoute?.(pin);
+  expect(ipc.invoke.mock.calls).toEqual([
+    [IpcChannels.OPEN_PEN_ROUTE_CHANNEL, pin],
+    [IpcChannels.CLOSE_PEN_ROUTE_CHANNEL, pin],
+  ]);
+});
+
 describe("SSH preparation progress in preload", () => {
   it("isolates simultaneous requests and never sends their callbacks over IPC", async () => {
     const pending: Array<{ requestId: string; finish: (value: unknown) => void }> = [];

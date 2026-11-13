@@ -19,7 +19,7 @@ import type { ConnectionAttemptError } from "../connection/model.ts";
 import type { AuthorizedRemoteEnvironment } from "../authorization/service.ts";
 import type { VerifiedSshEndpoint } from "../environment/descriptor.ts";
 import type { SshPairingGrant } from "../connection/catalog.ts";
-import { PEN_VIEWER_ENABLED } from "../connection/penViewerGate.ts";
+import { PEN_VIEWER_ENABLED } from "@goat/shared/penViewerGate";
 
 export interface PreparedSshEnvironment {
   readonly bootstrap: DesktopSshEnvironmentBootstrap;
