@@ -797,3 +797,27 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "one failed journal read after a long gap waits; only 2 hours of failed reads stop the record",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the add left its entry open
+        // The hub was off overnight; the first read after it fails once.
+        yield* TestClock.adjust(8 * HOUR);
+        host.control.journalUnreadable = true;
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+        yield* TestClock.adjust(2 * HOUR);
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "unknown",
+          message: expect.stringContaining("for two hours"),
+        });
+      }),
+    ),
+);

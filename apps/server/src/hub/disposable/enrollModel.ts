@@ -21,6 +21,8 @@ const Enroll = Schema.Struct({
       sends: Schema.optionalKey(Schema.Number),
       /** When GOAT first read the entry as open. */
       openSinceMs: Schema.optionalKey(Schema.Number),
+      /** When the journal first could not be read, since the last answer it gave. */
+      unreadableSinceMs: Schema.optionalKey(Schema.Number),
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),

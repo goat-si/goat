@@ -328,7 +328,12 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     outcome: LinkOutcome,
     sent: boolean,
   ) {
-    const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
+    const { unreadableSinceMs, ...answered } = enroll.link ?? { attempt: 1, intentAtMs: 0 };
+    // Any answer the journal gave ends a run of unreadable reads.
+    const link =
+      outcome.kind === "unreadable" && unreadableSinceMs !== undefined
+        ? { ...answered, unreadableSinceMs }
+        : answered;
     const as = (result: string): Enroll => ({ ...enroll, link: { ...link, outcome: result } });
     switch (outcome.kind) {
       case "committed":
@@ -363,14 +368,23 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         }
         return "resend" as const;
       }
-      case "unreadable":
-        // The same bound as "not found": past 2 hours a person reads the journal instead.
-        if ((yield* Clock.currentTimeMillis) - link.intentAtMs >= OPERATION_REPLAY_MS) {
-          yield* stop(row, as("journal_unreadable"), "journal_unreadable", { state: "unknown" });
+      case "unreadable": {
+        // A person reads the journal once it has failed for 2 hours and the id is 2 hours old.
+        const nowMs = yield* Clock.currentTimeMillis;
+        if (unreadableSinceMs === undefined) {
+          yield* note(row, {
+            ...enroll,
+            link: { ...link, outcome: "journal_unreadable", unreadableSinceMs: nowMs },
+          });
           return "done" as const;
         }
-        if (link.outcome !== "journal_unreadable") yield* note(row, as("journal_unreadable"));
+        if (
+          nowMs - unreadableSinceMs >= OPERATION_REPLAY_MS &&
+          nowMs - link.intentAtMs >= OPERATION_REPLAY_MS
+        )
+          yield* stop(row, as("journal_unreadable"), "journal_unreadable", { state: "unknown" });
         return "done" as const;
+      }
       case "not_found": {
         const age = (yield* Clock.currentTimeMillis) - link.intentAtMs;
         // After 2 hours the journal may have dropped a settled entry, so the id says nothing.
