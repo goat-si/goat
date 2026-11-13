@@ -41,6 +41,8 @@ import { disposableKnownHosts } from "./routeContract.ts";
 // ocx link add gives up at 360 s; the margin lets it report before GOAT stops waiting.
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
+/** The identity file form OpenCodex accepts (link.route/2): absolute, of letters, digits and ._+/-. */
+const OPENCODEX_KEY_PATH = /^\/[A-Za-z0-9._+/-]+$/u;
 type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
 // Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
 const ENROLL_LIMIT = 100;
@@ -435,6 +437,10 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         });
       return;
     }
+    // OpenCodex refuses any other identity path at probe, before its journal opens.
+    const key = yield* machineKey.identity.pipe(Effect.option);
+    if (key._tag === "Some" && !OPENCODEX_KEY_PATH.test(key.value.privateKeyFile))
+      return yield* stop(row, enroll, "machine_key_path");
     const pin = yield* pinHolds(row, route);
     if (pin === "changed") return yield* conflict(row, enroll, "pin_changed");
     if (pin === "unknown") return;

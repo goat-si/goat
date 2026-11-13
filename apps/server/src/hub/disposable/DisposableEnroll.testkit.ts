@@ -10,15 +10,18 @@ import type { DisposableRoute } from "./routeContract.ts";
 
 export const MACHINE_KEY_FILE = "/srv/goat/disposable/machine_ed25519";
 export const MACHINE_KEY_LINE = "ssh-ed25519 " + "A".repeat(68) + " goat-disposable";
-const IDENTITY = { privateKeyFile: MACHINE_KEY_FILE, publicLine: MACHINE_KEY_LINE };
 /** A key that exists once `identity` made it; `known` only reads. */
-const fakeMachineKey = (control: { keysMade: number }) =>
+const fakeMachineKey = (control: { keysMade: number; keyFile: string }) =>
   MachineKey.of({
     identity: Effect.sync(() => {
       if (control.keysMade === 0) control.keysMade = 1;
-      return IDENTITY;
+      return { privateKeyFile: control.keyFile, publicLine: MACHINE_KEY_LINE };
     }),
-    known: Effect.sync(() => (control.keysMade === 0 ? undefined : IDENTITY)),
+    known: Effect.sync(() =>
+      control.keysMade === 0
+        ? undefined
+        : { privateKeyFile: control.keyFile, publicLine: MACHINE_KEY_LINE },
+    ),
   });
 
 export const penRouteOf = (node: PenNode, hostKey = "ssh-ed25519 " + "K".repeat(68)) =>
@@ -95,6 +98,7 @@ export const fakeEnrollHost = () => {
     calls: [] as Array<ReadonlyArray<string>>,
     statusUnreadable: false,
     keysMade: 0,
+    keyFile: MACHINE_KEY_FILE,
     /** Hold Pen's route read, the reach, or the journal read until a test releases them. */
     holdRoute: undefined as Hold | undefined,
     holdReach: undefined as Hold | undefined,

@@ -225,6 +225,8 @@ const STOPS: Record<string, string> = {
   link_attempts_used: "Three link attempts failed.",
   journal_unreadable:
     "OpenCodex's link operation journal could not be read for two hours after GOAT sent the link; check it on the hub with ocx link operations.",
+  machine_key_path:
+    "OpenCodex accepts a key file path of letters, digits and . _ + / - only, and the path of GOAT's state folder holds another character.",
   link_stuck_open:
     "OpenCodex left the link operation open and did not settle it when GOAT repeated it.",
   link_not_started:

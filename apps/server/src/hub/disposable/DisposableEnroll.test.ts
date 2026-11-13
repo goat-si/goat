@@ -734,3 +734,24 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a machine key path OpenCodex would refuse stops the link before any ocx", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      // OpenCodex takes an identity file of letters, digits and ._+/- only.
+      host.control.keyFile = "/Users/a person/.goat/userdata/disposable/machine_ed25519";
+      yield* enroll;
+      host.control.keyFile = MACHINE_KEY_FILE;
+      yield* enroll;
+      host.control.keyFile = "/srv/goat~x/disposable/machine_ed25519";
+      yield* enroll;
+      expect(linkAdds(host.control.calls)).toEqual([]);
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "paused",
+        message: expect.stringContaining("state folder"),
+      });
+    }),
+  ),
+);
