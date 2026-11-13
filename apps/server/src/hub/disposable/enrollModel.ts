@@ -24,6 +24,8 @@ const Enroll = Schema.Struct({
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),
+  /** The folder others can write that holds the link (key_dir_unsafe), for the person's chmod. */
+  keyDir: Schema.optionalKey(Schema.String),
   /** Why the attach stopped and only a person can move it on. */
   stop: Schema.optionalKey(Schema.String),
 });
@@ -256,6 +258,8 @@ const WAITING: Record<string, string> = {
     "ssh found no host key in GOAT's known_hosts for this machine; GOAT writes it again on the next pass.",
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
+  key_dir_unsafe:
+    "OpenCodex refuses a key under a folder others can write; GOAT tries again on the next pass.",
   machine_key_unusable:
     "This hub's machine key cannot be used: GOAT cannot read it, or others can.",
   opencodex_unsupported:
@@ -350,6 +354,16 @@ export const enrollMessage = (
               name + "'s route is recorded; reaching it with the hub's machine key.") +
             " " +
             keyStep,
+          nextAction: null,
+        };
+      if (enroll.link?.outcome === "key_dir_unsafe" && enroll.keyDir !== undefined)
+        return {
+          message:
+            "OpenCodex refuses a key under a folder others can write, and " +
+            enroll.keyDir +
+            " can be written by its group or others. Run chmod go-w " +
+            enroll.keyDir +
+            " on the hub; GOAT tries again on the next pass.",
           nextAction: null,
         };
       return {

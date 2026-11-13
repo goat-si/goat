@@ -6,6 +6,7 @@ import type { OcxOutput, PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
 import { EnrollHost, KnownHostsError, type ReachAnswer } from "./EnrollHost.ts";
 import { MachineKey } from "./machineKey.ts";
+import type { KeyPathAnswer } from "./keyPath.ts";
 import type { DisposableRoute } from "./routeContract.ts";
 
 export const MACHINE_KEY_FILE = "/srv/goat/disposable/machine_ed25519";
@@ -99,6 +100,8 @@ export const fakeEnrollHost = () => {
     statusUnreadable: false,
     keysMade: 0,
     keyFile: MACHINE_KEY_FILE,
+    /** What the check of the key's path for OpenCodex answers. */
+    keyPath: { kind: "ok" } as KeyPathAnswer,
     /** Hold Pen's route read, the reach, or the journal read until a test releases them. */
     holdRoute: undefined as Hold | undefined,
     holdReach: undefined as Hold | undefined,
@@ -161,6 +164,7 @@ export const fakeEnrollHost = () => {
         Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
+    keyPath: () => Effect.sync(() => control.keyPath),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(

@@ -35,14 +35,13 @@ import {
   verifyLink,
 } from "./enrollModel.ts";
 import { declares, HomeContracts } from "./features.ts";
+import type { KeyPathAnswer } from "./keyPath.ts";
 import { MachineKey } from "./machineKey.ts";
 import { disposableKnownHosts } from "./routeContract.ts";
 
 // ocx link add gives up at 360 s; the margin lets it report before GOAT stops waiting.
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
-/** The identity file form OpenCodex accepts (link.route/2): absolute, of letters, digits and ._+/-. */
-const OPENCODEX_KEY_PATH = /^\/[A-Za-z0-9._+/-]+$/u;
 type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
 // Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
 const ENROLL_LIMIT = 100;
@@ -414,6 +413,34 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     yield* record(row, enroll, yield* readBack(row, operationId), true);
   });
 
+  /**
+   * Whether OpenCodex can use the machine key's path, checked with its own rule before an id is
+   * stored or sent (keyPath.ts). A folder others can write holds the link until it is fixed; a path
+   * OpenCodex can never take stops it.
+   */
+  const keyUsable = Effect.fn("DisposableEnroll.keyUsable")(function* (row: Row, enroll: Enroll) {
+    const key = yield* machineKey.identity.pipe(Effect.option);
+    const answer: KeyPathAnswer =
+      key._tag === "None"
+        ? { kind: "key", problem: "missing" }
+        : yield* host.keyPath(key.value.privateKeyFile);
+    if (answer.kind === "ok") return true;
+    if (answer.kind === "form") {
+      yield* stop(row, enroll, "machine_key_path");
+      return false;
+    }
+    const link = { attempt: 0, intentAtMs: 0, ...enroll.link };
+    const outcome = answer.kind === "directory" ? "key_dir_unsafe" : "machine_key_unusable";
+    const keyDir = answer.kind === "directory" ? answer.directory : undefined;
+    if (link.outcome !== outcome || enroll.keyDir !== keyDir)
+      yield* note(row, {
+        ...enroll,
+        ...(keyDir === undefined ? {} : { keyDir }),
+        link: { ...link, outcome },
+      });
+    return false;
+  });
+
   const linkStep = Effect.fn("DisposableEnroll.link")(function* (
     row: Row,
     before: ServerSettings,
@@ -437,10 +464,6 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         });
       return;
     }
-    // OpenCodex refuses any other identity path at probe, before its journal opens.
-    const key = yield* machineKey.identity.pipe(Effect.option);
-    if (key._tag === "Some" && !OPENCODEX_KEY_PATH.test(key.value.privateKeyFile))
-      return yield* stop(row, enroll, "machine_key_path");
     const pin = yield* pinHolds(row, route);
     if (pin === "changed") return yield* conflict(row, enroll, "pin_changed");
     if (pin === "unknown") return;
@@ -448,7 +471,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     if (stored !== null) {
       // A stored id is read back first; it is sent again only when OpenCodex never journalled it.
       const settled = yield* record(row, enroll, yield* readBack(row, stored), false);
-      if (settled !== "resend") return;
+      if (settled !== "resend" || !(yield* keyUsable(row, enroll))) return;
       // A resend is a new effect: admitted again, with the authority as it is now.
       const current = yield* settingsNow;
       if (current === undefined) return;
@@ -463,6 +486,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       if (again !== undefined && due(again)) yield* dispatch(again, resent, route, stored);
       return;
     }
+    if (!(yield* keyUsable(row, enroll))) return;
     // Effect admission: the operation id is stored under the settings lock before ocx starts.
     const attempt = (enroll.link?.attempt ?? 0) + 1;
     const operationId = linkOperationId(row.attach_id, attempt);

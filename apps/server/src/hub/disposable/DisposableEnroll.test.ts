@@ -741,11 +741,9 @@ it.effect("a machine key path OpenCodex would refuse stops the link before any o
       withIdentity(home);
       const { attachId } = yield* joined(pen, host, 1);
       // OpenCodex takes an identity file of letters, digits and ._+/- only.
-      host.control.keyFile = "/Users/a person/.goat/userdata/disposable/machine_ed25519";
+      host.control.keyPath = { kind: "form" };
       yield* enroll;
-      host.control.keyFile = MACHINE_KEY_FILE;
       yield* enroll;
-      host.control.keyFile = "/srv/goat~x/disposable/machine_ed25519";
       yield* enroll;
       expect(linkAdds(host.control.calls)).toEqual([]);
       expect(yield* listed(attachId)).toMatchObject({
@@ -776,4 +774,26 @@ it.effect("an entry that stays open through three sends of its id stops for a pe
       });
     }),
   ),
+);
+
+it.effect(
+  "a key folder others can write holds the link with the folder and the chmod named, and it goes on once fixed",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.keyPath = { kind: "directory", directory: "/home/shared" };
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        expect(host.control.calls.filter((args) => args[0] === "link")).toEqual([]);
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "attaching",
+          message: expect.stringContaining("chmod go-w /home/shared"),
+        });
+        host.control.keyPath = { kind: "ok" };
+        yield* enroll;
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
+      }),
+    ),
 );

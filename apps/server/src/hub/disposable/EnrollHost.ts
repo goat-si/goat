@@ -13,6 +13,7 @@ import * as ProcessRunner from "../../processRunner.ts";
 import * as Settings from "../../serverSettings.ts";
 import { HubOcx, type OcxOutput, type PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
+import { type KeyPathAnswer, keyPathFor } from "./keyPath.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
 /** How a reach ended; ssh's own lines decide it, and none of them is kept. */
@@ -81,6 +82,8 @@ export class EnrollHost extends Context.Service<
     readonly reach: (route: DisposableRoute) => Effect.Effect<ReachAnswer>;
     /** Whether this Home's OpenCodex serves its link operation journal. */
     readonly journalServed: Effect.Effect<boolean>;
+    /** Whether OpenCodex can use the machine key at this path, GOAT's own folders tightened. */
+    readonly keyPath: (keyFile: string) => Effect.Effect<KeyPathAnswer>;
     /** ocx on this Home; undefined when it could not be run. */
     readonly ocx: (
       args: ReadonlyArray<string>,
@@ -101,7 +104,10 @@ export const layer = Layer.effect(
     const runner = yield* ProcessRunner.ProcessRunner;
     const inventory = yield* Inventory.OpenCodexInventory;
     const environment = yield* HostProcess.Environment;
-    const directory = path.join((yield* ServerConfig).stateDir, "disposable", "known_hosts");
+    const config = yield* ServerConfig;
+    const directory = path.join(config.stateDir, "disposable", "known_hosts");
+    // The folders GOAT made and may tighten; anything above them it only names.
+    const own = [config.baseDir, config.stateDir, path.join(config.stateDir, "disposable")];
     return EnrollHost.of({
       route: Effect.fn("EnrollHost.route")(
         function* (node) {
@@ -111,6 +117,15 @@ export const layer = Layer.effect(
         },
         Effect.orElseSucceed(() => undefined),
       ),
+      keyPath: Effect.fn("EnrollHost.keyPath")(function* (keyFile) {
+        // A walk that fails names the key's own folder, which a person can check.
+        return yield* keyPathFor(keyFile, own).pipe(
+          Effect.orElseSucceed((): KeyPathAnswer => ({
+            kind: "directory",
+            directory: path.dirname(keyFile),
+          })),
+        );
+      }),
       knownHosts: Effect.fn("EnrollHost.knownHosts")(
         function* (attachId, line) {
           const file = path.join(directory, attachId);
