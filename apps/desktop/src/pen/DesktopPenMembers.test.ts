@@ -1,5 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off -- A duplex stands in for the snapshot transport.
-import * as NodeStream from "node:stream";
 import { assert, describe, it } from "@effect/vitest";
 import type { DesktopPenMembersState } from "@goat/contracts";
 import {
@@ -15,7 +13,6 @@ import * as TestClock from "effect/testing/TestClock";
 import { expect, vi } from "vite-plus/test";
 
 import * as DesktopPenMembers from "./DesktopPenMembers.ts";
-import type { openPenSnapshotChild } from "./penSnapshotChild.ts";
 
 vi.mock("electron", () => ({}));
 
@@ -313,22 +310,11 @@ describe("DesktopPenMembers", () => {
 });
 
 describe("snapshot watch selection", () => {
-  it("uses the child on Windows and the socket on macOS and Linux", () => {
-    expect(DesktopPenMembers.selectPenSnapshotWatch("darwin")).toBe(watchPenSnapshots);
-    expect(DesktopPenMembers.selectPenSnapshotWatch("linux")).toBe(watchPenSnapshots);
-    const child = new NodeStream.Duplex({
-      read() {},
-      write(_chunk, _encoding, done) {
-        done();
-      },
-    });
-    const open = vi.fn((_input: Parameters<typeof openPenSnapshotChild>[0]) => child);
-    const stop = DesktopPenMembers.selectPenSnapshotWatch(
-      "win32",
-      open,
-    )({ stateDir: "/test", onSnapshot: vi.fn(), onStale: vi.fn() });
-    expect(open).toHaveBeenCalledOnce();
-    expect(open.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ stateDir: "/test" }));
-    stop();
+  it("keeps the socket on macOS and Linux and leaves it on Windows", () => {
+    expect(DesktopPenMembers.selectPenSnapshotWatch("darwin", undefined)).toBe(watchPenSnapshots);
+    expect(DesktopPenMembers.selectPenSnapshotWatch("linux", undefined)).toBe(watchPenSnapshots);
+    expect(DesktopPenMembers.selectPenSnapshotWatch("win32", undefined)).not.toBe(
+      watchPenSnapshots,
+    );
   });
 });

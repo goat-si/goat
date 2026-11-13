@@ -36,10 +36,11 @@ export function openPenSnapshotChild(input: {
       if (child && !exited && child.exitCode === null && child.signalCode === null) child.kill();
     },
   });
-  void Promise.resolve()
-    .then(input.resolveBinary)
-    .then((binary) => {
-      if (destroyed) return;
+  const failed = (error: unknown) =>
+    fail(error instanceof Error ? error : new Error(String(error)));
+  const start = (binary: string | undefined) => {
+    if (destroyed) return;
+    try {
       if (!binary || !NodePath.isAbsolute(binary)) throw new Error("no Pen binary");
       child = guardChild(
         input.spawn(binary, ["ls", "--watch", "--snapshot", "--until-stdin-closes"], {
@@ -70,7 +71,17 @@ export function openPenSnapshotChild(input: {
         ended = true;
         emitter.emit("close");
       });
-    })
-    .catch((error: unknown) => fail(error instanceof Error ? error : new Error(String(error))));
+    } catch (error) {
+      failed(error);
+    }
+  };
+  let lookup: Promise<string | undefined>;
+  try {
+    lookup = input.resolveBinary();
+  } catch (error) {
+    lookup = Promise.reject(error);
+  }
+  // A reaction runs after this call returns, so the watch has attached its listeners by then.
+  void lookup.then(start, failed);
   return stream;
 }

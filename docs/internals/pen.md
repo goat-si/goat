@@ -277,11 +277,11 @@ alias. The Pen-native path stays closed (next section).
   Windows child outlives its parent and would hold one of the 8 watcher slots. A GOAT server on
   Windows (`PenHubNodes`) still uses the socket and so lists nothing.
 - **The Windows exact-route check is narrower than what pen can write.** It accepts only an
-  absolute program and `--home`, and one known_hosts path without whitespace: `ssh -G` prints
+  absolute `pen.exe` and `--home`, and one known_hosts path without whitespace: `ssh -G` prints
   file lists space-joined and unquoted, so a path with a space cannot be told from two files, and
-  Pen's own block cannot settle it because an earlier block may have set them. The forms it
-  accepts are what Win32-OpenSSH prints on the Windows CI job
-  (`packages/ssh/src/penAliasWindows.test.ts` runs the real `ssh -G`), not what its source suggests.
+  Pen's own block cannot settle it because an earlier block may have set them. What
+  Win32-OpenSSH prints is taken from the hosted Windows job, where
+  `packages/ssh/src/penAliasWindows.test.ts` runs the real `ssh -G`, not from its source.
 - **The desktop dials a Pen-only machine only while the registry's gate lets it.** An environment
   whose every route is a managed Pen route connects only while its id is in the registry's live
   set (`packages/client-runtime/src/connection/penLiveSet.ts`): the member is online in the latest

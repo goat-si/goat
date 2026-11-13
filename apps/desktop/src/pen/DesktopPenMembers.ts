@@ -249,16 +249,16 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
 
 export function selectPenSnapshotWatch(
   platform: NodeJS.Platform,
-  openChild: typeof openPenSnapshotChild = openPenSnapshotChild,
+  searchPath: string | undefined,
 ): PenMembershipSource["watch"] {
   if (platform !== "win32") return watchPenSnapshots;
   return (input) =>
     watchPenSnapshots({
       ...input,
       connect: () =>
-        openChild({
+        openPenSnapshotChild({
           stateDir: input.stateDir,
-          resolveBinary: () => resolvePenBinary({ platform, path: process.env.PATH }),
+          resolveBinary: () => resolvePenBinary({ platform, path: searchPath }),
           spawn: (path, args, options) => NodeChildProcess.spawn(path, [...args], options),
         }),
     });
@@ -270,15 +270,16 @@ export const layer = Layer.effect(
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const platform = yield* HostProcess.Platform;
+    const hostEnvironment = yield* HostProcess.Environment;
     const fs = yield* FileSystem.FileSystem;
     const services = yield* Effect.context<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
     >();
     return yield* make({
-      stateDir: penStateDir(process.env, environment.homeDirectory),
+      stateDir: penStateDir(hostEnvironment, environment.homeDirectory),
       stateDirExists: (stateDir) => fs.exists(stateDir).pipe(Effect.orElseSucceed(() => false)),
       leftMesh: (stateDir) => Effect.promise(() => penLeftMesh(stateDir)),
-      watch: selectPenSnapshotWatch(platform),
+      watch: selectPenSnapshotWatch(platform, hostEnvironment.PATH),
       inspect: (alias) =>
         inspectPenExactAlias({ alias, homeDirectory: environment.homeDirectory }).pipe(
           Effect.provide(services),

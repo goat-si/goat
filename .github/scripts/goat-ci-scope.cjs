@@ -79,8 +79,11 @@ const WINDOWS_SUITES = [
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
   "apps/desktop/native/computer-use-helper-windows/",
+  "apps/desktop/src/pen/penPipe",
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
+  "packages/ssh/src/penAlias.",
+  "packages/ssh/src/penRoute",
   "patches/node-pty@",
 ];
 const WINDOWS_TASK = "test-windows";

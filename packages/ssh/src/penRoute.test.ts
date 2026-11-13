@@ -58,6 +58,7 @@ describe("exact Pen route", () => {
     ["controlmaster", "true"],
     ["controlpath", "/tmp/socket"],
     ["proxyjump", "jump"],
+    ["nohostauthenticationforproxycommand", "yes"],
     ["knownhostscommand", "command"],
     ["userknownhostsfile", `${file} /tmp/other`],
   ])("refuses unsafe %s = %s", (key, value) => {
@@ -125,6 +126,7 @@ describe("Windows exact Pen route", () => {
     ["proxyjump", "jump"],
     ["controlmaster", "auto"],
     ["controlpath", "C:/socket"],
+    ["nohostauthenticationforproxycommand", "yes"],
   ])("refuses %s", (key, value) => {
     const f = winFacts();
     f.settings.set(key, value);

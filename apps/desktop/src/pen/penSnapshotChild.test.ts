@@ -135,7 +135,6 @@ describe("Pen snapshot child", () => {
   it("reports a thrown spawn as connect failure", async () => {
     const f = fixture(async () => binary, true);
     await f.ready;
-    await Promise.resolve();
     expect(f.events).toEqual(["connect"]);
   });
   it("reports a rejected binary lookup", async () => {
@@ -180,8 +179,8 @@ describe("Pen snapshot child", () => {
     const f = fixture(() => pending);
     f.stop();
     resolve(binary);
+    // The adapter's reaction on this promise was registered first, so it has run by now.
     await pending;
-    await Promise.resolve();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.events).toEqual([]);
   });

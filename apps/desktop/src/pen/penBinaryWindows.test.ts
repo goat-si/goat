@@ -24,12 +24,7 @@ describe("Windows Pen binary lookup", () => {
           }),
         ).toBe(await NodeFSP.realpath(NodePath.join(bin, "pen.exe")));
         expect(await resolvePenBinary({ platform: "win32", path: empty })).toBeUndefined();
-        expect(
-          await resolvePenBinary({
-            platform: "win32",
-            path: NodePath.relative(process.cwd(), bin),
-          }),
-        ).toBeUndefined();
+        expect(await resolvePenBinary({ platform: "win32", path: "bin" })).toBeUndefined();
       } finally {
         await NodeFSP.rm(root, { recursive: true, force: true });
       }
