@@ -681,14 +681,15 @@ it.effect("recordingStop can finish an active recording after a tab is fenced", 
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
-      expect((yield* f.call(f.tabId, "recordingStart", {}).pipe(Effect.result))._tag).toBe(
-        "Success",
-      );
+      // The whole result, so a failure names its error.
+      expect(yield* f.call(f.tabId, "recordingStart", {}).pipe(Effect.result)).toMatchObject({
+        _tag: "Success",
+      });
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
-      expect((yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result))._tag).toBe(
-        "Success",
-      );
+      expect(yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result)).toMatchObject({
+        _tag: "Success",
+      });
     }),
   ).pipe(Effect.provide(layer)),
 );
