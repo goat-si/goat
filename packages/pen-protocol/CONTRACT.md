@@ -863,6 +863,9 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
 - The invite's entry in `offers.json` keeps the subject. In "Join" step 3 the inviter refuses (`refused`, then 4401)
   a card whose signPub, noisePub or name differs from the subject before it burns the invite, so a wrong machine
   holding the token cannot use it up; the burn checks the subject again.
+- `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
+  `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
+  `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to.
 - A node older than this decodes `subject` as the string of the `revoke` op, answers `{"error":"bad request"}` and
   makes nothing, so a caller never gets an unbound token in place of a bound one.
 
@@ -970,7 +973,8 @@ v1.2 member-only reader refuses both valid new forms.
   local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
   exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.
 - v1.3 (2026-11-13): node side only, no wire change: "Bound invites": control op `invite` with a `subject` makes an invite that
-  admits only that machine's keys and name, refused before the burn otherwise.
+  admits only that machine's keys and name, refused before the burn otherwise; `pen identity --json` prints a machine's
+  keys before it joins.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.
