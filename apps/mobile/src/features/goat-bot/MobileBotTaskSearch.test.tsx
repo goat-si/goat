@@ -80,7 +80,7 @@ async function type(value: string) {
 const wait = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
 const text = () => container.textContent ?? "";
 const button = (label: string) =>
-  [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+  [...container.querySelectorAll("button")].find((item) => item.textContent?.startsWith(label));
 const hit = (taskId: string, title: string, titleTruncated?: boolean) => ({
   taskId,
   title,
