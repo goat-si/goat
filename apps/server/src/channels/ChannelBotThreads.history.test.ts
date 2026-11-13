@@ -4,10 +4,12 @@ import {
   CHANNEL_BOT_THREADS_HISTORY_LIMIT,
   ChannelChildWorkId,
   ChannelInputId,
+  WsChannelRpcGroup,
   ChannelTaskId,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
@@ -81,6 +83,11 @@ describe("ChannelBotThreads history", () => {
           assert.strictEqual(known.task.row.task.title, "a".repeat(199));
           assert.strictEqual(known.task.row.task.titleTruncated, true);
         }
+        const rpc = WsChannelRpcGroup.requests.get("channel.getBotTask");
+        if (rpc === undefined) throw new Error("missing lookup RPC");
+        const codec = Schema.toCodecJson(rpc.successSchema);
+        const decoded = Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(known));
+        assert.deepStrictEqual(decoded, known);
         assert.strictEqual(known.codingRows[0]?.title, "x".repeat(199) + "😀");
         assert.strictEqual(known.codingRows[0]?.titleTruncated, true);
         const ledger = yield* ChannelLedger.ChannelLedger;
