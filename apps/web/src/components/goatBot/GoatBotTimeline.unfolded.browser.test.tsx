@@ -183,3 +183,94 @@ it("failing-first: another device's matching folded answer cannot consume a loca
     scroll.getBoundingClientRect().bottom + 1,
   );
 });
+
+it("failing-first: warm live history cues both catch-up and later replies while reading above", async () => {
+  const rows: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `m-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const reply = (id: string): GoatBotRow => ({
+    kind: "bot",
+    id,
+    text: id,
+    tone: "reply",
+    proactive: false,
+    replyTo: null,
+    options: [],
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+  });
+  const baselineIds = new Set(rows.map((row) => row.id));
+  const view = (shown: ReadonlyArray<GoatBotRow>) => (
+    <GoatBotTimeline
+      rows={shown}
+      onRetry={() => {}}
+      {...{ baselineIds, sourceIds: new Set(shown.map((row) => row.id)) }}
+    />
+  );
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  await using screen = await render(view(rows), { container: host, router: false }); // No links in these rows.
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(view([...rows, reply("catch-up")]));
+  expect(screen.container.textContent).toContain("Jump to latest");
+  await screen.rerender(view([...rows, reply("catch-up"), reply("fresh")]));
+  expect(screen.container.textContent).toContain("Jump to latest (2 new)");
+});
+
+it("guard: an arrival first exposed while following does not become new after scrolling up", async () => {
+  const rows: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `m-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const reply: GoatBotRow = {
+    kind: "bot",
+    id: "filtered",
+    text: "Reply",
+    tone: "reply",
+    proactive: false,
+    replyTo: null,
+    options: [],
+    createdAt: "2026-10-12T09:41:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+  };
+  const baselineIds = new Set(rows.map((row) => row.id));
+  const sourceIds = new Set([...baselineIds, "filtered"]);
+  const view = (shown: ReadonlyArray<GoatBotRow>) => (
+    <GoatBotTimeline rows={shown} onRetry={() => {}} {...{ baselineIds, sourceIds }} />
+  );
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  await using screen = await render(view(rows), { container: host, router: false }); // No links in these rows.
+  await screen.rerender(view([...rows, reply]));
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(view(rows));
+  await screen.rerender(view([...rows, reply]));
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
