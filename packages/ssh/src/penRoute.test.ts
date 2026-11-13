@@ -151,32 +151,23 @@ describe("Windows global known hosts", () => {
   it("accepts only the unambiguous default list or none", () => {
     const files = ["C:\\ProgramData\\ssh/ssh_known_hosts", "C:\\ProgramData\\ssh/ssh_known_hosts2"];
     const options = { platform: "win32" as const, programData: "C:\\ProgramData" };
+    const printed = "__PROGRAMDATA__\\ssh/ssh_known_hosts __PROGRAMDATA__\\ssh/ssh_known_hosts2";
     expect(penGlobalFiles(new Map(), options)).toEqual([]);
-    expect(penGlobalFiles(new Map([["globalknownhostsfile", files.join(" ")]]), options)).toEqual(
-      files,
-    );
+    expect(penGlobalFiles(new Map([["globalknownhostsfile", printed]]), options)).toEqual(files);
     expect(
-      penGlobalFiles(
-        new Map([
-          [
-            "globalknownhostsfile",
-            "__PROGRAMDATA__\\ssh/ssh_known_hosts __PROGRAMDATA__\\ssh/ssh_known_hosts2",
-          ],
-        ]),
-        options,
-      ),
-    ).toEqual(files);
+      penGlobalFiles(new Map([["globalknownhostsfile", files.join(" ")]]), options),
+    ).toBeUndefined();
     expect(
       penGlobalFiles(new Map([["globalknownhostsfile", "C:/custom"]]), options),
     ).toBeUndefined();
     expect(
-      penGlobalFiles(new Map([["globalknownhostsfile", files.join(" ")]]), {
+      penGlobalFiles(new Map([["globalknownhostsfile", printed]]), {
         ...options,
         programData: "C:\\Program Data",
       }),
     ).toBeUndefined();
     expect(
-      penGlobalFiles(new Map([["globalknownhostsfile", files.join(" ")]]), { platform: "win32" }),
+      penGlobalFiles(new Map([["globalknownhostsfile", printed]]), { platform: "win32" }),
     ).toBeUndefined();
   });
 });

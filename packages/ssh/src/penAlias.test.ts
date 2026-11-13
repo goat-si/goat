@@ -126,7 +126,7 @@ it.effect.each(["trusted", "joined-collision"] as const)("inspects Windows %s", 
       "C:\\ProgramData\\ssh/ssh_known_hosts2",
     ];
     const known = "C:\\Users\\jun\\.ssh\\pen\\known_hosts";
-    const settings = `hostname ${alias}\nport 22\nproxycommand "C:\\pen.exe" pipe --node ${node} --noise ${noise} 22\nproxyjump none\nstricthostkeychecking yes\ncontrolmaster no\nuserknownhostsfile C:/Users/jun/.ssh/pen/known_hosts\nglobalknownhostsfile ${global.join(" ")}\n`;
+    const settings = `hostname ${alias}\nport 22\nproxycommand "C:\\pen.exe" pipe --node ${node} --noise ${noise} 22\nproxyjump none\nstricthostkeychecking yes\ncontrolmaster no\nuserknownhostsfile C:/Users/jun/.ssh/pen/known_hosts\nglobalknownhostsfile __PROGRAMDATA__\\ssh/ssh_known_hosts __PROGRAMDATA__\\ssh/ssh_known_hosts2\n`;
     const spawner = lazyChildProcessSpawner((command) => {
       if (command._tag !== "StandardCommand") return Effect.die("pipeline");
       if (command.command === "fake-ssh") {
