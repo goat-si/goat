@@ -510,25 +510,30 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	select {
 	case o := <-wait:
 		outcome(o)
+		return
 	case <-sig.Cancelled:
 		reply(map[string]any{"t": "cancelled"})
+		return
 	case <-expiry:
 		if !d.inviteBook().BurnedNow(sig) {
 			reply(map[string]any{"t": "expired"})
 			return
 		}
-		// Used before it expired: the join's outcome is the answer, for as long as that join may run; past that the
-		// invite was used and this wait cannot say whom it admitted.
-		joinDone, stopJoin := inviteExpiry(meshSessionTimeout)
-		defer stopJoin()
-		select {
-		case o := <-wait:
-			outcome(o)
-		case <-joinDone:
-			reply(map[string]any{"t": "burned"})
-		case <-gone:
-		case <-ctx.Done():
-		}
+	case <-sig.Burned:
+	case <-gone:
+		return
+	case <-ctx.Done():
+		return
+	}
+	// A join used the invite: its outcome is the answer, for as long as that join may run, counted from here; past
+	// that the invite was used and this wait cannot say whom it admitted.
+	joinDone, stopJoin := inviteExpiry(meshSessionTimeout)
+	defer stopJoin()
+	select {
+	case o := <-wait:
+		outcome(o)
+	case <-joinDone:
+		reply(map[string]any{"t": "burned"})
 	case <-gone:
 	case <-ctx.Done():
 	}

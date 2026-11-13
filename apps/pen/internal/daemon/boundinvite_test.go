@@ -569,8 +569,13 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	oldLink, oldExpiry := serveJoinLink, inviteExpiry
 	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
-	fire := make(chan time.Time)
-	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) { return fire, func() bool { return true } }
+	// Each timer is its own; the first is the invite's expiry, buffered so firing it never waits for the caller.
+	timers := make(chan chan time.Time, 2)
+	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) {
+		ch := make(chan time.Time, 1)
+		timers <- ch
+		return ch, func() bool { return true }
+	}
 	t.Cleanup(func() { serveJoinLink, inviteExpiry = oldLink, oldExpiry })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -595,7 +600,7 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 	joined := make(chan error, 1)
 	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
 	<-entered
-	fire <- time.Now() // taken by the waiting caller while the burned invite's join is held
+	(<-timers) <- time.Now() // the expiry fires while the burned invite's join is held
 	close(release)
 	if err := <-joined; err != nil {
 		t.Fatal(err)
@@ -606,8 +611,8 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 	}
 }
 
-// A wait on an invite used before its expiry whose join never reports is answered burned once the join's own time
-// is up, instead of staying open.
+// A wait on an invite whose join used it and never reports is answered burned once that join's own time is up,
+// counted from the burn, however far off the invite's expiry is.
 func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	defer close(release)
@@ -642,8 +647,8 @@ func TestAWaitOnAUsedInviteWhoseJoinNeverReportsEnds(t *testing.T) {
 	tok, _ := mesh.ParseToken(r.Token)
 	go Join(ctx, jst, jid, tok, "j")
 	<-entered
-	(<-timers) <- time.Now() // the invite's expiry, while its join is held after the burn
-	(<-timers) <- time.Now() // the join's own time is up
+	<-timers                 // the invite's expiry, an hour off, never fires
+	(<-timers) <- time.Now() // the join's own time, counted from the burn, is up
 	var ev struct{ T string }
 	if err := cl.Next(&ev); err != nil || ev.T != "burned" {
 		t.Fatalf("the waiting caller got %+v (%v); want burned", ev, err)
