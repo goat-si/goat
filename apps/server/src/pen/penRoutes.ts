@@ -67,6 +67,13 @@ const ROUTES: ReadonlyArray<PenRoute> = [
     upgrade: false,
   },
   {
+    methods: new Set(["GET"]),
+    path: path("/api/auth/session"),
+    grants: [{ credential: "proxy" }],
+    query: "none",
+    upgrade: false,
+  },
+  {
     methods: READ,
     path: path("/api/orchestration/shell"),
     grants: proxyRead,
@@ -114,6 +121,7 @@ const CREDENTIAL_QUERY_NAMES: ReadonlySet<string> = new Set([
 /** What the hub proxy forwards on an upstream socket (hubProxy/http.ts FORWARDED_WEBSOCKET_QUERY_PARAMS). */
 const WEBSOCKET_QUERY_NAMES: ReadonlySet<string> = new Set([
   "orchestrationProtocol",
+  "frameParts",
   "clientSurface",
   "clientAppVersion",
   "clientDeviceType",

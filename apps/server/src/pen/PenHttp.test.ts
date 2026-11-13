@@ -5,9 +5,15 @@ import * as NodeNet from "node:net";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, EnvironmentHttpApi, HUB_PROXY_NODE_SCOPE_CEILING } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import { penConnection } from "../auth/connectionContext.testkit.ts";
+import * as AuthHttp from "../auth/http.ts";
 import { HttpRouter, HttpServerResponse } from "effect/http";
 
 import { issueAttachmentUploadUrl } from "../assets/AttachmentUpload.ts";
@@ -23,7 +29,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as PenEnablement from "./PenEnablement.ts";
 import { layerTest as layerEnablement } from "./PenEnablement.testkit.ts";
-import { dial, http, member, PIN, prove, response } from "./penDaemon.testkit.ts";
+import { dial, http, member, peerOf, PIN, prove, response } from "./penDaemon.testkit.ts";
 import { layerPenRouteGate, layerPenSessionRoute } from "./PenHttp.ts";
 import * as PenListener from "./PenListener.ts";
 import * as PenSessions from "./PenSessions.ts";
@@ -31,6 +37,7 @@ import * as PenSessions from "./PenSessions.ts";
 const layerServices = (enabled: Layer.Layer<PenEnablement.PenEnablement>) =>
   PenSessions.layer.pipe(
     Layer.provideMerge(enabled),
+    Layer.provideMerge(EnvironmentAuth.layer),
     Layer.provideMerge(SessionStore.layer),
     Layer.provideMerge(PendingAttachmentSweep.layer),
     Layer.provideMerge(AttachmentFileLeases.layer),
@@ -44,6 +51,8 @@ const layerServices = (enabled: Layer.Layer<PenEnablement.PenEnablement>) =>
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-pen-http-" })),
     Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   );
+
+class AuthTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth) {}
 
 const harness = Effect.gen(function* () {
   const seen: Array<string> = [];
@@ -62,7 +71,10 @@ const harness = Effect.gen(function* () {
         HttpRouter.add("GET", "/api/projects", record("projects")),
         HttpRouter.add("GET", "/ws", record("ws")),
         HttpRouter.add("POST", "/mcp", record("mcp")),
-        HttpRouter.add("GET", "/api/auth/session", record("auth")),
+        HttpApiBuilder.layer(AuthTestApi).pipe(
+          Layer.provide(AuthHttp.layer),
+          Layer.provide(AuthHttp.layerAuthenticatedAuth),
+        ),
       ),
       { disableListenLog: true, disableLogger: true },
     ).pipe(
@@ -137,6 +149,9 @@ it.layer(NodeServices.layer)("the Pen listener's HTTP surface (mesh link design 
       expect((yield* call(port, member("b"), "GET", "/api/projects", bearer(proxy))).status).toBe(
         401,
       );
+      expect(
+        (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(agent))).status,
+      ).toBe(404);
       expect((yield* call(port, member("a"), "POST", "/mcp", bearer(agent))).status).toBe(200);
       expect((yield* call(port, member("a"), "POST", "/mcp", bearer(proxy))).status).toBe(404);
       expect(
@@ -144,7 +159,7 @@ it.layer(NodeServices.layer)("the Pen listener's HTTP surface (mesh link design 
       ).toBe(404);
       expect(
         (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(proxy))).status,
-      ).toBe(404);
+      ).toBe(200);
       const upgrade = (token: string) => ({
         ...bearer(token),
         connection: "Upgrade",
@@ -156,6 +171,47 @@ it.layer(NodeServices.layer)("the Pen listener's HTTP surface (mesh link design 
       expect((yield* call(port, member("a"), "GET", "/ws", upgrade(proxy))).status).toBe(200);
       expect(seen).toEqual(["projects", "mcp", "ws"]);
     }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
+  );
+
+  it.effect(
+    "the real session handler reports proxy restrictions and rejects invalid member sessions",
+    () =>
+      Effect.gen(function* () {
+        const { port } = yield* harness;
+        const body = { kind: "proxy", scopes: [...HUB_PROXY_NODE_SCOPE_CEILING] };
+        const valid = yield* issue(port, member("a"), body);
+        const revoked = yield* issue(port, member("a"), body);
+        const answer = yield* call(port, member("a"), "GET", "/api/auth/session", bearer(valid));
+        expect(answer.status).toBe(200);
+        const state = JSON.parse(answer.body);
+        expect(state).toMatchObject({ authenticated: true, proxiedByHub: true });
+        expect(state.permissions).toEqual(
+          expect.arrayContaining([...HUB_PROXY_NODE_SCOPE_CEILING]),
+        );
+        expect(state.permissions).not.toContain("hub:proxy");
+        expect(
+          (yield* call(port, member("b"), "GET", "/api/auth/session", bearer(valid))).status,
+        ).toBe(401);
+        const sessions = yield* SessionStore.SessionStore;
+        const verified = yield* sessions.verify(valid, penConnection(peerOf(member("a"))).context);
+        const auth = yield* EnvironmentAuth.EnvironmentAuth;
+        expect((yield* Effect.flip(auth.issueWebSocketTicket(verified)))._tag).toBe(
+          "ServerAuthWebSocketTokenIssueError",
+        );
+        const pen = yield* PenSessions.PenSessions;
+        yield* pen.revokeExcept([]);
+        expect(
+          (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(revoked))).status,
+        ).toBe(401);
+        const fresh = yield* issue(port, member("a"), body);
+        expect(
+          (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(fresh))).status,
+        ).toBe(200);
+        yield* TestClock.adjust("12 hours");
+        expect(
+          (yield* call(port, member("a"), "GET", "/api/auth/session", bearer(fresh))).status,
+        ).toBe(401);
+      }).pipe(Effect.scoped, Effect.provide(layerServices(layerEnablement(true)))),
   );
 
   it.effect("a dispatch upload needs the member agent's bearer and a valid capability", () =>
