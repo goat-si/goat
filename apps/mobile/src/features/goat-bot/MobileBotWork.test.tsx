@@ -902,3 +902,38 @@ it("an older task marked read on its screen is read again, so it no longer shows
   });
   expect(state.lookup).toHaveBeenCalledTimes(2);
 });
+
+it("a read mark that settles after the screen moved to another bot does not reread that bot's task", async () => {
+  reset();
+  resetTaskReadAcknowledgementsForTests();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  const unread = lookedUp("completed");
+  Object.assign(unread.task.row, { unread: true, lastActivityAt: "2026-11-02T00:00:00.000Z" });
+  state.lookup.mockResolvedValueOnce(AsyncResult.success(unread));
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  let settle: (value: unknown) => void = () => {};
+  state.update.mockReturnValue(new Promise((resolve) => (settle = resolve)));
+  await render(ChannelTaskId.make("task-old"));
+  expect(state.update).toHaveBeenCalledOnce();
+  await act(async () =>
+    root?.render(
+      <WorkWithChip
+        visible
+        taskId={ChannelTaskId.make("task-old")}
+        member={{
+          botId: BotId.make("scout"),
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("scout-thread"),
+          name: "Scout",
+          defaultModelSelection: null,
+        }}
+        onOpenTask={() => {}}
+        onOpenThread={state.openThread}
+      />,
+    ),
+  );
+  expect(state.lookup).toHaveBeenCalledTimes(2);
+  await act(async () => settle(AsyncResult.success({})));
+  expect(state.lookup).toHaveBeenCalledTimes(2);
+});

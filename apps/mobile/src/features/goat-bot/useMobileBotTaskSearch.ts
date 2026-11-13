@@ -8,6 +8,9 @@ import { channelEnvironment } from "../../state/channels";
 /** Quiet time after the last keystroke before a query is sent. */
 export const TASK_SEARCH_DEBOUNCE_MS = 300;
 const QUERY_MAX = 256;
+const PAGE_SIZE = 20;
+/** The most results one search holds; past it the walk offers no more. */
+export const TASK_SEARCH_MAX_RESULTS = 50;
 
 export type MobileTaskSearchState = {
   readonly tasks: ChannelSearchBotTasksResult["tasks"];
@@ -30,6 +33,8 @@ type Request = {
   readonly environmentId: EnvironmentId;
   readonly botId: BotId;
   readonly query: string;
+  /** Which of the field's queries this belongs to; a return to the same text is a new one. */
+  readonly generation: number;
 };
 
 /** The text a person typed as the server takes it, or null when it would not be sent. */
@@ -40,8 +45,9 @@ export function taskSearchQuery(text: string): string | null {
 
 /**
  * One bot's task-title search (`channel.searchBotTasks`): sent after a quiet moment, one request
- * at a time, and only the latest query's answer is kept. More results come only from the server's
- * cursor, on request. Unmounting ends it; a pending answer then lands nowhere.
+ * at a time, and only the field's latest query is answered. More results come only from the
+ * server's cursor, on request, up to TASK_SEARCH_MAX_RESULTS. Unmounting ends it; a pending answer
+ * then lands nowhere.
  */
 export function useMobileBotTaskSearch(input: {
   readonly environmentId: EnvironmentId;
@@ -52,12 +58,12 @@ export function useMobileBotTaskSearch(input: {
   const query = taskSearchQuery(input.text);
   const key = query === null ? null : JSON.stringify([environmentId, botId, query]);
   const [state, setState] = useState<{ key: string; value: MobileTaskSearchState } | null>(null);
-  // The query the field wants answered, the request in flight, and one waiting behind it.
-  const wanted = useRef<string | null>(null);
+  // The field's current query, the request in flight, and one waiting behind it.
+  const generation = useRef(0);
   const busy = useRef(false);
   const queued = useRef<Request | null>(null);
   const alive = useRef(true);
-  const send = async (request: Request, cursor?: string, restarted = false) => {
+  const send = async (request: Request, cursor?: string, held = 0, restarted = false) => {
     if (busy.current) {
       if (cursor === undefined) queued.current = request;
       return;
@@ -71,12 +77,18 @@ export function useMobileBotTaskSearch(input: {
           ? { ...current.value, loading: true, failed: false }
           : EMPTY,
     }));
+    const limit = Math.min(PAGE_SIZE, TASK_SEARCH_MAX_RESULTS - held);
     const result = await runAtomCommand(
       appAtomRegistry,
       channelEnvironment.searchBotTasks,
       {
         environmentId: request.environmentId,
-        input: { botId: request.botId, query: request.query, ...(cursor ? { cursor } : {}) },
+        input: {
+          botId: request.botId,
+          query: request.query,
+          ...(cursor ? { cursor } : {}),
+          limit,
+        },
       },
       { label: "GOAT Bot task search", reportFailure: false },
     );
@@ -84,8 +96,8 @@ export function useMobileBotTaskSearch(input: {
     if (!alive.current) return;
     const next = queued.current;
     queued.current = null;
-    if (sentKey !== wanted.current) {
-      if (next !== null && next.key === wanted.current) void send(next);
+    if (request.generation !== generation.current) {
+      if (next !== null && next.generation === generation.current) void send(next);
       return;
     }
     if (result._tag === "Failure") {
@@ -97,7 +109,7 @@ export function useMobileBotTaskSearch(input: {
         "reason" in error &&
         error.reason === "invalid_input";
       // A continuation the server no longer accepts starts the walk again once.
-      if (stale && !restarted) return void send(request, undefined, true);
+      if (stale && !restarted) return void send(request, undefined, 0, true);
       setState((current) =>
         current?.key === sentKey
           ? { key: sentKey, value: { ...current.value, loading: false, failed: true } }
@@ -108,11 +120,13 @@ export function useMobileBotTaskSearch(input: {
     const page = result.value;
     setState((current) => {
       const before = current?.key === sentKey && cursor !== undefined ? current.value : null;
+      const tasks = [...(before?.tasks ?? []), ...page.tasks].slice(0, TASK_SEARCH_MAX_RESULTS);
+      const more = page.nextCursor !== undefined && tasks.length < TASK_SEARCH_MAX_RESULTS;
       return {
         key: sentKey,
         value: {
-          tasks: before ? [...before.tasks, ...page.tasks] : page.tasks,
-          ...(page.nextCursor !== undefined ? { cursor: page.nextCursor } : {}),
+          tasks,
+          ...(more ? { cursor: page.nextCursor } : {}),
           partial: (before?.partial ?? false) || page.partial === true,
           endedEarly: page.endedEarly === true,
           loading: false,
@@ -121,31 +135,41 @@ export function useMobileBotTaskSearch(input: {
       };
     });
   };
-  const request: Request | null =
-    key === null || query === null ? null : { key, environmentId, botId, query };
   const fire = useEffectEvent((sent: Request) => void send(sent));
   // oxlint-disable-next-line goat/react-effect-budget -- Waits for a quiet moment before asking the server, and forgets a query the field moved past.
   useEffect(() => {
     alive.current = true;
-    wanted.current = key;
+    const current = ++generation.current;
     const timer =
       key === null || query === null
         ? undefined
-        : setTimeout(() => fire({ key, environmentId, botId, query }), TASK_SEARCH_DEBOUNCE_MS);
+        : setTimeout(
+            () => fire({ key, environmentId, botId, query, generation: current }),
+            TASK_SEARCH_DEBOUNCE_MS,
+          );
     return () => {
       clearTimeout(timer);
       alive.current = false;
     };
   }, [key, environmentId, botId, query]);
   const value = key !== null && state?.key === key ? state.value : null;
+  // A handler sends for the query the field shows now.
+  const now = (): Request | null =>
+    key === null || query === null
+      ? null
+      : { key, environmentId, botId, query, generation: generation.current };
   return {
     query,
     value,
     loadMore: () => {
-      if (request !== null && value?.cursor && !value.loading) void send(request, value.cursor);
+      const request = now();
+      if (request !== null && value?.cursor && !value.loading)
+        void send(request, value.cursor, value.tasks.length);
     },
     retry: () => {
-      if (request !== null && value?.failed) void send(request, value.cursor);
+      const request = now();
+      if (request !== null && value?.failed)
+        void send(request, value.cursor, value.cursor === undefined ? 0 : value.tasks.length);
     },
   };
 }

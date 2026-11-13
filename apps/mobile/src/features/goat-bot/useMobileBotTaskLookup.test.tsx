@@ -9,6 +9,7 @@ const net = vi.hoisted(() => ({
     input: { taskId: string; botId: string };
     answer: (value: unknown) => Promise<void>;
     fail: (reason: string) => Promise<void>;
+    refuse: (error: unknown) => Promise<void>;
   }>,
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
@@ -34,6 +35,8 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
                 cause: { _tag: "Fail", error: { _tag: "ChannelGatewayError", reason } },
               }),
             ),
+          refuse: (error) =>
+            act(async () => resolve({ _tag: "Failure", cause: { _tag: "Fail", error } })),
         });
       }),
     squashAtomCommandFailure: (result: { cause: { error: unknown } }) => result.cause.error,
@@ -172,4 +175,27 @@ it("keeps only the newest read: a late answer for another task or an earlier rea
   await net.calls[3]?.answer(known("t2", { partial: true }));
   await net.calls[2]?.answer(known("t2"));
   expect((seen.current as { result: BotWorkResult }).result.partial).toBe(true);
+});
+
+it("a reload kept by an earlier task's screen does not displace the task shown now", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  const earlier = seen.current;
+  await show({ taskId: "t2" as Props["taskId"] });
+  if (earlier?.state === "known") earlier.reload();
+  expect(net.calls.map((call) => call.input.taskId)).toEqual(["t1", "t2"]);
+  await net.calls[1]?.answer(known("t2"));
+  expect(state()).toBe("known");
+  expect(seen.current?.state === "known" && seen.current.task.row.task.taskId).toBe("t2");
+});
+
+it("a read the server refuses for this device's access says so instead of offering a retry", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.refuse({ _tag: "EnvironmentAuthorizationError", message: "no" });
+  expect(state()).toBe("denied");
+  await show({ taskId: "t2" as Props["taskId"] });
+  await net.calls[1]?.fail("forbidden");
+  expect(state()).toBe("denied");
 });

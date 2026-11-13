@@ -57,7 +57,7 @@ const knownTask = {
 const container = document.createElement("div");
 const reload = vi.fn();
 const openHome = vi.fn();
-async function render(lookup: MobileTaskLookup, enabled = true) {
+async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = null) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(container);
   await act(async () =>
@@ -79,7 +79,7 @@ async function render(lookup: MobileTaskLookup, enabled = true) {
         onRetried={() => {}}
         onOpenThread={() => {}}
         onOpenHome={openHome}
-        card={null}
+        card={card as never}
       />,
     ),
   );
@@ -152,5 +152,19 @@ it("without the lookup, or without permission, the older-work explanation stays 
   root = await render({ state: "denied" });
   expect(text()).toContain("This connection can't look up older tasks.");
   expect(button("Open Home")).toBeDefined();
+  await act(async () => root.unmount());
+});
+
+it("a task the server does not have shows no chat card, so nothing on the screen opens it", async () => {
+  const root = await render({ state: "missing" }, true, {
+    key: "t1",
+    revision: 1,
+    updatedAt: at,
+    title: "Old report",
+    statusLabel: "Done",
+    target: { kind: "thread", threadId: "w-1" },
+  });
+  expect(text()).toContain("This task isn't available.");
+  expect(text()).not.toContain("chat card");
   await act(async () => root.unmount());
 });

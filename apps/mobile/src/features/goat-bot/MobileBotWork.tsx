@@ -418,8 +418,8 @@ export function MobileBotWork(props: {
     // A mark reaches the walk showing its computer and bot; only a sent one on this Home rereads.
     onAcknowledged: (taskId, through, scope, sent) => {
       if (history.markRead(scope, taskId, through) && sent) threads.refresh();
-      if (sent && lookup.state === "known" && lookup.task.row.task.taskId === taskId)
-        lookup.reload();
+      const shown = lookup.state === "known" && lookup.task.row.task.taskId === taskId;
+      if (sent && shown && scope === workOwner) lookup.reload();
     },
   });
   const now = useNowMinuteMs();

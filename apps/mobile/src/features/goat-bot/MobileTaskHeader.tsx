@@ -154,10 +154,11 @@ export function MobileTaskHeader(props: {
           onOpenThread={props.onOpenThread}
         />
       ) : null}
-      {/* Without a current task, its status is unknown here: the chat card is drawn without it. */}
+      {/* Without a current task its status is unknown here, so the card is drawn without it; a task
+          the server does not have shows none. */}
       {props.task ? (
         props.taskCard
-      ) : props.card ? (
+      ) : props.card && lookup.state !== "missing" ? (
         <GoatBotTaskRow
           card={props.card}
           statusHidden

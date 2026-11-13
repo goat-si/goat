@@ -97,13 +97,15 @@ it("sends a query only after a quiet moment, one at a time, and keeps the latest
     expect(net.calls).toHaveLength(0);
     await type("repo");
     await wait(TASK_SEARCH_DEBOUNCE_MS);
-    expect(net.calls.map((call) => call.input)).toEqual([{ botId: "echo", query: "repo" }]);
+    expect(net.calls.map((call) => call.input)).toEqual([
+      { botId: "echo", query: "repo", limit: 20 },
+    ]);
     await type("report");
     await wait(TASK_SEARCH_DEBOUNCE_MS);
     expect(net.calls).toHaveLength(1);
     await net.calls[0]?.answer({ tasks: [hit("t0", "Old repo note")] });
     expect(text()).not.toContain("Old repo note");
-    expect(net.calls[1]?.input).toEqual({ botId: "echo", query: "report" });
+    expect(net.calls[1]?.input).toEqual({ botId: "echo", query: "report", limit: 20 });
     await net.calls[1]?.answer({ tasks: [hit("t1", "Weekly report", true)] });
     expect(text()).toContain("Weekly report…");
     await act(async () => button("Weekly report…")?.click());
@@ -137,7 +139,12 @@ it("an empty page that can continue offers Load more; only the end of the walk s
     expect(text()).not.toContain("No matching tasks.");
     expect(text()).toContain("Some tasks that might match could not be checked or shown.");
     await act(async () => button("Load more")?.click());
-    expect(net.calls[1]?.input).toEqual({ botId: "main", query: "report", cursor: "c1" });
+    expect(net.calls[1]?.input).toEqual({
+      botId: "main",
+      query: "report",
+      cursor: "c1",
+      limit: 20,
+    });
     await net.calls[1]?.answer({ tasks: [] });
     expect(text()).toContain("No matching tasks.");
     expect(button("Load more")).toBeUndefined();
@@ -169,7 +176,7 @@ it("a continuation the server rejects restarts once; a failure then offers Try a
     await net.calls[0]?.answer({ tasks: [hit("t1", "Weekly report")], nextCursor: "c1" });
     await act(async () => button("Load more")?.click());
     await net.calls[1]?.fail("invalid_input");
-    expect(net.calls[2]?.input).toEqual({ botId: "main", query: "report" });
+    expect(net.calls[2]?.input).toEqual({ botId: "main", query: "report", limit: 20 });
     await net.calls[2]?.fail("persistence_failed");
     expect(text()).toContain("Couldn't search tasks. Try again");
     await act(async () => button("Couldn't search tasks. Try again")?.click());
@@ -213,7 +220,7 @@ it("a page asked for one bot lands nowhere once the field belongs to another bot
     await wait(TASK_SEARCH_DEBOUNCE_MS);
     await net.calls[0]?.answer({ tasks: [hit("t-echo", "Echo's report")] });
     expect(text()).not.toContain("Echo's report");
-    expect(net.calls[1]?.input).toEqual({ botId: "main", query: "report" });
+    expect(net.calls[1]?.input).toEqual({ botId: "main", query: "report", limit: 20 });
     await net.calls[1]?.answer({ tasks: [hit("t-main", "Main's report")] });
     expect(text()).toContain("Main's report");
   } finally {
@@ -231,6 +238,54 @@ it("clearing the field drops a pending answer", async () => {
     await net.calls[0]?.answer({ tasks: [hit("t1", "Weekly report")] });
     expect(text()).not.toContain("Weekly report");
     expect(net.calls).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("returning to a query the field moved past asks again instead of taking the superseded answer", async () => {
+  vi.useFakeTimers();
+  try {
+    await setup();
+    await type("report");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await type("notes");
+    await type("report");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    await net.calls[0]?.answer({ tasks: [hit("t-old", "Earlier report")] });
+    expect(text()).not.toContain("Earlier report");
+    expect(net.calls[1]?.input).toMatchObject({ botId: "main", query: "report" });
+    await net.calls[1]?.answer({ tasks: [hit("t-new", "Current report")] });
+    expect(text()).toContain("Current report");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("holds at most 50 results: the last page asks only for what is left, then offers no more", async () => {
+  vi.useFakeTimers();
+  try {
+    await setup();
+    await type("report");
+    await wait(TASK_SEARCH_DEBOUNCE_MS);
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        hit(`t${from + index}`, `Report ${from + index}`),
+      );
+    await net.calls[0]?.answer({ tasks: page(0, 20), nextCursor: "c1" });
+    await act(async () => button("Load more")?.click());
+    await net.calls[1]?.answer({ tasks: page(20, 20), nextCursor: "c2" });
+    await act(async () => button("Load more")?.click());
+    expect(net.calls[2]?.input).toEqual({
+      botId: "main",
+      query: "report",
+      cursor: "c2",
+      limit: 10,
+    });
+    await net.calls[2]?.answer({ tasks: page(40, 20), nextCursor: "c3" });
+    expect(container.querySelectorAll("button").length).toBe(50);
+    expect(text()).not.toContain("Report 50");
+    expect(button("Load more")).toBeUndefined();
   } finally {
     vi.useRealTimers();
   }

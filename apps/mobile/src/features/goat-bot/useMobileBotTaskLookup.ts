@@ -39,7 +39,19 @@ export type MobileTaskLookup =
       readonly reload: () => void;
     };
 
-type Answer = { readonly key: string; readonly value?: BotWorkResult; readonly missing?: boolean };
+type Answer = {
+  readonly key: string;
+  readonly value?: BotWorkResult;
+  readonly missing?: boolean;
+  readonly denied?: boolean;
+};
+
+/** A refusal by the server's access check, at the transport or by the channel gateway. */
+function refused(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  if ("_tag" in error && error._tag === "EnvironmentAuthorizationError") return true;
+  return "reason" in error && error.reason === "forbidden";
+}
 
 /**
  * Reads one task of one bot by id on request (`channel.getBotTask`), for a task screen whose
@@ -68,6 +80,8 @@ export function useMobileBotTaskLookup(input: {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [failedKey, setFailedKey] = useState<string | null>(null);
   const sequence = useRef(0);
+  // The task this screen reads now; a reload kept from an earlier one sends nothing.
+  const shown = useRef<string | null>(null);
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
     const key = JSON.stringify([environmentId, botId, taskId]);
     const sent = ++sequence.current;
@@ -89,27 +103,31 @@ export function useMobileBotTaskLookup(input: {
           ? error.reason === "not_found"
           : false;
       if (missing) setAnswer({ key, missing: true });
+      else if (refused(error)) setAnswer({ key, denied: true });
       else setFailedKey(key);
     });
   };
   const readShown = useEffectEvent(read);
   // oxlint-disable-next-line goat/react-effect-budget -- Reads the shown task from the server and drops a read that a newer one replaced.
   useEffect(() => {
+    shown.current = key;
     if (!asking || environmentId === null || taskId === null) return;
     readShown(environmentId, botId, taskId);
     return () => {
       sequence.current++;
     };
-  }, [asking, environmentId, botId, taskId]);
+  }, [asking, key, environmentId, botId, taskId]);
   if (!input.needed || !supported || environmentId === null || taskId === null)
     return { state: "off" };
   if (!permitted) return { state: "denied" };
   const reload = () => {
+    if (shown.current !== key) return;
     setFailedKey(null);
     read(environmentId, botId, taskId);
   };
   if (failedKey === key) return { state: "failed", reload };
   if (answer?.key !== key) return { state: "loading" };
+  if (answer.denied) return { state: "denied" };
   if (answer.missing || answer.value === undefined) return { state: "missing" };
   const result = answer.value;
   if (result.task.state === "unavailable")
