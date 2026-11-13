@@ -313,6 +313,9 @@ together, after the review at the end of this section.
   late.
 - **A Pen route is never this device.** Its URL is loopback like an ssh forward's, so every check
   that reads "loopback" as "local" excludes it by target (`connection/loopbackHost.ts`).
+- **The member says what a proxy may not do.** Its session state reports `proxiedByHub`, the same
+  flag a hub sets, so the client hides what `proxiedCallPolicy` will refuse; the client adds no
+  route check of its own.
 - **A stored Pen route is inert while the gate is closed,** on web and mobile too: it lives in its
   own optional arrays of the connection catalog, so a build that does not know them keeps the rest.
 
