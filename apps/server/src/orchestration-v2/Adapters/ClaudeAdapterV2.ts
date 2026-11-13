@@ -1,3 +1,4 @@
+import { claudeQueryFlagEnvironment } from "./ClaudeQueryFlags.ts";
 import { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
 export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
 import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
@@ -1446,8 +1447,6 @@ function parseClaudeInteger(text: string): number {
   return Number.parseInt(value, 10);
 }
 
-const CLAUDE_CODE_MODEL_ALIASES = new Set(["opus", "sonnet", "haiku", "fable"]);
-
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -1515,25 +1514,23 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
-  const compactQuerySettings =
+  const autoCompactWindow =
     input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
+      ? undefined
+      : input.settings.autoCompactWindow;
+  const compactQuerySettings =
+    autoCompactWindow === undefined
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
+          autoCompactWindow: Number(autoCompactWindow),
         } as ClaudeSdkSettings);
-  const flagEnvironment = {
-    ...input.flagEnvironment,
-    ...(CLAUDE_CODE_MODEL_ALIASES.has(compiledSelection.apiModelId)
-      ? {
-          [`ANTHROPIC_DEFAULT_${compiledSelection.apiModelId.toUpperCase()}_MODEL`]:
-            compiledSelection.apiModelId,
-        }
-      : {}),
-    ...(input.toolSearchOverride === undefined
-      ? {}
-      : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
-  };
+  const flagEnvironment = claudeQueryFlagEnvironment({
+    environment: input.flagEnvironment,
+    model: compiledSelection.apiModelId,
+    autoCompactWindow,
+    toolSearchOverride: input.toolSearchOverride,
+  });
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     Object.keys(flagEnvironment).length === 0 || typeof compactQuerySettings === "string"
