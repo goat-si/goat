@@ -543,6 +543,7 @@ it.effect("reach tells a refused key, a changed host key and an unusable key apa
           /refused this hub's machine key.*authorized_keys.*Settings → Hub/su,
         ),
       });
+      expect((yield* listed(first.attachId))?.message).not.toMatch(/machineKey|goat_hub/u);
       host.control.reachAnswers.set(first.nodeId, "unreachable");
       yield* enroll;
       expect(yield* listed(first.attachId)).toMatchObject({
@@ -636,6 +637,7 @@ it.effect("an attach that loses its authority after the machine joined says so i
       const machine = yield* listed(attachId);
       expect(machine).toMatchObject({ state: "paused" });
       expect(machine?.message).toContain("then lost its authority");
+      expect(machine?.message).toContain("pen revoke");
       expect(machine?.message).not.toContain("joined Pen after");
     }),
   ),
@@ -819,10 +821,12 @@ it.effect(
         expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
         yield* TestClock.adjust(2 * HOUR);
         yield* enroll;
-        expect(yield* listed(attachId)).toMatchObject({
-          state: "unknown",
-          message: expect.stringContaining("for two hours"),
-        });
+        // People see only the message: it names the operation and the way out of Pen.
+        const stopped = yield* listed(attachId);
+        expect(stopped).toMatchObject({ state: "unknown" });
+        expect(stopped?.message).toContain("for two hours");
+        expect(stopped?.message).toContain(attachId + ".link.1");
+        expect(stopped?.message).toContain("pen revoke");
       }),
     ),
 );

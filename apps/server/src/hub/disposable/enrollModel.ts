@@ -320,29 +320,47 @@ export const leftPenMessage = (
  * The fixed text for an admitted attach (design section 2, "What the caller sees"); undefined for a
  * state the invite texts cover.
  */
+/** Stops about the link operation itself; their text names its id. */
+const OPERATION_STOPS: ReadonlySet<string> = new Set([
+  "journal_unreadable",
+  "operation_lost",
+  "link_residual",
+  "link_unknown",
+  "link_stuck_open",
+]);
+
 export const enrollMessage = (
   state: string,
   name: string,
   enroll: Enroll,
   /** The record was paused after its machine joined, not by a join after the withdrawal. */
   pausedAfterJoin = false,
+  /** The record's link operation, named in a stop about it. */
+  operationId: string | null = null,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   // Both clients show the message, so what a person must do is in it.
   const keyStep =
-    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet; Settings → Hub shows it with the machine on web and desktop, and goat_hub_machine_list returns it as machineKey.";
+    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet; Settings → Hub shows it with the machine on web and desktop.";
+  const leave = " It stays a Pen member until a person removes it with pen revoke.";
   if (enroll.stop !== undefined && (state === "paused" || state === "unknown"))
     return {
-      message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),
-      nextAction:
-        "A person decides what happens to it. Detaching is not available yet; it stays a Pen member until a person removes it from Pen.",
+      message:
+        name +
+        " joined Pen; its attach stopped: " +
+        stopText(enroll.stop) +
+        (operationId !== null && OPERATION_STOPS.has(enroll.stop)
+          ? " Link operation " + operationId + "."
+          : "") +
+        leave,
+      nextAction: "Resuming or detaching an attach is not available yet.",
     };
   if (state === "paused" && pausedAfterJoin)
     return {
       message:
         name +
-        " joined Pen; its attach then lost its authority (the consent changed or ended, or the provisioner's grant did) before it was linked.",
-      nextAction:
-        "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
+        " joined Pen; its attach then lost its authority (the consent changed or ended, or the provisioner's grant did) before it was linked." +
+        leave,
+      nextAction: "Resuming an attach is not available yet.",
     };
   switch (state) {
     case "admitted":
@@ -363,7 +381,12 @@ export const enrollMessage = (
             keyStep,
           nextAction: null,
         };
-      if (enroll.link?.outcome === "key_dir_unsafe" && enroll.keyDir !== undefined)
+      // The folder is named twice; a longer path than this would pass the wire's 500 characters.
+      if (
+        enroll.link?.outcome === "key_dir_unsafe" &&
+        enroll.keyDir !== undefined &&
+        enroll.keyDir.length <= 160
+      )
         return {
           message:
             "OpenCodex refuses a key under a folder others can write, and " +
