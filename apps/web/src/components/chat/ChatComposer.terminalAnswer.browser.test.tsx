@@ -20,7 +20,7 @@ it("does not add terminal output to the hidden draft while answering a question"
         isLastQuestion: true,
         canAdvance: true,
         customAnswer: "answer",
-        activeQuestion: { id: "q1", allowCustomAnswer: true },
+        activeQuestion: { id: "q1", options: [], allowCustomAnswer: true },
       },
     };
     state.composer = composer;

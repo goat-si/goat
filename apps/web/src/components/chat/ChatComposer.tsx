@@ -434,6 +434,7 @@ export interface ChatComposerProps {
     customAnswer: string;
     activeQuestion: {
       id: string;
+      options: ReadonlyArray<unknown>;
       initialAnswer?: string | undefined;
       multiSelect?: boolean | undefined;
       allowCustomAnswer?: boolean | undefined;
@@ -3750,7 +3751,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPasteStable}
                     placeholder={composerPlaceholder({
                       approval: isComposerApprovalState ? (activePendingApproval ?? {}) : null,
-                      question: activePendingProgress ? { isChoiceOnlyPendingQuestion } : null,
+                      question: activePendingProgress?.activeQuestion ?? null,
                       planFollowUp: showPlanFollowUpPrompt && activeProposedPlan !== null,
                       projectSelectionRequired,
                       showProviderUnavailable,
