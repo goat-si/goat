@@ -215,7 +215,7 @@ func ServeJoin(ctx context.Context, l Link, remoteStatic []byte, a Admission) (*
 		if a.Store.burnGate != nil {
 			a.Store.burnGate()
 		}
-		if err := a.Invites.Burn(a.InviteID, a.Now, cb); err != nil {
+		if err := a.Invites.Burn(a.InviteID, now, cb, a.Now); err != nil {
 			return errBurn
 		}
 		return nil

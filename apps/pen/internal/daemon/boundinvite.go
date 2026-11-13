@@ -15,7 +15,7 @@ import (
 // boundInviteRequest is an invite op that names its subject (contract "Bound invites").
 type boundInviteRequest struct {
 	Op      string        `json:"op"`
-	TTLMs   int64         `json:"ttlMs,omitempty"`
+	TTLMs   *int64        `json:"ttlMs,omitempty"`
 	Wait    bool          `json:"wait,omitempty"`
 	Subject *mesh.Subject `json:"subject"`
 	MintID  string        `json:"mintId,omitempty"`
@@ -75,14 +75,14 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		}
 		if head.Op == "invite.status" {
 			store, book := d.meshAndBook()
-			reply(mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now()))
+			reply(mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now))
 			return
 		}
 		do, t := d.inviteBook().Cancel, "invite-cancel"
 		if head.Op == "invite.ack" {
 			do, t = d.inviteBook().Ack, "invite-ack"
 		}
-		state, err := do(ref.InviteID, ref.MintID, d.now())
+		state, err := do(ref.InviteID, ref.MintID, d.now)
 		if err != nil {
 			fail(err)
 			return
@@ -126,7 +126,7 @@ func boundExpiry(req boundInviteRequest, now time.Time) (time.Time, error) {
 		return time.Time{}, errors.New("mintId and expiresAt go together")
 	}
 	if req.ExpiresAt != 0 {
-		if req.TTLMs != 0 {
+		if req.TTLMs != nil {
 			return time.Time{}, errors.New("expiresAt replaces ttlMs; send one of them")
 		}
 		t := time.UnixMilli(req.ExpiresAt)
@@ -135,7 +135,10 @@ func boundExpiry(req boundInviteRequest, now time.Time) (time.Time, error) {
 		}
 		return t, nil
 	}
-	ttl := time.Duration(req.TTLMs) * time.Millisecond
+	var ttl time.Duration
+	if req.TTLMs != nil {
+		ttl = time.Duration(*req.TTLMs) * time.Millisecond
+	}
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
 	}

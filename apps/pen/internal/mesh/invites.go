@@ -178,14 +178,17 @@ func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
 
 // Burn atomically uses an invite for the joiner whose card is cb; only one caller ever succeeds, and a bound
 // invite only for its subject. A bound invite becomes a burned entry carrying the offer nonce, in the same save.
-// clock is read under the book's lock, so an invite that expired while the join waited for it is not burned.
-func (iv *Invites) Burn(id string, clock func() time.Time, cb CardBody) error {
+// An ordinary invite is judged at now, when the join began, as it always was; a bound one reads clock under the
+// book's lock, so a bound invite that expired while the join waited for it is not burned.
+func (iv *Invites) Burn(id string, now time.Time, cb CardBody, clock func() time.Time) error {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
-	now := clock()
 	x, ok := iv.byID[id]
 	if !ok || x.State != "" {
 		return errors.New("invite already used or expired")
+	}
+	if x.Subject != nil {
+		now = clock()
 	}
 	if expired(x, now) {
 		if err := iv.saveLocked(now); err != nil {
@@ -211,10 +214,12 @@ func terminal(x Invite, state string, now time.Time, nonce string) Invite {
 
 // Cancel ends the invite named by id, or the one mintID made (exactly one is set), so it admits nobody, and
 // answers the state it is in: cancelled (by this call or an earlier one), burned, expired or absent. A mintID that
-// names nothing yet is fenced: it answers cancelled and a later create with that mintID is refused.
-func (iv *Invites) Cancel(id, mintID string, now time.Time) (string, error) {
+// names nothing yet is fenced: it answers cancelled and a later create with that mintID is refused. clock is read
+// under the book's lock.
+func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	now := clock()
 	x, ok := iv.findLocked(id, mintID)
 	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
 	switch {
@@ -269,10 +274,11 @@ func (iv *Invites) boundLocked() int {
 }
 
 // Ack forgets the terminal entry or fence named by id or mintID once its caller has read it, and answers acked, or
-// absent when there is none. A live invite is refused: cancel it first.
-func (iv *Invites) Ack(id, mintID string, now time.Time) (string, error) {
+// absent when there is none. A live invite is refused: cancel it first. clock is read under the book's lock.
+func (iv *Invites) Ack(id, mintID string, clock func() time.Time) (string, error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
+	now := clock()
 	x, ok := iv.findLocked(id, mintID)
 	if !ok {
 		return InviteAbsent, nil
