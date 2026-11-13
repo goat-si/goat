@@ -1,3 +1,4 @@
+import { orderedListGutterStyle } from "./chat/orderedListGutterStyle";
 import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@goat/shared/fileLinks";
 import {
   isWindowsDrivePathHref,
@@ -307,17 +308,6 @@ function CodexArtifactTemplateCard(props: {
   );
 }
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
-function orderedListGutterStyle(
-  itemCount: number,
-  start: unknown,
-): { "--list-gutter": string } | undefined {
-  const parsedStart = Number.parseInt(String(start ?? 1), 10);
-  const firstNumber = Number.isNaN(parsedStart) ? 1 : parsedStart;
-  const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
-  const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
-  if (markerWidth <= 1) return undefined;
-  return { "--list-gutter": `${markerWidth + 2}ch` };
-}
 const GITHUB_ALERT_PRESENTATIONS: Record<
   string,
   { label: string; Icon: typeof InfoIcon; borderClassName: string; titleClassName: string }
@@ -989,10 +979,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   ol: function MarkdownOrderedList({ node, start, style, ...props }) {
-    const itemCount =
-      node?.children?.filter((child) => child.type === "element" && child.tagName === "li")
-        .length ?? 0;
-    const gutterStyle = orderedListGutterStyle(itemCount, start);
+    const itemValues =
+      node?.children?.flatMap((child) =>
+        child.type === "element" && child.tagName === "li" ? [child.properties.value] : [],
+      ) ?? [];
+    const gutterStyle = orderedListGutterStyle(itemValues, start);
     return (
       <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
     );
