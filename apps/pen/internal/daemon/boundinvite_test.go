@@ -704,18 +704,33 @@ func TestAWaitDecidesItsExpiryByTheNodesClock(t *testing.T) {
 	}
 
 	cl, r := wait("early")
+	type answer struct {
+		t   string
+		err error
+	}
+	answers := make(chan answer, 1)
+	go func() {
+		var ev struct{ T string }
+		err := cl.Next(&ev)
+		answers <- answer{ev.T, err}
+	}()
 	(<-timers).ch <- time.Now() // fires while the node's clock is still a minute short of the expiry
-	if again := <-timers; again.d != time.Minute {
-		t.Fatalf("re-armed for %v; want the minute left by the node's clock", again.d)
+	select {
+	case again := <-timers:
+		if again.d != time.Minute {
+			t.Fatalf("re-armed for %v; want the minute left by the node's clock", again.d)
+		}
+	case a := <-answers:
+		t.Fatalf("at a timer a minute early by the node's clock the waiting caller got %q (%v); want it to wait again", a.t, a.err)
 	}
 	tok, _ := mesh.ParseToken(r.Token)
 	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
 		t.Fatal(err)
 	}
-	var ev struct{ T string }
-	if err := cl.Next(&ev); err != nil || ev.T != "admitted" {
-		t.Fatalf("after an early timer the waiting caller got %+v (%v); want admitted", ev, err)
+	if a := <-answers; a.err != nil || a.t != "admitted" {
+		t.Fatalf("after an early timer the waiting caller got %q (%v); want admitted", a.t, a.err)
 	}
+	var ev struct{ T string }
 
 	cl, _ = wait("late")
 	clk.advance(2 * time.Minute)
@@ -737,5 +752,32 @@ func TestAWaitDecidesItsExpiryByTheNodesClock(t *testing.T) {
 	}
 	if !written {
 		t.Fatalf("offers.json %+v; want the late invite written as expired before the answer", books)
+	}
+}
+
+// A join outcome without a member (the invite was used and no admission can be named) is answered burned.
+func TestAWaitHearsBurnedForAnOutcomeWithoutAMember(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	a.d.tellWaiter(r.ID, joinOutcome{})
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil || string(raw) != `{"t":"burned"}` {
+		t.Fatalf("the waiting caller got %s (%v); want exactly {\"t\":\"burned\"}", raw, err)
 	}
 }
