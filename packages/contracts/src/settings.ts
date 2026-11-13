@@ -1011,6 +1011,8 @@ export const BackgroundActivityProfile = Schema.Literals([
 ]);
 export type BackgroundActivityProfile = typeof BackgroundActivityProfile.Type;
 export const DEFAULT_BACKGROUND_ACTIVITY_PROFILE: BackgroundActivityProfile = "balanced";
+/** On: a server in a Pen mesh lists the other members; opening one still needs hub:proxy. */
+export const DEFAULT_PEN_HUB_NODES = true;
 
 export const BackgroundActivityProfileSelection = Schema.Literals([
   "balanced",
@@ -1320,6 +1322,10 @@ export const ServerSettings = Schema.Struct({
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticServerUpdates: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Keep one hub route per machine in this server's Pen mesh. It never installs GOAT anywhere. */
+  penHubNodes: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PEN_HUB_NODES)),
+  ),
   ...Restart.RestartSettingsFields,
   ...Restart.CodexAppServerSettingsFields,
   ...BlockedBrowser.BlockedBrowserSettingsFields,
@@ -1773,6 +1779,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   ...Restart.RestartSettingsPatchFields,
   ...Restart.CodexAppServerSettingsPatchFields,
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
+  penHubNodes: Schema.optionalKey(Schema.Boolean),
   ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
