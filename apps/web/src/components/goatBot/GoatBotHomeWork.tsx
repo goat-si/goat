@@ -398,7 +398,12 @@ function WorkRow({
             onClick={() => onOpenTask(row)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} unread={row.unread} />
+            <WorkRowText
+              title={title}
+              status={status.label}
+              unread={row.unread}
+              returned={returned}
+            />
           </button>
         ) : (
           <Link
@@ -408,7 +413,12 @@ function WorkRow({
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} unread={row.unread} />
+            <WorkRowText
+              title={title}
+              status={status.label}
+              unread={row.unread}
+              returned={returned}
+            />
           </Link>
         )}
         {row.view.pinnedAt !== null && (
@@ -454,10 +464,12 @@ function WorkRowText({
   title,
   status,
   unread,
+  returned,
 }: {
   readonly title: string;
   readonly status: string;
   readonly unread: boolean;
+  readonly returned: boolean;
 }) {
   return (
     <>
@@ -472,6 +484,8 @@ function WorkRowText({
           <span className="sr-only">Unread</span>
         </>
       ) : null}
+      {/* The returned row's highlight, said to a screen reader on the control it focuses. */}
+      {returned ? <span className="sr-only">Where you left off</span> : null}
       <ChevronRightIcon
         data-work-chevron
         aria-hidden
