@@ -220,13 +220,18 @@ func TestInviteStatusOpFollowsAMintToItsAdmitAndAck(t *testing.T) {
 		fmt.Sprintf(`{"op":"invite","mintId":"m7","expiresAt":%d}`, clk.now().Add(time.Minute).UnixMilli()),
 		fmt.Sprintf(`{"op":"invite","mintId":"m8","expiresAt":%d,"ttlMs":0,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")),
 		fmt.Sprintf(`{"op":"invite","mintId":"m9","expiresAt":%d,"ttlMs":null,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m10","expiresAt":null,"ttlMs":60000,"subject":%s}`, subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"m11","expiresAt":0,"subject":%s}`, subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","expiresAt":null,"subject":%s}`, subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","expiresAt":0,"subject":%s}`, subjectLine(jid, "j")),
+		fmt.Sprintf(`{"op":"invite","mintId":"","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")),
 	} {
 		var r InviteReply
 		if err := rawCall(t, a.st, line, &r); err == nil {
 			t.Fatalf("%s: made %+v; want a refusal", line, r)
 		}
 	}
-	for _, m := range []string{"m3", "m4", "m5", "m6", "m7", "m8", "m9"} {
+	for _, m := range []string{"m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11"} {
 		if s := statusOp(t, a.st, `"mintId":"`+m+`"`); s.State != "absent" {
 			t.Fatalf("refused mint %s left %+v", m, s)
 		}

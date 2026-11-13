@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"slices"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -68,6 +67,11 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		Op string `json:"op"`
 	}
 	json.Unmarshal(line, &head)
+	has, err := presentMembers(line)
+	if err != nil {
+		fail(err)
+		return
+	}
 	if head.Op != "invite" {
 		var ref inviteRef
 		if strictjson.Unmarshal(line, &ref) != nil || !validRef(ref) {
@@ -97,8 +101,7 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 		return
 	}
 	now := d.now()
-	keys, _ := strictjson.Keys(line)
-	expiresAt, err := boundExpiry(req, slices.Contains(keys, "ttlMs"), now)
+	expiresAt, err := boundExpiry(req, has, now)
 	if err != nil {
 		fail(err)
 		return
@@ -123,14 +126,17 @@ const maxBoundExpiry = 24 * time.Hour
 // boundExpiry is the invite's expiry: the caller's absolute expiresAt, which comes with a mintId and without ttlMs
 // and is at most maxBoundExpiry ahead, or ttlMs (10 minutes when absent). A passed expiresAt is refused under the
 // invite book's lock (CreateBound).
-// hasTTL says the line carries a ttlMs member at all, so 0 or null is refused beside expiresAt as well.
-func boundExpiry(req boundInviteRequest, hasTTL bool, now time.Time) (time.Time, error) {
-	if (req.MintID == "") != (req.ExpiresAt == 0) {
+// has names the members the line carries, so the rules follow what was sent, not what decoded to zero.
+func boundExpiry(req boundInviteRequest, has map[string]bool, now time.Time) (time.Time, error) {
+	if has["mintId"] != has["expiresAt"] {
 		return time.Time{}, errors.New("mintId and expiresAt go together")
 	}
-	if req.ExpiresAt != 0 {
-		if hasTTL {
+	if has["expiresAt"] {
+		if has["ttlMs"] {
 			return time.Time{}, errors.New("expiresAt replaces ttlMs; send one of them")
+		}
+		if req.ExpiresAt <= 0 || !mesh.ValidMintID(req.MintID) {
+			return time.Time{}, errBadRequest
 		}
 		t := time.UnixMilli(req.ExpiresAt)
 		if t.After(now.Add(maxBoundExpiry)) {
@@ -143,6 +149,23 @@ func boundExpiry(req boundInviteRequest, hasTTL bool, now time.Time) (time.Time,
 		ttl = 10 * time.Minute
 	}
 	return now.Add(ttl), nil
+}
+
+// presentMembers names the members of a bound-invite line and refuses one that is null, which would decode like an
+// absent member.
+func presentMembers(line []byte) (map[string]bool, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(line, &members); err != nil {
+		return nil, errBadRequest
+	}
+	has := map[string]bool{}
+	for k, v := range members {
+		if string(v) == "null" {
+			return nil, errBadRequest
+		}
+		has[k] = true
+	}
+	return has, nil
 }
 
 // validRef checks that exactly one of the invite id (12 bytes in canonical base64url) and a valid mintId is set.
