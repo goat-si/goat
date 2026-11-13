@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./penRouteUrl": {
+      "types": "./src/penRouteUrl.ts",
+      "import": "./src/penRouteUrl.ts"
+    },
     "./sshRuntimeProtocolComparison": {
       "types": "./src/sshRuntimeProtocolComparison.ts",
       "import": "./src/sshRuntimeProtocolComparison.ts"

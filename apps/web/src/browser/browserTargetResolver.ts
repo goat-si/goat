@@ -18,6 +18,9 @@ export {
 const readEnvironmentUrl = (environmentId: EnvironmentId): URL => {
   const connection = readPreparedConnection(environmentId);
   if (!connection) throw new Error(`Environment ${environmentId} is not connected.`);
+  // A Pen route's address is this desktop's gateway, not the environment's own loopback.
+  if (connection.target._tag === "PenConnectionTarget")
+    throw new Error("Ports of an environment reached through Pen are not reachable from here.");
   return new URL(connection.httpBaseUrl);
 };
 

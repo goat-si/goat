@@ -56,6 +56,7 @@ import {
 } from "./compatibility.ts";
 import { credentialConnectionId, penRouteOwner } from "./routes.ts";
 import { PenMembership } from "./penMembership.ts";
+import { makePenRouteBroker } from "./penRouteBroker.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
@@ -335,6 +336,7 @@ export const make = Effect.gen(function* () {
   const bearer = yield* makeBearerBroker();
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
+  const pen = yield* makePenRouteBroker();
   const httpClient = yield* HttpClient.HttpClient;
   const hubAuth = yield* Effect.serviceOption(HubProxyAuthSource);
   const presentation = yield* ClientCapabilities.ClientPresentation;
@@ -393,10 +395,7 @@ export const make = Effect.gen(function* () {
       "connection.target.kind": target._tag,
     });
     if (target._tag === "PenConnectionTarget")
-      return yield* new ConnectionBlockedError({
-        reason: "configuration",
-        detail: "Pen routes are not available in this build.",
-      });
+      return yield* pen(entry).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     if (target._tag === "HubProxyConnectionTarget")
       return yield* hubProxy(entry).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     const { prepared, verifiedEndpoint } = yield* (() => {

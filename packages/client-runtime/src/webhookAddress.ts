@@ -1,6 +1,7 @@
 import type { ScheduledTaskWebhookEndpoint } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isLocalLoopbackHost } from "@goat/shared/hostClassification";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
 
 export interface WebhookAddress {
   readonly address: string;
@@ -18,7 +19,8 @@ export function webhookAddress(
   const publicUrlHint = isGoatConnectEnabled()
     ? "Link GOAT Connect for a public URL."
     : `Public URLs arrive with ${GOAT_CONNECT_COMING_SOON.title} (${GOAT_CONNECT_COMING_SOON.status.toLowerCase()}).`;
-  if (httpBaseUrl === null) {
+  // A Pen route's base is this desktop's gateway: no caller outside the app can use it.
+  if (httpBaseUrl === null || isPenRouteUrl(httpBaseUrl)) {
     return {
       address: endpoint.path,
       copyable: false,

@@ -74,7 +74,7 @@ import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatenc
 import { desktopWakeups } from "./desktopWakeups";
 import {
   issuePenBearer,
-  penMembersGateway,
+  addPenCapabilities,
   penPreparationFailure,
   sshRuntimePendingError,
 } from "./platformPen";
@@ -875,7 +875,7 @@ const layerCapabilities = Layer.effectContext(
       Context.add(ClientCapabilities.RelayDeviceIdentity, identity),
       Context.add(ClientCapabilities.ClientPresentation, presentation),
       Context.add(ClientCapabilities.SshEnvironmentGateway, ssh),
-      Context.add(ClientCapabilities.PenMembersGateway, penMembersGateway(window.desktopBridge)),
+      addPenCapabilities(window.desktopBridge),
     );
   }),
 );

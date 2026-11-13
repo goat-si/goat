@@ -7,6 +7,31 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpObservability from "./httpObservability.ts";
 
 describe("HttpObservability.layer", () => {
+  it.effect("does not trace Pen URLs and preserves an existing trace filter", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const client = HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok"))),
+    );
+    return Effect.gen(function* () {
+      yield* client.get(`http://127.0.0.1/pen-route/${"a".repeat(43)}/api`);
+      yield* client.get("https://example.com/excluded");
+      yield* client.get("https://example.com/included");
+      expect(spans.filter((span) => span.kind === "client")).toHaveLength(1);
+    }).pipe(
+      Effect.provide(HttpObservability.layer),
+      Effect.provideService(HttpClient.TracerDisabledWhen, (request) =>
+        request.url.includes("excluded"),
+      ),
+      Effect.withTracer(tracer),
+    );
+  });
   it.effect("redacts credential query parameters on HTTP client spans", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const tracer = Tracer.make({
