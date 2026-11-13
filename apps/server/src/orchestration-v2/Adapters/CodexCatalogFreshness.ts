@@ -138,8 +138,8 @@ export const makeCodexCatalogFreshness = <E>(input: {
         yield* inBackground(
           resolvePath.pipe(Effect.flatMap((path) => (path ? refresh(path) : Effect.void))),
         );
-        // A process that failed to say where its catalog is may hold a stale one.
-        return configFailedAtMs !== undefined;
+        // Until the process says where its catalog is, or that it has none, it may hold a stale one.
+        return true;
       }
       const known = catalogPath.value;
       if (known === undefined) return false;

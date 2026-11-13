@@ -529,3 +529,50 @@ it.effect(
       assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("placement isolates a new thread while the first catalog lookup is still pending", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    const answer = yield* Deferred.make<void>();
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: fs,
+        readConfig: Deferred.await(answer).pipe(
+          Effect.as({ config: { model_catalog_json: filename } }),
+        ),
+      },
+    });
+    // The turn's own check is still waiting for config/read when the next thread is placed.
+    const opening = yield* modelStatus(known).pipe(Effect.forkChild({ startImmediately: true }));
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+    yield* Deferred.succeed(answer, undefined);
+    assert.strictEqual(yield* Fiber.join(opening), "ready");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a process with no catalog configured never isolates new threads once it says so", () =>
+  Effect.gen(function* () {
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Effect.succeed({ config: {} }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "ready");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
