@@ -149,12 +149,10 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const threadId = yield* threadOf(scope);
       const machines = yield* DisposableAttach.DisposableAttach;
-      const [record] = (yield* machines
-        .list({ attachId: input.attachId })
-        .pipe(Effect.mapError(machineFailure))).machines;
-      if (record !== undefined)
+      const nodeId = yield* machines.nodeOf(input.attachId).pipe(Effect.mapError(machineFailure));
+      if (nodeId !== undefined)
         yield* (yield* Profiles.PermissionProfiles).require(scope, "hub.manage", {
-          host: "pen-" + record.nodeId,
+          host: "pen-" + nodeId,
         });
       const caller = { provisioner: { kind: "thread" as const, threadId: threadId } };
       return yield* machines

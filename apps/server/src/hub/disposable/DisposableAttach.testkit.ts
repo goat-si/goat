@@ -70,6 +70,8 @@ export const fakePen = () => {
     /** Awaited by invite.status, so a test can hold a settlement between read and write. */
     statusGate: undefined as Deferred.Deferred<void> | undefined,
     statusStarted: undefined as Deferred.Deferred<void> | undefined,
+    /** Every invite.status asked, by the ref it named. */
+    statusAsked: [] as Array<string>,
     loseMint: false,
     /** The cancel's answer is lost before Pen applies it. */
     loseCancel: false,
@@ -143,6 +145,7 @@ export const fakePen = () => {
       }),
     status: (ref) =>
       Effect.gen(function* () {
+        control.statusAsked.push("mintId" in ref ? ref.mintId : ref.inviteId);
         if (control.statusStarted) yield* Deferred.succeed(control.statusStarted, undefined);
         if (control.statusGate) yield* Deferred.await(control.statusGate);
         const entry = refOf(ref);

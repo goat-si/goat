@@ -16,6 +16,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
@@ -52,6 +53,7 @@ import {
   type PenInviteState,
   PenInvites,
 } from "./PenInvites.ts";
+import { makeSharedPasses } from "./sharedPasses.ts";
 
 export type { StoredProvisioner };
 
@@ -71,6 +73,8 @@ export class Provisioners extends Context.Service<
 >()("goat/hub/disposable/DisposableAttach/Provisioners") {}
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
+/** How long a list waits for Pen's answers before it reads what GOAT has stored. */
+export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
 const MAX_INVITES_PER_ATTACH = 32;
 const OPEN = "final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')";
@@ -164,12 +168,15 @@ export class DisposableAttach extends Context.Service<
       input: HubMachineReissueInput,
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly list: (input: HubMachineListInput) => Effect.Effect<HubMachineList, HubMachinesError>;
+    /** The stored record's Pen node id, read without asking Pen; for a caller's host check. */
+    readonly nodeOf: (attachId: string) => Effect.Effect<string | undefined, HubMachinesError>;
     /**
      * One pass over open records and admitted keys: withdraws the open mints of records whose
      * provisioner's authority ended, settles each mint from what Pen saved, lets Pen forget what
-     * GOAT has stored, and confirms admitted keys are still members.
+     * GOAT has stored, and confirms admitted keys are still members. A pass already running is
+     * joined; its failures are logged, never returned.
      */
-    readonly reconcile: Effect.Effect<void, HubMachinesError>;
+    readonly reconcile: Effect.Effect<void>;
   }
 >()("goat/hub/disposable/DisposableAttach") {}
 
@@ -184,6 +191,8 @@ export const make = Effect.gen(function* () {
   // One attach mutation at a time, each rereading its record: mint, reissue, settlement and
   // withdrawal never interleave. Lock order: this, the settings write lock, the SQL transaction.
   const exclusive = (yield* Semaphore.make(1)).withPermits(1);
+  // Passes outlive the caller that started them, so an interrupted list never cuts one short.
+  const shared = makeSharedPasses(yield* Effect.scope, 64);
 
   const read = (attachId: string) =>
     sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${attachId}`.pipe(
@@ -683,17 +692,19 @@ export const make = Effect.gen(function* () {
     return yield* save(row, effects);
   });
 
-  const reconcile = Effect.gen(function* () {
+  const fullPass = Effect.gen(function* () {
     const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
       WHERE (${sql.unsafe(OPEN)}) OR (${sql.unsafe(IN_PEN)}) OR ${sql.unsafe(OWES_ACK)}
       ORDER BY created_at LIMIT 1000`.pipe(Effect.mapError(storageFailed));
-    for (const { attach_id } of due)
-      yield* exclusive(
-        Effect.flatMap(read(attach_id), (row) =>
-          row === undefined ? Effect.void : Effect.asVoid(settleRecord(row)),
-        ),
-      );
+    for (const { attach_id } of due) yield* settleOne(attach_id);
   }).pipe(Effect.withSpan("DisposableAttach.reconcile"));
+  const settleOne = (attachId: string) =>
+    exclusive(
+      Effect.flatMap(read(attachId), (row) =>
+        row === undefined ? Effect.void : Effect.asVoid(settleRecord(row)),
+      ),
+    );
+  const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await);
 
   const recordRequest = (requestKey: string, outcome: string, detail: string | null) =>
     Effect.flatMap(
@@ -818,7 +829,12 @@ export const make = Effect.gen(function* () {
   });
 
   const list = Effect.fn("DisposableAttach.list")(function* (input: HubMachineListInput) {
-    yield* reconcile.pipe(Effect.ignore);
+    // A slow or wedged Pen delays the answer by LIST_WAIT at most; the pass goes on behind it.
+    const pass =
+      input.attachId === undefined
+        ? shared("all", fullPass)
+        : shared("one:" + input.attachId, settleOne(input.attachId));
+    yield* Effect.flatMap(pass, Deferred.await).pipe(Effect.timeoutOption(LIST_WAIT));
     const rows =
       input.attachId === undefined
         ? yield* sql<Row>`SELECT * FROM disposable_machines ORDER BY created_at DESC LIMIT 200`.pipe(
@@ -828,7 +844,9 @@ export const make = Effect.gen(function* () {
     return { machines: rows.map((row) => status(row)) };
   });
 
-  return DisposableAttach.of({ attach, reissue, list, reconcile });
+  const nodeOf = (attachId: string) => Effect.map(read(attachId), (row) => row?.node_id);
+
+  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile });
 });
 
 // Settles invites and withdraws ones whose authority ended, also when no client is reading.
@@ -839,11 +857,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const service = yield* make;
     yield* service.reconcile.pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Disposable machine reconcile failed").pipe(
-          Effect.annotateLogs({ reason: error.detail }),
-        ),
-      ),
       Effect.repeat(Schedule.spaced(RECONCILE_EVERY)),
       Effect.forkScoped,
     );
