@@ -14,6 +14,7 @@ import { render } from "../../../test/render";
 const mocks = vi.hoisted(() => ({
   canEdit: false,
   historySupported: false,
+  revision: 0,
   readHistory: vi.fn(),
   tasks: [] as unknown[],
   routinesError: null as string | null,
@@ -45,6 +46,7 @@ vi.mock("./useBotRoster", () => ({
   useBotThreads: () => ({
     rows: mocks.rows,
     remoteWork: [],
+    revision: mocks.revision,
     supported: true,
     loaded: mocks.threads.loaded,
     failed: mocks.threads.failed,
@@ -122,6 +124,7 @@ import { navigationBlocked } from "~/lib/navigationHolds";
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
   mocks.canEdit = false;
   mocks.historySupported = false;
+  mocks.revision = 0;
   mocks.readHistory.mockReset();
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
@@ -898,4 +901,26 @@ it("keeps a paged-in task in the peek and exposes its work threads", async () =>
   expect(
     screen.getByRole("link", { name: "Go to thread" }).element().getAttribute("href"),
   ).toContain("taskTitle=Older");
+});
+
+it("keeps a paged-in peek open when the current list is refreshed", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValue(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await userEvent.click(screen.getByRole("button", { name: /^Older task/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  mocks.revision += 1;
+  await screen.rerender(historyPanel());
+  expect(screen.container.textContent).toContain("Older task");
+  expect(screen.container.textContent).toContain("Go to thread");
+  await userEvent.click(screen.getByRole("button", { name: "Back to Home from Older task" }));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
 });

@@ -32,12 +32,14 @@ export function GoatBotTaskPane({
   environmentId,
   session,
   taskId,
+  taskTitle,
   onClose,
   narrow,
 }: {
   readonly environmentId: EnvironmentId;
   readonly session: ReturnType<typeof useGoatBotSession>;
   readonly taskId: ChannelTaskId;
+  readonly taskTitle?: string | undefined;
   readonly onClose: () => void;
   readonly narrow: boolean;
 }) {
@@ -107,9 +109,11 @@ export function GoatBotTaskPane({
                 />
               }
             >
-              {task?.kind === "task" ? task.task.title : "Task thread"}
+              {task?.kind === "task" ? task.task.title : (taskTitle ?? "Task thread")}
             </TooltipTrigger>
-            <TooltipPopup>{task?.kind === "task" ? task.task.title : "Task thread"}</TooltipPopup>
+            <TooltipPopup>
+              {task?.kind === "task" ? task.task.title : (taskTitle ?? "Task thread")}
+            </TooltipPopup>
           </Tooltip>
           {task?.kind === "task" && (
             <p className="shrink-0 text-xs text-muted-foreground">

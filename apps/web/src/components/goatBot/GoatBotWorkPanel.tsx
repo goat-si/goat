@@ -40,6 +40,7 @@ import {
   useGoatBotName,
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
+import { useBotWorkHistory } from "./useBotWorkHistory";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import type { GoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
@@ -85,6 +86,7 @@ export function GoatBotWorkPanel({
   const [peek, setPeek] = useState<{
     readonly taskId: ChannelTaskId;
     readonly title: string;
+    readonly historyRow: Extract<BotThreadRow, { kind: "task" }> | null;
   } | null>(null);
   // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
   // peek held focus and closed because its task left the list. It applies once, so later tab
@@ -132,9 +134,25 @@ export function GoatBotWorkPanel({
   const botName = useGoatBotName();
   const picture = useGoatBotPicture();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
-  const { rows, remoteWork, supported, loaded, failed, failure, turnsWaiting, refresh } =
-    useBotThreads(environmentId, memberThreadsKey(member));
-  const offline = useEnvironment(environmentId)?.connection.phase === "offline";
+  const current = useBotThreads(environmentId, memberThreadsKey(member));
+  const { supported, loaded, failed, failure, turnsWaiting, refresh } = current;
+  const environment = useEnvironment(environmentId);
+  const history = useBotWorkHistory(
+    environmentId,
+    member?.botId ?? null,
+    environment?.connection.phase === "connected"
+      ? environment.serverConfig?.environment.capabilities
+      : undefined,
+    {
+      rows: current.rows,
+      remoteWork: current.remoteWork,
+      mainMessageCount: current.mainMessageCount ?? 0,
+    },
+    current.revision ?? 0,
+    loaded && !failed,
+  );
+  const { rows, remoteWork } = history;
+  const offline = environment?.connection.phase === "offline";
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -175,10 +193,12 @@ export function GoatBotWorkPanel({
   const peeked =
     peek === null
       ? undefined
-      : rows.find(
+      : (rows.find(
           (row): row is Extract<BotThreadRow, { kind: "task" }> =>
             row.kind === "task" && row.task.taskId === peek.taskId,
-        );
+        ) ??
+        peek.historyRow ??
+        undefined);
   // A task the list no longer has, once it has loaded, closes its peek.
   const peekGone = peek !== null && loaded && !failed && peeked === undefined;
   if (peekGone) {
@@ -216,7 +236,11 @@ export function GoatBotWorkPanel({
               workRowCollapsed(rows, environmentId, remoteWork, peek.taskId)
             )
               setShowAllWork(true);
-            setFocusTarget(peeked === undefined ? "home" : peek.taskId);
+            setFocusTarget(
+              rows.some((row) => row.kind === "task" && row.task.taskId === peek.taskId)
+                ? peek.taskId
+                : "home",
+            );
             setPeekHasFocus(false);
             setPeek(null);
           }}
@@ -313,13 +337,27 @@ export function GoatBotWorkPanel({
                 supported={supported}
                 offline={offline}
                 onRetry={refresh}
+                historyAvailable={history.hasMore}
+                historyLoading={history.loading}
+                historyFailed={history.failed}
+                historyIncomplete={history.incomplete}
+                launchesTruncated={history.launchesTruncated}
+                onLoadHistory={history.loadMore}
                 peekable={peekRows !== undefined}
                 showAll={showAllWork}
                 onShowAllChange={setShowAllWork}
                 onOpenTask={(row) => {
                   if (peekRows === undefined) return;
                   setRoutineFocus(null);
-                  setPeek({ taskId: row.task.taskId, title: row.task.title });
+                  setPeek({
+                    taskId: row.task.taskId,
+                    title: row.task.title,
+                    historyRow: current.rows.some(
+                      (item) => item.kind === "task" && item.task.taskId === row.task.taskId,
+                    )
+                      ? null
+                      : row,
+                  });
                 }}
                 focusTaskId={focusTarget === "home" ? null : focusTarget}
                 focusRef={focusOnce}

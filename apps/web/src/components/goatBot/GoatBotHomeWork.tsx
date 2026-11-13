@@ -66,6 +66,12 @@ export function GoatBotHomeWork({
   focusTaskId = null,
   focusRef,
   notice = null,
+  historyAvailable = false,
+  historyLoading = false,
+  historyFailed = false,
+  historyIncomplete = false,
+  launchesTruncated,
+  onLoadHistory,
 }: {
   readonly environmentId: EnvironmentId;
   /** Kept for the history walk, which will read this bot's older work for these rows. */
@@ -93,6 +99,12 @@ export function GoatBotHomeWork({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
+  readonly historyAvailable?: boolean;
+  readonly historyLoading?: boolean;
+  readonly historyFailed?: boolean;
+  readonly historyIncomplete?: boolean;
+  readonly launchesTruncated?: ReadonlySet<ChannelTaskId>;
+  readonly onLoadHistory?: () => void;
 }) {
   const work = botHomeWork(rows, [], environmentId, remoteWork);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
@@ -111,6 +123,7 @@ export function GoatBotHomeWork({
       onRefresh={onRetry}
       peekable={peekable}
       focusRef={task.row.task.taskId === focusTaskId ? focusRef : undefined}
+      launchesTruncated={launchesTruncated?.has(task.row.task.taskId) === true}
     />
   );
   return (
@@ -138,20 +151,32 @@ export function GoatBotHomeWork({
           <GoatBotCardSkeleton rows={3} />
         </>
       )}
-      {loaded && !failed && empty && (
+      {loaded && !failed && empty && !historyAvailable && (
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
-          <p className="text-muted-foreground">
-            Ask {botName} in chat to start work. Unpinned tasks that finished more than three days
-            ago aren't listed here.
-          </p>
+          <p className="text-muted-foreground">Ask {botName} in chat to start work.</p>
         </div>
       )}
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {hidden > 0 && (
-        <GoatBotShowMoreRow expanded={showAll} onToggle={() => onShowAllChange(!showAll)} />
+      {historyIncomplete && (
+        <p className="px-3 py-2 text-xs text-muted-foreground">Older work may be missing</p>
+      )}
+      {historyFailed && (
+        <p className="px-3 py-2 text-xs text-muted-foreground">Couldn't load older work.</p>
+      )}
+      {(historyAvailable || hidden > 0) && (
+        <GoatBotShowMoreRow
+          expanded={!historyAvailable && showAll}
+          onToggle={() => {
+            if (historyLoading) return;
+            if (historyAvailable) {
+              onShowAllChange(true);
+              onLoadHistory?.();
+            } else onShowAllChange(!showAll);
+          }}
+        />
       )}
     </div>
   );
@@ -175,6 +200,7 @@ function WorkRow({
   onRefresh,
   peekable,
   focusRef,
+  launchesTruncated,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -185,6 +211,7 @@ function WorkRow({
   readonly onRefresh: () => void;
   readonly peekable: boolean;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
+  readonly launchesTruncated: boolean;
 }) {
   const row = task.row;
   const title = row.task.title;
@@ -247,7 +274,7 @@ function WorkRow({
         ) : (
           <Link
             to="/bot"
-            search={{ task: row.task.taskId, ...goatBotSearch(member) }}
+            search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             <WorkRowText title={title} status={status.label} unread={row.unread} />
@@ -269,6 +296,11 @@ function WorkRow({
           <EllipsisIcon />
         </Button>
       </div>
+      {launchesTruncated && (
+        <p className="px-9 pb-2 text-xs text-muted-foreground">
+          Some threads are listed in Threads.
+        </p>
+      )}
       {expanded && (
         <div className="pb-2 pl-9">
           <GoatBotWorkDetails

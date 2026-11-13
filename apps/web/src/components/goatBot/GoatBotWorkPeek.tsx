@@ -95,7 +95,9 @@ export function GoatBotWorkPeek({
       <div className="p-3">
         <Button
           className="w-full"
-          render={<Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />}
+          render={
+            <Link to="/bot" search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }} />
+          }
         >
           Go to thread
         </Button>

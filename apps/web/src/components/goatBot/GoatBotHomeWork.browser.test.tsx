@@ -225,16 +225,12 @@ it("an access-denied read explains itself and offers no retry that can never suc
   expect(screen.container.textContent).not.toContain("Try again");
 });
 
-it("an empty list claims only recent work and offers the one next action", async () => {
+it("an empty list offers the next action without claiming history is unavailable", async () => {
   const rows = setup([]);
   await using screen = await render(view(rows));
   await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText(/Ask GOAT Bot in chat to start work/)).toBeVisible();
-  await expect
-    .element(
-      screen.getByText(/Unpinned tasks that finished more than three days ago aren't listed here/),
-    )
-    .toBeVisible();
+  expect(screen.container.textContent).not.toContain("aren't listed here");
 });
 
 it("says the computer is offline instead of loading forever, and an unsupported read never loads", async () => {

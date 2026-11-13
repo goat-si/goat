@@ -1,7 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { BotId, BotRemoteWork, BotThreadRow, ChannelTaskId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { botThreadsHistoryInput, mergeBotThreadHistory } from "./botThreadHistory.ts";
+import {
+  BOT_THREAD_HISTORY_REQUESTS_PER_PRESS,
+  botThreadsHistoryInput,
+  mergeBotThreadHistory,
+  readBotThreadHistory,
+} from "./botThreadHistory.ts";
 
 const row = Schema.decodeUnknownSync(BotThreadRow);
 const remoteWork = Schema.decodeUnknownSync(BotRemoteWork);
@@ -158,5 +163,79 @@ describe("mergeBotThreadHistory", () => {
         { rows: [task("c")], mainMessageCount: 0, history: { endedEarly: true } },
       ]).endedEarly,
     ).toBe(true);
+  });
+});
+
+describe("readBotThreadHistory", () => {
+  const page = (rows: ReadonlyArray<ReturnType<typeof task>>, nextCursor?: string) => ({
+    rows,
+    mainMessageCount: 0,
+    history: nextCursor === undefined ? {} : { nextCursor },
+  });
+  const reader = (
+    answers: ReadonlyArray<ReturnType<typeof page> | { rows: []; mainMessageCount: 0 }>,
+  ) => {
+    const asked: Array<string | undefined> = [];
+    return {
+      asked,
+      read: async (cursor: string | undefined) => {
+        asked.push(cursor);
+        const answer = answers[asked.length - 1];
+        if (answer === undefined) throw new Error("read past the fixture");
+        return answer;
+      },
+    };
+  };
+
+  it("keeps reading past empty pages while a cursor comes back, and stops when none does", async () => {
+    const pages = reader([page([], "v1.a"), page([], "v1.b"), page([task("old")])]);
+    const result = await readBotThreadHistory({
+      read: pages.read,
+      from: undefined,
+      listed: new Set(),
+      wanted: 10,
+    });
+    expect(pages.asked).toEqual([undefined, "v1.a", "v1.b"]);
+    expect(result.supported).toBe(true);
+    expect(result.pages.map((entry) => entry.cursor)).toEqual([undefined, "v1.a", "v1.b"]);
+  });
+
+  it("asks at most its share of requests per press and leaves the cursor to continue from", async () => {
+    const endless = Array.from({ length: 10 }, (_, index) => page([], `v1.${index}`));
+    const pages = reader(endless);
+    const result = await readBotThreadHistory({
+      read: pages.read,
+      from: "v1.start",
+      listed: new Set(),
+      wanted: 10,
+    });
+    expect(pages.asked).toHaveLength(BOT_THREAD_HISTORY_REQUESTS_PER_PRESS);
+    expect(pages.asked[0]).toBe("v1.start");
+    expect(result.pages.at(-1)?.result.history?.nextCursor).toBe("v1.3");
+  });
+
+  it("stops once a screenful of rows the list did not have came back", async () => {
+    const pages = reader([
+      page([task("listed"), task("new-1")], "v1.a"),
+      page([task("new-2")], "v1.b"),
+    ]);
+    await readBotThreadHistory({
+      read: pages.read,
+      from: undefined,
+      listed: new Set(["task:listed"]),
+      wanted: 2,
+    });
+    expect(pages.asked).toEqual([undefined, "v1.a"]);
+  });
+
+  it("reports an answer without the history marker as a server that does not walk history", async () => {
+    const pages = reader([{ rows: [], mainMessageCount: 0 }]);
+    const result = await readBotThreadHistory({
+      read: pages.read,
+      from: undefined,
+      listed: new Set(),
+      wanted: 10,
+    });
+    expect(result).toEqual({ pages: [], supported: false });
   });
 });
