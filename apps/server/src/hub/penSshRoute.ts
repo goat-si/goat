@@ -70,7 +70,9 @@ export interface PenInstall {
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-// Words OpenCodex accepts in a link's explicit route (O6): no quotes, shell syntax or % tokens.
+// Words OpenCodex accepts in a link's explicit route (O6, src/link/explicit-route.ts): no quotes,
+// shell syntax or % tokens, and the program path narrower than the words after it.
+const ROUTE_PROGRAM = /^\/[A-Za-z0-9._+/-]*$/u;
 const ROUTE_PATH = /^\/[A-Za-z0-9._/:@+,=-]*$/u;
 
 /**
@@ -80,7 +82,7 @@ const ROUTE_PATH = /^\/[A-Za-z0-9._/:@+,=-]*$/u;
  */
 export const penRunCommand = (node: PenNode, pen: PenInstall) => {
   if (!NODE_ID.test(node.nodeId) || !NOISE_PUB.test(node.noisePub)) return undefined;
-  if (!ROUTE_PATH.test(pen.executablePath) || !ROUTE_PATH.test(pen.stateDir)) return undefined;
+  if (!ROUTE_PROGRAM.test(pen.executablePath) || !ROUTE_PATH.test(pen.stateDir)) return undefined;
   const command = `${pen.executablePath} pipe --node ${node.nodeId} --noise ${node.noisePub} --home ${pen.stateDir} 22`;
   return command.length <= 1024 ? command : undefined;
 };
