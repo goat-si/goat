@@ -110,6 +110,8 @@ export function DisposableMachinesSettings({
   return (
     <SettingsSection title="Disposable machines">
       <SettingsRow
+        serverScoped
+        settingKeys={["hub"]}
         title="Attach disposable machines"
         description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${expires}`}
         control={
@@ -122,6 +124,8 @@ export function DisposableMachinesSettings({
         }
       />
       <SettingsRow
+        serverScoped
+        settingKeys={["hub"]}
         title="Provisioner threads"
         description="Threads that may attach machines, by thread id."
         control={
@@ -177,6 +181,8 @@ export function DisposableMachinesSettings({
         )}
       </SettingsRow>
       <SettingsRow
+        serverScoped
+        settingKeys={["hub"]}
         title="Machine cap"
         description="How many disposable machines may hold a place in Pen at once."
         control={
@@ -209,6 +215,8 @@ export function DisposableMachinesSettings({
         }
       />
       <SettingsRow
+        serverScoped
+        settingKeys={["hub"]}
         title="Name rule"
         description="Names machines may take: letters, digits, - _ ., classes such as [a-z0-9-] and counts such as {0,30}."
         control={

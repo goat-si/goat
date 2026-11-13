@@ -32,6 +32,12 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["cloud machine boat opencodex child bootstrap automatic join auto-join"],
   },
   {
+    id: "hub-disposable-machines",
+    title: "Attach disposable machines",
+    to: "/settings/hub",
+    searchTerms: ["disposable machine cloud vm pen invite attach provisioner thread cap name rule"],
+  },
+  {
     id: "hub-relay-warning",
     title: "Relay traffic warning",
     to: "/settings/hub",
