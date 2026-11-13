@@ -153,7 +153,7 @@ export function GoatBotHomeWork({
           <GoatBotCardSkeleton rows={3} />
         </>
       )}
-      {loaded && !failed && empty && !historyAvailable && (
+      {loaded && !failed && empty && (
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
           <p className="text-muted-foreground">
