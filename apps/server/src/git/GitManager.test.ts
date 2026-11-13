@@ -3973,6 +3973,23 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         expect(NodeFS.readFileSync(NodePath.join(repoDir, "untracked.txt"), "utf8")).toBe(
           "keep me\n",
         );
+        expect(
+          (yield* runGit(repoDir, ["config", "branch.feature/pr-safe.goat-pull-request"])).stdout,
+        ).toBe("https://github.com/pingdotgg/codething-mvp/pull/91\n");
+        expect(
+          yield* manager.checkedOutPullRequest({
+            cwd: repoDir,
+            branch: result.branch,
+            url: result.pullRequest.url,
+          }),
+        ).toBe(true);
+        expect(
+          yield* manager.checkedOutPullRequest({
+            cwd: repoDir,
+            branch: result.branch,
+            url: "https://github.com/example/other/pull/1",
+          }),
+        ).toBe(false);
       }),
   );
 
