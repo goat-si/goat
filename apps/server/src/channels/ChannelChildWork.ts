@@ -30,10 +30,12 @@ import {
   type RunId,
   ThreadId,
 } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -59,6 +61,10 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 
 /** At most this many active coding threads per channel task. */
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
+/** Child-work rows one reconcile pass reads while repairing settled remote launches. */
+export const REMOTE_THREAD_REPAIR_PAGE = 200;
+/** How long a stopped repair waits before one more walk: a lost launch's dispatch can gain its thread later. */
+const REMOTE_THREAD_REPAIR_REARM_MS = 10 * 60_000;
 
 const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
   surface === "delegate_local" || surface === "delegate_remote"
@@ -708,6 +714,42 @@ const make = Effect.gen(function* () {
     return false;
   });
 
+  // A remote launch that settled before its bind kept no thread, and the pass above only visits
+  // active records; its dispatch row still holds the thread the host acknowledged. Binds fill
+  // every newer record, so the walk stops once a whole walk fills nothing, and walks again only
+  // after REMOTE_THREAD_REPAIR_REARM_MS, when a recovered launch's dispatch may have its thread.
+  const repairWalk = yield* Ref.make({
+    after: "",
+    filled: 0,
+    stoppedAt: undefined as number | undefined,
+  });
+  const repairSettledLaunches = Effect.gen(function* () {
+    const walk = yield* Ref.get(repairWalk);
+    const now = yield* Clock.currentTimeMillis;
+    if (walk.stoppedAt !== undefined && now - walk.stoppedAt < REMOTE_THREAD_REPAIR_REARM_MS)
+      return 0;
+    const page = yield* store.pageSettledLaunches(walk.after, REMOTE_THREAD_REPAIR_PAGE);
+    let filled = 0;
+    for (const { record, remoteThreadId } of page.candidates) {
+      const correlationId = record.destination?.correlationId;
+      if (correlationId === undefined || !isThreadId(remoteThreadId)) continue;
+      const fill = { ...record, correlationId, threadId: remoteThreadId };
+      if (yield* store.fillSettledLaunchThread(fill)) filled += 1;
+    }
+    const ended = page.inspected < REMOTE_THREAD_REPAIR_PAGE || page.lastKey === undefined;
+    yield* Ref.set(
+      repairWalk,
+      ended
+        ? { after: "", filled: 0, stoppedAt: walk.filled + filled === 0 ? now : undefined }
+        : { after: page.lastKey, filled: walk.filled + filled, stoppedAt: undefined },
+    );
+    return filled;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("settled remote launches not repaired", { cause }).pipe(Effect.as(0)),
+    ),
+  );
+
   const reconcile = Effect.gen(function* () {
     const active = yield* store
       .listActive()
@@ -733,7 +775,7 @@ const make = Effect.gen(function* () {
       );
       if (changed) settled += 1;
     }
-    return settled;
+    return settled + (yield* repairSettledLaunches);
   }).pipe(Effect.withSpan("ChannelChildWork.reconcile"));
 
   return ChannelChildWork.of({

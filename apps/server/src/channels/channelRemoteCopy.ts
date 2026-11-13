@@ -61,9 +61,9 @@ export const REMOTE_COPY = {
   answerRefused: (host: string, answer: string) =>
     "The coding thread on " +
     host +
-    " now runs above what this task may use, so I didn’t pass on your answer (“" +
+    " now runs above what this task may use, so I may not have passed on your answer (“" +
     answer +
-    "”). Lower the thread’s mode there and answer again, or answer in the thread.",
+    "”). Lower the thread’s mode there and answer again if it still matters, or answer in the thread.",
   inboxOverflow: (count: number) =>
     String(count) + " older progress reports from the other machine were dropped.",
   projectModelMissing: (host: string, project: string) =>
@@ -89,4 +89,9 @@ export const REMOTE_COPY = {
     ": " +
     capped(name) +
     "'s access changed after they answered. Answer again if it still matters, or answer in the thread there.",
+  /** The requester's permission no longer covers the work; whether an earlier send reached the host is unknown. */
+  requesterChanged: (host: string) =>
+    "I may not have passed on your answer to " +
+    capped(host) +
+    ": the requester’s permission no longer covers this work. Open the thread in GOAT to check it.",
 } as const;

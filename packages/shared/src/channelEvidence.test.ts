@@ -2,6 +2,7 @@ import { RunId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  channelEvidenceCorrection,
   channelEvidenceSentence,
   channelPersonEvidenceLabels,
   splitChannelResultText,
@@ -45,6 +46,12 @@ describe("evidence for people", () => {
     );
     expect(channelEvidenceSentence({ runId, observedCheckPending: true })).toBe(
       "Verification: the agent reported no tests; GOAT's own check is pending.",
+    );
+  });
+
+  it("corrects a told pending check to not run even when nothing else was reported", () => {
+    expect(channelEvidenceCorrection({ runId, observedCheckPending: false }, "fix the build")).toBe(
+      "Verification for fix the build: the agent reported no tests; GOAT's own check did not run.",
     );
   });
 });
