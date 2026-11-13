@@ -178,6 +178,7 @@ export function MobileBotWork(props: {
   // An event line opens the home on Home with its task peeked or its routine scrolled to.
   const [focusSeq, setFocusSeq] = useState(0);
   const [routineFocus, setRoutineFocus] = useState<{ id: string; seq: number } | null>(null);
+  const [showAllRoutines, setShowAllRoutines] = useState(false);
   // A task the list had not loaded yet when the home opened on it, and one it turned out to lack.
   const [taskFocus, setTaskFocus] = useState<ChannelTaskId | null>(null);
   const [leaveFor, setLeaveFor] = useState<{ id: ChannelTaskId; seq: number } | null>(null);
@@ -315,12 +316,25 @@ export function MobileBotWork(props: {
     routineThreadId === null
       ? []
       : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, now);
-  const sectionLabel = (key: string, text: string, first = false): MobileBotHomeItem => ({
+  if (
+    routineFocus &&
+    !showAllRoutines &&
+    boundRoutines.findIndex((row) => row.id === routineFocus.id) >= 5
+  ) {
+    setShowAllRoutines(true);
+  }
+  const sectionLabel = (
+    key: string,
+    text: string,
+    first = false,
+    action?: ReactNode,
+  ): MobileBotHomeItem => ({
     key,
     render: () => (
-      <Text className={`${first ? "mt-2" : "mt-4"} text-xs font-medium text-foreground-muted`}>
-        {text}
-      </Text>
+      <View className={`${first ? "mt-2" : "mt-4"} flex-row items-center justify-between`}>
+        <Text className="text-xs font-medium text-foreground-muted">{text}</Text>
+        {action}
+      </View>
     ),
   });
   const message = (key: string, node: ReactNode): MobileBotHomeItem => ({
@@ -499,6 +513,8 @@ export function MobileBotWork(props: {
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
           rows={boundRoutines}
+          showAll={showAllRoutines}
+          onShowAllChange={setShowAllRoutines}
           focusRoutineId={routineFocus?.id ?? null}
           onFocusedRowLayout={(y) => {
             if (routineFocus !== null) routineLanded.current = routineFocus.seq;
@@ -521,7 +537,25 @@ export function MobileBotWork(props: {
         />
       ),
     };
-    homeItems.push(sectionLabel("routines-label", "Routines"), routinesItem);
+    homeItems.push(
+      sectionLabel(
+        "routines-label",
+        "Routines",
+        false,
+        props.onDraft ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              if (props.onDraft?.(GOAT_BOT_NEW_ROUTINE_DRAFT)) closeSheet();
+            }}
+            className="min-h-[44px] justify-center"
+          >
+            <Text className="text-foreground underline">New routine</Text>
+          </Pressable>
+        ) : null,
+      ),
+      routinesItem,
+    );
     homeItems.push(sectionLabel("machines-label", "Machines"), {
       key: "machines",
       render: () => (

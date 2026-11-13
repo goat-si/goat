@@ -29,6 +29,8 @@ export function MobileBotRoutines(props: {
   readonly error: boolean;
   readonly onRetry: () => void;
   readonly rows: ReadonlyArray<BotRoutineRow>;
+  readonly showAll: boolean;
+  readonly onShowAllChange: (showAll: boolean) => void;
   /** A routine the home opened on; its row reports where it sits so the list can scroll to it. */
   readonly focusRoutineId?: string | null | undefined;
   readonly onFocusedRowLayout?: ((y: number) => void) | undefined;
@@ -76,7 +78,7 @@ export function MobileBotRoutines(props: {
       ) : !props.tasks ? (
         <Text className="text-foreground-muted">Loading routines…</Text>
       ) : props.rows.length && environmentId ? (
-        props.rows.map((routine) => (
+        (props.showAll ? props.rows : props.rows.slice(0, 5)).map((routine) => (
           <MobileRoutineRow
             key={routine.id}
             environmentId={environmentId}
@@ -98,7 +100,15 @@ export function MobileBotRoutines(props: {
           }
         />
       )}
-      {newRoutine}
+      {props.rows.length > 5 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => props.onShowAllChange(!props.showAll)}
+          className="min-h-[44px] items-center justify-center"
+        >
+          <Text className="text-foreground">{props.showAll ? "Show less" : "Show more"}</Text>
+        </Pressable>
+      ) : null}
     </>
   );
 }
