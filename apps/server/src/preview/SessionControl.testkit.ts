@@ -1,9 +1,8 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
-import type { Page } from "playwright-core";
 import { vi } from "vite-plus/test";
-import type { ServerBrowser } from "./ServerBrowser.ts";
+import type { PreviewManager } from "./Manager.ts";
+import { popupAdmission } from "./popupAdmission.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 /** Completes once SessionControl.cutBlockedUrl has run on any tab; the spy ends with the scope. */
@@ -20,19 +19,29 @@ export const cutBlockedUrlObserved = Effect.gen(function* () {
   return observed;
 });
 
-export const popupClosedBeforeAdoption = (
-  popup: Page,
-  service: ServerBrowser["Service"],
-  count: number,
-) =>
-  Effect.raceFirst(
-    (popup.isClosed() ? Effect.void : Effect.promise(() => popup.waitForEvent("close"))).pipe(
-      Effect.as("closed"),
-    ),
-    Stream.merge(Stream.succeed(undefined), service.sessionChanges).pipe(
-      Stream.mapEffect(() => service.sessions),
-      Stream.filter((views) => views.length > count),
-      Stream.runHead,
-      Effect.as("adopted"),
-    ),
-  );
+export const popupAdmissionObserved = (manager: PreviewManager["Service"]) =>
+  Effect.gen(function* () {
+    const outcome = yield* Deferred.make<"refused" | "adopted">();
+    const refuse = popupAdmission.refuse;
+    const refusal = vi.spyOn(popupAdmission, "refuse").mockImplementation(async (close) => {
+      await refuse(close);
+      Deferred.doneUnsafe(outcome, Effect.succeed("refused"));
+    });
+    const open = manager.open;
+    const adoption = vi.spyOn(manager, "open").mockImplementation((input) =>
+      open({
+        ...input,
+        beforePublish: (snapshot) => {
+          input.beforePublish?.(snapshot);
+          Deferred.doneUnsafe(outcome, Effect.succeed("adopted"));
+        },
+      }),
+    );
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        refusal.mockRestore();
+        adoption.mockRestore();
+      }),
+    );
+    return outcome;
+  });

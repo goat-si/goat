@@ -356,6 +356,7 @@ const make = Effect.gen(function* () {
   const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
   const agentTurns = yield* activity.changes;
   const { runFork, recordAction, keepTypedText } = yield* makeBrowserHistorySupport;
+  const popupCloseFailure = (p: Page) => closeUnadoptedPopup(p, runFork);
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const { applyOpenRendering, applyRendering, applySetting, broadcastViewport, layoutSize } =
     makeRendering(runPromise);
@@ -590,7 +591,7 @@ const make = Effect.gen(function* () {
         : openRuns.signal(snapshot.threadId, snapshot.automationOwner);
       openSignal?.throwIfAborted();
       adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
-      if (adopted) opened.push(() => adopted.close());
+      if (adopted) opened.push(() => adopted.close().catch(popupCloseFailure(adopted.page)));
       const desktop =
         adopted === undefined &&
         snapshot.serverRendered !== true &&
@@ -823,7 +824,7 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       updateFileChooserInterception(tab);
       // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
-      page.on("popup", (p) => void adoptPopup(tab, p).catch(closeUnadoptedPopup(p, runFork)));
+      page.on("popup", (p) => void adoptPopup(tab, p).catch(popupCloseFailure(p)));
       void startBrowserWatchers(tab, () => Date.now(), adopted?.signal)
         .finally(() => adopted?.release())
         .catch(constVoid);
@@ -1099,7 +1100,7 @@ const make = Effect.gen(function* () {
       () => Date.now(),
     );
     if (refused) return;
-    const release = closePopupOnAbort(popup, signal, releaseOrigin, close);
+    const release = closePopupOnAbort(signal, releaseOrigin, close, popupCloseFailure(popup));
     if (signal?.aborted) return release();
     const url = popup.url();
     const controller = [...opener.viewers].find(
@@ -1129,7 +1130,7 @@ const make = Effect.gen(function* () {
       },
       async () => {
         release();
-        await close().catch(closeUnadoptedPopup(popup, runFork));
+        await close().catch(popupCloseFailure(popup));
       },
     );
   };
@@ -1146,7 +1147,7 @@ const make = Effect.gen(function* () {
         adopted?.release();
         if (adopted?.signal?.aborted) {
           adoptedPages.delete(key);
-          await adopted.close().catch(constVoid);
+          await adopted.close().catch(popupCloseFailure(adopted.page));
           await runPromise(
             manager.close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId }),
           ).catch(constVoid);
