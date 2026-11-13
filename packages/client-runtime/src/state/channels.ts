@@ -146,6 +146,7 @@ export function createChannelEnvironmentAtoms<R, E>(
         config.environment.capabilities.goatBotTaskLookupSearch === true &&
         get(listPermission.permissionAtom(environmentId, input));
       const result = get(listBotThreads({ environmentId, input }));
+      const filtered = eligible ? get(retainedFor(environmentId, input)) : null;
       return selectHomeCurrentOpenableWork({
         sourceEnvironmentId: environmentId,
         botId,
@@ -155,50 +156,28 @@ export function createChannelEnvironmentAtoms<R, E>(
           : result._tag === "Failure"
             ? "failed"
             : "pending",
-        current: AsyncResult.isSuccess(result) ? result.value : null,
+        current: AsyncResult.isSuccess(result) ? (filtered ?? result.value) : null,
         isOpenable: (destination) => get(remoteWorkOpenable(destination)),
       });
     });
   });
   const homeCurrentOpenableWorkAtom = (key: readonly [EnvironmentId, BotId]) =>
     currentOpenableFamily(JSON.stringify(key));
-  /**
-   * The threads the rows each bot shows open as its own work. A row aged out of the bot's lists
-   * stops hiding its thread, and the rows are read again when the next one's retention ends.
-   * Until they load, nothing is listed, so thread lists keep showing the work.
-   */
-  const listedBotWork = (source: {
-    readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
-    readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
-  }) => {
-    shellWorkSignal = source.signal;
-    const forEnvironment = Atom.family((environmentId: EnvironmentId) => {
-      // When this client first saw each remote launch without a destination, by its own clock.
-      const pendingSince = new Map<string, number>();
-      return Atom.make((get): ReadonlyArray<GoatBotWorkRef> => {
-        const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
-          .capabilities;
-        if (capabilities?.goatBotTaskThreads !== true) return NO_WORK;
-        const inputs: ChannelListBotThreadsInput[] = [{}];
-        if (capabilities.goatBotMembers === true && capabilities.goatBotProfiles === true) {
-          // The roster's own query, so both read one list of bots.
-          const bots = get(listBots({ environmentId, input: { includeDeleted: true } }));
-          for (const bot of AsyncResult.isSuccess(bots) ? bots.value.bots : []) {
-            if (bot.role === "member" && bot.state !== "deleted") inputs.push({ botId: bot.botId });
-          }
-        }
-        const listed: GoatBotWorkRef[] = [];
-        // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
-        const now = Date.now();
-        let nextExpiry = Infinity;
-        const stillPending = new Set<string>();
-        let everyListRead = true;
-        for (const input of inputs) {
-          const result = get(listBotThreads({ environmentId, input }));
-          if (!AsyncResult.isSuccess(result)) {
-            everyListRead = false;
-            continue;
-          }
+  const retained = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [EnvironmentId, ChannelListBotThreadsInput];
+    const pendingSince = new Map<string, number>();
+    return Atom.make((get) => {
+      // @effect-diagnostics-next-line globalDate:off - Retention is wall-clock, as the bot's lists read it.
+      const now = Date.now();
+      let nextExpiry = Infinity;
+      const stillPending = new Set<string>();
+      let everyListRead = true;
+      let filtered = null;
+      {
+        const result = get(listBotThreads({ environmentId, input }));
+        if (!AsyncResult.isSuccess(result)) {
+          everyListRead = false;
+        } else {
           const shown = [];
           const retiredTasks = new Set<string>();
           for (const row of result.value.rows) {
@@ -226,41 +205,92 @@ export function createChannelEnvironmentAtoms<R, E>(
             if (now - since < PENDING_REMOTE_WINDOW_MS)
               nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
           }
-          listed.push(
-            ...goatBotListedWork(shown, {
-              originEnvironmentId: environmentId,
-              // A retired task's remote work opens only from that task, so it shows again too.
-              items: (result.value.remoteWork ?? []).filter(
-                (item) => !retiredTasks.has(item.taskId),
-              ),
-              isOpenable: (destination) => get(remoteWorkOpenable(destination)),
-            }),
-          );
+          filtered = {
+            ...result.value,
+            rows: shown,
+            remoteWork: (result.value.remoteWork ?? []).filter(
+              (item) => !retiredTasks.has(item.taskId),
+            ),
+          };
         }
-        // A failed read proves nothing about a pending launch, so it keeps its window.
-        for (const [key, since] of pendingSince) {
-          if (stillPending.has(key)) continue;
-          if (everyListRead) pendingSince.delete(key);
-          else if (now - since < PENDING_REMOTE_WINDOW_MS)
-            nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
-        }
-        if (nextExpiry !== Infinity) {
-          // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
-          const handle = setTimeout(
-            () => {
-              get.registry.update(botThreadsRevision(environmentId), (n) => n + 1);
-              get.refreshSelf();
-            },
-            Math.min(nextExpiry - now, MAX_TIMER_MS),
-          );
-          get.addFinalizer(() => clearTimeout(handle));
-        }
-        return listed.length === 0 ? NO_WORK : listed;
-      }).pipe(Atom.withLabel(`environment-data:channel:goat-bot-listed-work:${environmentId}`));
+      }
+      // A failed read proves nothing about a pending launch, so it keeps its window.
+      for (const [key, since] of pendingSince) {
+        if (stillPending.has(key)) continue;
+        if (everyListRead) pendingSince.delete(key);
+        else if (now - since < PENDING_REMOTE_WINDOW_MS)
+          nextExpiry = Math.min(nextExpiry, now + PENDING_REMOTE_RETRY_MS);
+      }
+      if (nextExpiry !== Infinity) {
+        // @effect-diagnostics-next-line globalTimers:off - One bounded timer per read, cleared on the next.
+        const handle = setTimeout(
+          () => {
+            get.registry.refresh(listBotThreads({ environmentId, input }));
+            get.refreshSelf();
+          },
+          Math.min(nextExpiry - now, MAX_TIMER_MS),
+        );
+        get.addFinalizer(() => clearTimeout(handle));
+      }
+      return filtered;
     });
+  });
+  const retainedFor = (environmentId: EnvironmentId, input: ChannelListBotThreadsInput) =>
+    retained(JSON.stringify([environmentId, input]));
+  const botInputs = (get: Atom.AtomContext, environmentId: EnvironmentId) => {
+    const capabilities = get(sessions.initialConfigValueAtom(environmentId))?.environment
+      .capabilities;
+    const inputs: ChannelListBotThreadsInput[] = [{}];
+    if (capabilities?.goatBotMembers === true && capabilities.goatBotProfiles === true) {
+      const bots = get(listBots({ environmentId, input: { includeDeleted: true } }));
+      for (const bot of AsyncResult.isSuccess(bots) ? bots.value.bots : []) {
+        if (bot.role === "member" && bot.state !== "deleted") inputs.push({ botId: bot.botId });
+      }
+    }
+    return inputs;
+  };
+  const homeCurrentOpenableWorkByEnvironment = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const inputs = botInputs(get, environmentId);
+      const byBot = inputs.map((input) => {
+        const botId = input.botId ?? ("main" as BotId);
+        const value = get(homeCurrentOpenableWorkAtom([environmentId, botId]));
+        return { botId, eligible: value.eligible, list: value.list };
+      });
+      return {
+        byBot,
+        links: inputs.flatMap(
+          (input) =>
+            get(homeCurrentOpenableWorkAtom([environmentId, input.botId ?? ("main" as BotId)]))
+              .links,
+        ),
+      };
+    }),
+  );
+  const listedBotWork = (source: {
+    readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
+    readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
+  }) => {
+    shellWorkSignal = source.signal;
     return Atom.make((get) =>
-      get(source.environmentIdsAtom).flatMap((environmentId) => get(forEnvironment(environmentId))),
-    ).pipe(Atom.withLabel("environment-data:channel:goat-bot-listed-work"));
+      get(source.environmentIdsAtom).flatMap((environmentId) => {
+        if (
+          get(sessions.initialConfigValueAtom(environmentId))?.environment.capabilities
+            .goatBotTaskThreads !== true
+        )
+          return NO_WORK;
+        return botInputs(get, environmentId).flatMap((input) => {
+          const value = get(retainedFor(environmentId, input));
+          return value === null
+            ? []
+            : goatBotListedWork(value.rows, {
+                originEnvironmentId: environmentId,
+                items: value.remoteWork ?? [],
+                isOpenable: (destination) => get(remoteWorkOpenable(destination)),
+              });
+        });
+      }),
+    );
   };
   return {
     ensureBot: createEnvironmentRpcCommand(runtime, {
@@ -270,6 +300,7 @@ export function createChannelEnvironmentAtoms<R, E>(
     listBots,
     listedBotWork,
     homeCurrentOpenableWorkAtom,
+    homeCurrentOpenableWorkByEnvironment,
     remoteWorkOpenable,
     /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
     updateBot: createEnvironmentRpcCommand(runtime, {
