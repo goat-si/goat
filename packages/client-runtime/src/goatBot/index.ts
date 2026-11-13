@@ -14,6 +14,7 @@ export * from "./taskVisibility.ts";
 export * from "./botThreadHistory.ts";
 export * from "./botRoster.ts";
 export * from "./botWork.ts";
+export * from "./taskReadAcknowledgement.ts";
 export * from "./remoteWork.ts";
 export * from "./face.ts";
 export * from "./avatar.ts";
