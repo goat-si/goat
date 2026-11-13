@@ -11,7 +11,6 @@ import {
   isPenNodeName,
   matchesDisposableNameRule,
 } from "@goat/contracts";
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -76,9 +75,6 @@ export interface AttachCaller {
 }
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
-// Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
-const ENROLL_LIMIT = 100;
-const ENROLL_CONCURRENCY = 4;
 /** How long a list waits for Pen's answers before it reads what GOAT has stored. */
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
@@ -597,27 +593,7 @@ export const make = Effect.gen(function* () {
         row === undefined ? Effect.void : Effect.asVoid(settleRecord(row, members)),
       ),
     );
-  const enrollPass = Effect.gen(function* () {
-    const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
-      WHERE final_at IS NULL AND ((${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching'))
-        OR state = 'left_pen')
-      ORDER BY created_at LIMIT ${ENROLL_LIMIT}`.pipe(Effect.mapError(storageFailed));
-    // One read of the Home's contracts serves every record in the pass.
-    const contracts = yield* Effect.cached(home.contracts);
-    // One record's failure is logged and never stops the others.
-    yield* Effect.forEach(
-      due,
-      ({ attach_id }) =>
-        enrollment
-          .advance(attach_id, contracts)
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Disposable machine enrollment step failed", Cause.squash(cause)),
-            ),
-          ),
-      { concurrency: ENROLL_CONCURRENCY, discard: true },
-    );
-  }).pipe(Effect.withSpan("DisposableAttach.enroll"));
+  const enrollPass = enrollment.pass.pipe(Effect.mapError(storageFailed));
   const enroll = Effect.flatMap(shared("enroll", enrollPass), Deferred.await);
   const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await).pipe(
     Effect.andThen(shared("enroll", enrollPass)),

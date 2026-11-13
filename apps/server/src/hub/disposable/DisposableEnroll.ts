@@ -1,4 +1,5 @@
 import type { ServerSettings } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -9,7 +10,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { makeAuthority } from "./attachAuthority.ts";
 import { conflictCount } from "./attachModel.ts";
-import { type Columns, type Row, samePolicy } from "./attachRow.ts";
+import { type Columns, IN_PEN, type Row, samePolicy } from "./attachRow.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { EnrollHost } from "./EnrollHost.ts";
 import {
@@ -41,6 +42,9 @@ import { disposableKnownHosts } from "./routeContract.ts";
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
 type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
+// Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
+const ENROLL_LIMIT = 100;
+const ENROLL_CONCURRENCY = 4;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const WAITING_ROUTE = new Set(["no_exact_block", "no_user", "no_key"]);
 
@@ -536,5 +540,25 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     );
   });
 
-  return { advance };
+  /** One pass over every record enrollment moves on; one record's failure never stops the others. */
+  const pass = Effect.gen(function* () {
+    const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
+      WHERE final_at IS NULL AND ((${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching'))
+        OR state = 'left_pen')
+      ORDER BY created_at LIMIT ${ENROLL_LIMIT}`;
+    // One read of the Home's contracts serves every record in the pass.
+    const contracts = yield* Effect.cached(home.contracts);
+    yield* Effect.forEach(
+      due,
+      ({ attach_id }) =>
+        advance(attach_id, contracts).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Disposable machine enrollment step failed", Cause.squash(cause)),
+          ),
+        ),
+      { concurrency: ENROLL_CONCURRENCY, discard: true },
+    );
+  }).pipe(Effect.withSpan("DisposableEnroll.pass"));
+
+  return { advance, pass };
 });
