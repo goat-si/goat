@@ -890,7 +890,7 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
   that reaches the node after its E, or after a cancel of its mintId, therefore makes nothing.
 - A bound invite whose expiry passes becomes an `expired` entry: the node writes it when it next saves the book (it
   prunes at start and every minute), and invite.status writes it before it answers `expired`, so a wall clock set back
-  later cannot make it live again. Terminal entries and
+  later cannot make it live again; when that write fails, status answers `{"error":"..."}` instead. Terminal entries and
   fences are kept, and pruning skips them, until `invite.ack` forgets them. Leaving the mesh or replacing it (`pen
   leave`, a join that replaces a solo mesh) deletes `offers.json` with them, and status then answers `absent`.
 - Control op `invite.status`, `{"op":"invite.status","inviteId":I}` or `{"op":"invite.status","mintId":M}`, answers

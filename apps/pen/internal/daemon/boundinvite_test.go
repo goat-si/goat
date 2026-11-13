@@ -381,3 +381,35 @@ func TestAnOrdinaryInvitesAnswerIsUnchanged(t *testing.T) {
 		t.Fatalf("answer members %v (%v); want token,relay,expiresAt,command,windowsCommand", keys, err)
 	}
 }
+
+// A cancel that lands after a bound invite is made but before its waiter is registered still ends the wait: the
+// waiter checks the invite's state once it is registered.
+func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	clk := &clock{}
+	clk.ms.Store(time.Now().UnixMilli())
+	a := founder(t, ctx, rs, "a", clk)
+	a.d.boundCreated = func(id string) {
+		if _, err := a.d.inviteBook().Cancel(id, "", clk.now); err != nil {
+			t.Error(err)
+		}
+	}
+	jid := newIdentity(t)
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	var ev struct{ T string }
+	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
+		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}

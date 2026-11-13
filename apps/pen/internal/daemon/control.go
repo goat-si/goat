@@ -462,6 +462,12 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 		delete(d.inviteWait, id)
 		d.mu.Unlock()
 	}()
+	// A cancel that came before the waiter was registered found nobody to tell; one after this check finds it.
+	if d.inviteBook().State(id) == mesh.InviteCancelled {
+		reply(r)
+		reply(map[string]any{"t": "cancelled"})
+		return
+	}
 	reply(r)
 	gone := clientGone(c)
 	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))

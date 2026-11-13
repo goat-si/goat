@@ -151,7 +151,9 @@ type Daemon struct {
 	acct []*acctSlot
 	// inviteWait holds the callers waiting on an invite: an admitted member, or nil when the invite was cancelled.
 	inviteWait map[string]chan *mesh.Member
-	lastView   *mesh.View
+	// boundCreated, when set, runs after a bound invite is made and before its waiter is registered (tests).
+	boundCreated func(id string)
+	lastView     *mesh.View
 	// saveErr is the last mesh save's error (nil once a save succeeds), shown by pen ls.
 	saveErr error
 	// hostKeysErr names the sshd key files the last host key check could not read, shown by pen ls.

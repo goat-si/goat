@@ -65,7 +65,9 @@ func (x *Invite) UnmarshalJSON(b []byte) error {
 	}
 	*x = Invite{ID: f.ID, Secret: f.Secret, ExpiresAt: f.ExpiresAt, Subject: f.Subject, MintID: f.MintID, State: f.State,
 		Nonce: f.Nonce, At: f.At}
-	if f.Subject != nil {
+	if f.Subject != nil && (f.BoundSecret != nil || f.BoundExpiresAt != 0) {
+		// A bound entry written before its secret moved to boundSecret keeps secret and expiresAt; the next save moves
+		// them.
 		x.Secret, x.ExpiresAt = f.BoundSecret, f.BoundExpiresAt
 	}
 	return nil
@@ -260,6 +262,13 @@ func terminal(x Invite, state string, now time.Time, nonce string) Invite {
 // names nothing yet is fenced: it answers cancelled and a later create with that mintID is refused. clock is read
 // under the book's lock.
 func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, error) {
+	state, _, err := iv.CancelID(id, mintID, clock)
+	return state, err
+}
+
+// CancelID is Cancel that also answers the id of the invite it named, resolved under the same hold of the book's lock
+// (empty for a fence or an absent id), so the caller acts on exactly that invite.
+func (iv *Invites) CancelID(id, mintID string, clock func() time.Time) (state, inviteID string, err error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
 	now := clock()
@@ -267,25 +276,40 @@ func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, er
 	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
 	switch {
 	case !ok && mintID == "":
-		return InviteAbsent, nil
+		return InviteAbsent, "", nil
 	case !ok:
 		if len(iv.fences)+iv.boundLocked() >= maxBoundAndFences {
-			return "", errors.New("too many bound invites and cancels kept; acknowledge settled ones first")
+			return "", "", errors.New("too many bound invites and cancels kept; acknowledge settled ones first")
 		}
 		fences[mintID] = Invite{MintID: mintID, State: InviteCancelled, At: now.UnixMilli()}
 	case x.State != "":
-		return x.State, nil
+		return x.State, x.ID, nil
 	case expired(x, now):
-		return InviteExpired, iv.saveLocked(now)
+		return InviteExpired, x.ID, iv.saveLocked(now)
 	case x.Subject == nil:
 		delete(byID, x.ID)
 	default:
 		byID[x.ID] = terminal(x, InviteCancelled, now, "")
 	}
 	if err := iv.commitLocked(now, byID, fences); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return InviteCancelled, nil
+	return InviteCancelled, x.ID, nil
+}
+
+// State is the state of the invite id under the book's lock: live, burned, cancelled, expired (as written), or
+// absent.
+func (iv *Invites) State(id string) string {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	x, ok := iv.byID[id]
+	switch {
+	case !ok:
+		return InviteAbsent
+	case x.State == "":
+		return InviteLive
+	}
+	return x.State
 }
 
 // findLocked finds the entry named by id, or by mintID among the invites and then the fences.

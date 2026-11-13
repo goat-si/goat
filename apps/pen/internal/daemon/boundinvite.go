@@ -84,24 +84,33 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 			fail(errBadRequest)
 			return
 		}
-		if head.Op == "invite.status" {
+		switch head.Op {
+		case "invite.status":
 			store, book := d.meshAndBook()
-			reply(mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now))
-			return
+			s, err := mesh.StatusOf(store, book, ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			reply(s)
+		case "invite.ack":
+			state, err := d.inviteBook().Ack(ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			reply(InviteCancelReply{T: "invite-ack", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
+		default:
+			state, id, err := d.inviteBook().CancelID(ref.InviteID, ref.MintID, d.now)
+			if err != nil {
+				fail(err)
+				return
+			}
+			if state == mesh.InviteCancelled {
+				d.endWait(id)
+			}
+			reply(InviteCancelReply{T: "invite-cancel", InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		}
-		do, t := d.inviteBook().Cancel, "invite-cancel"
-		if head.Op == "invite.ack" {
-			do, t = d.inviteBook().Ack, "invite-ack"
-		}
-		state, err := do(ref.InviteID, ref.MintID, d.now)
-		if err != nil {
-			fail(err)
-			return
-		}
-		if t == "invite-cancel" && state == mesh.InviteCancelled {
-			d.endWait(ref)
-		}
-		reply(InviteCancelReply{T: t, InviteID: ref.InviteID, MintID: ref.MintID, State: state})
 		return
 	}
 	var req boundInviteRequest
@@ -122,6 +131,9 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 	}
 	r := d.inviteReply(inv)
 	r.ID, r.MintID = inv.ID, inv.MintID
+	if d.boundCreated != nil {
+		d.boundCreated(inv.ID)
+	}
 	if !req.Wait {
 		reply(r)
 		return
@@ -160,13 +172,8 @@ func boundExpiry(req boundInviteRequest, has map[string]bool, now time.Time) (ti
 	return now.Add(ttl), nil
 }
 
-// endWait tells a caller waiting on the cancelled invite (wait:true) that it was cancelled.
-func (d *Daemon) endWait(ref inviteRef) {
-	id := ref.InviteID
-	if id == "" {
-		store, book := d.meshAndBook()
-		id = mesh.StatusOf(store, book, "", ref.MintID, d.now).InviteID
-	}
+// endWait tells a caller waiting on the cancelled invite id (wait:true) that it was cancelled.
+func (d *Daemon) endWait(id string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if ch := d.inviteWait[id]; ch != nil && id != "" {

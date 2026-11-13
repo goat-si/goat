@@ -23,23 +23,25 @@ const InviteBurnedUnsaved = "burned-unsaved"
 
 // StatusOf reads the invite named by id or mintID together with the record set. It holds the store's lock and then
 // the book's, the order of a burn, so a burn is never seen without the admit signed in the same hold.
-// clock is read under both locks.
-func StatusOf(s *Store, iv *Invites, id, mintID string, clock func() time.Time) InviteStatus {
+// clock is read under both locks. An expired bound invite is settled before it is reported; when that save fails the
+// answer is the error, never expired, since the invite would still be live after a clock set back.
+func StatusOf(s *Store, iv *Invites, id, mintID string, clock func() time.Time) (InviteStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	iv.mu.Lock()
 	x, ok := iv.findLocked(id, mintID)
 	now := clock()
 	if ok && x.Subject != nil && expired(x, now) {
-		// Settled before it is reported, so a clock stepped back later cannot make it live again; a failed save still
-		// answers expired, as Lookup and Burn refuse it by the same clock.
-		_ = iv.saveLocked(now)
+		if err := iv.saveLocked(now); err != nil {
+			iv.mu.Unlock()
+			return InviteStatus{}, err
+		}
 		x, ok = iv.findLocked(id, mintID)
 	}
 	iv.mu.Unlock()
 	out := InviteStatus{T: "invite-status", InviteID: id, MintID: mintID, State: InviteAbsent}
 	if !ok {
-		return out
+		return out, nil
 	}
 	out.InviteID, out.MintID = x.ID, x.MintID
 	switch {
@@ -64,7 +66,7 @@ func StatusOf(s *Store, iv *Invites, id, mintID string, clock func() time.Time) 
 			out.State = InviteBurnedUnsaved
 		}
 	}
-	return out
+	return out, nil
 }
 
 // admitOfLocked finds the stored admit whose card repeats nonce and carries sub's keys; s.mu is held.
