@@ -49,7 +49,7 @@ import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
-import { localSendRows, questionForSend, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { localSendRows, type GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
@@ -223,13 +223,9 @@ export function GoatBotChatView({
   }>({ identity: timelineIdentity, submissions: [] });
   if (local.identity !== timelineIdentity)
     setLocal({ identity: timelineIdentity, submissions: [] });
-  const recordSubmission = (result: boolean | string | void, text: string, questionId?: string) => {
+  const recordSubmission = (result: boolean | string | void) => {
     if (typeof result === "string") {
-      const submission = {
-        key: result,
-        text,
-        questionRowId: questionForSend(rows, text, questionId),
-      };
+      const submission = { key: result };
       setLocal((previous) => ({
         identity: timelineIdentity,
         submissions: [
@@ -485,7 +481,7 @@ export function GoatBotChatView({
                                       : ChannelQuestionId.make(questionId),
                                   )
                                 : onSend(answer);
-                            recordSubmission(result, answer, questionId);
+                            recordSubmission(result);
                           }
                         : undefined
                     }
@@ -547,7 +543,7 @@ export function GoatBotChatView({
                 attachments,
               );
               if (result !== false) setReplyState(null);
-              return recordSubmission(result, text);
+              return recordSubmission(result);
             }}
           />
         </div>

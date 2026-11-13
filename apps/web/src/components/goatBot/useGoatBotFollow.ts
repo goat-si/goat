@@ -4,8 +4,6 @@ import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 export interface GoatBotLocalSubmission {
   readonly key: string;
-  readonly text: string;
-  readonly questionRowId: string | null;
 }
 
 export function localSendRows(items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>) {
@@ -16,21 +14,6 @@ export function localSendRows(items: ReadonlyArray<OrchestrationV2ProjectedTurnI
     if (key) result.set(key, item.id);
   }
   return result;
-}
-
-export function questionForSend(
-  rows: ReadonlyArray<GoatBotRow>,
-  text: string,
-  questionId?: string,
-) {
-  return (
-    rows.findLast(
-      (row) =>
-        row.kind === "bot" &&
-        (questionId === undefined || row.answerQuestionId === questionId) &&
-        row.options.includes(text.trim()),
-    )?.id ?? null
-  );
 }
 
 export function useGoatBotFollow({
@@ -120,7 +103,7 @@ export function useGoatBotFollow({
       submitted.current.add(send.key);
       pending.current.set(send.key, send);
     }
-    for (const [key, send] of pending.current) {
+    for (const [key] of pending.current) {
       const sent = rows.find(
         (row) =>
           row.kind === "user" && (row.sendKey === key || row.id === committedSends?.get(key)),
@@ -130,11 +113,7 @@ export function useGoatBotFollow({
           row.kind === "bot" &&
           (row.answerInputRowId === `pending:${key}` ||
             (row.answerInputRowId !== undefined &&
-              row.answerInputRowId === committedSends?.get(key)) ||
-            (send.questionRowId !== null &&
-              row.id === send.questionRowId &&
-              row.answerIndex !== undefined &&
-              row.answer === send.text.trim())),
+              row.answerInputRowId === committedSends?.get(key))),
       );
       if (!sent && !question) continue;
       pending.current.delete(key);

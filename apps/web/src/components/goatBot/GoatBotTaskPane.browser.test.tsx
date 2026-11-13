@@ -187,7 +187,14 @@ function TwoTaskPanes() {
     answerQuestionId: "q1",
     firstInGroup: true,
     groupPosition: "single",
-    ...(answered ? { answer: "Keep", answerIndex: 0, answerSending: true } : {}),
+    ...(answered
+      ? {
+          answer: "Keep",
+          answerIndex: 0,
+          answerSending: true,
+          answerInputRowId: "pending:pane-send",
+        }
+      : {}),
   };
   const messages: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
     kind: "user",
@@ -247,7 +254,14 @@ function MainAndTaskPane() {
     answerQuestionId: "q1",
     firstInGroup: true,
     groupPosition: "single",
-    ...(answered ? { answer: "Keep", answerIndex: 0, answerSending: true } : {}),
+    ...(answered
+      ? {
+          answer: "Keep",
+          answerIndex: 0,
+          answerSending: true,
+          answerInputRowId: "pending:main-send",
+        }
+      : {}),
   };
   const messages: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
     kind: "user",

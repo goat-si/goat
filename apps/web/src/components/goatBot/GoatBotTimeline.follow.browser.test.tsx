@@ -204,7 +204,14 @@ function ChatFixture({ folded = false, sibling = false }: { folded?: boolean; si
     : folded
       ? [
           ...rows.slice(0, 10),
-          { ...question, options: [], answer: "Keep", answerIndex: 0, answerSending: !confirmed },
+          {
+            ...question,
+            options: [],
+            answer: "Keep",
+            answerIndex: 0,
+            answerSending: !confirmed,
+            answerInputRowId: "pending:local-1",
+          },
           ...rows.slice(10),
         ]
       : [...rows, sentRow];

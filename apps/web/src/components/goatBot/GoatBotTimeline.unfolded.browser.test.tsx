@@ -122,3 +122,64 @@ it("failing-first: a new task cue focuses the transcript when the task has no fo
   expect(document.activeElement).toBe(scroll);
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
+
+it("failing-first: another device's matching folded answer cannot consume a local send", async () => {
+  const messages: GoatBotRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "user",
+    id: `m-${index}`,
+    sendKey: null,
+    requestKey: null,
+    text: `Message ${index}`,
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+    delivery: { state: "delivered" },
+    showReceipt: false,
+  }));
+  const question: Extract<GoatBotRow, { kind: "bot" }> = {
+    kind: "bot",
+    id: "question",
+    text: "Which option?",
+    tone: "question",
+    proactive: false,
+    replyTo: null,
+    options: ["Keep"],
+    choices: ["Keep"],
+    createdAt: "2026-10-12T09:40:00Z",
+    firstInGroup: true,
+    groupPosition: "single",
+  };
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;flex-direction:column;height:400px;width:360px";
+  const view = (
+    row: GoatBotRow,
+    submissions: Array<{ key: string; text: string; questionRowId: string | null }>,
+  ) => (
+    <GoatBotTimeline
+      rows={[...messages.slice(0, 10), row, ...messages.slice(10)]}
+      onRetry={() => {}}
+      {...{ submissions }}
+    />
+  );
+  await using screen = await render(view(question, []), { container: host, router: false }); // No links in these rows.
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  const remote = {
+    ...question,
+    options: [],
+    answer: "Keep",
+    answerIndex: 0,
+    answerInputRowId: "pending:remote",
+  };
+  await screen.rerender(view(remote, [{ key: "local", text: "Keep", questionRowId: "question" }]));
+  expect(scroll.scrollTop).toBe(0);
+  const local = { ...remote, answerInputRowId: "pending:local" };
+  await screen.rerender(view(local, [{ key: "local", text: "Keep", questionRowId: "question" }]));
+  const anchor = screen.container.querySelector<HTMLElement>('[data-bot-row="question"]')!;
+  expect(anchor.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    scroll.getBoundingClientRect().bottom + 1,
+  );
+});

@@ -29,7 +29,7 @@ import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
-import { localSendRows, questionForSend, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { localSendRows, type GoatBotLocalSubmission } from "./useGoatBotFollow";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -84,11 +84,7 @@ export function GoatBotTaskPane({
         ? session.onSendToTask(taskId, text, attachments)
         : session.onSendToTask(taskId, text, attachments, questionId);
     if (typeof result === "string") {
-      const submission = {
-        key: result,
-        text,
-        questionRowId: questionForSend(timelineRows, text, questionId),
-      };
+      const submission = { key: result };
       setLocal((previous) => ({
         taskId,
         submissions: [...(previous.taskId === taskId ? previous.submissions : []), submission],
