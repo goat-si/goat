@@ -370,8 +370,9 @@ export function disposableSwitchSaveError(requested: boolean, saved: boolean): s
 }
 
 /**
- * Reads the disposable machines consent as the hub does: on with no expiry, a past one or one more
- * than 30 days ahead is closed, and only a person renews it.
+ * Reads the disposable machines consent as the hub does: on with no expiry or a past one is closed,
+ * and only a person renews it. The hub stamps a new consent to its own clock plus 30 days, so the
+ * hand-edit bound allows a day of clock skew before an expiry far ahead reads closed.
  */
 export function disposableConsentEnded(
   value: { readonly enabled: boolean; readonly expiresAt: string | null },
@@ -379,5 +380,5 @@ export function disposableConsentEnded(
 ): boolean {
   if (!value.enabled) return false;
   const at = value.expiresAt === null ? Number.NaN : Date.parse(value.expiresAt);
-  return !(at > nowMs) || at > nowMs + DISPOSABLE_SWITCH_DAYS * 86_400_000;
+  return !(at > nowMs) || at > nowMs + (DISPOSABLE_SWITCH_DAYS + 1) * 86_400_000;
 }

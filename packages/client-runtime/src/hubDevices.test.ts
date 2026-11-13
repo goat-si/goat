@@ -350,15 +350,22 @@ describe("cloudAutoJoinSaveError", () => {
   });
 });
 
-// The hub reads a switch that is on with no expiry, a past one or one over 30 days ahead as closed.
+// The hub reads a switch that is on with no expiry or a past one as closed, and stamps a new consent to
+// its own clock plus 30 days, which a client whose clock is behind reads as more than 30 days ahead.
 it("reads the disposable machines consent as the hub does", () => {
   const now = Date.parse("2026-11-14T00:00:00.000Z");
   const at = (days: number) => DateTime.formatIso(DateTime.makeUnsafe(now + days * 86_400_000));
   expect(disposableConsentEnded({ enabled: true, expiresAt: at(10) }, now)).toBe(false);
   expect(disposableConsentEnded({ enabled: true, expiresAt: at(-1) }, now)).toBe(true);
   expect(disposableConsentEnded({ enabled: true, expiresAt: null }, now)).toBe(true);
-  expect(disposableConsentEnded({ enabled: true, expiresAt: at(31) }, now)).toBe(true);
+  expect(disposableConsentEnded({ enabled: true, expiresAt: at(32) }, now)).toBe(true);
   expect(disposableConsentEnded({ enabled: false, expiresAt: null }, now)).toBe(false);
+});
+
+it("keeps a consent the hub just stamped open on a client whose clock is a minute behind", () => {
+  const now = Date.parse("2026-11-14T00:00:00.000Z");
+  const stamped = DateTime.formatIso(DateTime.makeUnsafe(now + 60_000 + 30 * 86_400_000));
+  expect(disposableConsentEnded({ enabled: true, expiresAt: stamped }, now)).toBe(false);
 });
 
 it("names an older hub or a hub turned off when the disposable switch stays off", () => {
