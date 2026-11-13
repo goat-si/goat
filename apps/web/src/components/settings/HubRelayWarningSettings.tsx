@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, OpenCodexHubRelayWarning } from "@goat/contracts";
+import {
+  HUB_RELAY_WARNING_MAX_GB,
+  type EnvironmentId,
+  type OpenCodexHubRelayWarning,
+} from "@goat/contracts";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "~/hooks/useSettings";
@@ -18,19 +22,16 @@ function GbInput(props: {
   readonly value: number;
   readonly disabled: boolean;
   readonly onCommit: (value: number) => void;
+  readonly onInvalid: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const commit = () => {
-    const parsed = Number(draft);
     setDraft(null);
-    if (
-      draft !== null &&
-      draft.trim() !== "" &&
-      Number.isFinite(parsed) &&
-      parsed >= 0 &&
-      parsed !== props.value
-    )
-      props.onCommit(parsed);
+    if (draft === null || draft.trim() === "") return;
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > HUB_RELAY_WARNING_MAX_GB)
+      props.onInvalid();
+    else if (parsed !== props.value) props.onCommit(parsed);
   };
   return (
     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -38,6 +39,7 @@ function GbInput(props: {
         size="sm"
         type="number"
         min={0}
+        max={HUB_RELAY_WARNING_MAX_GB}
         step="any"
         className="w-20"
         aria-label={props.label}
@@ -105,12 +107,22 @@ export function HubRelayWarningRow({
             value={device}
             disabled={saving || !canConfigure}
             onCommit={(value) => void save("hubRelayWarningDeviceGbPerDay", value)}
+            onInvalid={() =>
+              setError(
+                `Enter a number from 0 to ${HUB_RELAY_WARNING_MAX_GB.toLocaleString("en-US")} GB.`,
+              )
+            }
           />
           <GbInput
             label="GB per hub"
             value={hub}
             disabled={saving || !canConfigure}
             onCommit={(value) => void save("hubRelayWarningHubGbPerDay", value)}
+            onInvalid={() =>
+              setError(
+                `Enter a number from 0 to ${HUB_RELAY_WARNING_MAX_GB.toLocaleString("en-US")} GB.`,
+              )
+            }
           />
         </span>
       }

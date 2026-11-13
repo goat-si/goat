@@ -36,29 +36,34 @@ function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string
 }
 
 /**
- * "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h", then what went another way. A link
- * that sent nothing through a relay reads "↑…↓… last hour · ↑…↓… in 24 h, none through a relay".
+ * Bytes by how they went: through a Pen relay, direct, or with no confirmed route (Pen's config
+ * unread, or the route changed between readings), each way over the last hour and 24 hours.
  */
-function hubLinkTrafficFacts(traffic: OpenCodexLinkTraffic): ReadonlyArray<string> {
+function hubLinkTrafficFacts(
+  traffic: OpenCodexLinkTraffic,
+  route: OpenCodexLinkRoute | null,
+): ReadonlyArray<string> {
   const { hour, day } = traffic;
-  const relayDay = day.relayToHomeBytes + day.relayFromHomeBytes;
-  const directDayTo = day.toHomeBytes - day.relayToHomeBytes;
-  const directDayFrom = day.fromHomeBytes - day.relayFromHomeBytes;
+  const unconfirmedTo = day.toHomeBytes - day.relayToHomeBytes - day.directToHomeBytes;
+  const unconfirmedFrom = day.fromHomeBytes - day.relayFromHomeBytes - day.directFromHomeBytes;
+  const relay = day.relayToHomeBytes + day.relayFromHomeBytes > 0 || route?.via === "relay";
+  const direct = day.directToHomeBytes + day.directFromHomeBytes > 0 || route?.via === "direct";
   const measured = measuredFor(day, 24 * 3_600_000);
-  const parts =
-    relayDay === 0
-      ? [
-          `${eachWay(hour.toHomeBytes, hour.fromHomeBytes)} last hour · ${eachWay(day.toHomeBytes, day.fromHomeBytes)} in 24 h, none through a relay`,
-        ]
-      : [
-          `relay ${eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes)} last hour · ${eachWay(day.relayToHomeBytes, day.relayFromHomeBytes)} in 24 h`,
-          directDayTo + directDayFrom > 0
-            ? `not via relay ${eachWay(directDayTo, directDayFrom)} in 24 h`
-            : null,
-        ];
-  return [...parts, measured === null ? null : `measured over ${measured}`].filter(
-    (part) => part !== null,
-  );
+  const parts = [
+    relay
+      ? `relay ${eachWay(hour.relayToHomeBytes, hour.relayFromHomeBytes)} last hour · ${eachWay(day.relayToHomeBytes, day.relayFromHomeBytes)} in 24 h`
+      : null,
+    direct
+      ? `direct ${eachWay(hour.directToHomeBytes, hour.directFromHomeBytes)} last hour · ${eachWay(day.directToHomeBytes, day.directFromHomeBytes)} in 24 h`
+      : null,
+    unconfirmedTo + unconfirmedFrom > 0
+      ? `route not confirmed for ${eachWay(unconfirmedTo, unconfirmedFrom)} in 24 h`
+      : null,
+  ].filter((part) => part !== null);
+  return [
+    ...(parts.length === 0 ? ["nothing sent in 24 h"] : parts),
+    ...(measured === null ? [] : [`measured over ${measured}`]),
+  ];
 }
 
 /** "via relay pen-mac", "direct mac-ts", or the name alone when the Home could not tell. */
@@ -82,8 +87,10 @@ export function hubLinkFacts(link: HubLinkView, connected: boolean): ReadonlyArr
     return ["link traffic not measured"];
   return [
     link.route === null ? "route not measured" : hubLinkRouteLabel(link.route),
-    link.linkTransport === null ? null : TRANSPORT_LABEL[link.linkTransport],
-    ...(link.traffic === null ? ["traffic not measured"] : hubLinkTrafficFacts(link.traffic)),
+    link.linkTransport === null ? "transport not measured" : TRANSPORT_LABEL[link.linkTransport],
+    ...(link.traffic === null
+      ? ["traffic not measured"]
+      : hubLinkTrafficFacts(link.traffic, link.route)),
   ].filter((part) => part !== null);
 }
 

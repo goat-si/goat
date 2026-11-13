@@ -1,7 +1,7 @@
 /**
  * Two readings of OpenCodex's link counters subtract only under the same epoch and generation;
- * a delta spreads evenly over the time between them. Relay bytes need the same Pen route at both
- * readings. At most MAX_LINKS series of SLOTS five-minute slots are held.
+ * a delta spreads evenly over the time between them. Relay or direct bytes need the same route,
+ * classified, at both readings. At most MAX_LINKS series of SLOTS five-minute slots are held.
  */
 export const SLOT_MS = 5 * 60_000;
 const HOUR_MS = 3_600_000;
@@ -9,8 +9,16 @@ const DAY_MS = 24 * HOUR_MS;
 // One slot more than a day, so the oldest partial slot of a 24-hour window is still held.
 const SLOTS = DAY_MS / SLOT_MS + 1;
 const MAX_LINKS = 256;
-const FIELDS = 5;
-const [TO_HOME, FROM_HOME, RELAY_TO_HOME, RELAY_FROM_HOME, MEASURED] = [0, 1, 2, 3, 4] as const;
+const FIELDS = 7;
+const [
+  TO_HOME,
+  FROM_HOME,
+  RELAY_TO_HOME,
+  RELAY_FROM_HOME,
+  DIRECT_TO_HOME,
+  DIRECT_FROM_HOME,
+  MEASURED,
+] = [0, 1, 2, 3, 4, 5, 6] as const;
 
 export interface LinkTrafficCounters {
   readonly epoch: string;
@@ -31,6 +39,8 @@ export interface LinkTrafficWindow {
   readonly fromHomeBytes: number;
   readonly relayToHomeBytes: number;
   readonly relayFromHomeBytes: number;
+  readonly directToHomeBytes: number;
+  readonly directFromHomeBytes: number;
   readonly measuredMs: number;
 }
 
@@ -41,7 +51,8 @@ export interface LinkTrafficView {
 
 interface Last extends LinkTrafficCounters {
   readonly at: number;
-  readonly relayRoute: string | undefined;
+  /** "relay:name" or "direct:name"; undefined when no route is classified. */
+  readonly routeKey: string | undefined;
 }
 
 interface Series {
@@ -50,8 +61,8 @@ interface Series {
   readonly slotOf: Float64Array;
 }
 
-const relayRouteOf = (reading: LinkTrafficReading) =>
-  reading.route?.via === "relay" ? reading.route.name : undefined;
+const routeKeyOf = (reading: LinkTrafficReading) =>
+  reading.route?.via === undefined ? undefined : `${reading.route.via}:${reading.route.name}`;
 
 const pairs = (last: Last, next: LinkTrafficCounters, at: number) =>
   at > last.at &&
@@ -101,6 +112,8 @@ function sum(series: Series, at: number, windowMs: number): LinkTrafficWindow {
     fromHomeBytes: whole(FROM_HOME),
     relayToHomeBytes: whole(RELAY_TO_HOME),
     relayFromHomeBytes: whole(RELAY_FROM_HOME),
+    directToHomeBytes: whole(DIRECT_TO_HOME),
+    directFromHomeBytes: whole(DIRECT_FROM_HOME),
     measuredMs: Math.min(windowMs, whole(MEASURED)),
   };
 }
@@ -121,7 +134,7 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
   };
 
   const record = (reading: LinkTrafficReading, at: number, inPass: ReadonlySet<string>) => {
-    const next: Last = { ...reading.traffic, at, relayRoute: relayRouteOf(reading) };
+    const next: Last = { ...reading.traffic, at, routeKey: routeKeyOf(reading) };
     const series = book.get(reading.linkId);
     if (series === undefined) {
       if (!admit(inPass)) return;
@@ -137,12 +150,16 @@ export function makeLinkTrafficBook(maxLinks = MAX_LINKS) {
       if (pairs(last, next, at)) {
         const toHome = next.toHomeBytes - last.toHomeBytes;
         const fromHome = next.fromHomeBytes - last.fromHomeBytes;
-        const relay = last.relayRoute !== undefined && last.relayRoute === next.relayRoute;
+        const same = last.routeKey !== undefined && last.routeKey === next.routeKey;
+        const relay = same && next.routeKey?.startsWith("relay:") === true;
+        const direct = same && next.routeKey?.startsWith("direct:") === true;
         spread(series, last.at, at, [
           toHome,
           fromHome,
           relay ? toHome : 0,
           relay ? fromHome : 0,
+          direct ? toHome : 0,
+          direct ? fromHome : 0,
           at - last.at,
         ]);
       }

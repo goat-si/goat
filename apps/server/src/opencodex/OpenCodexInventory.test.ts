@@ -896,6 +896,8 @@ it.effect(
             fromHomeBytes: 600_000_000,
             relayToHomeBytes: 6_000_000_000,
             relayFromHomeBytes: 600_000_000,
+            directToHomeBytes: 0,
+            directFromHomeBytes: 0,
             measuredMs: 600_000,
           },
           day: {
@@ -903,6 +905,8 @@ it.effect(
             fromHomeBytes: 600_000_000,
             relayToHomeBytes: 6_000_000_000,
             relayFromHomeBytes: 600_000_000,
+            directToHomeBytes: 0,
+            directFromHomeBytes: 0,
             measuredMs: 600_000,
           },
           warning: { thresholdBytes: 5_000_000_000 },

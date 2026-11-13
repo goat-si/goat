@@ -223,11 +223,13 @@ describe("hubVersionLabel", () => {
 });
 
 describe("link traffic", () => {
-  const window = (total: number, relay: number, measuredMs: number) => ({
+  const window = (total: number, relay: number, measuredMs: number, direct = total - relay) => ({
     toHomeBytes: total,
     fromHomeBytes: total / 10,
     relayToHomeBytes: relay,
     relayFromHomeBytes: relay / 10,
+    directToHomeBytes: direct,
+    directFromHomeBytes: direct / 10,
     measuredMs,
   });
   const home = (
@@ -270,7 +272,7 @@ describe("link traffic", () => {
       "via relay pen-macmini",
       "HTTP",
       "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h",
-      "not via relay ↑2 GB ↓200 MB in 24 h",
+      "direct ↑0 B ↓0 B last hour · ↑2 GB ↓200 MB in 24 h",
     ]);
   });
 
@@ -293,11 +295,12 @@ describe("link traffic", () => {
         ]),
       },
     ]);
-    const facts = hub!.devices.map((device) => hubDeviceFacts(device).slice(-3));
+    const facts = hub!.devices.map((device) => hubDeviceFacts(device).slice(-4));
     expect(facts[0]).toContain("link traffic not measured");
     expect(facts[1]).toEqual([
       "route lan",
-      "↑0 B ↓0 B last hour · ↑0 B ↓0 B in 24 h, none through a relay",
+      "transport not measured",
+      "nothing sent in 24 h",
       "measured over 10 min",
     ]);
     expect(hubDeviceFacts(hub!.devices[2]!).join(" ")).not.toContain("measured");
@@ -316,6 +319,57 @@ describe("link traffic", () => {
     );
     const under = hubSnapshot([{ key: "home", label: "home", entry: home([]) }]);
     expect(under!.relayWarning).toBe(null);
+  });
+
+  it("never calls bytes without a confirmed route direct, and says what the Home did not report", () => {
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: home([
+          {
+            id: "lnk_a",
+            alias: "macmini-ts",
+            tunnelPort: 54958,
+            state: "connected",
+            route: { name: "pen-macmini" },
+            traffic: {
+              hour: window(1_000_000_000, 0, 3_600_000, 0),
+              day: window(10_000_000_000, 0, 86_400_000, 0),
+            },
+          },
+        ]),
+      },
+    ]);
+    const facts = hubDeviceFacts(hub!.devices[0]!);
+    expect(facts.slice(-3)).toEqual([
+      "route pen-macmini",
+      "transport not measured",
+      "route not confirmed for ↑10 GB ↓1 GB in 24 h",
+    ]);
+    expect(facts.join(" ")).not.toMatch(/none through a relay|not via relay|direct/u);
+  });
+
+  it("keeps the hub-wide warning of a Home whose last link went and now reads standalone", () => {
+    const base = inventory("none");
+    const hub = hubSnapshot([
+      {
+        key: "home",
+        label: "home",
+        entry: entry(null, {
+          ...base,
+          link: {
+            ...base.link,
+            relayWarning: { relayBytes: 31_000_000_000, thresholdBytes: 30_000_000_000 },
+          },
+        }),
+      },
+    ]);
+    expect(hub?.relayWarning).toEqual({
+      relayBytes: 31_000_000_000,
+      thresholdBytes: 30_000_000_000,
+    });
+    expect(hub?.devices).toEqual([]);
   });
 });
 

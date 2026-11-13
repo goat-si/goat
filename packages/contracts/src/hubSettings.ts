@@ -48,8 +48,11 @@ export const HubSettingsPatch = Schema.Struct({
   devices: Schema.optionalKey(HubDevices),
 });
 
+export const HUB_RELAY_WARNING_MAX_GB = 1_000_000;
 /** Decimal gigabytes a day; 0 never warns. */
-const RelayWarningGb = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000 }));
+const RelayWarningGb = Schema.Number.check(
+  Schema.isBetween({ minimum: 0, maximum: HUB_RELAY_WARNING_MAX_GB }),
+);
 export const DEFAULT_HUB_RELAY_WARNING_DEVICE_GB_PER_DAY = 5;
 export const DEFAULT_HUB_RELAY_WARNING_HUB_GB_PER_DAY = 30;
 

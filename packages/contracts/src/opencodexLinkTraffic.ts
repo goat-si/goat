@@ -15,6 +15,9 @@ export const OpenCodexLinkTrafficWindow = Schema.Struct({
   /** Of those, bytes measured while both readings had the same Pen relay route in use. */
   relayToHomeBytes: Count,
   relayFromHomeBytes: Count,
+  /** Of those, bytes measured while both readings had the same direct route in use. */
+  directToHomeBytes: Count,
+  directFromHomeBytes: Count,
   measuredMs: Count,
 });
 export type OpenCodexLinkTrafficWindow = typeof OpenCodexLinkTrafficWindow.Type;

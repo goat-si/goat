@@ -57,6 +57,8 @@ describe("link traffic book", () => {
       fromHomeBytes: 1_800_000,
       relayToHomeBytes: 0,
       relayFromHomeBytes: 0,
+      directToHomeBytes: 0,
+      directFromHomeBytes: 0,
       measuredMs: 2 * HOUR,
     });
     expect(view?.hour).toMatchObject({ toHomeBytes: 3_600_000, measuredMs: HOUR });
@@ -122,5 +124,18 @@ describe("link traffic book", () => {
     const measured = ["a", "b", "c"].filter((id) => book.view(id, T0 + 60_000) !== undefined);
     expect(measured).toHaveLength(2);
     expect(book.size()).toBe(2);
+  });
+  it("counts direct bytes only while both readings had the same direct route; the rest has no confirmed route", () => {
+    const book = makeLinkTrafficBook();
+    book.observe([reading(0, { route: direct })], T0);
+    book.observe([reading(1_000, { route: direct })], T0 + 60_000);
+    book.observe([reading(3_000, { route: { name: "pen-mac" } })], T0 + 120_000);
+    book.observe([reading(3_400, { route: { name: "pen-mac" } })], T0 + 180_000);
+    expect(book.view("link-a", T0 + 180_000)?.day).toMatchObject({
+      toHomeBytes: 3_400,
+      relayToHomeBytes: 0,
+      directToHomeBytes: 1_000,
+      directFromHomeBytes: 250,
+    });
   });
 });

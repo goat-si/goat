@@ -67,7 +67,10 @@ const opencodexOf = (entry: HostStatusEntry | null | undefined) =>
 
 /** Null when no host this client reads is an OpenCodex Home. */
 export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | null {
-  const home = sources.find((source) => opencodexOf(source.entry)?.link.role === "home");
+  // A Home whose last link went reads standalone but keeps its relay warning for a day.
+  const home =
+    sources.find((source) => opencodexOf(source.entry)?.link.role === "home") ??
+    sources.find((source) => opencodexOf(source.entry)?.link.relayWarning !== undefined);
   const inventory = opencodexOf(home?.entry);
   if (home === undefined || inventory === undefined) return null;
   const byAlias = new Map<string, HubSource>();
