@@ -1,4 +1,6 @@
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
+import { statusUpstreamRefreshFailureCooldown } from "./statusRefreshCooldown.ts";
+import { availableWorktreePath } from "./availableWorktreePath.ts";
 import { untrackedExceedsLimit } from "./untrackedSize.ts";
 import {
   parseReviewNumstat,
@@ -133,8 +135,6 @@ const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_FETCH_TIMEOUT = Duration.minutes(5);
 
-const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
-const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const REPOSITORY_PATHS_CACHE_CAPACITY = 2_048;
 const REPOSITORY_PATHS_CACHE_TTL = Duration.minutes(10);
@@ -188,13 +188,6 @@ class StatusRemoteRefreshCacheKey extends Data.Class<{
   gitCommonDir: string;
   remoteName: string;
 }> {}
-
-function statusUpstreamRefreshFailureCooldown(consecutiveFailures: number): Duration.Duration {
-  const exponent = Math.max(0, consecutiveFailures - 1);
-  const cooldownMs =
-    Duration.toMillis(STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN) * Math.pow(2, exponent);
-  return Duration.min(Duration.millis(cooldownMs), STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN);
-}
 
 class GitRefsSnapshotCacheKey extends Data.Class<{
   gitCommonDir: string;
@@ -4129,6 +4122,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         });
       }
     }
+    if (input.path === null && existing !== "reused")
+      targetPath = worktreePath = yield* availableWorktreePath(fileSystem, input.cwd, worktreePath);
     const args =
       newBranch && existing === null
         ? ["worktree", "add", "-b", newBranch, "--", worktreePath, input.refName]
