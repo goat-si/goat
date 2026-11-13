@@ -22,6 +22,7 @@ import {
   LINK_ATTEMPTS,
   LINK_CONTRACTS,
   LINK_IDENTITY_CONTRACT,
+  LINK_SENDS,
   type LinkOutcome,
   linkAddArgs,
   linkIdentityArgs,
@@ -310,6 +311,11 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
           if (link.outcome !== "not_started") yield* note(row, as("not_started"));
           return "done" as const;
         }
+        // An id OpenCodex keeps refusing before its journal opens is not resent without end.
+        if ((link.sends ?? 1) >= LINK_SENDS) {
+          yield* stop(row, as("not_started"), "link_not_started");
+          return "done" as const;
+        }
         return "resend" as const;
       }
     }
@@ -368,10 +374,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       const ended = yield* authorityEnded(row, current);
       if (ended !== undefined) return yield* exclusive(pause(row, ended));
       const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
-      const resent = {
-        ...enroll,
-        link: { ...link, intentAtMs: yield* Clock.currentTimeMillis, outcome: "resent" },
-      };
+      // The 2-hour window counts from the id's first store, whatever was resent since.
+      const resent = { ...enroll, link: { ...link, sends: (link.sends ?? 1) + 1 } };
       if ((yield* forward(row, current, resent, {})) !== "committed") return;
       const again = yield* read(row.attach_id);
       if (again !== undefined && due(again)) yield* dispatch(again, resent, route, stored);

@@ -15,8 +15,10 @@ const Enroll = Schema.Struct({
     Schema.Struct({
       /** Operations started; each has its own id, <attachId>.link.<attempt>. */
       attempt: Schema.Number,
-      /** When the current operation's id was stored, before it was sent. */
+      /** When the current operation's id was first stored, before it was first sent. */
       intentAtMs: Schema.Number,
+      /** How many times the current id was sent; OpenCodex never journalled the earlier ones. */
+      sends: Schema.optionalKey(Schema.Number),
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),
@@ -59,6 +61,8 @@ export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file"
 export const OPERATION_REPLAY_MS = 2 * 60 * 60 * 1000;
 /** Link operations an attach may start before it stops for a person. */
 export const LINK_ATTEMPTS = 3;
+/** Sends of one operation id that OpenCodex refuses before journalling it, before a person decides. */
+export const LINK_SENDS = 3;
 const SSH_PORT = 22;
 
 export const linkOperationId = (attachId: string, attempt: number) => attachId + ".link." + attempt;
@@ -210,6 +214,8 @@ const STOPS: Record<string, string> = {
     "The machine has a full OpenCodex install; disposable machines take only the lightweight Child.",
   require_ephemeral_unsupported: "OpenCodex cannot plant its lightweight Child on this machine.",
   link_attempts_used: "Three link attempts failed.",
+  link_not_started:
+    "OpenCodex refused the link three times before recording it: the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
   operation_lost:
     "OpenCodex no longer has the link operation GOAT started more than two hours ago, so GOAT cannot tell whether it linked the machine.",
   link_residual: "The link operation may have left an enrollment or a plant on the machine.",
@@ -232,6 +238,7 @@ const WAITING: Record<string, string> = {
     "This hub's OpenCodex cannot link a machine with the hub's machine key yet; update OpenCodex.",
   journal_unreadable: "OpenCodex's link operation journal could not be read; GOAT asks again.",
   open: "OpenCodex is still running the link operation.",
+  not_started: "OpenCodex did not record the link operation; GOAT sends it again on a later pass.",
   verify_unreadable: "OpenCodex's link status could not be read; GOAT asks again.",
 };
 const waitingText = (outcome: string | undefined) =>

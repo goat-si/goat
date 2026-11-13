@@ -396,3 +396,27 @@ it.effect("two machines whose routes complete together cannot both take one SSH 
     }),
   ),
 );
+
+it.effect(
+  "a link OpenCodex never journals is sent at most three times, then stops for a person",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        for (let n = 0; n < 300; n += 1) host.control.adds.push("not_journalled");
+        yield* enroll;
+        yield* enroll;
+        // Passes 30 s apart for three hours, as the reconcile loop runs them.
+        for (let pass = 0; pass < 360; pass += 1) {
+          yield* enroll;
+          yield* TestClock.adjust(30_000);
+        }
+        expect(linkAdds(host.control.calls)).toHaveLength(3);
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "paused",
+          message: expect.stringContaining("before recording it"),
+        });
+      }),
+    ),
+);
