@@ -102,7 +102,7 @@ it("saves disposable machine consent, describes Pen access, and names an older h
     environmentId,
     input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
   });
-  await expect.element(screen.getByText(/older GOAT without disposable machines/)).toBeVisible();
+  await expect.element(screen.getByText(/kept this switch off/)).toBeVisible();
 });
 
 it("shows the invite once and clears it when the attach dialog closes", async () => {

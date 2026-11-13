@@ -361,8 +361,8 @@ it("reads the disposable machines consent as the hub does", () => {
   expect(disposableConsentEnded({ enabled: false, expiresAt: null }, now)).toBe(false);
 });
 
-it("flags an older hub that dropped the disposable machines switch turned on", () => {
-  expect(disposableSwitchSaveError(true, false)).toMatch(/Update GOAT/);
+it("names an older hub or a hub turned off when the disposable switch stays off", () => {
+  expect(disposableSwitchSaveError(true, false)).toMatch(/update GOAT there/);
   expect(disposableSwitchSaveError(true, true)).toBeNull();
   expect(disposableSwitchSaveError(false, false)).toBeNull();
 });

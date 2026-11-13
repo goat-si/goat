@@ -159,7 +159,7 @@ export function DisposableMachinesSettings({
         serverScoped
         settingKeys={["hub"]}
         title="Provisioner threads"
-        description="Threads that may attach machines, by thread ID (Copy Thread ID in a thread's menu). Changing the threads, cap or name rule cancels invites not yet used."
+        description="Threads that may attach machines, by thread ID (Copy → Thread ID in a thread's menu). Changing the threads, cap or name rule cancels invites not yet used."
         control={
           <div className="flex items-center gap-2">
             <Input

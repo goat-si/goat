@@ -127,7 +127,7 @@ routes on the hub; an older one says so.
 A disposable machine is one you build for a short job, such as a cloud VM, and
 admit to your Pen mesh with a one-time invite. Turn on **Attach disposable
 machines** in **Settings → Hub** (the hub must be on), then name the threads that
-may attach machines by their thread ID (**Copy Thread ID** in a thread's menu).
+may attach machines by their thread ID (**Copy → Thread ID** in a thread's menu).
 Only a person can change this consent, and it lasts 30 days: when it ends,
 **Renew for 30 days** opens it again. Changing the threads, the cap or the name
 rule cancels invites that were not used yet.

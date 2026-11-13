@@ -627,7 +627,7 @@ it("saves disposable machine consent, describes Pen access, and names an older h
     environmentId: second.environmentId,
     input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
   });
-  expect(container.textContent).toContain("Update GOAT there to turn this on.");
+  expect(container.textContent).toContain("If the hub is on, update GOAT there.");
 });
 
 it("tells a phone that the disposable machines consent ended and how to renew it", async () => {

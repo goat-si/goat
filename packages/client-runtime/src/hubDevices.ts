@@ -362,10 +362,10 @@ export function connectHubProxySaveError(
     : "Update GOAT on the hub to allow GOAT Connect devices to reach hub devices.";
 }
 
-/** An older hub drops the disposable machines switch from the patch and answers it off. */
+/** The hub answered the switch off: an older hub drops it from the patch, and a hub turned off keeps it off. */
 export function disposableSwitchSaveError(requested: boolean, saved: boolean): string | null {
   return requested && !saved
-    ? "This hub runs an older GOAT without disposable machines. Update GOAT there to turn this on."
+    ? "The hub kept this switch off: the hub was turned off, or its GOAT predates disposable machines. If the hub is on, update GOAT there."
     : null;
 }
 
