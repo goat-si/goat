@@ -448,6 +448,61 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.live(
+    "regression #3079: a Claude status check reads the host PATH current at the check, and an instance PATH still wins",
+    () =>
+      Effect.gen(function* () {
+        if (yield* HostProcess.isWindows) return;
+        const fixtures = yield* makeTildeProviderFixtures();
+        const path = yield* Path.Path;
+        const homePath = yield* HostProcess.HomeDirectory;
+        const folder = path.dirname(path.join(homePath, fixtures.claudeBinaryPath.slice(2)));
+        // The fixture runs on node; keep it reachable without the fixture folder.
+        const before = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+        const original = process.env.PATH;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            process.env.PATH = original;
+          }),
+        );
+        process.env.PATH = before;
+        const config = makeClaudeConfig({
+          enabled: true,
+          binaryPath: "claude",
+          homePath: fixtures.claudeHomePath,
+        });
+        const inheritedId = ProviderInstanceId.make("claude_host_path");
+        const pinnedId = ProviderInstanceId.make("claude_instance_path");
+        const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+          drivers: [ClaudeDriver],
+          configMap: {
+            [inheritedId]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              config,
+            },
+            [pinnedId]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              environment: [{ name: "PATH", value: `${folder}:${before}`, sensitive: false }],
+              config,
+            },
+          },
+        });
+        const inherited = yield* registry.getInstance(inheritedId);
+        const pinned = yield* registry.getInstance(pinnedId);
+        expect(yield* inherited!.snapshot.refresh).toMatchObject({ installed: false });
+
+        process.env.PATH = `${folder}:${before}`;
+        expect(yield* inherited!.snapshot.refresh).toMatchObject({
+          installed: true,
+          version: "2.1.219",
+        });
+        process.env.PATH = before;
+        expect(yield* pinned!.snapshot.refresh).toMatchObject({ installed: true });
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("scopes Claude's one-probe fallback to the logged-in organization", () =>
     Effect.gen(function* () {
       if (yield* HostProcess.isWindows) return;

@@ -100,7 +100,7 @@ const isProtocolError = Schema.is(ProviderAdapter.ProviderAdapterProtocolError);
 export interface MuseAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: MuseSettings;
-  readonly environment: NodeJS.ProcessEnv;
+  readonly environment: NodeJS.ProcessEnv | Effect.Effect<NodeJS.ProcessEnv>;
   readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
@@ -1620,7 +1620,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         const epoch = ++hostEpoch;
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const environment = McpProviderSession.withThreadAgentEnvironment(
-          McpProviderSession.withAgentDeviceEnvironment(options.environment, mcpSession),
+          McpProviderSession.withAgentDeviceEnvironment(
+            Effect.isEffect(options.environment) ? yield* options.environment : options.environment,
+            mcpSession,
+          ),
           mcpSession,
         );
         const launch = yield* agentScope.wrap({

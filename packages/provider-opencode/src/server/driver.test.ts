@@ -166,6 +166,52 @@ const lazyMiseShim = {
 } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
+  it.effect(
+    "refreshes the probe environment after the host PATH changes while preserving instance overrides",
+    () =>
+      Effect.gen(function* () {
+        const original = process.env.PATH;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (original === undefined) delete process.env.PATH;
+            else process.env.PATH = original;
+          }),
+        );
+        process.env.PATH = "/usr/bin:/bin";
+        const environments: NodeJS.ProcessEnv[] = [];
+        const runtime = {
+          ...openCode2Runtime,
+          runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
+            Effect.sync(() => {
+              environments.push(environment ?? {});
+              return { stdout: "opencode v2.0.18\n", stderr: "", code: 0 };
+            }),
+        };
+        const makeInstance = (override: boolean) =>
+          OpenCodeDriver.create({
+            instanceId: ProviderInstanceId.make(override ? "override" : "inherited"),
+            displayName: undefined,
+            environment: override
+              ? [{ name: "PATH", value: "/usr/bin:/bin", sensitive: false }]
+              : [],
+            enabled: true,
+            config: OpenCodeDriver.defaultConfig(),
+          }).pipe(
+            Effect.provideService(HttpClient.HttpClient, noHttp),
+            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+            Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+          );
+        const inherited = yield* makeInstance(false);
+        const overridden = yield* makeInstance(true);
+        process.env.PATH = "/new/bin:/usr/bin:/bin";
+        yield* inherited.snapshot.refresh;
+        assert.strictEqual(environments.at(-1)?.PATH, "/new/bin:/usr/bin:/bin");
+        assert.strictEqual(environments.at(-1)?.MISE_OFFLINE, "1");
+        assert.strictEqual(Object.getPrototypeOf(environments.at(-1)), Object.prototype);
+        yield* overridden.snapshot.refresh;
+        assert.strictEqual(environments.at(-1)?.PATH, "/usr/bin:/bin");
+      }).pipe(Effect.scoped),
+  );
   it.effect("starts workspace discovery servers with mise offline", () =>
     Effect.gen(function* () {
       const environments: NodeJS.ProcessEnv[] = [];
