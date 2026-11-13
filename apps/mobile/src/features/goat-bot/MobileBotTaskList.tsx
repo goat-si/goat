@@ -129,14 +129,12 @@ export function mobileBotTaskListItems(props: {
       items.push({
         key: JSON.stringify(["task", row.task.taskId]),
         render: () => (
-          <View className="flex-row items-center">
-            <MobileBotRowMenu
-              label={`Actions for ${row.task.title}`}
-              title={row.task.title}
-              actions={actions(row)}
-              onSelect={(id) => choose(row, id)}
-              style={{ flex: 1 }}
-            >
+          <MobileBotRowMenu
+            label={`Actions for ${row.task.title}`}
+            title={row.task.title}
+            actions={actions(row)}
+            onSelect={(id) => choose(row, id)}
+            row={
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={mobileBotTaskLabel(row)}
@@ -191,14 +189,8 @@ export function mobileBotTaskListItems(props: {
                   tintColorClassName="accent-foreground-muted"
                 />
               </Pressable>
-            </MobileBotRowMenu>
-            <MobileBotRowMenu
-              label={`Actions for ${row.task.title}`}
-              title={row.task.title}
-              actions={actions(row)}
-              onSelect={(id) => choose(row, id)}
-            />
-          </View>
+            }
+          />
         ),
       });
       if (props.expanded.has(row.task.taskId)) items.push(...props.details(row.task.taskId));

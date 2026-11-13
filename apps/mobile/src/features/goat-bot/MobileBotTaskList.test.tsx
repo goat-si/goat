@@ -38,7 +38,7 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-    children?: ReactNode;
+    row?: ReactNode;
   }) => {
     const open = () =>
       alert(
@@ -49,11 +49,12 @@ vi.mock("./MobileBotRowMenu", () => ({
           onPress: () => props.onSelect(action.id),
         })),
       );
-    // Given a row, the menu opens on a long press of it; a context menu stands for that press.
-    return props.children ? (
-      <div onContextMenu={open}>{props.children}</div>
-    ) : (
-      <button aria-label={props.label} onClick={open} />
+    // A long press of the row opens the same menu; a context menu stands for that press.
+    return (
+      <>
+        <div onContextMenu={open}>{props.row}</div>
+        <button aria-label={props.label} onClick={open} />
+      </>
     );
   },
 }));

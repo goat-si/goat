@@ -151,8 +151,12 @@ vi.mock("react-native", () => ({
 }));
 // The row menu is native; these tests do not open it.
 vi.mock("./MobileBotRowMenu", () => ({
-  MobileBotRowMenu: (props: { label: string; children?: ReactNode }) =>
-    props.children ? <>{props.children}</> : <button aria-label={props.label} />,
+  MobileBotRowMenu: (props: { label: string; row?: ReactNode }) => (
+    <>
+      {props.row}
+      <button aria-label={props.label} />
+    </>
+  ),
 }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({

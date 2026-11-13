@@ -89,11 +89,10 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-    children?: ReactNode;
-  }) =>
-    props.children ? (
-      <>{props.children}</>
-    ) : (
+    row?: ReactNode;
+  }) => (
+    <>
+      {props.row}
       <button
         aria-label={props.label}
         onClick={() =>
@@ -107,7 +106,8 @@ vi.mock("./MobileBotRowMenu", () => ({
           )
         }
       />
-    ),
+    </>
+  ),
 }));
 const state = vi.hoisted(() => ({
   rows: [] as BotThreadRow[],

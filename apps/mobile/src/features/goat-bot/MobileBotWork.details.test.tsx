@@ -87,11 +87,10 @@ vi.mock("./MobileBotRowMenu", () => ({
     title: string;
     actions: ReadonlyArray<{ id: string; title: string }>;
     onSelect: (id: string) => void;
-    children?: ReactNode;
-  }) =>
-    props.children ? (
-      <>{props.children}</>
-    ) : (
+    row?: ReactNode;
+  }) => (
+    <>
+      {props.row}
       <button
         aria-label={props.label}
         onClick={() =>
@@ -105,7 +104,8 @@ vi.mock("./MobileBotRowMenu", () => ({
           )
         }
       />
-    ),
+    </>
+  ),
 }));
 const state = vi.hoisted(() => ({
   // Whether the screen is focused and the app active; a task is marked read only then.
@@ -711,7 +711,7 @@ function setupReads(result: { _tag: string } = { _tag: "Success" }) {
   nativeAlert.mockClear();
 }
 
-it("a peek marks its unread task read once, and again only for newer activity", async () => {
+it("a peek marks its unread task read once, and not again when reopened with no newer activity", async () => {
   setupReads();
   state.rows = [unreadTask("t1", "Check the disks")];
   await open();

@@ -1,26 +1,24 @@
 import { MenuView, type MenuAction, type MenuComponentRef } from "@react-native-menu/menu";
-import { useRef, type ReactElement } from "react";
-import { Platform, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { cloneElement, useRef, type ReactElement } from "react";
+import { Platform, Text, View, type PressableProps } from "react-native";
 
 import { Menu } from "../../components/ui/Menu";
 
 /**
- * A Work row's actions in a native menu with every choice (Android's Alert keeps three). In the
- * Home sheet's modal, Android uses the native menu view, since the anchored menu draws behind it;
- * that view opens on touch only, so a screen reader's activation opens it through its ref.
- * Given a row as children, the same menu opens on a long press of that row instead.
+ * A Work row's actions with every choice. Android uses the native menu view (the anchored menu
+ * draws behind the Home modal); it takes every touch of what it wraps and opens on touch only, so
+ * TalkBack and a long press of the row open it through its ref, and the row stays outside it.
  */
 export function MobileBotRowMenu(props: {
   readonly label: string;
   readonly title: string;
   readonly actions: readonly MenuAction[];
   readonly onSelect: (id: string) => void;
-  readonly children?: ReactElement;
-  readonly style?: StyleProp<ViewStyle>;
+  readonly row?: ReactElement<Pick<PressableProps, "onLongPress">>;
 }) {
   const menuRef = useRef<MenuComponentRef>(null);
   const android = Platform.OS === "android";
-  const control = props.children ?? (
+  const control = (
     <View
       accessible
       accessibilityRole="button"
@@ -40,29 +38,45 @@ export function MobileBotRowMenu(props: {
   );
   const select = ({ nativeEvent }: { nativeEvent: { event: string } }) =>
     props.onSelect(nativeEvent.event);
-  const longPress = props.children !== undefined;
-  if (android)
-    return (
-      <MenuView
-        ref={menuRef}
-        title={props.title}
-        style={props.style}
-        actions={[...props.actions]}
-        shouldOpenOnLongPress={longPress}
-        onPressAction={select}
-      >
-        {control}
-      </MenuView>
-    );
-  return (
+  const button = android ? (
+    <MenuView
+      ref={menuRef}
+      title={props.title}
+      actions={[...props.actions]}
+      shouldOpenOnLongPress={false}
+      onPressAction={select}
+    >
+      {control}
+    </MenuView>
+  ) : (
     <Menu
       title={props.title}
-      style={props.style}
       actions={[...props.actions]}
-      shouldOpenOnLongPress={longPress}
+      shouldOpenOnLongPress={false}
       onPressAction={select}
     >
       {control}
     </Menu>
+  );
+  if (!props.row) return button;
+  const row = android ? (
+    /* oxlint-disable-next-line react/refs -- The ref is read when the long press runs. */
+    cloneElement(props.row, { onLongPress: () => menuRef.current?.show() })
+  ) : (
+    <Menu
+      title={props.title}
+      style={{ flex: 1 }}
+      actions={[...props.actions]}
+      shouldOpenOnLongPress
+      onPressAction={select}
+    >
+      {props.row}
+    </Menu>
+  );
+  return (
+    <View className="flex-row items-center">
+      {row}
+      {button}
+    </View>
   );
 }

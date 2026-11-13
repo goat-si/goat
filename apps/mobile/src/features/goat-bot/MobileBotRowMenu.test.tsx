@@ -38,7 +38,9 @@ const menu = vi.hoisted(() => (kind: string) => (props: MenuProps) => {
   native.menus.push({ kind, actions: props.actions, longPress: props.shouldOpenOnLongPress });
   native.press = (id) => props.onPressAction?.({ nativeEvent: { event: id } });
   return (
-    <div>{typeof props.children === "function" ? props.children(() => {}) : props.children}</div>
+    <div data-menu={kind} data-long-press={String(props.shouldOpenOnLongPress)}>
+      {typeof props.children === "function" ? props.children(() => {}) : props.children}
+    </div>
   );
 });
 // Android uses the native menu view so it is not drawn behind the Home sheet's modal; that layering
@@ -72,9 +74,13 @@ async function show(os: "ios" | "android", row?: ReactElement) {
   const root = createRoot(container);
   await act(async () =>
     root.render(
-      <MobileBotRowMenu label="Actions for Task" title="Task" actions={actions} onSelect={onSelect}>
-        {row}
-      </MobileBotRowMenu>,
+      <MobileBotRowMenu
+        label="Actions for Task"
+        title="Task"
+        actions={actions}
+        onSelect={onSelect}
+        row={row}
+      />,
     ),
   );
   return { container, onSelect, unmount: () => act(async () => root.unmount()) };
@@ -109,18 +115,33 @@ it("uses the iOS menu with the same actions", async () => {
   await view.unmount();
 });
 
-it("opens the same actions on a long press of a row it wraps, on both platforms", async () => {
-  for (const os of ["android", "ios"] as const) {
-    const view = await show(os, <span>Task row</span>);
-    expect(native.menus.at(-1)).toMatchObject({ kind: os, longPress: true });
-    expect(native.menus.at(-1)?.actions).toHaveLength(4);
-    expect(view.container.textContent).toBe("Task row");
-    await act(async () => native.press?.("pin"));
-    expect(view.onSelect).toHaveBeenCalledWith("pin");
-    await view.unmount();
-  }
-  // The standalone button opens on a tap, so its menu does not also wait for a long press.
-  const button = await show("android");
-  expect(native.menus.at(-1)?.longPress).toBe(false);
-  await button.unmount();
+// A context menu on the row stands for the long press its Pressable reports.
+const Row = (props: { onLongPress?: () => void; onPress?: () => void }) => (
+  <button aria-label="Task row" onClick={props.onPress} onContextMenu={props.onLongPress} />
+);
+
+it("on Android keeps the row outside the native menu view, whose long press opens the button's menu", async () => {
+  const onPress = vi.fn();
+  const view = await show("android", <Row onPress={onPress} />);
+  const row = view.container.querySelector('[aria-label="Task row"]');
+  // The native view takes every touch of what it wraps, so a wrapped row could not be tapped.
+  expect(row?.closest("[data-menu]")).toBeNull();
+  await act(async () => (row as HTMLButtonElement).click());
+  expect(onPress).toHaveBeenCalledTimes(1);
+  native.shown = 0;
+  await act(async () =>
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+  );
+  expect(native.shown).toBe(1);
+  expect(native.menus.map((menu) => menu.kind)).toEqual(["android"]);
+  await view.unmount();
+});
+
+it("on iOS wraps the row in a menu that opens on long press, with the same actions", async () => {
+  const view = await show("ios", <Row />);
+  const row = view.container.querySelector('[aria-label="Task row"]');
+  expect(row?.closest("[data-menu]")?.getAttribute("data-long-press")).toBe("true");
+  expect(native.menus.filter((menu) => menu.longPress)).toHaveLength(1);
+  expect(native.menus.every((menu) => menu.actions.length === 4)).toBe(true);
+  await view.unmount();
 });
