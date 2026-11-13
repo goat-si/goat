@@ -100,6 +100,7 @@ import { filterBranchesForListQuery, paginateBranches } from "./gitBranchListQue
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
+import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
@@ -2995,7 +2996,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return stdout.trim();
   });
 
-  const prepareUntrackedReviewIndex = Effect.fn("prepareUntrackedReviewIndex")(function* (
+  const prepareUntrackedReviewIndexOrReason = Effect.fn("prepareUntrackedReviewIndex")(function* (
     cwd: string,
     pathArgs: ReadonlyArray<string>,
     onlyPath?: string,
@@ -3006,15 +3007,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       cwd,
       ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathArgs],
       { maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
-    ).pipe(Effect.orElseSucceed(() => null));
-    if (untracked === null) return null;
+    ).pipe(Effect.catchTags({ GitCommandError: failedUntrackedListing }));
+    if ("unavailable" in untracked) return untracked;
     // ls-files lists a nested repository with a trailing slash; its diff path has none.
     const paths = splitNullSeparatedGitStdoutPaths(untracked).filter(
       (candidate) =>
         onlyPath === undefined || candidate === onlyPath || candidate === `${onlyPath}/`,
     );
     if (paths.length === 0) return { env: undefined };
-    if (paths.length > REVIEW_UNTRACKED_MAX_FILES) return null;
+    if (paths.length > REVIEW_UNTRACKED_MAX_FILES)
+      return { unavailable: "Too many untracked files to count." };
     const env = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>
@@ -3031,6 +3033,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
     return { env };
   });
+  const prepareUntrackedReviewIndex = (
+    ...args: Parameters<typeof prepareUntrackedReviewIndexOrReason>
+  ) =>
+    prepareUntrackedReviewIndexOrReason(...args).pipe(
+      Effect.map((result) => ("unavailable" in result ? null : result)),
+    );
+  const untrackedTotalsBackoff = makeUntrackedTotalsBackoff(STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY);
 
   const resolveReviewMergeBase = Effect.fn("resolveReviewMergeBase")(function* (
     cwd: string,
@@ -3105,15 +3114,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ? roots.map((root) => `:(top,literal)${root}`)
         : [];
     // Empty status can mean untracked files are hidden; retain the full scan.
-    const untracked = yield* prepareUntrackedReviewIndex(cwd, pathspecs);
-    if (untracked === null) {
-      return yield* new GitCommandError({
-        operation: "GitVcsDriver.readBranchChangeTotals",
-        command: "git ls-files",
-        cwd,
-        detail: "Too many untracked files to count.",
-      });
-    }
+    const untracked = yield* untrackedTotalsBackoff(
+      cwd,
+      roots,
+      prepareUntrackedReviewIndexOrReason(cwd, pathspecs),
+    );
     const readNumstat = (ref: string) =>
       executeGit(
         "GitVcsDriver.readBranchChangeTotals",
