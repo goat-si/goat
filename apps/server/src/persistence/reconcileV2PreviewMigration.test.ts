@@ -160,6 +160,7 @@ describe("V2 preview upgrade", () => {
         [143, "RemoteDispatchHostOutage"],
         [144, "ChannelBotTaskHistory"],
         [145, "DisposableMachines"],
+        [146, "DisposableMachineRequests"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -330,6 +331,7 @@ describe("V2 preview upgrade", () => {
         [143, "RemoteDispatchHostOutage"],
         [144, "ChannelBotTaskHistory"],
         [145, "DisposableMachines"],
+        [146, "DisposableMachineRequests"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
