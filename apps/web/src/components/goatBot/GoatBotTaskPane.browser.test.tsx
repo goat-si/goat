@@ -133,7 +133,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
-import { goatBotHomeKey, takeHomeOpen } from "./goatBotHomeRequest";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -373,7 +373,7 @@ it("explains where to find actions for older work absent from the current list",
   expect(close).toHaveBeenCalledOnce();
 });
 
-it("Open Home from an older task asks that bot's chat to open Home once", async () => {
+it("Open Home from an older task goes to the bot's chat with its Home named in history state", async () => {
   setup();
   state.noRows = true;
   const session = useGoatBotSession();
@@ -390,8 +390,8 @@ it("Open Home from an older task asks that bot's chat to open Home once", async 
   );
   await userEvent.click(screen.getByRole("button", { name: "Open Home" }));
   expect(close).not.toHaveBeenCalled();
-  const key = goatBotHomeKey(EnvironmentId.make("env"), null);
-  expect(takeHomeOpen(goatBotHomeKey(EnvironmentId.make("other"), null))).toBe(false);
-  expect(takeHomeOpen(key)).toBe(true);
-  expect(takeHomeOpen(key)).toBe(false);
+  await vi.waitFor(() => expect(screen.router?.state.location.pathname).toBe("/env/bot-thread"));
+  expect(screen.router?.state.location.state.goatBotOpenHome).toBe(
+    goatBotHomeKey(EnvironmentId.make("env"), null),
+  );
 });

@@ -5,9 +5,9 @@ import {
   ChannelTaskId,
   type EnvironmentId,
 } from "@goat/contracts";
-import { Link } from "@tanstack/react-router";
+import { Link, useLocation } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
-import { goatBotHomeKey, takeHomeOpen } from "./goatBotHomeRequest";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
@@ -141,11 +141,7 @@ export function GoatBotChatView({
   onCheckAgain,
 }: GoatBotChatViewProps) {
   const member = useGoatBotMember();
-  // The task pane's Open Home leaves a one-shot request for this bot's next chat.
-  const [panelOpen, setPanelOpen] = useState(() => {
-    const home = availability.kind === "ready" ? availability.bot.environmentId : environmentId;
-    return home !== null && takeHomeOpen(goatBotHomeKey(home, member?.botId ?? null));
-  });
+  const [panelOpen, setPanelOpen] = useState(false);
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -175,6 +171,17 @@ export function GoatBotChatView({
   const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
   // A bot or environment switch remounts Home, so its history walk starts over.
   const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
+  // The task pane's Open Home navigates here with this bot's key in history state; each such
+  // history entry opens Home once.
+  const homeEntry = useLocation({
+    select: (location) =>
+      location.state.goatBotOpenHome === homeKey ? (location.state.__TSR_key ?? "") : null,
+  });
+  const [openedHomeEntry, setOpenedHomeEntry] = useState<string | null>(null);
+  if (bot && homeEntry !== null && homeEntry !== openedHomeEntry) {
+    setOpenedHomeEntry(homeEntry);
+    setPanelOpen(true);
+  }
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;

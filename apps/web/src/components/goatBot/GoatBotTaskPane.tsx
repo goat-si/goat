@@ -24,7 +24,7 @@ import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
-import { goatBotHomeKey, requestHomeOpen } from "./goatBotHomeRequest";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
@@ -174,11 +174,11 @@ export function GoatBotTaskPane({
             onClick={() => {
               const bot = session.availability.kind === "ready" ? session.availability.bot : null;
               if (bot == null) return onClose();
-              requestHomeOpen(goatBotHomeKey(environmentId, member?.botId ?? null));
               // Straight to the bot's chat: /bot would mount a chat that redirects away.
               void navigate({
                 to: "/$environmentId/$threadId",
                 params: { environmentId: bot.environmentId, threadId: bot.threadId },
+                state: { goatBotOpenHome: goatBotHomeKey(environmentId, member?.botId ?? null) },
               });
             }}
           >

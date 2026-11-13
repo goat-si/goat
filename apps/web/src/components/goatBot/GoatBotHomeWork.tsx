@@ -305,7 +305,7 @@ function WorkRow({
     }
     const input: ChannelUpdateTaskViewInput =
       action === "pin"
-        ? { taskId: row.task.taskId, pinned: row.view.pinnedAt === null }
+        ? { taskId: row.task.taskId, pinned: older || row.view.pinnedAt === null }
         : action === "done"
           ? { taskId: row.task.taskId, done: row.view.doneAt === null }
           : action === "read"

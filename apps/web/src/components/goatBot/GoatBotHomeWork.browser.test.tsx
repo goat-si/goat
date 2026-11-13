@@ -335,6 +335,17 @@ it("an older row's menu offers Show work, Open and Pin, and Pin only refreshes t
   expect(onOpenTask).toHaveBeenCalledWith(row);
 });
 
+it("Pin on an older row that is already pinned still pins it", async () => {
+  const [row] = setup([taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z")]);
+  if (!row) throw new Error("missing fixture");
+  const pinned = { ...row, view: { ...row.view, pinnedAt: "2026-11-01T00:00:00.000Z" } };
+  await using screen = await render(view([pinned], { history: history({ supported: true }) }));
+  actions.show.mockResolvedValueOnce("pin");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await vi.waitFor(() => expect(actions.update).toHaveBeenCalledOnce());
+  expect(actions.update.mock.calls[0]?.[0].input).toEqual({ taskId: "old", pinned: true });
+});
+
 it("an older row's Pin is unavailable without permission to change task views", async () => {
   const [row] = setup([taskRow("old", "Older task", "completed", "2026-11-09T01:00:00.000Z")]);
   if (!row) throw new Error("missing fixture");
