@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
-import { disposableSwitch } from "../hub/disposable/disposableSwitch.ts";
+import { disposableSwitch, withPersonConsent } from "../hub/disposable/disposableSwitch.ts";
 import * as Routes from "../provider/CodexRouteService.ts";
 import * as ConnectRuntime from "./ConnectHubRuntime.testkit.ts";
 import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
@@ -63,9 +63,11 @@ it.effect("a client with settings:write cannot reopen an expired switch through 
   Effect.gen(function* () {
     const runtime = yield* ConnectRuntime.open();
     yield* runtime.settings.start;
-    yield* runtime.settings.updateSettings({
-      hub: { enabled: true, attachDisposableMachines: { enabled: true } },
-    });
+    yield* withPersonConsent(
+      runtime.settings.updateSettings({
+        hub: { enabled: true, attachDisposableMachines: { enabled: true } },
+      }),
+    );
     const opened = (yield* runtime.settings.getSettings).hub.attachDisposableMachines;
     yield* TestClock.adjust(31 * 24 * 60 * 60 * 1000);
     const now = yield* Clock.currentTimeMillis;

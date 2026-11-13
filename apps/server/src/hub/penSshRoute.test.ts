@@ -119,6 +119,10 @@ describe("Pen's exact per-node route", () => {
     expect(penRunCommand(node, { ...pen, stateDir: "/home/u/pen state" })).toBeUndefined();
     expect(penRunCommand(node, { ...pen, executablePath: "/opt/it's/pen" })).toBeUndefined();
     expect(penRunCommand(node, { ...pen, stateDir: "/srv/p%n" })).toBeUndefined();
+    // OpenCodex takes : @ , = in later words but not in the program path (explicit-route.ts).
+    expect(penRunCommand(node, { ...pen, executablePath: "/opt/me@host/pen" })).toBeUndefined();
+    expect(penRunCommand(node, { ...pen, executablePath: "/opt/a:b/pen" })).toBeUndefined();
+    expect(penRunCommand(node, { ...pen, stateDir: "/srv/me@host/.pen" })).toBeDefined();
     expect(
       isPenRunCommand(
         "env PEN_HOME='/home/u/.pen' '/opt/bin/pen-v1'" + exact.slice(exact.indexOf(" pipe")),

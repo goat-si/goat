@@ -2,9 +2,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * One row per attach. Keys, invite and mint are unique only while final_at is null, and the CHECK
- * makes a final state set final_at in the same write, so "open" is final_at IS NULL everywhere.
- * Pin, environment, install and link ids are left to the class rules: two records sharing one are a
+ * One row per attach. Keys are unique while final_at is null; mint and invite ids in every row (Pen
+ * reuses neither). The CHECK makes a final state set final_at, so "open" is final_at IS NULL. Pin,
+ * environment, install and link ids are left to the class rules: two records sharing one are a
  * conflict to show, not a write to refuse.
  */
 export default Effect.gen(function* () {

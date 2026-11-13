@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -144,6 +145,33 @@ export const HubDisposableMachinesSettings = Schema.Struct({
   ),
 });
 export type HubDisposableMachinesSettings = typeof HubDisposableMachinesSettings.Type;
+
+const SWITCH_OFF: HubDisposableMachinesSettings = {
+  enabled: false,
+  provisioners: [],
+  cap: DISPOSABLE_CAP_DEFAULT,
+  nameRule: DISPOSABLE_NAME_RULE_DEFAULT,
+  expiresAt: null,
+  grantId: null,
+};
+/**
+ * The switch as saved settings read it: a block this version cannot read (a later version widened
+ * a limit, then a downgrade) reads as off, and the next write saves it off, instead of failing the
+ * whole settings file.
+ */
+// A union keeps the strict member for encoding, so the sparse settings writer still works.
+export const HubDisposableMachinesSaved = Schema.Union([
+  HubDisposableMachinesSettings,
+  Schema.Unknown.pipe(
+    Schema.decodeTo(
+      Schema.toType(HubDisposableMachinesSettings),
+      SchemaTransformation.transform<HubDisposableMachinesSettings, unknown>({
+        decode: () => SWITCH_OFF,
+        encode: (value) => value,
+      }),
+    ),
+  ),
+]);
 
 /** Changes the named fields; `grantId` is the server's alone. */
 export const HubDisposableMachinesPatch = Schema.Struct({

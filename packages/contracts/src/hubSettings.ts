@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { HubDisposableMachinesPatch, HubDisposableMachinesSettings } from "./disposableMachines.ts";
+import { HubDisposableMachinesPatch, HubDisposableMachinesSaved } from "./disposableMachines.ts";
 
 /**
  * "hub": cloud launches from any device go to the hub's sign-ins. "auto": the least loaded
@@ -38,7 +38,7 @@ export const HubSettings = Schema.Struct({
   autoJoinCloudMachines: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   devices: HubDevices.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /** "Attach disposable machines": off, with no provisioners, until a person turns it on. */
-  attachDisposableMachines: HubDisposableMachinesSettings.pipe(
+  attachDisposableMachines: HubDisposableMachinesSaved.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
 });

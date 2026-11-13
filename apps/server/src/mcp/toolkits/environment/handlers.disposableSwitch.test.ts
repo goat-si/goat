@@ -10,7 +10,7 @@ import * as Auth from "../../../auth/EnvironmentAuth.ts";
 import * as Secrets from "../../../auth/ServerSecretStore.ts";
 import * as Config from "../../../config.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
-import { disposableSwitch } from "../../../hub/disposable/disposableSwitch.ts";
+import { disposableSwitch, withPersonConsent } from "../../../hub/disposable/disposableSwitch.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
@@ -38,9 +38,11 @@ it.effect("a thread turning the hub off and on cannot reopen an expired disposab
     const environmentId = yield* identity.getEnvironmentId;
     const threadId = ThreadId.make("provisioner");
     yield* settings.start;
-    yield* settings.updateSettings({
-      hub: { enabled: true, attachDisposableMachines: { enabled: true } },
-    });
+    yield* withPersonConsent(
+      settings.updateSettings({
+        hub: { enabled: true, attachDisposableMachines: { enabled: true } },
+      }),
+    );
     const opened = (yield* settings.getSettings).hub.attachDisposableMachines.expiresAt;
     yield* TestClock.adjust(31 * DAY_MS);
     const dependencies = Layer.mergeAll(
