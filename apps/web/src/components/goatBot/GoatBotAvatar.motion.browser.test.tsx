@@ -140,6 +140,7 @@ it("separates an accent from its status ring and outlines the waiting dot on the
   expect(surface).not.toBe("rgba(0, 0, 0, 0)");
   // The ring: a 1 px border in the failed colour.
   expect(Number.parseFloat(ring.borderLeftWidth)).toBeCloseTo(1, 1);
+  expect(Number.parseFloat(ring.borderRightWidth)).toBeCloseTo(1, 1);
   expect(ring.borderLeftColor).not.toBe(surface);
   // The gap: 1 px between the ring and the colour, showing the surface behind the avatar.
   const outer = colored.getBoundingClientRect();
