@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../../processRunner.ts";
+import { phaseOf } from "../HubOcx.ts";
 import { journalServed, reachAnswerOf, writeKnownHostsOnce } from "./EnrollHost.ts";
 
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
@@ -74,3 +75,14 @@ it.live.skipIf(WINDOWS)("the known_hosts line is published whole and written onc
     expect(changed.reason).toBe("changed");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it("ocx's refusal of a key file is read by its hint, as the CLI prints it", () => {
+  const line =
+    "Error: Every directory above the identity file must be owned by this user or root and not writable by group or others unless it is sticky like /tmp, and every symlink on its path must be owned by this user or root. A home or state folder created under umask 002 (per-user groups on Ubuntu or Fedora) is group-writable: chmod g-w on that directory. (code invalid_identity_file, hint identity_file_ancestor)\n";
+  expect(phaseOf(line)).toBe("identity_file_ancestor");
+  expect(
+    phaseOf(
+      "Error: The identity file does not exist. (code invalid_identity_file, hint identity_file_missing)",
+    ),
+  ).toBe("identity_file_missing");
+});

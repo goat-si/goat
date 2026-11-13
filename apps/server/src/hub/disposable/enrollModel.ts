@@ -223,6 +223,19 @@ const STOPS: Record<string, string> = {
   sshd_pin_shared:
     "Another disposable machine presents the same SSH host key, so GOAT cannot tell them apart.",
   pin_changed: "Pen now advertises another SSH host key for this machine than GOAT recorded.",
+  identity_file_missing: "OpenCodex refused this hub's machine key file: it could not find it.",
+  identity_file_not_regular:
+    "OpenCodex refused this hub's machine key file: it is not a regular file.",
+  identity_file_permissions:
+    "OpenCodex refused this hub's machine key file's owner or permissions; OpenCodex on this hub may run as another user than GOAT.",
+  identity_file_directory:
+    "OpenCodex refused this hub's machine key file: its folder is not private to this user (chmod g-w,o-w on it).",
+  identity_file_ancestor:
+    "OpenCodex refused this hub's machine key file: a folder above it can be written by its group or others or belongs to another user, or a symlink on its path does (chmod g-w on that folder).",
+  identity_file_unreadable:
+    "OpenCodex refused this hub's machine key file: it cannot read it or a folder on its path; OpenCodex on this hub may run as another user than GOAT.",
+  identity_file_unsupported_platform:
+    "OpenCodex refused this hub's machine key file: a Windows hub cannot use one.",
   known_hosts_edited:
     "GOAT's known_hosts file for this machine no longer holds only the host key Pen recorded; it was edited or damaged on the hub.",
   host_key_changed: "The machine presented another SSH host key than the one Pen recorded for it.",

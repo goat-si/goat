@@ -886,3 +886,21 @@ it.effect("a symlink another user owns on the key's path holds the link and is n
     }),
   ),
 );
+
+it.effect(
+  "OpenCodex refusing the key file stops the attach at once with GOAT's text for its hint",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push({ identityRefused: "identity_file_permissions" });
+        for (let pass = 0; pass < 6; pass += 1) yield* enroll;
+        expect(linkAdds(host.control.calls)).toHaveLength(1);
+        const machine = yield* listed(attachId);
+        expect(machine).toMatchObject({ state: "paused" });
+        expect(machine?.message).toContain("OpenCodex refused this hub's machine key file");
+        expect(machine?.message).toContain("another user");
+      }),
+    ),
+);

@@ -47,7 +47,9 @@ export type AddScript =
   | "residual"
   | "unknown"
   /** The Home stopped mid-operation: the entry stays open until the same id is repeated. */
-  | "open";
+  | "open"
+  /** The Home refuses the key file before its journal opens, naming the hint. */
+  | { readonly identityRefused: string };
 
 /** Holds a call until released; `arrived` completes once `want` calls wait. */
 export interface Hold {
@@ -133,10 +135,12 @@ export const fakeEnrollHost = () => {
     }
     const script = control.adds.shift() ?? "commit";
     if (script === "not_journalled") return output(1);
+    if (typeof script === "object" && "identityRefused" in script)
+      return { code: 1, stdout: "", phase: script.identityRefused };
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);
-    if (typeof script === "object") {
+    if (typeof script === "object" && "failedClean" in script) {
       operation.state = "failed_clean";
       operation.code = script.failedClean;
       return output(1);
