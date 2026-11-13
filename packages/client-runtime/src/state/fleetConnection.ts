@@ -46,6 +46,13 @@ export function presentFleetConnection(connection: FleetConnectionInput | null):
   if (connection === null) return UNKNOWN_FLEET_CONNECTION;
   if (connection.penHold === "offline")
     return { state: "offline", label: "Offline in Pen", reason: null };
+  if (connection.penHold === "no-list")
+    return {
+      state: "offline",
+      label: "Waiting for Pen",
+      reason:
+        "Pen is not running on this computer, so GOAT cannot tell whether this machine is on.",
+    };
   if (connection.penHold === "waiting")
     return {
       state: "offline",

@@ -23,9 +23,12 @@ export type EnvironmentConnectionPhase =
   | "error"
   | "unsupported";
 
+/** Why a Pen-only machine is not dialed: Pen reports it offline, it is past the limit, or Pen has no list here. */
+export type PenHold = "offline" | "waiting" | "no-list";
+
 export interface EnvironmentConnectionPresentation {
   readonly phase: EnvironmentConnectionPhase;
-  readonly penHold?: "offline" | "waiting";
+  readonly penHold?: PenHold;
   readonly failureOrigin?: ConnectionFailureOrigin;
   readonly sshPreparation?: ConnectionSshPreparation;
   readonly sshRuntimeReady?: ConnectionSshRuntimeReady;

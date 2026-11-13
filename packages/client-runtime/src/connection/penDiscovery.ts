@@ -20,6 +20,8 @@ export type PenMemberState =
   | "yours"
   | "connecting"
   | "offline"
+  | "pen-offline"
+  | "pen-down"
   | "waiting"
   | "not-set-up"
   | "needs-update"
@@ -146,22 +148,28 @@ const make = Effect.gen(function* () {
         reason: "configuration",
         detail: "This Pen member is not trusted.",
       });
-    const admitted = yield* liveSet.admitOnboarding(nodeId, { force: true });
-    if (!admitted)
-      return yield* new ConnectionBlockedError({
-        reason: "configuration",
-        detail: "This Pen member is already being set up.",
-      });
-    const id = yield* onboarding
-      .registerSsh({
-        target: member.route.target,
-        label: member.name,
-        keyOnly: false,
-        pen: { meshId: state.meshId, nodeId },
-        confirm: confirm(state.meshId, member),
-      })
-      .pipe(Effect.ensuring(liveSet.releaseOnboarding(nodeId)));
-    yield* liveSet.open(id);
+    const sshTarget = member.route.target;
+    const id = yield* Effect.acquireUseRelease(
+      liveSet.admitOnboarding(nodeId, { force: true }),
+      (admitted) =>
+        admitted
+          ? onboarding
+              .registerSsh({
+                target: sshTarget,
+                label: member.name,
+                keyOnly: false,
+                pen: { meshId: state.meshId, nodeId },
+                confirm: confirm(state.meshId, member),
+              })
+              .pipe(Effect.tap((environmentId) => liveSet.open(environmentId)))
+          : Effect.fail(
+              new ConnectionBlockedError({
+                reason: "configuration",
+                detail: "This Pen member is already being set up.",
+              }),
+            ),
+      (admitted) => (admitted ? liveSet.releaseOnboarding(nodeId) : Effect.void),
+    );
     yield* rerun;
     return id;
   });
@@ -237,7 +245,7 @@ const make = Effect.gen(function* () {
             yield* SubscriptionRef.update(statuses, (current) =>
               current.map((row) =>
                 row.nodeId === member.nodeId
-                  ? { nodeId: member.nodeId, name: member.name, state: "offline" }
+                  ? { nodeId: member.nodeId, name: member.name, state: "pen-offline" }
                   : row,
               ),
             );
@@ -251,8 +259,41 @@ const make = Effect.gen(function* () {
             return;
           }
           const wasForced = forced.delete(member.nodeId);
-          const admitted = yield* liveSet.admitOnboarding(member.nodeId, { force: wasForced });
-          if (!admitted) {
+          const sshTarget = member.route.target;
+          const attempt = yield* Effect.acquireUseRelease(
+            liveSet.admitOnboarding(member.nodeId, { force: wasForced }),
+            (admitted) =>
+              admitted
+                ? Effect.gen(function* () {
+                    attempts.set(key, {
+                      nodeId: member.nodeId,
+                      noise: member.noisePub,
+                      online: member.online,
+                    });
+                    yield* SubscriptionRef.update(statuses, (current) =>
+                      current.map((row) =>
+                        row.nodeId === member.nodeId
+                          ? { nodeId: member.nodeId, name: member.name, state: "connecting" }
+                          : row,
+                      ),
+                    );
+                    const result = yield* Effect.result(
+                      onboarding.registerSsh({
+                        target: sshTarget,
+                        keyOnly: true,
+                        installation: "existing-only",
+                        label: member.name,
+                        pen: { meshId: state.meshId, nodeId: member.nodeId },
+                        confirm: confirm(state.meshId, member),
+                      }),
+                    );
+                    if (wasForced && result._tag === "Success") yield* liveSet.open(result.success);
+                    return Option.some(result);
+                  })
+                : Effect.succeed(Option.none<never>()),
+            (admitted) => (admitted ? liveSet.releaseOnboarding(member.nodeId) : Effect.void),
+          );
+          if (Option.isNone(attempt)) {
             yield* SubscriptionRef.update(statuses, (current) =>
               current.map((row) =>
                 row.nodeId === member.nodeId
@@ -262,31 +303,7 @@ const make = Effect.gen(function* () {
             );
             return;
           }
-          attempts.set(key, {
-            nodeId: member.nodeId,
-            noise: member.noisePub,
-            online: member.online,
-          });
-          yield* SubscriptionRef.update(statuses, (current) =>
-            current.map((row) =>
-              row.nodeId === member.nodeId
-                ? { nodeId: member.nodeId, name: member.name, state: "connecting" }
-                : row,
-            ),
-          );
-          const outcome = yield* Effect.result(
-            onboarding
-              .registerSsh({
-                target: member.route.target,
-                keyOnly: true,
-                installation: "existing-only",
-                label: member.name,
-                pen: { meshId: state.meshId, nodeId: member.nodeId },
-                confirm: confirm(state.meshId, member),
-              })
-              .pipe(Effect.ensuring(liveSet.releaseOnboarding(member.nodeId))),
-          );
-          if (wasForced && outcome._tag === "Success") yield* liveSet.open(outcome.success);
+          const outcome = attempt.value;
           let status: PenMemberStatus;
           if (outcome._tag === "Success")
             status = {
@@ -329,6 +346,8 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.onInterrupt(() => Effect.sync(() => attempts.delete(attemptKey(member))))),
       { concurrency: 2, discard: true },
     );
+    // A Connect whose machine was not a candidate on this pass does not wait for a later one.
+    forced.clear();
   });
   return { statuses, availability, retry, connect, setUp, pass };
 });

@@ -130,7 +130,7 @@ it("shows held machines and connects a waiting member", async () => {
   await using screen = await render(
     <PenMachinesView
       statuses={[
-        { nodeId: "offline", name: "Offline", state: "offline" },
+        { nodeId: "offline", name: "Offline", state: "pen-offline" },
         { nodeId: "waiting", name: "Waiting", state: "waiting" },
       ]}
       guidance={null}

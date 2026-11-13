@@ -156,8 +156,9 @@ such a machine **via Pen**.
 - A member whose GOAT is too old to sign this computer in asks you to update GOAT on that machine.
 - A machine you had already added yourself stays as you added it.
 - While Pen is not running on this computer, machines already listed stay listed, but nothing new
-  is added and no new sign-in is made until Pen is back. The same holds on the other side: a
-  machine accepts this computer's sign-in only while its own Pen is running and lists it.
+  is added and no new sign-in is made until Pen is back; a machine GOAT was not already connected
+  to reads **Waiting for Pen**. The same holds on the other side: a machine accepts this
+  computer's sign-in only while its own Pen is running and lists it.
 - A machine Pen reports offline reads **Offline in Pen**. GOAT does not try to reach it, shows its
   threads as this computer last saw them, and connects by itself when Pen sees the machine again.
 - GOAT keeps 16 Pen machines open at a time. In a larger mesh the rest read **Not open**; choose
