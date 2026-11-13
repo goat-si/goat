@@ -121,7 +121,8 @@ export type LinkOutcome =
   | { readonly kind: "unreadable" };
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/u;
-const CODE = /^[a-z][a-z0-9_]{0,63}$/u;
+// A status step outcome carries at most 40 characters (HubMachineStep).
+const CODE = /^[a-z][a-z0-9_]{0,39}$/u;
 /** Not found is ocx's exit 4 for a 404; anything else that is not a valid entry for this id is unreadable. */
 export const readOperation = (
   output: { readonly code: number; readonly stdout: string },
