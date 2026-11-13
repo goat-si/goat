@@ -74,6 +74,61 @@ export const hubEntries = {
       "One setup runs per machine and a concurrent call joins it; a valid proof is reused, and each new attempt starts from the Child's recorded progress.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.machine_attach": entry({
+    resource: "hub",
+    verb: "machine_attach",
+    name: "goat_hub_machine_attach",
+    toolkit: "hostStatus",
+    summary: "Admit a machine you built to this hub's Pen mesh and link it as a disposable Child.",
+    description:
+      "Start one attach for a cloud machine this thread provisioned: GOAT mints a Pen invite bound to its keys and name and returns the token once. The machine joins with pen join; GOAT continues after it is admitted. Read goat_hub_machine_list for progress.",
+    guide:
+      "Needs the hub setting Attach disposable machines on, unexpired, with this thread named as a provisioner (a person decides in Settings), hub.manage for pen-<nodeId> when goatclaw is on, and a full-access thread in default mode. Pass the keys pen identity --json printed on the machine. The token is a bearer secret: hand it only to that machine and do not store it; GOAT never stores or logs it, and a repeat with the same clientRequestId answers without it. Refusals: switch_off, switch_expired, provisioner_refused, delegation_lost, cap_reached, name_rule, key_in_use, pen_unsupported, opencodex_unsupported, unknown_outcome. A Pen member admitted this way holds the owner's authority on every member until a person removes it from Pen.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service keys each attach by its caller and clientRequestId and answers a repeat from the stored record, without the token; the generic receipt would store the token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_reissue": entry({
+    resource: "hub",
+    verb: "machine_reissue",
+    name: "goat_hub_machine_reissue",
+    toolkit: "hostStatus",
+    summary: "Cancel an attach's open Pen invite and mint a new one for the same keys.",
+    description:
+      "Cancel the open invite of an attach that nobody joined yet and mint a new token bound to the same keys. If the old invite was already used, no token is minted and the attach shows what Pen recorded.",
+    guide:
+      "Only the thread that started the attach, or a person, may reissue it, under the same switch and grant checks as goat_hub_machine_attach. Use a new clientRequestId for each reissue; a repeat of one answers without a token. A lost answer needs another reissue with a new key, which cancels the token that answer carried.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service records each reissue's request key on its mint and answers a repeat without minting or returning a token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_list": entry({
+    resource: "hub",
+    verb: "machine_list",
+    name: "goat_hub_machine_list",
+    toolkit: "hostStatus",
+    summary: "List this hub's disposable machines with their attach state.",
+    description:
+      "List disposable machine records, or one by attachId, with state, step, class and whether the key is still a Pen member. Reading also settles invites from what Pen recorded.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "hub.device_verify": entry({
     resource: "hub",
     verb: "device_verify",

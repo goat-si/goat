@@ -55,6 +55,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import * as DisposableAttach from "../hub/disposable/DisposableAttach.ts";
 import * as ChildReady from "../opencodex/OpenCodexChildReady.ts";
 import * as ChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
@@ -245,6 +246,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(DisposableAttach.DisposableAttach)({}),
   Layer.mock(ChildReady.OpenCodexChildReady)({}),
   Layer.mock(ChildBootstrap.OpenCodexChildBootstrap)({}),
   Layer.mock(OpenCodexSync.OpenCodexSync)({}),
