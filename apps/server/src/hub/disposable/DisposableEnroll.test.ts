@@ -870,3 +870,19 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a symlink another user owns on the key's path holds the link and is named", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.keyPath = { kind: "symlink", path: "/srv/shared/goat" };
+      for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+      expect(linkAdds(host.control.calls)).toEqual([]);
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "attaching",
+        message: expect.stringContaining("symlink another user owns, /srv/shared/goat"),
+      });
+    }),
+  ),
+);

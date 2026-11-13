@@ -3,6 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- POSIX path arithmetic on the resolved walk.
 import * as NodePath from "node:path";
 
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 
 /**
@@ -14,7 +15,22 @@ export type KeyPathAnswer =
   | { readonly kind: "ok" }
   | { readonly kind: "form" }
   | { readonly kind: "key"; readonly problem: "missing" | "not_regular" | "permissions" }
-  | { readonly kind: "directory"; readonly directory: string };
+  | { readonly kind: "directory"; readonly directory: string }
+  /** A symlink on the path that another user owns, who could point it elsewhere. */
+  | { readonly kind: "symlink"; readonly path: string };
+
+/** lstat as the walk reads it; a test gives an entry another owner. */
+export type Lstat = (path: string) => Effect.Effect<
+  {
+    readonly uid: number;
+    readonly mode: number;
+    readonly isSymbolicLink: () => boolean;
+    readonly isDirectory: () => boolean;
+    readonly isFile: () => boolean;
+  },
+  Cause.UnknownError
+>;
+const nodeLstat: Lstat = (path) => Effect.tryPromise(() => NodeFSP.lstat(path));
 
 const FORM = /^\/[A-Za-z0-9._+/-]+$/u;
 const MAX_SYMLINKS = 40;
@@ -30,6 +46,7 @@ const isForm = (path: string) =>
 
 interface Walk {
   readonly uid: number;
+  readonly lstat: Lstat;
   /** Real paths of the directories GOAT may tighten. */
   readonly own: ReadonlySet<string>;
 }
@@ -57,9 +74,10 @@ const resolveDirectory = Effect.fn("keyPath.resolveDirectory")(function* (
   target: string,
 ) {
   let current = "/";
-  const root = yield* Effect.tryPromise(() => NodeFSP.lstat(current));
+  const root = yield* walk.lstat(current);
   const pending = target.split("/").filter((name) => name !== "" && name !== ".");
-  if (!(yield* judge(walk, current, root, pending.length === 0))) return current;
+  const unsafe = (directory: string): KeyPathAnswer => ({ kind: "directory", directory });
+  if (!(yield* judge(walk, current, root, pending.length === 0))) return unsafe(current);
   let links = 0;
   while (pending.length > 0) {
     const name = pending.shift() ?? "";
@@ -68,17 +86,19 @@ const resolveDirectory = Effect.fn("keyPath.resolveDirectory")(function* (
       continue;
     }
     const next = current === "/" ? "/" + name : current + "/" + name;
-    const entry = yield* Effect.tryPromise(() => NodeFSP.lstat(next));
+    const entry = yield* walk.lstat(next);
     if (entry.isSymbolicLink()) {
+      if (entry.uid !== walk.uid && entry.uid !== 0)
+        return { kind: "symlink", path: next } satisfies KeyPathAnswer;
       links += 1;
-      if (links > MAX_SYMLINKS) return next;
+      if (links > MAX_SYMLINKS) return unsafe(next);
       const link = yield* Effect.tryPromise(() => NodeFSP.readlink(next));
       if (link.startsWith("/")) current = "/";
       pending.unshift(...link.split("/").filter((part) => part !== "" && part !== "."));
       continue;
     }
-    if (!entry.isDirectory()) return next;
-    if (!(yield* judge(walk, next, entry, pending.length === 0))) return next;
+    if (!entry.isDirectory()) return unsafe(next);
+    if (!(yield* judge(walk, next, entry, pending.length === 0))) return unsafe(next);
     current = next;
   }
   return undefined;
@@ -91,6 +111,7 @@ const resolveDirectory = Effect.fn("keyPath.resolveDirectory")(function* (
 export const keyPathFor = Effect.fn("keyPath.check")(function* (
   keyFile: string,
   own: ReadonlyArray<string>,
+  lstat: Lstat = nodeLstat,
 ) {
   if (!isForm(keyFile)) return { kind: "form" } as const satisfies KeyPathAnswer;
   const uid = process.getuid?.() ?? -1;
@@ -99,9 +120,10 @@ export const keyPathFor = Effect.fn("keyPath.check")(function* (
   );
   const walk: Walk = {
     uid,
+    lstat,
     own: new Set(real.flatMap((path) => (path._tag === "Some" ? [path.value] : []))),
   };
-  const key = yield* Effect.tryPromise(() => NodeFSP.lstat(keyFile)).pipe(Effect.option);
+  const key = yield* lstat(keyFile).pipe(Effect.option);
   if (key._tag === "None")
     return { kind: "key", problem: "missing" } as const satisfies KeyPathAnswer;
   if (key.value.isSymbolicLink() || !key.value.isFile())
@@ -109,9 +131,10 @@ export const keyPathFor = Effect.fn("keyPath.check")(function* (
   if (key.value.uid !== uid || (key.value.mode & 0o077) !== 0)
     return { kind: "key", problem: "permissions" } as const satisfies KeyPathAnswer;
   const unsafe = yield* resolveDirectory(walk, NodePath.dirname(keyFile)).pipe(
-    Effect.orElseSucceed(() => NodePath.dirname(keyFile)),
+    Effect.orElseSucceed((): KeyPathAnswer => ({
+      kind: "directory",
+      directory: NodePath.dirname(keyFile),
+    })),
   );
-  return unsafe === undefined
-    ? ({ kind: "ok" } as const satisfies KeyPathAnswer)
-    : ({ kind: "directory", directory: unsafe } as const satisfies KeyPathAnswer);
+  return unsafe ?? ({ kind: "ok" } as const satisfies KeyPathAnswer);
 });

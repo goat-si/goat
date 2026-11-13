@@ -1,4 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a real lstat whose owner the test rewrites.
+import * as NodeFSP from "node:fs/promises";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -92,4 +94,28 @@ it.live.skipIf(WINDOWS)("the key itself must be a regular private file at a plai
     yield* fs.chmod(at.key, 0o640);
     expect(yield* keyPathFor(at.key, at.own)).toEqual({ kind: "key", problem: "permissions" });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(WINDOWS)(
+  "a symlink another user owns on the key's path is named and never followed",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const at = yield* layout({ shared: 0o755, base: 0o755 });
+      const links = path.join(at.root, "links");
+      yield* fs.makeDirectory(links);
+      yield* fs.chmod(links, 0o755);
+      const link = path.join(links, "goat");
+      yield* fs.symlink(at.base, link);
+      const linked = path.join(link, "userdata", "disposable", "machine_ed25519");
+      // OpenCodex refuses a link another user owns: they could point it elsewhere, even in a sticky folder.
+      const foreign = (target: string) =>
+        Effect.map(
+          Effect.promise(() => NodeFSP.lstat(target)),
+          (stat) => (target === link ? Object.assign(stat, { uid: 4242 }) : stat),
+        );
+      expect(yield* keyPathFor(linked, at.own, foreign)).toEqual({ kind: "symlink", path: link });
+      expect(yield* keyPathFor(linked, at.own)).toEqual({ kind: "ok" });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

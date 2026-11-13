@@ -445,8 +445,18 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       return false;
     }
     const link = { attempt: 0, intentAtMs: 0, ...enroll.link };
-    const outcome = answer.kind === "directory" ? "key_dir_unsafe" : "machine_key_unusable";
-    const keyDir = answer.kind === "directory" ? answer.directory : undefined;
+    const outcome =
+      answer.kind === "directory"
+        ? "key_dir_unsafe"
+        : answer.kind === "symlink"
+          ? "key_symlink_foreign"
+          : "machine_key_unusable";
+    const keyDir =
+      answer.kind === "directory"
+        ? answer.directory
+        : answer.kind === "symlink"
+          ? answer.path
+          : undefined;
     if (link.outcome !== outcome || enroll.keyDir !== keyDir)
       yield* note(row, {
         ...enroll,

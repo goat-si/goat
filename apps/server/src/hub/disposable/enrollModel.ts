@@ -265,6 +265,8 @@ const WAITING: Record<string, string> = {
     "ssh found no host key in GOAT's known_hosts for this machine; GOAT writes it again on the next pass.",
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
+  key_symlink_foreign:
+    "OpenCodex refuses a key whose path passes a symlink another user owns; GOAT tries again on the next pass.",
   key_dir_unsafe:
     "OpenCodex refuses a key under a folder others can write; GOAT tries again on the next pass.",
   machine_key_unusable:
@@ -394,6 +396,18 @@ export const enrollMessage = (
             " can be written by its group or others. Run chmod go-w " +
             enroll.keyDir +
             " on the hub; GOAT tries again on the next pass.",
+          nextAction: null,
+        };
+      if (
+        enroll.link?.outcome === "key_symlink_foreign" &&
+        enroll.keyDir !== undefined &&
+        enroll.keyDir.length <= 300
+      )
+        return {
+          message:
+            "OpenCodex refuses a key whose path passes a symlink another user owns, " +
+            enroll.keyDir +
+            ", who could point it elsewhere. Keep GOAT's state folder on a path without it; GOAT tries again on the next pass.",
           nextAction: null,
         };
       return {
