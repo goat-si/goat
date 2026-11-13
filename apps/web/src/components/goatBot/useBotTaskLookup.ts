@@ -1,100 +1,101 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { BotId, type BotWorkResult, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import type { BotId, BotWorkResult, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { channelEnvironment } from "~/state/channels";
 import { useServerConfigs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { botTaskLookupDecision } from "./botTaskLookupDecision";
 
-type Lookup = {
-  key: string;
-  value?: BotWorkResult;
-  error?: "missing" | "failed" | "denied";
-  loading?: boolean;
-};
+type LookupError = "missing" | "failed" | "denied";
+type Answer = { key: string; value?: BotWorkResult; error?: LookupError };
+type Read = { key: string; generation: number };
 
+function failureKind(error: unknown): LookupError {
+  if (!error || typeof error !== "object") return "failed";
+  if ("reason" in error && error.reason === "not_found") return "missing";
+  return ("_tag" in error && error._tag === "EnvironmentAuthorizationError") ||
+    ("reason" in error && error.reason === "forbidden")
+    ? "denied"
+    : "failed";
+}
+
+/** Reads a task the bot's current list does not hold; botTaskLookupDecision says when. */
 export function useBotTaskLookup(
   environmentId: EnvironmentId,
   taskId: ChannelTaskId,
   botId: BotId,
-  needed: boolean,
+  list: {
+    readonly established: boolean;
+    readonly refreshing: boolean;
+    readonly holdsTask: boolean;
+  },
+  available: boolean,
 ) {
   const configs = useServerConfigs();
   const supported =
     configs.get(environmentId)?.environment.capabilities.goatBotTaskLookupSearch === true;
   const permitted = useAtomValue(channelEnvironment.getBotTask.permissionAtom(environmentId));
-  const read = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
-  const sequence = useRef(0);
-  const inFlight = useRef<string | null>(null);
-  const [answer, setAnswer] = useState<Lookup | null>(null);
+  const command = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
+  const readable = supported && permitted && available;
   const key = JSON.stringify([environmentId, botId, taskId]);
-  const eligibleKey = supported && permitted && needed ? key : null;
-  const [previousKey, setPreviousKey] = useState(eligibleKey);
-  if (eligibleKey !== previousKey) {
-    setPreviousKey(eligibleKey);
-    setAnswer(null);
-  }
-  const run = useStableCallback(
-    (
-      environmentId: EnvironmentId,
-      taskId: ChannelTaskId,
-      botId: BotId,
-      needed: boolean,
-      supported: boolean,
-      permitted: boolean,
-      force = false,
-    ) => {
-      if (!supported || !permitted || !needed || (!force && inFlight.current === key)) return;
-      inFlight.current = key;
-      const current = ++sequence.current;
-      setAnswer((previous) => ({
-        key,
-        ...(previous?.key === key && previous.value ? { value: previous.value } : {}),
-        loading: true,
-      }));
-      void read({ environmentId, input: { taskId, botId } }).then((result) => {
-        if (inFlight.current === key) inFlight.current = null;
-        if (current !== sequence.current) return;
-        if (result._tag === "Success") setAnswer({ key, value: result.value });
-        else {
-          const error = squashAtomCommandFailure(result);
-          setAnswer({
-            key,
-            error:
-              error &&
-              typeof error === "object" &&
-              "reason" in error &&
-              error.reason === "not_found"
-                ? "missing"
-                : error &&
-                    typeof error === "object" &&
-                    (("_tag" in error && error._tag === "EnvironmentAuthorizationError") ||
-                      ("reason" in error && error.reason === "forbidden"))
-                  ? "denied"
-                  : "failed",
-          });
-        }
-      });
-    },
-  );
-  // oxlint-disable-next-line goat/react-effect-budget -- Reads the selected task and invalidates in-flight reads when its identity changes.
-  useEffect(() => {
-    run(environmentId, taskId, botId, needed, supported, permitted);
-    return () => {
-      sequence.current++;
-      inFlight.current = null;
-    };
-  }, [environmentId, botId, taskId, needed, supported, permitted, run]);
-  const reload = useStableCallback((force = false) => {
-    run(environmentId, taskId, botId, needed, supported, permitted, force);
+  const generation = useRef(0);
+  const runningRef = useRef<Read | null>(null);
+  const [running, setRunning] = useState<Read | null>(null);
+  const [answer, setAnswer] = useState<Answer | null>(null);
+  const [staleKey, setStaleKey] = useState<string | null>(null);
+  if (staleKey !== null && staleKey !== key) setStaleKey(null);
+  const listed = list.established && list.holdsTask;
+  if (answer !== null && (answer.key !== key || !readable || listed)) setAnswer(null);
+  const held = answer?.key === key;
+  const inFlight = running?.key === key;
+  const decision = botTaskLookupDecision({
+    readable,
+    ...list,
+    held,
+    stale: staleKey === key,
+    inFlight,
   });
+  const settle = useStableCallback((read: Read, next: Answer) => {
+    if (runningRef.current === read) {
+      runningRef.current = null;
+      setRunning(null);
+    }
+    if (read.generation === generation.current && read.key === key) setAnswer(next);
+  });
+  const start = useStableCallback(() => {
+    if (runningRef.current?.key === key) return;
+    const read = { key, generation: ++generation.current };
+    runningRef.current = read;
+    setRunning(read);
+    setStaleKey(null);
+    void command({ environmentId, input: { taskId, botId } }).then((result) =>
+      settle(
+        read,
+        result._tag === "Success"
+          ? { key: read.key, value: result.value }
+          : { key: read.key, error: failureKind(squashAtomCommandFailure(result)) },
+      ),
+    );
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- Starts the read botTaskLookupDecision asks for.
+  useEffect(() => {
+    if (decision.startRead) start();
+  }, [decision.startRead, start]);
   return {
     supported,
     permitted,
-    value: supported && permitted && needed && answer?.key === key ? answer.value : undefined,
-    error: supported && permitted && needed && answer?.key === key ? answer.error : undefined,
-    loading: eligibleKey !== null && (answer?.key !== key || answer.loading === true),
-    reload,
+    view: decision.view,
+    value: held ? answer.value : undefined,
+    error: held && !inFlight ? answer.error : undefined,
+    loading: inFlight || (decision.view === "waiting" && readable),
+    /** The person's Try again; the only read that ignores a held answer. */
+    retry: () => {
+      if (decision.canRetry) start();
+    },
+    /** An action on the task completed, so its view is reread once the list settles. */
+    invalidate: (task: ChannelTaskId = taskId) =>
+      setStaleKey(JSON.stringify([environmentId, botId, task])),
   };
 }

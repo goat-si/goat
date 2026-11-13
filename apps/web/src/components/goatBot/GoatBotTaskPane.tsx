@@ -9,7 +9,7 @@ import {
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
 import { BotId, ChannelQuestionId, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
-import { useEffect, useEffectEvent, useRef, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { cn } from "~/lib/utils";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -62,42 +62,26 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh, loaded, pending, failed } = useBotThreads(
+  const { rows, remoteWork, refresh, established, pending } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
-  const listKey = JSON.stringify([environmentId, member?.botId ?? "main"]);
-  const [established, setEstablished] = useState<string | null>(null);
-  if (loaded && !pending && !failed && established !== listKey) setEstablished(listKey);
   const listedTask = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const lookup = useBotTaskLookup(
     environmentId,
     taskId,
     member?.botId ?? BotId.make("main"),
-    established === listKey && !failed && listedTask === undefined && member?.state !== "deleted",
+    { established, refreshing: pending, holdsTask: listedTask !== undefined },
+    member?.state !== "deleted",
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
   const taskSummary =
     task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
-  const refreshLookup = useRef(false);
-  const [refreshVersion, setRefreshVersion] = useState(0);
-  const refreshTask = () => {
+  const refreshTask = (task: ChannelTaskId = taskId) => {
     refresh();
-    refreshLookup.current = true;
-    setRefreshVersion((value) => value + 1);
+    lookup.invalidate(task);
   };
-  const readInvalidated = useEffectEvent(
-    (pending: boolean, loaded: boolean, failed: boolean, listed: boolean, _version: number) => {
-      if (!refreshLookup.current || pending || !loaded || failed) return;
-      refreshLookup.current = false;
-      if (!listed) lookup.reload(true);
-    },
-  );
-  // oxlint-disable-next-line goat/react-effect-budget -- Rereads an invalidated task after the list refresh settles.
-  useEffect(() => {
-    readInvalidated(pending, loaded, failed, listedTask !== undefined, refreshVersion);
-  }, [pending, loaded, failed, listedTask, refreshVersion]);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
@@ -105,7 +89,7 @@ export function GoatBotTaskPane({
     environmentId,
     taskId,
     readThrough,
-    onAcknowledged: () => refreshTask(),
+    onAcknowledged: (task) => refreshTask(task),
   });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
@@ -301,12 +285,12 @@ export function GoatBotTaskPane({
       {lookup.error === "failed" && (
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3 text-sm text-muted-foreground">
           <p role="alert">Couldn't load this task.</p>
-          <Button variant="outline" size="xs" onClick={lookup.reload}>
+          <Button variant="outline" size="xs" onClick={() => lookup.retry()}>
             Try again
           </Button>
         </div>
       )}
-      {task === undefined && (!lookup.supported || failed || established !== listKey) && (
+      {task === undefined && (!lookup.supported || lookup.view === "dev") && (
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3 text-sm text-muted-foreground">
           <p>Status and actions for older work are in {botName}'s Home.</p>
           <Button
