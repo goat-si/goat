@@ -64,11 +64,12 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;
-  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // tabs 15 s default, apps 10 s max; answers within the cell
+  waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean; download?: object }>; // tabs 15 s default, apps 10 s max; answers within the cell; download: the file a tab's { download: true } took
   verify(c: Condition): Promise<{ met: boolean }> }`;
 
-const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target } | { role, name? },
+const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { download: true } | { target } | { role, name? },
 // and with target or role: enabled?, value?, checked?, selected? (true/false or exact value of the one match) and state?: "attached" | "detached" | "visible" | "hidden".
+// url: a substring, or with * a glob of the whole URL (* spans anything, / included). download: one started after this tab's latest input has saved; each wait takes the next.
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
 // Never click a file input: upload() it. Custom dropdown: click, observe(), click the option.
 // Read typed CJK or autocomplete text back before Enter.

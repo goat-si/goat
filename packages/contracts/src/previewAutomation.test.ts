@@ -66,6 +66,15 @@ describe("PreviewAutomationWaitForInput", () => {
       expect(() => decode(input)).toThrow();
     expect(decode({ loadState: "networkIdle", timeoutMs: 60_000 }).timeoutMs).toBe(60_000);
   });
+
+  it("takes a URL glob or a download alone, as conditions on the tab", () => {
+    expect(decode({ urlGlob: "**/done*" })).toEqual({ urlGlob: "**/done*" });
+    expect(decode({ download: true })).toEqual({ download: true });
+    const both = { urlIncludes: "/done", urlGlob: "https://app.test/*", download: true };
+    expect(decode(both)).toEqual(both);
+    for (const input of [{ download: false }, { urlGlob: " " }, { urlGlob: "x".repeat(2049) }])
+      expect(() => decode(input)).toThrow();
+  });
 });
 
 describe("PreviewAutomationClickInput", () => {

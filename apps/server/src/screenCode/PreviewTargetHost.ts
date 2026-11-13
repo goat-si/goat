@@ -738,10 +738,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         case "wait_for": {
           const conditions = waitConditions(arg);
           if ("error" in conditions) return yield* Effect.fail(conditions.error);
+          if (arg.download !== undefined && arg.download !== true)
+            return yield* Effect.fail(fail("invalid_argument", "download is true."));
           input = {
             ...(locator ? { locator } : {}),
             ...(stringField(arg, "text") ? { text: arg.text } : {}),
             ...(stringField(arg, "urlIncludes") ? { urlIncludes: arg.urlIncludes } : {}),
+            ...(stringField(arg, "urlGlob") ? { urlGlob: arg.urlGlob } : {}),
+            ...(arg.download === true ? { download: true } : {}),
             ...(stringField(arg, "loadState") ? { loadState: arg.loadState } : {}),
             ...conditions.fields,
           };
@@ -805,8 +809,11 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         if (waited._tag === "Failure" && !unmet)
           return yield* Effect.fail(previewTargetFailure(waited.failure, "waitFor"));
         const waitStatus = waited._tag === "Success" ? "met" : "timeout";
+        const met = waited._tag === "Success" ? waited.success : undefined;
+        const download =
+          typeof met === "object" && met !== null && "download" in met && met.download;
         return {
-          value: { status: waitStatus },
+          value: { status: waitStatus, ...(download ? { download } : {}) },
           category: waitStatus === "met" ? "confirmed" : "unverifiable",
           evidence: [`Wait ${waitStatus}`],
         };

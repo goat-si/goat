@@ -180,6 +180,8 @@ const SERVER_ONLY_REQUESTS = [
   { operation: "click" as const, input: { locator: "#terms", checked: true } },
   { operation: "click" as const, input: { locator: "#row", modifiers: ["Shift"] } },
   { operation: "scroll" as const, input: { locator: "#footer" } },
+  { operation: "waitFor" as const, input: { urlGlob: "**/done" } },
+  { operation: "waitFor" as const, input: { download: true } },
 ];
 
 const connectHost = Effect.fn("PreviewAutomationBrokerFeaturesTest.connectHost")(function* (

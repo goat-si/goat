@@ -444,11 +444,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const arg = timeoutMs === undefined ? {} : { timeoutMs };
     if (!tab) return { ...wanted, ...arg };
     if (__legacy(wanted)) return { ...wanted, ...arg };
-    __only('A tab condition', wanted, ['text', 'url', 'load', 'target', 'role', 'name', 'enabled', 'value', 'checked', 'selected', 'state']);
+    __only('A tab condition', wanted, ['text', 'url', 'load', 'download', 'target', 'role', 'name', 'enabled', 'value', 'checked', 'selected', 'state']);
     return {
       ...arg,
       ...(wanted.text === undefined ? {} : { text: wanted.text }),
-      ...(wanted.url === undefined ? {} : { urlIncludes: wanted.url }),
+      // A url without * is a substring, as before; with * it is matched as a whole-URL glob.
+      ...(wanted.url === undefined ? {} : { urlGlob: wanted.url }),
+      ...(wanted.download === undefined ? {} : { download: wanted.download }),
       ...(wanted.load === undefined ? {} : { loadState: wanted.load }),
       ...(wanted.enabled === undefined ? {} : { enabled: wanted.enabled }),
       ...(wanted.value === undefined ? {} : { value: wanted.value }),

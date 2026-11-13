@@ -17,6 +17,8 @@ export const usesServerOnlyInput = (
     case "scroll":
       // An element with no delta is scrolled into view; an older host refuses or ignores that.
       return (has("selector") || has("locator")) && !has("deltaX") && !has("deltaY");
+    case "waitFor":
+      return has("urlGlob") || has("download");
     default:
       return false;
   }

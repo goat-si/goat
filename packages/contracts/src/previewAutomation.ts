@@ -28,7 +28,7 @@ import { BrowserProfileId } from "./browserProfile.ts";
 import * as Session from "./previewAutomationSession.ts";
 import * as Screen from "./previewAutomationScreen.ts";
 import * as ActionFields from "./previewActionFields.ts";
-import { PreviewWaitStateFields, waitStateConflict } from "./previewWaitState.ts";
+import * as WaitState from "./previewWaitState.ts";
 import {
   PreviewAutomationFeature,
   PreviewAutomationConsoleEntry,
@@ -485,22 +485,16 @@ export const PreviewAutomationWaitForInput = Schema.Struct({
   ),
   urlIncludes: Schema.optional(TrimmedNonEmptyString),
   timeoutMs: OptionalTimeoutMs,
-  ...PreviewWaitStateFields,
+  ...WaitState.PreviewWaitStateFields,
+  ...WaitState.PreviewWaitPageFields,
 }).check(
   Schema.makeFilter((input) => {
     if (input.selector !== undefined && input.locator !== undefined) {
       return "Provide at most one of selector or locator.";
     }
-    const conflict = waitStateConflict(input);
+    const conflict = WaitState.waitStateConflict(input);
     if (conflict !== undefined) return conflict;
-    return (
-      input.selector !== undefined ||
-      input.locator !== undefined ||
-      input.text !== undefined ||
-      input.urlIncludes !== undefined ||
-      input.loadState !== undefined ||
-      "Provide at least one wait condition."
-    );
+    return WaitState.hasWaitCondition(input) || "Provide at least one wait condition.";
   }),
 );
 export type PreviewAutomationWaitForInput = typeof PreviewAutomationWaitForInput.Type;

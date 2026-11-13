@@ -85,6 +85,7 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
+import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import {
   browserSessionView,
@@ -817,7 +818,7 @@ const make = Effect.gen(function* () {
         tab.dialog = dialog;
         broadcastControl(tab);
       });
-      page.on("download", (download) => void saveDownload(tab, download));
+      page.on("download", (download) => void journalDownload(tab, download, saveDownload));
       openSignal?.throwIfAborted();
       updateFileChooserInterception(tab);
       // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
@@ -1882,7 +1883,7 @@ const make = Effect.gen(function* () {
           runSignal,
         };
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
-        if (tab.agentOperating) tab.popups.lastInput = attribution;
+        if (tab.agentOperating) tab.popups.lastInput = downloadJournal(tab).input(attribution);
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(
@@ -2117,9 +2118,12 @@ const make = Effect.gen(function* () {
           ),
         );
       case "waitFor":
-        return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
-          ServerBrowserScreen.recheck(tab, request),
-        );
+        return ServerBrowserPage.waitFor(
+          tab.page,
+          waitInput(request, deadlineMs),
+          signal,
+          downloadsOf(tab, observe),
+        ).then(ServerBrowserScreen.recheck(tab, request));
       case "recordingStart": {
         const recording = await startRecording(tab, actionGate().channel, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };

@@ -22,6 +22,8 @@ import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
 import { clickToState, heldKeys, type ClickReport } from "./clickState.ts";
+import type { DownloadWait } from "./downloadJournal.ts";
+import { extraWaits } from "./waitExtras.ts";
 import { evaluateWithTimeout, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
@@ -1034,6 +1036,7 @@ export const waitFor = async (
   page: Page,
   input: PreviewAutomationWaitForInput,
   signal?: AbortSignal,
+  downloads?: DownloadWait,
 ) => {
   signal?.throwIfAborted();
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1055,12 +1058,14 @@ export const waitFor = async (
     ${input.text === undefined ? "true" : `(document.body?.innerText ?? "").includes(${JSON.stringify(input.text)})`}
     && ${input.urlIncludes === undefined ? "true" : `location.href.includes(${JSON.stringify(input.urlIncludes)})`}
   ))()`;
+  const extras = extraWaits(page, input, downloads);
   const conditions = [
     ...(locator ? [`locator:${state}`] : []),
     ...elementConditions,
     ...(input.text === undefined ? [] : ["text"]),
     ...(input.urlIncludes === undefined ? [] : ["url"]),
     ...(input.loadState === undefined ? [] : [`load:${input.loadState}`]),
+    ...extras.names,
   ];
   const timeout = () =>
     new ServerBrowserOperationError(
@@ -1097,6 +1102,7 @@ export const waitFor = async (
                 .waitForFunction(documentCondition, undefined, { timeout: remaining() })
                 .then((handle) => handle.dispose()),
             ]),
+        ...extras.pending(remaining()),
       ]);
       remaining();
       const version = documentVersion;
@@ -1127,16 +1133,17 @@ export const waitFor = async (
       // Revalidate snapshot refs after a navigation even if the native locator happened to settle.
       if (target) targetLocator(page, input);
       const held =
-        locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
+        (locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
           ? await matchesState(locator, input, remaining())
-          : true;
-      if (version === documentVersion && locatorMatches && documentMatches === true && held) return;
+          : true) && extras.held();
+      if (version === documentVersion && locatorMatches && documentMatches === true && held)
+        return extras.finish();
       // An element condition has no event to wait on: look again shortly, within the deadline.
       if (!held) await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining())));
     }
   };
   try {
-    await Promise.race([wait(), interrupted]);
+    return await Promise.race([wait(), interrupted]);
   } catch (cause) {
     signal?.throwIfAborted();
     if (cause instanceof Error && cause.name === "TimeoutError") throw timeout();
@@ -1145,6 +1152,7 @@ export const waitFor = async (
     // Playwright's read-only wait has no AbortSignal API. It may settle until its deadline,
     // but cannot start another check or hold the control queue after takeover/timeout.
     stopped = true;
+    extras.end();
     clearTimeout(timer);
     if (abort) signal?.removeEventListener("abort", abort);
     page.off("framenavigated", navigated);

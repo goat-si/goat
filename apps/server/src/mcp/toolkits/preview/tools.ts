@@ -424,7 +424,19 @@ const PreviewEvaluateTool = Tool.make(agentSurfaceRegistry["preview.evaluate"].n
 const PreviewWaitForTool = Tool.make(agentSurfaceRegistry["preview.wait"].name, {
   description: agentSurfaceRegistry["preview.wait"].description,
   parameters: PreviewAutomationWaitForInput,
-  success: PreviewActionResult,
+  success: Schema.Struct({
+    ...presentationFields,
+    /** The file a download:true wait took. */
+    download: Schema.optional(
+      Schema.Struct({
+        fileName: Schema.String,
+        path: Schema.String,
+        sizeBytes: Schema.Number,
+        url: Schema.String,
+        completedAt: Schema.String,
+      }),
+    ),
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,
