@@ -15,6 +15,7 @@ export const commitContextObjects = Effect.fn("GitVcsDriver.commitContextObjects
     args: readonly string[],
   ) => Effect.Effect<string, GitCommandError>,
 ) {
+  const physicalCwd = yield* fileSystem.realPath(cwd);
   const indexValue = yield* runGitStdout("GitVcsDriver.prepareCommitContext.indexPath", cwd, [
     "rev-parse",
     "--git-path",
@@ -30,7 +31,7 @@ export const commitContextObjects = Effect.fn("GitVcsDriver.commitContextObjects
     "-v",
   ]);
   const alternates = [
-    path.resolve(cwd, objects.replace(/\r?\n$/u, "")),
+    path.resolve(physicalCwd, objects.replace(/\r?\n$/u, "")),
     ...output
       .split("\n")
       .flatMap((line) =>
@@ -42,7 +43,7 @@ export const commitContextObjects = Effect.fn("GitVcsDriver.commitContextObjects
   const objectsPath = path.join(directory, "objects");
   yield* fileSystem.makeDirectory(objectsPath);
   return {
-    indexPath: path.resolve(cwd, indexValue.trim()),
+    indexPath: path.resolve(physicalCwd, indexValue.trim()),
     env: {
       GIT_INDEX_FILE: path.join(directory, "index"),
       GIT_OBJECT_DIRECTORY: objectsPath,
