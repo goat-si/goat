@@ -202,6 +202,7 @@ export const DISPOSABLE_MACHINE_STATES = [
   "invited",
   "admitted",
   "attaching",
+  "linked",
   "attached",
   "failed",
   "unknown",
@@ -295,6 +296,11 @@ export const HubMachineStep = Schema.Struct({
 });
 export type HubMachineStep = typeof HubMachineStep.Type;
 
+/** An OpenSSH ed25519 public key line; the comment is GOAT's own. */
+export const DisposableMachineKey = Schema.String.check(
+  Schema.isPattern(/^ssh-ed25519 [A-Za-z0-9+/]{68}(?: [A-Za-z0-9._@-]{1,64})?$/u),
+);
+
 export const HubMachineStatus = Schema.Struct({
   attachId: DisposableAttachId,
   name: DisposableMachineName,
@@ -310,6 +316,11 @@ export const HubMachineStatus = Schema.Struct({
   penMember: Schema.Boolean,
   provisioner: DisposableMachineProvisioner,
   stateSince: IsoDateTime,
+  /**
+   * The hub's machine key while the attach is open: the provisioner adds this public line to the
+   * machine user's authorized_keys, and GOAT and the Home reach the machine with it alone.
+   */
+  machineKey: Schema.optionalKey(DisposableMachineKey),
   /**
    * Only in the answer that minted it: the token the machine joins with. The attach service never
    * keeps it, and a replay answers without it; an agent caller's tool output, which carries it, is
