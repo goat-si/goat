@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { penNodeId } from "./attachModel.ts";
@@ -96,6 +97,27 @@ it.effect("with the switch off or the thread unnamed, attach asks neither Pen no
       yield* switchTo({ enabled: false });
       expect(yield* reason(attach(2))).toBe("switch_off");
       expect(pen.control.featuresAsked).toBe(0);
+    }),
+  ),
+);
+
+it.effect("a record that holds more than 32 invites still lists within the wire's 32 steps", () =>
+  world(() =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      const sql = yield* SqlClient.SqlClient;
+      const many = Array.from({ length: 40 }, (_, n) => ({
+        id: first.attachId + "." + (n + 1),
+        kind: "mint",
+        state: "done",
+        expiresAtMs: INVITE_MS,
+        settled: "cancelled",
+        acked: true,
+      }));
+      yield* sql`UPDATE disposable_machines SET effects_json = ${JSON.stringify(many)}`;
+      const machine = yield* listed(first.attachId);
+      expect(machine?.steps).toHaveLength(32);
+      expect(encodeStatus(machine)._tag).toBe("Success");
     }),
   ),
 );

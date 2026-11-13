@@ -122,7 +122,8 @@ export const status = (
     nodeId: row.node_id,
     state: row.state,
     step: row.step,
-    steps: mintSteps(effectsOf(row)),
+    // The wire carries 32 steps; reissue stops there, and an older row shows its latest.
+    steps: mintSteps(effectsOf(row)).slice(-32),
     message,
     nextAction,
     class:
