@@ -1,14 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { homeWorkGoverns } from "@goat/client-runtime/goatBot";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { ChannelBotRef, EnvironmentId } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
+import { channelEnvironment } from "~/state/channels";
 import { useThreadShell } from "~/state/entities";
 import { environmentServerConfigsAtom } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
@@ -197,7 +200,9 @@ export function useGoatBotWaitingCount() {
   return enabled && connected ? count : undefined;
 }
 
-/** The sidebar needs visit-aware status, while older servers keep their legacy count. */
+const NOT_GOVERNED = Atom.make({ rosterKnown: false, byBot: [], links: [] });
+
+/** Visit-aware status where Home governs the environment; elsewhere dev's legacy count. */
 export function useGoatBotSidebarWaiting() {
   const legacy = useGoatBotWaitingCount();
   const { enabled, environment, generation, port } = useGoatBotEnabled();
@@ -205,12 +210,17 @@ export function useGoatBotSidebarWaiting() {
   const environmentId = environment?.environmentId ?? null;
   const capabilities =
     environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
-  const h2 =
-    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
+  const governed = homeWorkGoverns(
+    useAtomValue(
+      environmentId === null
+        ? NOT_GOVERNED
+        : channelEnvironment.homeCurrentOpenableWorkByEnvironment(environmentId),
+    ),
+  );
   const status = useCounts((values) =>
     environmentId === null ? undefined : values.status.get(environmentId),
   );
-  if (!h2) return { environmentId, h2, count: legacy, state: "ready" as const };
+  if (!governed) return { environmentId, governed, count: legacy, state: "ready" as const };
   if (
     !enabled ||
     environment?.connected !== true ||
@@ -218,12 +228,12 @@ export function useGoatBotSidebarWaiting() {
     capabilities.goatBotWaitingRead !== true ||
     capabilities.threadVisitedTracking !== true
   )
-    return { environmentId, h2, count: undefined, state: "unavailable" as const };
+    return { environmentId, governed, count: undefined, state: "unavailable" as const };
   if (status === undefined || status.generation !== generation || status.port !== port)
-    return { environmentId, h2, count: undefined, state: "pending" as const };
+    return { environmentId, governed, count: undefined, state: "pending" as const };
   return {
     environmentId,
-    h2,
+    governed,
     count: status.count,
     state: status.count === undefined ? ("unavailable" as const) : ("ready" as const),
   };

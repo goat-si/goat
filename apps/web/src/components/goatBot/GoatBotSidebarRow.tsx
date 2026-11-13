@@ -143,7 +143,7 @@ function GoatBotSidebarPreview({
   count: number | undefined;
   waiting: {
     environmentId: EnvironmentId | null;
-    h2: boolean;
+    governed: boolean;
     count: number | undefined;
     state: "ready" | "pending" | "unavailable";
   };
@@ -209,7 +209,7 @@ function GoatBotConversationRow({
   count: number | undefined;
   waiting: {
     environmentId: EnvironmentId | null;
-    h2: boolean;
+    governed: boolean;
     count: number | undefined;
     state: "ready" | "pending" | "unavailable";
   };
@@ -240,7 +240,7 @@ function GoatBotConversationRow({
         surface="sidebar"
         emoji={avatar}
         countInLabel
-        waitingOverride={waiting.h2 ? (count ?? null) : undefined}
+        waitingOverride={waiting.governed ? (count ?? null) : undefined}
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
@@ -265,6 +265,7 @@ function GoatBotConversationRow({
           <GoatBotRowSignals
             environmentId={waiting.environmentId}
             botId={BotId.make("main")}
+            governed={waiting.governed}
             waiting={count}
             waitingState={waiting.state}
           />

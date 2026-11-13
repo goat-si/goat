@@ -130,7 +130,8 @@ vi.mock("../ui/toast", () => ({
 }));
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: (bot: BotProfile) => ({
-    waitingCount: server.waiting[bot.botId] ?? 0,
+    // Offline the member's status is not read at all, as useGoatBotMemberStatus does.
+    waitingCount: server.connected ? (server.waiting[bot.botId] ?? 0) : 0,
     sidebarWaitingState: server.statusPending
       ? "pending"
       : server.connected && server.waitingRead && server.statusAvailable

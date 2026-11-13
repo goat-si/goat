@@ -5,6 +5,7 @@ import {
   goatBotAccent,
   goatBotMemberPicture,
   goatBotPreviewText,
+  homeWorkGoverns,
 } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
@@ -58,7 +59,12 @@ export function GoatBotMemberRoster({
   const [editing, setEditing] = useState<BotProfile | null>(null);
   const [deleting, setDeleting] = useState<BotProfile | null>(null);
   const [hiddenOpen, setHiddenOpen] = useState(false);
+  // One read for the whole list: every row follows the environment's governance by Home.
+  const governed = homeWorkGoverns(
+    useAtomValue(channelEnvironment.homeCurrentOpenableWorkByEnvironment(environmentId)),
+  );
   const actions = {
+    governed,
     canManage: manage.canManage,
     canEdit,
     onEdit: setEditing,
@@ -150,6 +156,7 @@ export function GoatBotMemberRoster({
 
 function GoatBotMemberRow({
   bot,
+  governed,
   canManage,
   canEdit,
   onEdit,
@@ -157,6 +164,7 @@ function GoatBotMemberRow({
   onDelete,
 }: {
   readonly bot: BotProfile;
+  readonly governed: boolean;
   readonly canManage: boolean;
   readonly canEdit: boolean;
   readonly onEdit: (bot: BotProfile) => void;
@@ -165,11 +173,7 @@ function GoatBotMemberRow({
 }) {
   const status = useGoatBotMemberStatus(bot);
   const { latest } = status;
-  const presentation = useEnvironment(bot.environmentId);
-  const capabilities = presentation?.serverConfig?.environment.capabilities;
-  const h2 =
-    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
-  const count = h2 ? status.sidebarWaitingCount : status.waitingCount;
+  const count = governed ? status.sidebarWaitingCount : status.waitingCount;
   // The row's second line is what the bot last said or was asked; a new bot shows its purpose.
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -215,6 +219,7 @@ function GoatBotMemberRow({
             <GoatBotRowSignals
               environmentId={bot.environmentId}
               botId={bot.botId}
+              governed={governed}
               waiting={count}
               waitingState={status.sidebarWaitingState}
             />

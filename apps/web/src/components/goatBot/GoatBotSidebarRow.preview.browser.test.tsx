@@ -82,7 +82,6 @@ vi.mock("./useGoatBotWaitingCount", () => ({
   useGoatBotWaitingCount: () => state.waiting,
   useGoatBotSidebarWaiting: () => ({
     environmentId: state.botRef?.environmentId ?? null,
-    h2: state.governed,
     governed: state.governed,
     count: state.governed ? state.sidebarCount : state.waiting,
     state: state.governed ? state.sidebarState : "ready",

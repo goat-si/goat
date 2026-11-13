@@ -10,11 +10,14 @@ const NO_WORK = Atom.make(null);
 export function GoatBotRowSignals({
   environmentId,
   botId,
+  governed,
   waiting,
   waitingState,
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly botId: BotId;
+  /** Whether Home governs this environment; otherwise the row is the older one, with no signals. */
+  readonly governed: boolean;
   readonly waiting: number | undefined;
   readonly waitingState: "ready" | "pending" | "unavailable";
 }) {
@@ -24,9 +27,6 @@ export function GoatBotRowSignals({
       ? NO_WORK
       : channelEnvironment.homeCurrentOpenableWorkAtom([environmentId, botId]),
   );
-  const capabilities = environment?.serverConfig?.environment.capabilities;
-  const h2 =
-    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
   const available =
     environment?.connection.phase === "connected" &&
     work?.eligible === true &&
@@ -47,7 +47,7 @@ export function GoatBotRowSignals({
       : null,
   ].filter(Boolean);
   const label = `${unread} unread task${unread === 1 ? "" : "s"}; recent work only; older work may be missing`;
-  if (!h2) return null;
+  if (!governed) return null;
   return (
     <>
       {unread !== undefined && unread > 0 ? (
