@@ -36,10 +36,21 @@ const profile = (botId: string, role: "main" | "member", name: string) =>
     updatedAt: "2026-11-07T00:00:00.000Z",
   });
 const bots = [profile("main", "main", "Goaty"), profile("research", "member", "Research")];
-function Search({ query, profiles = bots }: { query: string; profiles?: readonly BotProfile[] }) {
-  const groups = useGoatBotTaskSearch(profiles, query, true, state.navigate);
+function Search({
+  query,
+  profiles = bots,
+  enabled = true,
+}: {
+  query: string;
+  profiles?: readonly BotProfile[];
+  enabled?: boolean;
+}) {
+  const { groups, status } = useGoatBotTaskSearch(profiles, query, enabled, state.navigate);
   return (
     <div>
+      <div role="status" aria-label="Bot task search">
+        {status}
+      </div>
       {groups.map((group) => (
         <section key={group.value} aria-label={group.label}>
           <h2>{group.label}</h2>
@@ -91,31 +102,30 @@ it("searches each bot and follows a cursor through an empty page", async () => {
   await screen.rerender(<Search query="papers" />);
   await act(() => vi.advanceTimersByTimeAsync(250));
   await expect.element(screen.getByRole("button", { name: "Load more" })).toBeVisible();
-  expect(state.read).toHaveBeenCalledWith(
-    {
-      environmentId: "env",
-      input: { botId: "main", query: "papers" },
-    },
-    expect.any(AbortSignal),
-  );
-  expect(state.read).toHaveBeenCalledWith(
-    {
-      environmentId: "env",
-      input: { botId: "research", query: "papers" },
-    },
-    expect.any(AbortSignal),
-  );
+  expect(state.read).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { botId: "main", query: "papers" },
+  });
+  expect(state.read).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { botId: "research", query: "papers" },
+  });
   await userEvent.click(screen.getByRole("button", { name: "Load more" }));
   await expect.element(screen.getByRole("button", { name: "Find papers" })).toBeVisible();
-  expect(state.read).toHaveBeenCalledWith(
-    {
-      environmentId: "env",
-      input: { botId: "research", query: "papers", cursor: "next" },
-    },
-    expect.any(AbortSignal),
+  expect(state.read).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { botId: "research", query: "papers", cursor: "next" },
+  });
+  await vi.waitFor(() =>
+    expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toContain(
+      "Some results could not be checked.",
+    ),
   );
-  await expect.element(screen.getByText("Some results could not be checked.")).toBeVisible();
-  await expect.element(screen.getByText("Search ended early.")).toBeVisible();
+  await vi.waitFor(() =>
+    expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toContain(
+      "Search ended early.",
+    ),
+  );
   await userEvent.click(screen.getByRole("button", { name: "Find papers" }));
   expect(state.navigate).toHaveBeenCalledWith({
     to: "/bot",
@@ -143,11 +153,11 @@ it("shows a search error without claiming there were no results", async () => {
   using _clock = fakeTimers();
   await screen.rerender(<Search query="papers" />);
   await act(() => vi.advanceTimersByTimeAsync(250));
-  await expect
-    .element(
-      screen.getByRole("region", { name: "Research tasks" }).getByText("Couldn't search tasks."),
-    )
-    .toBeVisible();
+  await vi.waitFor(() =>
+    expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toContain(
+      "Couldn't search tasks.",
+    ),
+  );
   await expect
     .element(
       screen
@@ -157,14 +167,14 @@ it("shows a search error without claiming there were no results", async () => {
     .toBeVisible();
 });
 
-it("cancels an old query and ignores its late results", async () => {
+it("supersedes an old query and ignores its late results", async () => {
   setup();
   let finish!: (value: unknown) => void;
   const old = new Promise((resolve) => {
     finish = resolve;
   });
   state.read.mockImplementation(({ input }: { input: { query: string } }) =>
-    input.query === "old"
+    input.query === "a"
       ? old
       : Promise.resolve({
           _tag: "Success",
@@ -175,12 +185,9 @@ it("cancels an old query and ignores its late results", async () => {
   );
   await using screen = await render(<Search query="" />);
   using _clock = fakeTimers();
-  await screen.rerender(<Search query="old" />);
+  await screen.rerender(<Search query="a" />);
   await act(() => vi.advanceTimersByTimeAsync(250));
-  const oldSignal = state.read.mock.calls[0]?.[1] as AbortSignal;
-  expect(oldSignal.aborted).toBe(false);
-  await screen.rerender(<Search query="new" />);
-  expect(oldSignal.aborted).toBe(true);
+  await screen.rerender(<Search query="ab" />);
   await act(() => vi.advanceTimersByTimeAsync(250));
   await expect
     .element(
@@ -208,8 +215,50 @@ it("does not offer searches for deleted or unknown bots", async () => {
   using _clock = fakeTimers();
   await screen.rerender(<Search query="papers" profiles={profiles} />);
   await act(() => vi.advanceTimersByTimeAsync(250));
-  await expect.element(screen.getByRole("region", { name: "Goaty tasks" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("status", { name: "Bot task search" }))
+    .toHaveTextContent("Goaty: No matching tasks.");
   expect(state.read).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("region", { name: "Research tasks" }).query()).toBeNull();
   expect(screen.getByRole("region", { name: "Unknown tasks" }).query()).toBeNull();
+});
+
+it.each([{ partial: true }, { endedEarly: true }])(
+  "does not claim a complete empty search when %j",
+  async (flags) => {
+    setup();
+    state.read.mockResolvedValue({ _tag: "Success", value: { tasks: [], ...flags } });
+    await using screen = await render(<Search query="" />);
+    using _clock = fakeTimers();
+    await screen.rerender(<Search query="papers" />);
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("status", { name: "Bot task search" }).element().textContent,
+      ).toContain("No matching tasks found. Some tasks could not be checked."),
+    );
+    expect(
+      screen.getByRole("status", { name: "Bot task search" }).element().textContent,
+    ).not.toContain("Goaty: No matching tasks.");
+  },
+);
+
+it("ignores a late answer after the palette closes", async () => {
+  setup();
+  let finish!: (value: unknown) => void;
+  state.read.mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await using screen = await render(<Search query="" />);
+  using _clock = fakeTimers();
+  using errors = vi.spyOn(console, "error");
+  await screen.rerender(<Search query="papers" />);
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  await screen.rerender(<Search query="papers" enabled={false} />);
+  await act(() => finish({ _tag: "Failure" }));
+  expect(screen.getByRole("status", { name: "Bot task search" }).element().textContent).toBe("");
+  expect(screen.getByRole("button", { name: "Retry task search" }).query()).toBeNull();
+  expect(errors).not.toHaveBeenCalled();
 });

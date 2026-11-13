@@ -101,7 +101,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
 import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { goatBotPaletteItems, useGoatBotPaletteBots } from "./goatBot/goatBotPaletteItems";
-import { useGoatBotTaskSearch } from "./goatBot/useGoatBotTaskSearch";
+import { BotTaskSearchStatus, useGoatBotTaskSearch } from "./goatBot/useGoatBotTaskSearch";
 import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
 import { useAtomValue } from "@effect/atom-react";
 
@@ -430,6 +430,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           {children}
         </div>
         <CommandPaletteDialog
+          open={state.open}
           mode={state.mode}
           openIntent={state.openIntent}
           setOpen={setOpen}
@@ -443,6 +444,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 }
 
 function CommandPaletteDialog(props: {
+  readonly open: boolean;
   readonly mode: SearchOverlayMode;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
@@ -461,6 +463,7 @@ function CommandPaletteDialog(props: {
         <ProjectContentSearchDialog onOpenChange={props.setOpen} />
       ) : (
         <OpenCommandPaletteDialog
+          open={props.open}
           openIntent={props.openIntent}
           setOpen={props.setOpen}
           openChildSearch={props.openChildSearch}
@@ -472,6 +475,7 @@ function CommandPaletteDialog(props: {
   );
 }
 function OpenCommandPaletteDialog(props: {
+  readonly open: boolean;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openChildSearch: (
@@ -1845,12 +1849,7 @@ function OpenCommandPaletteDialog(props: {
           ? changeAppearanceItem.groups
           : (currentView?.groups ?? rootGroups);
 
-  const botTaskGroups = useGoatBotTaskSearch(
-    goatBots,
-    deferredQuery,
-    currentView === null,
-    navigate,
-  );
+  const botTaskSearch = useGoatBotTaskSearch(goatBots, query, props.open && !currentView, navigate);
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
   const filteredGroups = filterCommandPaletteGroups({
@@ -2486,7 +2485,7 @@ function OpenCommandPaletteDialog(props: {
           },
         ];
 
-  let displayedGroups: CommandPaletteView["groups"] = [...filteredGroups, ...botTaskGroups];
+  let displayedGroups: CommandPaletteView["groups"] = [...filteredGroups, ...botTaskSearch.groups];
   if (newProjectFlow !== null) {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
@@ -3040,6 +3039,7 @@ function OpenCommandPaletteDialog(props: {
           Loading folders...
         </div>
       ) : null}
+      <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
         rows={resultRows.rows}
         listRef={resultListRef}

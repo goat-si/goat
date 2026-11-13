@@ -33,7 +33,7 @@ export function useGoatBotTaskSearch(
   query: string,
   enabled: boolean,
   navigate: ReturnType<typeof useNavigate>,
-): readonly CommandPaletteGroup[] {
+): { groups: readonly CommandPaletteGroup[]; status: string } {
   const configs = useServerConfigs();
   const environmentId = bots[0]?.environmentId;
   const supported =
@@ -61,16 +61,9 @@ export function useGoatBotTaskSearch(
   const key = JSON.stringify([environmentId, botKey, text]);
   const [search, setSearch] = useState<Search>({ key: "", pages: {} });
   const sequence = useRef(0);
-  const controller = useRef<AbortController | null>(null);
   const inFlight = useRef(new Set<string>());
   const request = useStableCallback(
-    async (
-      bot: BotProfile,
-      key: string,
-      version: number,
-      cursor?: string,
-      signal?: AbortSignal,
-    ) => {
+    async (bot: BotProfile, key: string, version: number, cursor?: string) => {
       const flightKey = `${version}:${key}:${bot.botId}`;
       if (inFlight.current.has(flightKey)) return;
       inFlight.current.add(flightKey);
@@ -85,13 +78,10 @@ export function useGoatBotTaskSearch(
           },
         },
       }));
-      const answer = await read(
-        {
-          environmentId: bot.environmentId,
-          input: { botId: bot.botId, query: text, ...(cursor ? { cursor } : {}) },
-        },
-        signal,
-      );
+      const answer = await read({
+        environmentId: bot.environmentId,
+        input: { botId: bot.botId, query: text, ...(cursor ? { cursor } : {}) },
+      });
       inFlight.current.delete(flightKey);
       if (sequence.current !== version) return;
       setSearch((prev) => {
@@ -121,30 +111,31 @@ export function useGoatBotTaskSearch(
         index += 4
       ) {
         const bot = selected[index];
-        if (bot) await request(bot, key, version, undefined, controller.current?.signal);
+        if (bot) await request(bot, key, version);
       }
     };
     for (let i = 0; i < Math.min(4, selected.length); i++) void worker(i);
   });
   const load = useStableCallback((bot: BotProfile, key: string, cursor?: string) =>
-    request(bot, key, sequence.current, cursor, controller.current?.signal),
+    request(bot, key, sequence.current, cursor),
   );
   // oxlint-disable-next-line goat/react-effect-budget -- Debounces remote search and invalidates older requests when its scope changes.
   useEffect(() => {
     const version = ++sequence.current;
     if (!valid) return;
-    const active = new AbortController();
-    controller.current = active;
     const timer = setTimeout(() => start(key, version), 250);
     return () => {
       clearTimeout(timer);
       sequence.current++;
-      active.abort();
-      if (controller.current === active) controller.current = null;
     };
   }, [valid, key, start]);
-  if (!valid || search.key !== key) return [];
-  return usable.flatMap((bot): CommandPaletteGroup[] => {
+  if (!valid) {
+    if (search.key !== "") setSearch({ key: "", pages: {} });
+    return { groups: [], status: "" };
+  }
+  if (search.key !== key) return { groups: [], status: "Searching tasks…" };
+  const statuses: string[] = [];
+  const groups = usable.flatMap((bot): CommandPaletteGroup[] => {
     const page = search.pages[bot.botId];
     if (!page) return [];
     const icon = <BotIcon className={ITEM_ICON_CLASS} />;
@@ -165,28 +156,18 @@ export function useGoatBotTaskSearch(
           },
         }),
     }));
-    const status = page.loading
-      ? "Searching tasks…"
-      : page.error
-        ? "Couldn't search tasks."
-        : page.tasks.length === 0 && !page.cursor
-          ? "No matching tasks."
-          : null;
-    for (const [id, title] of [
-      ["status", status],
-      ["partial", page.partial ? "Some results could not be checked." : null],
-      ["ended", page.endedEarly ? "Search ended early." : null],
-    ] as const)
-      if (title)
-        items.push({
-          kind: "action",
-          value: `bot-task-${id}:${bot.botId}`,
-          title,
-          searchTerms: [text],
-          icon,
-          disabled: true,
-          run: async () => {},
-        });
+    const messages = [
+      page.loading ? "Searching tasks…" : null,
+      page.error ? "Couldn't search tasks." : null,
+      !page.loading && !page.error && page.tasks.length === 0
+        ? page.partial || page.endedEarly || page.cursor
+          ? "No matching tasks found. Some tasks could not be checked."
+          : "No matching tasks."
+        : null,
+      page.partial ? "Some results could not be checked." : null,
+      page.endedEarly ? "Search ended early." : null,
+    ].filter((message) => message !== null);
+    if (messages.length) statuses.push(`${bot.name}: ${messages.join(" ")}`);
     if (page.cursor && !page.loading)
       items.push({
         kind: "action",
@@ -207,6 +188,22 @@ export function useGoatBotTaskSearch(
         keepOpen: true,
         run: async () => load(bot, key, page.cursor),
       });
-    return [{ value: `bot-tasks:${bot.botId}`, label: `${bot.name} tasks`, items }];
+    return items.length
+      ? [{ value: `bot-tasks:${bot.botId}`, label: `${bot.name} tasks`, items }]
+      : [];
   });
+  return { groups, status: statuses.join(" ") };
+}
+
+export function BotTaskSearchStatus({ status }: { status: string }) {
+  return (
+    <div
+      role="status"
+      aria-label="Bot task search"
+      aria-live="polite"
+      className="px-4 text-xs text-muted-foreground"
+    >
+      {status}
+    </div>
+  );
 }
