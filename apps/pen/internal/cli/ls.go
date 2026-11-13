@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -204,8 +205,23 @@ func RunLs(args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print JSON")
 	watch := fs.Bool("watch", false, "print a line on every view change")
 	until := fs.String("until-revoked", "", "with --watch: exit 0 once this member is revoked")
+	snapshot := fs.Bool("snapshot", false, "with --watch: print snapshot lines")
+	untilStdinCloses := fs.Bool("until-stdin-closes", false, "with --snapshot: stop when stdin closes")
 	if _, err := parse(fs, args); err != nil {
 		return 2
+	}
+	untilSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "until-revoked" {
+			untilSet = true
+		}
+	})
+	if (*snapshot && (!*watch || *asJSON || untilSet)) || (*untilStdinCloses && !*snapshot) {
+		fmt.Fprintln(stderr, "usage: pen ls --watch --snapshot [--until-stdin-closes]")
+		return 2
+	}
+	if *snapshot {
+		return runLsSnapshot(stdout, stderr, *untilStdinCloses)
 	}
 	st, err := openState()
 	if err != nil {

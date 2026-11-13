@@ -174,6 +174,12 @@ The machines need the same ssh access as `ssh pen-<name>`: an sshd on the member
 accepts. GOAT reaches each one through its `pen-<nodeId>` host, so reusing a name for another
 machine never points GOAT at the wrong one.
 
+On Windows the desktop app reads the machine list through the `pen` command, so `pen.exe` must be
+on your `PATH` (the installer puts it there; restart GOAT after installing Pen) and recent
+enough to know `pen ls --watch --snapshot`. With an older Pen, GOAT says Pen is not running
+here; run the install line again to update it. A Windows account whose home folder path contains
+a space is not supported: GOAT lists the machines but does not open them.
+
 Every GOAT server that is a Pen member, including the one inside the desktop app and a
 `goat serve` without a screen, lists the other members under
 [Hub devices](./remote-access.md#hub-devices) the same way, so a phone paired with any member's
@@ -369,8 +375,8 @@ working on the box from GOAT does the same.
 
 - Direct connections between machines: all traffic goes through a relay.
 - Running Pen on Windows before anyone signs in: it runs as the signed-in user.
-- Seeing your Pen machines in the GOAT desktop app on Windows. A Windows machine can be a member
-  the others see; GOAT on Windows cannot read Pen's machine list yet.
+- Listing Pen machines as hub devices from a GOAT server on Windows. The desktop app on Windows
+  shows them; a phone paired with a Windows computer does not see them yet.
 - Managing Pen from GOAT's settings, apart from removing a machine; use the `pen` command or its
   dashboard.
 - Signing in with a Google account the Pen sign-in service does not allow yet. While the service is

@@ -1,12 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { DesktopPenMembersState } from "@goat/contracts";
-import type { PenSnapshot, PenWatchStale } from "@goat/pen-protocol/snapshot";
+import {
+  watchPenSnapshots,
+  type PenSnapshot,
+  type PenWatchStale,
+} from "@goat/pen-protocol/snapshot";
 import { PenAliasUnreadable } from "@goat/ssh/penAlias";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 import * as DesktopPenMembers from "./DesktopPenMembers.ts";
 
@@ -303,4 +307,14 @@ describe("DesktopPenMembers", () => {
       assert.deepEqual(routes(h.last()), [["box-b", "trusted"]]);
     }).pipe(Effect.scoped),
   );
+});
+
+describe("snapshot watch selection", () => {
+  it("keeps the socket on macOS and Linux and leaves it on Windows", () => {
+    expect(DesktopPenMembers.selectPenSnapshotWatch("darwin", undefined)).toBe(watchPenSnapshots);
+    expect(DesktopPenMembers.selectPenSnapshotWatch("linux", undefined)).toBe(watchPenSnapshots);
+    expect(DesktopPenMembers.selectPenSnapshotWatch("win32", undefined)).not.toBe(
+      watchPenSnapshots,
+    );
+  });
 });

@@ -17,6 +17,14 @@ export interface PenSnapshot {
   readonly members: ReadonlyArray<PenSnapshotMember>;
   readonly revoked: ReadonlyArray<{ readonly nodeId: string; readonly name: string }>;
 }
+export interface PenSnapshotStream {
+  on(event: "data", listener: (chunk: Buffer) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "close", listener: () => void): this;
+  once(event: "connect", listener: () => void): this;
+  write(data: string): unknown;
+  destroy(): unknown;
+}
 export type PenWatchStale = "connect" | "refused" | "closed" | "gap" | "line";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -98,12 +106,12 @@ export function watchPenSnapshots(input: {
   readonly stateDir: string;
   readonly onSnapshot: (snapshot: PenSnapshot) => void;
   readonly onStale: (reason: PenWatchStale) => void;
-  readonly connect?: (path: string) => NodeNet.Socket;
+  readonly connect?: (path: string) => PenSnapshotStream;
 }): () => void {
   let active = true;
   let previous: number | undefined;
   let pending = Buffer.alloc(0);
-  let socket: NodeNet.Socket;
+  let socket: PenSnapshotStream;
   const fail = (reason: PenWatchStale) => {
     if (!active) return;
     active = false;
