@@ -1,0 +1,299 @@
+package mesh
+
+import (
+	"crypto/rand"
+	"errors"
+	"maps"
+	"sync"
+	"time"
+
+	"github.com/goat-si/goat/apps/pen/internal/session"
+	"github.com/goat-si/goat/apps/pen/internal/state"
+)
+
+// Invite is an entry of offers.json: a live single-use invite, or the terminal state a bound invite reached.
+type Invite struct {
+	ID        string `json:"id,omitempty"`
+	Secret    []byte `json:"secret,omitempty"`
+	ExpiresAt int64  `json:"expiresAt,omitempty"`
+	// Subject, when set, is the only machine the invite admits (a bound invite).
+	Subject *Subject `json:"subject,omitempty"`
+	// MintID is the caller's name for the request that made a bound invite, or for a cancel that came first.
+	MintID string `json:"mintId,omitempty"`
+	// State is empty for a live invite, else burned, cancelled or expired. A terminal entry keeps no secret and no
+	// expiresAt, so a node older than bound invites reads it as expired and prunes it.
+	State string `json:"state,omitempty"`
+	// Nonce is a burned invite's offer nonce, which the admitted card repeats; At is when it reached State.
+	Nonce string `json:"nonce,omitempty"`
+	At    int64  `json:"at,omitempty"`
+}
+
+// Invite states as cancel answers them.
+const (
+	InviteLive      = "live"
+	InviteBurned    = "burned"
+	InviteCancelled = "cancelled"
+	InviteExpired   = "expired"
+	InviteAbsent    = "absent"
+)
+
+// Caps on bound entries: a create is refused at maxBound, a fence at maxBoundAndFences, so a caller that never
+// acknowledges cannot grow offers.json without bound.
+const (
+	maxBound          = 256
+	maxBoundAndFences = 512
+)
+
+// Invites are the node's invites, persisted in offers.json.
+type Invites struct {
+	st *state.Store
+	mu sync.Mutex
+	// byID holds live invites and bound terminal entries; fences holds cancels by mintId that no invite answered.
+	byID   map[string]Invite
+	fences map[string]Invite
+	// retired is set when the node's mesh is replaced: this book no longer writes offers.json.
+	retired bool
+}
+
+// LoadInvites reads offers.json (st may be nil for in-memory use).
+func LoadInvites(st *state.Store) (*Invites, error) {
+	iv := &Invites{st: st, byID: map[string]Invite{}, fences: map[string]Invite{}}
+	if st == nil {
+		return iv, nil
+	}
+	var list []Invite
+	if _, err := st.ReadJSON("offers.json", &list); err != nil {
+		return nil, err
+	}
+	for _, x := range list {
+		switch {
+		case x.ID != "":
+			iv.byID[x.ID] = x
+		case x.MintID != "" && x.State == InviteCancelled:
+			iv.fences[x.MintID] = x
+		}
+	}
+	return iv, nil
+}
+
+func expired(x Invite, now time.Time) bool { return x.State == "" && x.ExpiresAt <= now.UnixMilli() }
+
+// commitLocked settles expired live invites in byID (an ordinary one is dropped, a bound one becomes an expired entry),
+// writes byID and fences, and makes them the book. A failed write leaves the book as it was; an ordinary invite's
+// burn changes the book before, as it always did.
+func (iv *Invites) commitLocked(now time.Time, byID, fences map[string]Invite) error {
+	list := []Invite{}
+	for id, x := range byID {
+		if expired(x, now) {
+			if x.Subject == nil {
+				delete(byID, id)
+				continue
+			}
+			x = terminal(x, InviteExpired, time.UnixMilli(x.ExpiresAt), "")
+			byID[id] = x
+		}
+		list = append(list, x)
+	}
+	for _, x := range fences {
+		list = append(list, x)
+	}
+	if iv.st != nil && !iv.retired {
+		unlock, err := iv.st.Lock()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		if err := iv.st.WriteJSON("offers.json", list, 0o600); err != nil {
+			return err
+		}
+	}
+	iv.byID, iv.fences = byID, fences
+	return nil
+}
+
+// saveLocked writes the book as it is.
+func (iv *Invites) saveLocked(now time.Time) error {
+	return iv.commitLocked(now, maps.Clone(iv.byID), maps.Clone(iv.fences))
+}
+
+// Retire stops this book from writing offers.json; a save already running finishes first.
+func (iv *Invites) Retire() {
+	iv.mu.Lock()
+	iv.retired = true
+	iv.mu.Unlock()
+}
+
+// Create makes an invite valid for ttl.
+func (iv *Invites) Create(ttl time.Duration, now time.Time) (Invite, error) {
+	x, err := newInvite(now.Add(ttl))
+	if err != nil {
+		return Invite{}, err
+	}
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	if iv.retired {
+		return Invite{}, errInviteRetired
+	}
+	iv.byID[x.ID] = x
+	return x, iv.saveLocked(now)
+}
+
+var errInviteRetired = errors.New("this node's mesh changed while the invite was made; run pen invite again")
+
+func newInvite(expiresAt time.Time) (Invite, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return Invite{}, err
+	}
+	return Invite{ID: session.InviteID(secret), Secret: secret, ExpiresAt: expiresAt.UnixMilli()}, nil
+}
+
+// Prune drops expired ordinary invites from memory and offers.json and keeps expired bound ones as expired entries.
+func (iv *Invites) Prune(now time.Time) error {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	for _, x := range iv.byID {
+		if expired(x, now) {
+			return iv.saveLocked(now)
+		}
+	}
+	return nil
+}
+
+// Lookup finds a live (unexpired, unused) invite.
+func (iv *Invites) Lookup(id string, now time.Time) (Invite, bool) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	x, ok := iv.byID[id]
+	if !ok || x.State != "" {
+		return Invite{}, false
+	}
+	if expired(x, now) {
+		// The join is refused either way; a failed write leaves the secret for the next save.
+		_ = iv.saveLocked(now)
+		return Invite{}, false
+	}
+	return x, true
+}
+
+// Burn atomically uses an invite for the joiner whose card is cb; only one caller ever succeeds, and a bound
+// invite only for its subject. A bound invite becomes a burned entry carrying the offer nonce, in the same save.
+// An ordinary invite is judged at now, when the join began, as it always was; a bound one reads clock under the
+// book's lock, so a bound invite that expired while the join waited for it is not burned.
+func (iv *Invites) Burn(id string, now time.Time, cb CardBody, clock func() time.Time) error {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	x, ok := iv.byID[id]
+	if !ok || x.State != "" {
+		return errors.New("invite already used or expired")
+	}
+	if x.Subject != nil {
+		now = clock()
+	}
+	if expired(x, now) {
+		if err := iv.saveLocked(now); err != nil {
+			return err
+		}
+		return errors.New("invite already used or expired")
+	}
+	if !x.Subject.admits(cb) {
+		return errors.New("card does not match this invite")
+	}
+	if x.Subject == nil {
+		delete(iv.byID, id)
+		return iv.saveLocked(now)
+	}
+	byID := maps.Clone(iv.byID)
+	byID[id] = terminal(x, InviteBurned, now, cb.Nonce)
+	return iv.commitLocked(now, byID, maps.Clone(iv.fences))
+}
+
+func terminal(x Invite, state string, now time.Time, nonce string) Invite {
+	return Invite{ID: x.ID, Subject: x.Subject, MintID: x.MintID, State: state, Nonce: nonce, At: now.UnixMilli()}
+}
+
+// Cancel ends the invite named by id, or the one mintID made (exactly one is set), so it admits nobody, and
+// answers the state it is in: cancelled (by this call or an earlier one), burned, expired or absent. A mintID that
+// names nothing yet is fenced: it answers cancelled and a later create with that mintID is refused. clock is read
+// under the book's lock.
+func (iv *Invites) Cancel(id, mintID string, clock func() time.Time) (string, error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	now := clock()
+	x, ok := iv.findLocked(id, mintID)
+	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
+	switch {
+	case !ok && mintID == "":
+		return InviteAbsent, nil
+	case !ok:
+		if len(iv.fences)+iv.boundLocked() >= maxBoundAndFences {
+			return "", errors.New("too many bound invites and cancels kept; acknowledge settled ones first")
+		}
+		fences[mintID] = Invite{MintID: mintID, State: InviteCancelled, At: now.UnixMilli()}
+	case x.State != "":
+		return x.State, nil
+	case expired(x, now):
+		return InviteExpired, iv.saveLocked(now)
+	case x.Subject == nil:
+		delete(byID, x.ID)
+	default:
+		byID[x.ID] = terminal(x, InviteCancelled, now, "")
+	}
+	if err := iv.commitLocked(now, byID, fences); err != nil {
+		return "", err
+	}
+	return InviteCancelled, nil
+}
+
+// findLocked finds the entry named by id, or by mintID among the invites and then the fences.
+func (iv *Invites) findLocked(id, mintID string) (Invite, bool) {
+	if id != "" {
+		x, ok := iv.byID[id]
+		return x, ok
+	}
+	if mintID == "" {
+		return Invite{}, false
+	}
+	for _, x := range iv.byID {
+		if x.MintID == mintID {
+			return x, true
+		}
+	}
+	x, ok := iv.fences[mintID]
+	return x, ok
+}
+
+func (iv *Invites) boundLocked() int {
+	n := 0
+	for _, x := range iv.byID {
+		if x.Subject != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// Ack forgets the terminal entry or fence named by id or mintID once its caller has read it, and answers acked, or
+// absent when there is none. A live invite is refused: cancel it first. clock is read under the book's lock.
+func (iv *Invites) Ack(id, mintID string, clock func() time.Time) (string, error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	now := clock()
+	x, ok := iv.findLocked(id, mintID)
+	if !ok {
+		return InviteAbsent, nil
+	}
+	if x.State == "" && !expired(x, now) {
+		return "", errors.New("the invite is live; cancel it first")
+	}
+	byID, fences := maps.Clone(iv.byID), maps.Clone(iv.fences)
+	if x.ID == "" {
+		delete(fences, x.MintID)
+	} else {
+		delete(byID, x.ID)
+	}
+	if err := iv.commitLocked(now, byID, fences); err != nil {
+		return "", err
+	}
+	return "acked", nil
+}

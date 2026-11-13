@@ -209,7 +209,8 @@ record hash so its revoke of honest members sorts before its own revocation; the
 2. The joiner dials `/v1/client/<inviter nodeId>` with kind 0x03, `{"v":1,"stream":"join","invite":"<id>","name":"<name>"}`.
 3. The inviter sends `{"t":"offer","mesh":"<id>","inviter":"<nodeId>","nonce":"<b64url 16 bytes>"}`. The joiner answers
    `{"t":"card","card":{…}}` whose noisePub equals the key it authenticated with. The inviter burns the invite before
-   it signs (an atomic check-and-set under the state lock; the loser of a race gets CLOSE 4401), signs an `admit`,
+   it signs (an atomic check-and-set under the state lock; the loser of a race gets CLOSE 4401; a bound invite first
+   refuses a card that is not its subject, "Bound invites"), signs an `admit`,
    and sends the whole set as `records` lines of at most 64 records each, then `{"t":"done","mesh":"<id>"}`.
 4. The joiner checks the founding record against the mesh id and that the view makes it a member, then stores the set.
    Any refusal is `{"t":"refused","reason":"…"}` then close 4401.
@@ -856,6 +857,72 @@ member's sessions load which relay.
   Unix epoch, where the totals start) to the reply while any bytes are counted. Every other field keeps its name,
   type and meaning, and a node with nothing counted prints exactly what it printed before.
 
+## Bound invites (v1.3)
+
+Local to the inviting node: nothing new crosses the wire, and a joiner runs "Join" unchanged. A program on the
+inviting machine that already knows the new machine's keys (GOAT) makes an invite that admits only that machine.
+
+- Control op `invite` with a `subject`, on the control socket only (the dashboard cannot send it):
+  `{"op":"invite","subject":{"signPub":S,"noisePub":N,"name":X},"ttlMs":T,"wait":W}`. S and N are canonical base64url
+  32-byte keys and X a valid node name; the subject has exactly these three members and the line no unknown member.
+  `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes when absent). The answer is the ordinary
+  invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and makes nothing.
+- The invite's entry in `offers.json` keeps the subject. A joiner whose Noise key is not the subject's gets no psk for
+  it and closes 4401 at the handshake, so another machine holding the token cannot hold a join session open. In
+  "Join" step 3 the inviter refuses (`refused`, then 4401) a card whose signPub, noisePub or name differs from the
+  subject, keys compared exactly as the subject spells them (canonical base64url), before it burns the invite, so a
+  wrong machine cannot use it up; the burn checks the subject again.
+- `"mintId":M` names the request that makes a bound invite: 1 to 64 ASCII letters, digits, `-`, `_`, `.` or `:`, only
+  with a subject and an `expiresAt`. The answer repeats it as `"mintId"`. Under the invite book's lock the create is refused, and makes
+  nothing, when an entry or a fence already carries M, so one mint makes at most one invite.
+- A bound invite is not deleted when it is used or cancelled. Its entry keeps the subject and the mintId, drops the
+  secret, and moves to `burned` with `nonce`, the offer nonce of the join that used it, in the same save as the burn and
+  before the admit is signed, or to `cancelled`. The admitted card repeats that nonce, so the admit this invite produced
+  is exactly the one whose card carries it.
+- Control op `invite.cancel`, `{"op":"invite.cancel","inviteId":I}` or `{"op":"invite.cancel","mintId":M}` (exactly
+  one; I is the invite id, 16 base64url characters for 12 bytes). Under the invite book's lock, which also orders the
+  burn, a live invite is cancelled and admits nobody from then on (an unbound one is removed). The answer
+  `{"t":"invite-cancel","inviteId":I,"mintId":M,"state":S}` repeats what was named and gives the state after the op:
+  `cancelled` (by this op or an earlier one), `burned` (a join came first), `expired`, or `absent` (no such id). A
+  mintId that names nothing yet leaves a fence and answers `cancelled`; a later create with it is refused. Of a cancel
+  and a join of one invite exactly one wins: the join that loses closes 4401, and a cancel that loses answers
+  `burned`.
+- `"expiresAt":E` comes with `mintId`, both or neither, and replaces `ttlMs` (sending both is refused). E is an
+  absolute expiry in milliseconds since the Unix epoch, at most 24 hours past the node's clock, and becomes the
+  invite's expiry. Under the invite book's lock a create whose E is not later than the node's clock is refused. A mint
+  that reaches the node after its E, or after a cancel of its mintId, therefore makes nothing.
+- A bound invite whose expiry passes becomes an `expired` entry: invite.status answers `expired` from that moment, and
+  the entry is written when the node next saves the book (it prunes at start and every minute). Terminal entries and
+  fences are kept, and pruning skips them, until `invite.ack` forgets them. Leaving the mesh or replacing it (`pen
+  leave`, a join that replaces a solo mesh) deletes `offers.json` with them, and status then answers `absent`.
+- Control op `invite.status`, `{"op":"invite.status","inviteId":I}` or `{"op":"invite.status","mintId":M}`, answers
+  `{"t":"invite-status","inviteId":I,"mintId":M,"state":S,...}` with both ids when the entry has them. S is `live`
+  (with `expiresAt`), `cancelled`, `expired`, `burned`, `burned-unsaved` or `absent`. `burned` carries `nonce`;
+  once the node's record set holds the admit whose card repeats that nonce and the subject's keys, it also carries
+  `admit` (that record's hash) and `member` (whether the subject is a current member of the node's view).
+  `burned-unsaved` is the same while the node holds any records it has not yet written to disk, so the admit may be
+  in memory only and a restart before a later save may lose it; a caller asks again later. `burned` without `admit`
+  means the burn was saved and no admit followed. An ordinary invite answers `live`, `expired` or `absent`. The
+  read holds the store's lock and then the invite book's, the order of a burn, so it never sees a burn without the
+  admit signed in the same step.
+- Control op `invite.ack`, `{"op":"invite.ack","inviteId":I}` or `{"op":"invite.ack","mintId":M}`, forgets a terminal
+  entry or a fence and answers `{"t":"invite-ack","inviteId":I,"mintId":M,"state":"acked"}`, or `"absent"` when there
+  is none. A live invite is refused. After an ack the node no longer knows the mintId, so a caller acknowledges a
+  fence only once that mint's expiresAt has passed, when the expiry alone refuses a late create.
+- At most 256 bound entries are kept, and 512 counting fences; past either a create is refused, and past 512 a fence.
+- `pen identity --json` makes the machine's node keys when it has none, joins nothing, and prints one line
+  `{"nodeId":I,"signPub":S,"noisePub":N}`; `pen join` and `pen up` keep those keys. It refuses (exit 1) while an unfinished
+  `pen leave` has left its marker, so the resumed leave cannot delete keys a caller already bound an invite to. A
+  `pen leave` still deletes them, also one running at the same time; a later join then makes other keys, which the
+  bound invite refuses.
+- A node older than this decodes `subject` as the string of the `revoke` op, answers `{"error":"bad request"}` and
+  makes nothing, so a caller never gets an unbound token in place of a bound one; it answers the other ops of this
+  section that it does not know the op. An older node takes a `null` or string `subject` as an ordinary invite, so a
+  caller sends the subject object and uses a token only from an answer that carries `id` and the `mintId` it sent.
+  A caller always sends the subject: an older node ignores a `mintId` and an
+  `expiresAt` without one. After a downgrade an older node prunes terminal entries (they have no `expiresAt`) and treats live
+  bound invites as ordinary ones.
+
 ## Close codes
 
 Doriterm's codes, same meanings: 4400 crypto or framing failure; 4401 not admitted (unknown key, revoked member,
@@ -959,6 +1026,12 @@ v1.2 member-only reader refuses both valid new forms.
   applies that view; list drops and registration ends close 4401 unless the session is already closing, with every
   local connection closed before the answer; `pen service register` prints the answers to forwarded ops before it
   exits at the end of stdin; two v1.2 sentences point to the v1.3 exceptions.
+- v1.3 (2026-11-13): node side only, no wire change: "Bound invites": control op `invite` with a `subject` makes an invite that
+  admits only that machine's keys and name, refused before the burn otherwise; `pen identity --json` prints a machine's
+  keys before it joins; bound invites carry a caller's mintId and are kept as `burned` or `cancelled` entries, and control op
+  `invite.cancel` cancels one by id or mintId, or fences a mintId before its create. A mint carries an absolute `expiresAt`,
+  an expired bound invite stays as an `expired` entry, `invite.status` reads an entry and the admit its nonce produced,
+  and `invite.ack` forgets a settled one.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.

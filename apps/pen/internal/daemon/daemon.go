@@ -333,6 +333,13 @@ func (d *Daemon) mesh() *mesh.Store {
 	return d.store
 }
 
+// meshAndBook is the current store and invite book, read together so a mesh replacement cannot come between them.
+func (d *Daemon) meshAndBook() (*mesh.Store, *mesh.Invites) {
+	d.meshMu.RLock()
+	defer d.meshMu.RUnlock()
+	return d.store, d.invites
+}
+
 func (d *Daemon) view() *mesh.View { return d.mesh().View() }
 
 func (d *Daemon) inviteBook() *mesh.Invites {

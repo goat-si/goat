@@ -27,6 +27,7 @@ const usage = `usage: pen <command> [flags]
   down                                    stop this node
   invite [--ttl 10m] [--auto]             print a single-use join token
   join <token> [--name N]                 join the mesh a token invites to
+  identity [--json]                       make this node's keys without joining and print them (pen join keeps them)
   login [--relay URL]... [--name N] [--yes]   sign in with Google: found and bind a mesh, or join the account's mesh
   logout                                  forget this node at the login service (it stays in its mesh)
   lock on|off                             make machines that sign in wait for pen approve
@@ -54,7 +55,7 @@ type verb func(args []string, stdout, stderr io.Writer) int
 func main() {
 	cli.Version, cli.ServiceUnit, cli.LaunchdPlist, cli.TaskXML = version, serviceUnit, launchdPlist, taskXML
 	verbs := map[string]verb{
-		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "ls": cli.RunLs,
+		"up": cli.RunUp, "down": cli.RunDown, "invite": cli.RunInvite, "join": cli.RunJoin, "identity": cli.RunIdentity, "ls": cli.RunLs,
 		"revoke": cli.RunRevoke, "leave": cli.RunLeave, "pipe": cli.RunPipe, "forward": cli.RunForward,
 		"ssh-config": cli.RunSSHConfig, "relay": cli.RunRelay,
 		"login": cli.RunLogin, "logout": cli.RunLogout, "lock": cli.RunLock, "approve": cli.RunApprove,
