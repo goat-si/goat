@@ -152,8 +152,9 @@ export const penConfigHosts = (config: string) =>
 export const penHostOption = (config: string, alias: string, option: "User" | "ProxyCommand") => {
   let inBlock = false;
   for (const line of config.split(/\r?\n/u)) {
-    const host = /^Host\s+(\S+)\s*$/u.exec(line.trim());
-    if (host !== null) inBlock = host[1] === alias;
+    // Any Host or Match line ends a block; only a Host line naming exactly the alias opens one.
+    const section = /^(Host|Match)\s+(.*)$/iu.exec(line.trim());
+    if (section !== null) inBlock = section[1] === "Host" && section[2]?.trim() === alias;
     else if (inBlock) {
       const value = new RegExp(`^${option}\\s+(\\S.*)$`, "u").exec(line.trim())?.[1];
       if (value !== undefined) return value;

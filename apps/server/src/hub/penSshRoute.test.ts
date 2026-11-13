@@ -86,6 +86,23 @@ describe("Pen's exact per-node route", () => {
     expect(penHostOption(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz", "User")).toBeUndefined();
     expect(penHostOption(config, "pen-missing", "User")).toBeUndefined();
   });
+
+  // Pen's fallback is `Host pen-* "!*'*"` (two patterns); a Match line ends a block as well.
+  it("never reads an option from the block or Match section after the alias's block", () => {
+    const config = [
+      "Host pen-zzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "    ProxyCommand '/p/pen' pipe --node zzzzzzzzzzzzzzzzzzzzzzzzzz --noise " + NOISE + " 22",
+      'Host pen-* "!*\'*"',
+      "    User fallback",
+      "    ProxyCommand '/p/pen' pipe '%n' 22",
+      "Host pen-" + NODE,
+      "    ProxyCommand '/p/pen' pipe --node " + NODE + " --noise " + NOISE + " 22",
+      "Match host pen-*",
+      "    User matched",
+    ].join("\n");
+    expect(penHostOption(config, "pen-zzzzzzzzzzzzzzzzzzzzzzzzzz", "User")).toBeUndefined();
+    expect(penHostOption(config, "pen-" + NODE, "User")).toBeUndefined();
+  });
   it("accepts any confirmed binary name in Pen's block", () => {
     const renamed = exact.replace("/home/u/.local/bin/pen", "/opt/bin/pen-v1");
     expect(penExactRoute(settings(renamed), node)).toBe(renamed);
