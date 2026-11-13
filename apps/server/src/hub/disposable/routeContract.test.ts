@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../../processRunner.ts";
 import { sshSettings } from "../penSshRoute.ts";
@@ -98,7 +99,10 @@ it.live(
         permitlocalcommand: "no",
         batchmode: "yes",
       });
-    }).pipe(Effect.scoped, Effect.provide(ProcessRunner.layer), Effect.provide(NodeServices.layer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
 );
 
 it.effect("the private known_hosts names the node's alias and its one recorded key", () =>

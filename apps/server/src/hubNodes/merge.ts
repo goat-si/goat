@@ -7,6 +7,7 @@ import type {
 } from "@goat/contracts";
 import type { LinkedHost } from "../linkedHosts/LinkedHosts.ts";
 import type { CloudMachineService } from "../cloudMachines/CloudMachineService.ts";
+import { type DisposableRecord, disposableClasses } from "../hub/disposable/disposableClass.ts";
 import type { Registration, RouteState } from "./HubNodeRepository.ts";
 import type * as Effect from "effect/Effect";
 
@@ -19,7 +20,10 @@ export function mergeHubNodes(input: {
   readonly cloud: CloudCatalog;
   readonly routeState: ReadonlyArray<RouteState>;
   readonly notices: ReadonlyArray<HubNodeNotice>;
+  /** Disposable machine records; a node none of them matches is kept. */
+  readonly disposable: ReadonlyArray<DisposableRecord>;
 }): HubNodesSnapshot {
+  const classes = disposableClasses(input.disposable);
   const states = new Map(input.routeState.map((row) => [row.routeId, row]));
   const groups = new Map<
     string,
@@ -103,6 +107,7 @@ export function mergeHubNodes(input: {
       )[0];
     const fallback =
       first.route.target.kind === "linked" ? first.route.target.name : first.route.target.alias;
+    const machineClass = classes.forNode({ environmentId: first.environmentId, routes });
     nodes.push({
       nodeId,
       environmentId: first.environmentId,
@@ -120,6 +125,7 @@ export function mergeHubNodes(input: {
           .sort()
           .at(-1) ?? null,
       addedBy: registration?.addedBy ?? null,
+      ...(machineClass === undefined ? {} : { machineClass }),
     });
   }
   nodes.sort((a, b) => a.label.localeCompare(b.label) || a.nodeId.localeCompare(b.nodeId));

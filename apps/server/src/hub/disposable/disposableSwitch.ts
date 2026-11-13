@@ -5,8 +5,6 @@ import { DISPOSABLE_SWITCH_DAYS, type HubSettings, type ServerSettings } from "@
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 // Everything the person consented to, with the hub switch: a change to any of it is a new consent.
 const consent = (hub: HubSettings) => {
   const { enabled, provisioners, cap, nameRule, expiresAt } = hub.attachDisposableMachines;
@@ -17,7 +15,7 @@ const consent = (hub: HubSettings) => {
  * Gives the switch a new grantId whenever the person's consent changes, and an expiry 30 days
  * ahead when it is on without a future one. Every settings write that applies a patch runs it.
  */
-export const stampDisposableSwitch = (
+const stampDisposableSwitch = (
   current: ServerSettings,
   next: ServerSettings,
 ): Effect.Effect<ServerSettings> =>
@@ -26,11 +24,11 @@ export const stampDisposableSwitch = (
     : DateTime.now.pipe(
         Effect.map((now): ServerSettings => {
           const value = next.hub.attachDisposableMachines;
-          const nowMs = DateTime.toEpochMillis(now);
-          const expired = value.expiresAt === null || Date.parse(value.expiresAt) <= nowMs;
+          const expired =
+            value.expiresAt === null || Date.parse(value.expiresAt) <= DateTime.toEpochMillis(now);
           const expiresAt =
             value.enabled && expired
-              ? new Date(nowMs + DISPOSABLE_SWITCH_DAYS * DAY_MS).toISOString()
+              ? DateTime.formatIso(DateTime.add(now, { days: DISPOSABLE_SWITCH_DAYS }))
               : value.expiresAt;
           return {
             ...next,

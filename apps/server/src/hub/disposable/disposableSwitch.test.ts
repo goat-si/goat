@@ -5,6 +5,7 @@ import {
   HubSettings,
   type ServerSettingsPatch,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -16,6 +17,7 @@ import { layerServerSettings } from "../../serverSettingsLayers.testkit.ts";
 import { disposableSwitch } from "./disposableSwitch.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const iso = (days: number) => DateTime.formatIso(DateTime.makeUnsafe(days * DAY_MS));
 const decodeHub = Schema.decodeUnknownEffect(HubSettings);
 
 it.effect("the switch is off with no provisioners, cap 10 and the default name rule", () =>
@@ -47,7 +49,7 @@ it.effect("every change to the switch writes a new grant to disk; other changes 
     });
     expect(on.grantId).toEqual(expect.any(String));
     // The test clock starts at 0, so the default expiry is 30 days after the epoch.
-    expect(on.expiresAt).toBe(new Date(30 * DAY_MS).toISOString());
+    expect(on.expiresAt).toBe(iso(30));
     const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
     expect(onDisk.hub.attachDisposableMachines.grantId).toBe(on.grantId);
 
@@ -56,7 +58,7 @@ it.effect("every change to the switch writes a new grant to disk; other changes 
       { hub: { attachDisposableMachines: { cap: 3 } } },
       { hub: { attachDisposableMachines: { nameRule: "^cc-[0-9]+$" } } },
       { hub: { attachDisposableMachines: { provisioners: ["thread-a" as never] } } },
-      { hub: { attachDisposableMachines: { expiresAt: new Date(5 * DAY_MS).toISOString() } } },
+      { hub: { attachDisposableMachines: { expiresAt: iso(5) } } },
       { hub: { enabled: false } },
       { hub: { enabled: true } },
     ] satisfies ReadonlyArray<ServerSettingsPatch>) {
@@ -79,7 +81,7 @@ it.effect("the switch admits work only while on, unexpired and holding its grant
       enabled: true,
       attachDisposableMachines: {
         enabled: true,
-        expiresAt: new Date(10 * DAY_MS).toISOString(),
+        expiresAt: iso(10),
         grantId: "g1",
       },
     });

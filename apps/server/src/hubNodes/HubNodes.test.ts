@@ -25,8 +25,15 @@ import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import migration from "../persistence/Migrations/106_HubNodes.ts";
+import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
+
+const noDisposableMachines = DisposableMachineStore.DisposableMachineStore.of({
+  records: Effect.succeed([]),
+  recordsOrKept: Effect.succeed([]),
+  commitForward: () => Effect.die("no disposable machine commits in hub node tests"),
+});
 
 const hub = EnvironmentId.make("env-hub");
 const remote = EnvironmentId.make("env-box");
@@ -243,6 +250,7 @@ const fixture = Effect.gen(function* () {
   });
   const service = yield* HubNodes.make.pipe(
     Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
+    Effect.provideService(DisposableMachineStore.DisposableMachineStore, noDisposableMachines),
     Effect.provideService(LinkedHosts.LinkedHosts, linked),
     Effect.provideService(CloudMachineService.CloudMachineService, cloud),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),

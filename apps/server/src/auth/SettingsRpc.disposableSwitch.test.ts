@@ -42,7 +42,7 @@ it.effect("only a person's session changes the disposable machines switch", () =
       expect(
         yield* asPerson({
           patch: turnOn,
-          providerInstanceMutation: { kind: "remove", instanceId: "codex" as never },
+          providerInstanceMutation: { operation: "remove", instanceId: "codex" as never },
         }).pipe(Effect.isFailure),
       ).toBe(true);
       expect(yield* enabled).toBe(false);
