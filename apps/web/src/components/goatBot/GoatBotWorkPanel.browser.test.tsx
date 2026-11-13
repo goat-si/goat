@@ -841,9 +841,9 @@ it("bounds empty history requests per press and lets the person continue", async
   mocks.readHistory.mockResolvedValueOnce(historyPage([], {}));
   await using screen = await render(historyPanel());
   await userEvent.click(showMore(screen));
-  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(4));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(4);
   await userEvent.click(showMore(screen));
-  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(5));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(5);
   expect(mocks.readHistory.mock.calls[4]?.[0].input.history.cursor).toBe("cursor-4");
 });
 
@@ -853,7 +853,7 @@ it("falls back to current work when the server omits the history marker", async 
   mocks.readHistory.mockResolvedValue(historyPage([], undefined));
   await using screen = await render(historyPanel());
   await userEvent.click(showMore(screen));
-  await vi.waitFor(() => expect(mocks.readHistory).toHaveBeenCalledTimes(1));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(1);
   await expect.element(screen.getByText("Stop the port 3774 server")).toBeVisible();
   expect(screen.container.textContent?.toLowerCase()).not.toContain("all work loaded");
   expect(
