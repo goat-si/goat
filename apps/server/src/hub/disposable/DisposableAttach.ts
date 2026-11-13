@@ -154,6 +154,9 @@ class NotNamed extends Data.TaggedError("NotNamed")<{}> {}
 /** Pen is asked by invite id once GOAT knows it, so a lost entry never reads as a fresh fence. */
 const refOf = (effect: AttachEffect): PenInviteRef =>
   effect.inviteId === undefined ? { mintId: effect.id } : { inviteId: effect.inviteId };
+/** The goatclaw policy a grant was resolved from is the one in force. */
+const samePolicy = (a: ServerSettings, b: ServerSettings) =>
+  JSON.stringify(a.goatclaw) === JSON.stringify(b.goatclaw);
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,
@@ -333,8 +336,7 @@ export const make = Effect.gen(function* () {
     if (!gate.open) return gate.reason;
     if (gate.grant !== row.grant_id) return "switch_off" as const;
     if (unnamed(row, current)) return "provisioner_refused" as const;
-    if (JSON.stringify(current.goatclaw) !== JSON.stringify(before.goatclaw))
-      return "delegation_lost" as const;
+    if (!samePolicy(current, before)) return "delegation_lost" as const;
     return undefined;
   };
   /** The last check before a token leaves: the grant now, then the switch under the lock. */
@@ -561,6 +563,9 @@ export const make = Effect.gen(function* () {
           expiresAtMs: (yield* Clock.currentTimeMillis) + INVITE_LIFETIME_MS,
         };
         // The grant is read before the settings lock: resolving it goes through the settings service.
+        // Under the lock, the goatclaw policy it was resolved from must be unchanged.
+        const atGrant = yield* settingsNow;
+        if (atGrant === undefined) return yield* storageFailed();
         const delegation = yield* provisioners.grantOf(caller.provisioner, nodeId);
         if (delegation === undefined)
           return yield* fail(
@@ -571,11 +576,9 @@ export const make = Effect.gen(function* () {
           .withSettingsSnapshot((current) =>
             Effect.gen(function* () {
               const value = current.hub.attachDisposableMachines;
-              if (
-                caller.provisioner.kind === "thread" &&
-                !value.provisioners.includes(caller.provisioner.threadId as never)
-              )
+              if (thread !== undefined && !value.provisioners.some((id) => id === thread))
                 return "provisioner_refused" as const;
+              if (!samePolicy(current, atGrant)) return "delegation_lost" as const;
               if (!matchesDisposableNameRule(value.nameRule, input.name))
                 return "name_rule" as const;
               return yield* sql.withTransaction(
@@ -627,6 +630,7 @@ export const make = Effect.gen(function* () {
               switch_expired: "Attach disposable machines has expired on this hub.",
               provisioner_refused:
                 "This caller is not named in Attach disposable machines or lacks hub.manage for this machine.",
+              delegation_lost: refusalText.delegation_lost,
               name_rule: "The name does not match the switch's name rule.",
               key_in_use: "Another attach already holds these keys.",
               cap_reached: "The switch's cap of disposable machines is reached.",

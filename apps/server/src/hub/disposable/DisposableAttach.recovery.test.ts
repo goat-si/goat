@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as Settings from "../../serverSettings.ts";
 import {
   attach,
   GRANT,
@@ -19,6 +20,7 @@ import {
   switchTo,
   world,
 } from "./DisposableAttach.testkit.ts";
+import { withPersonConsent } from "./disposableSwitch.ts";
 
 const attachIdOf = Effect.map(rows, (all) => String(all[0]?.attach_id));
 const liveMints = (book: ReadonlyMap<string, { state: string }>) =>
@@ -334,6 +336,27 @@ it.effect("a settlement whose fence moved stores nothing and acks nothing", () =
       yield* Fiber.join(settling);
       expect(pen.control.acked).toEqual([]);
       expect((yield* rows)[0]?.state).toBe("invited");
+    }),
+  ),
+);
+
+// The grant is resolved from the goatclaw policy outside the settings lock; under it, that policy
+// must still be the one the grant came from, for the first mint as for a reissue.
+it.effect("a goatclaw policy change while the grant resolves refuses the first mint", () =>
+  world((pen, _home, grant) =>
+    Effect.gen(function* () {
+      grant.gate = yield* Deferred.make<void>();
+      grant.reached = yield* Deferred.make<void>();
+      grant.gateOnCall = 1;
+      const attaching = yield* attach(1).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(grant.reached);
+      const settings = yield* Settings.ServerSettingsService;
+      yield* withPersonConsent(settings.updateSettings({ goatclaw: { enabled: true } }));
+      yield* Deferred.succeed(grant.gate, undefined);
+      const outcome = yield* Fiber.join(attaching);
+      expect(outcome._tag === "Failure" && outcome.failure.reason).toBe("delegation_lost");
+      expect(pen.book.size).toBe(0);
+      expect(yield* rows).toEqual([]);
     }),
   ),
 );
