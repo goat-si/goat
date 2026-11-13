@@ -86,8 +86,6 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
   fallback: ForwardCompatibleOptional(OpenCodexDeviceFallback),
   /** An ocx call outlasted the inventory's bound, so what it would have filled is unknown. */
   slow: ForwardCompatibleOptional(Schema.Literal(true)),
-  /** No inventory has completed; the placeholder's role is not evidence of a standalone host. */
-  notReadYet: ForwardCompatibleOptional(Schema.Literal(true)),
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;
 

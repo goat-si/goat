@@ -173,10 +173,7 @@ const make = Effect.gen(function* () {
         const metrics = sample?.reachability === "ok" ? sample.metrics : undefined;
         if (metrics === undefined) return false;
         const opencodex = metrics.opencodex;
-        if (
-          opencodex !== undefined &&
-          (opencodex.notReadYet || opencodex.link.role !== "none" || opencodex.hubClient)
-        )
+        if (opencodex !== undefined && (opencodex.link.role !== "none" || opencodex.hubClient))
           return false;
         return (metrics.providers ?? metrics.quotas).some(
           (provider) =>

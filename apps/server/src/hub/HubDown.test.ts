@@ -9,7 +9,6 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { HostHealthMonitor } from "../fleet/health/HostHealthMonitor.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -62,7 +61,6 @@ const child = (
 
 interface Fake {
   current: OpenCodexInventorySnapshot;
-  remote?: OpenCodexInventorySnapshot;
   parityReads: number;
   readonly commands: Array<OrchestrationV2ServerCommand>;
 }
@@ -98,26 +96,6 @@ const layerFor = (fake: Fake, localFallback = true) => {
             provider(own, "https://api.openai.com/v1"),
           ]),
         }),
-        Layer.mock(HostHealthMonitor)({
-          known: Effect.sync(() =>
-            fake.remote === undefined
-              ? []
-              : [
-                  {
-                    host: "remote",
-                    sample: {
-                      host: "remote",
-                      reachability: "ok",
-                      metrics: {
-                        opencodex: fake.remote,
-                        providers: [{ driver: "codex", enabled: true }],
-                        quotas: [],
-                      },
-                    } as never,
-                  },
-                ],
-          ),
-        }),
         Layer.succeed(HostProcess.Hostname, "macmini-ts"),
       ),
     ),
@@ -148,46 +126,6 @@ const pausedWork = (goalId: string, message: string): PausedGoalWork => ({
 });
 
 describe("HubDown", () => {
-  it.effect.each([
-    {
-      name: "unread",
-      remote: {
-        ...child(503),
-        link: { role: "none" as const, available: false, links: [], childSettingsApplied: null },
-        slow: true as const,
-        notReadYet: true as const,
-      },
-      offered: false,
-    },
-    {
-      name: "confirmed standalone",
-      remote: {
-        ...child(503),
-        link: { role: "none" as const, available: false, links: [], childSettingsApplied: null },
-      },
-      offered: true,
-    },
-    {
-      name: "slow confirmed standalone",
-      remote: {
-        ...child(503),
-        link: { role: "none" as const, available: false, links: [], childSettingsApplied: null },
-        slow: true as const,
-      },
-      offered: true,
-    },
-    { name: "linked", remote: child(503), offered: false },
-  ])("only offers confirmed standalone hosts: $name", ({ remote, offered }) => {
-    const fake = makeFake(child(503));
-    fake.remote = remote;
-    return Effect.gen(function* () {
-      const hub = yield* HubDown;
-      const inbox = yield* Inbox.DecisionInbox;
-      yield* hub.settle([pausedWork("goal", "waiting")]);
-      const decisions = (yield* inbox.list(owner, { status: "open" })).items;
-      expect(decisions[0]?.options.some((option) => option.id === "move:remote")).toBe(offered);
-    }).pipe(Effect.provide(layerFor(fake)));
-  });
   it.effect(
     "files one decision while goal work is paused and withdraws it once the Home answers",
     () => {
