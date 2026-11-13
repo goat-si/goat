@@ -66,16 +66,19 @@ export function useMobileBotWorkHistory(input: {
       written: UNWRITTEN,
     }));
   const walk = held.scope === scope ? held.walk : EMPTY_WALK;
-  // Going offline moves the epoch, ending any press started before it; that press stops counting
-  // as busy, so a reconnect can press again.
-  const [wasEnabled, setWasEnabled] = useState(enabled);
-  if (wasEnabled !== enabled) {
-    setWasEnabled(enabled);
-    if (!enabled)
+  // Losing the computer or its paged history moves the epoch, ending any press started before it
+  // before its next request. The press stops counting as busy and the failure notice goes, since
+  // nothing can be retried until Show more returns.
+  const paged = botThreadsHistoryInput(input.capabilities, botId) !== null;
+  const reachable = enabled && paged;
+  const [wasReachable, setWasReachable] = useState(reachable);
+  if (wasReachable !== reachable) {
+    setWasReachable(reachable);
+    if (!reachable)
       setHeld((state) => ({
         ...state,
         epoch: state.epoch + 1,
-        walk: state.walk.loading ? { ...state.walk, loading: false } : state.walk,
+        walk: { ...state.walk, loading: false, failed: false },
       }));
   }
   type Press = { readonly id: number; readonly epoch: number };
@@ -101,7 +104,7 @@ export function useMobileBotWorkHistory(input: {
     botId,
     loaded: input.loaded && enabled,
   });
-  const hasMore = view.hasMore && botThreadsHistoryInput(input.capabilities, botId) !== null;
+  const hasMore = view.hasMore && paged;
   if (held.scope === scope && view.reported !== held.written) {
     const id = held.id;
     setHeld((state) =>

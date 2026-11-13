@@ -443,6 +443,57 @@ it("says a read mark is this Home's only while mounted and for its own computer 
   expect(late("env:bot", "a" as never, at(5))).toBe(false);
 });
 
+const unpaged = { goatBotTaskThreadsPaged: false } as Props["capabilities"];
+
+it("ends a press when the computer stops offering paged history while its first page is pending", async () => {
+  setup();
+  await show();
+  await press();
+  await show({ capabilities: unpaged });
+  await net.calls[0]?.answer(page([task("a")], "c1"));
+  expect(net.calls).toHaveLength(1);
+  expect(view().failed).toBe(false);
+  expect(view().loading).toBe(false);
+  expect(view().hasMore).toBe(false);
+  expect(titles()).toEqual(["now"]);
+});
+
+it("ends a press when the computer stops offering paged history while a later page is pending, keeping read rows", async () => {
+  setup();
+  await show();
+  await press();
+  await net.calls[0]?.answer(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
+  await press();
+  await net.calls[1]?.answer(page([task("f")], "c2"));
+  expect(net.calls).toHaveLength(3);
+  await show({ capabilities: unpaged });
+  await net.calls[2]?.answer(page([task("g")], "c3"));
+  expect(net.calls).toHaveLength(3);
+  expect(view().failed).toBe(false);
+  expect(view().loading).toBe(false);
+  expect(view().hasMore).toBe(false);
+  expect(titles()).toEqual(["now", "a", "b", "c", "d", "e"]);
+  await show();
+  expect(view().hasMore).toBe(true);
+});
+
+it("going offline clears the failure notice, also when the failure lands in the same batch", async () => {
+  setup();
+  await show();
+  await press();
+  await net.calls[0]?.fail();
+  expect(view().failed).toBe(true);
+  await show({ enabled: false });
+  expect(view().failed).toBe(false);
+  await show();
+  await press();
+  await act(async () => {
+    net.calls[1]?.settleFail();
+    root?.render(<Probe {...base} enabled={false} />);
+  });
+  expect(view().failed).toBe(false);
+});
+
 it("a late mark for earlier activity reads the task through that activity only", async () => {
   setup();
   await show();
