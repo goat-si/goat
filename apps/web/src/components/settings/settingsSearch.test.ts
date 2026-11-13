@@ -128,6 +128,13 @@ describe("searchSettings", () => {
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
   });
 
+  it("finds the Scheduled tasks page", () => {
+    expect(searchSettings("scheduled tasks")[0]).toMatchObject({
+      id: "scheduled-tasks",
+      to: "/settings/scheduled-tasks",
+    });
+  });
+
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("glass").map((item) => item.id)).toContain("setting-glass-opacity");
