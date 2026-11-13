@@ -17,9 +17,13 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnabled } from "./useGoatBotSession";
 
-const useCounts = create<{ counts: ReadonlyMap<EnvironmentId, number> }>(() => ({
-  counts: new Map(),
-}));
+const useCounts = create<{
+  counts: ReadonlyMap<EnvironmentId, number>;
+  status: ReadonlyMap<
+    EnvironmentId,
+    { generation: number; port: GoatBotChannelPort; count: number | undefined }
+  >;
+}>(() => ({ counts: new Map(), status: new Map() }));
 const observers = new Map<
   EnvironmentId,
   {
@@ -132,11 +136,21 @@ export function useGoatBotWaitingCount() {
           if (result.bot !== null) rememberGoatBotFromStatus(result.bot, seenAtRequest);
           useCounts.setState((state) => ({
             counts: new Map(state.counts).set(environmentId, result.count),
+            status: supportsStatus
+              ? new Map(state.status).set(environmentId, { generation, port, count: result.count })
+              : state.status,
           }));
         };
         void readWaiting()
           .catch(() => {
-            // Keep the previous complete result, including an unknown first result.
+            if (!alive || !supportsStatus) return;
+            useCounts.setState((state) => ({
+              status: new Map(state.status).set(environmentId, {
+                generation,
+                port,
+                count: undefined,
+              }),
+            }));
           })
           .finally(() => {
             pending = false;
@@ -156,6 +170,13 @@ export function useGoatBotWaitingCount() {
         refresh,
         dispose: () => {
           alive = false;
+          useCounts.setState((state) => {
+            const status = new Map(state.status);
+            const prior = status.get(environmentId);
+            if (prior?.port === port && prior.generation === generation)
+              status.delete(environmentId);
+            return { status };
+          });
           window.clearInterval(interval);
           window.removeEventListener("focus", refresh);
         },
@@ -174,6 +195,38 @@ export function useGoatBotWaitingCount() {
     };
   }, [enabled, connected, environmentId, port, generation, supportsStatus]);
   return enabled && connected ? count : undefined;
+}
+
+/** The sidebar needs visit-aware status, while older servers keep their legacy count. */
+export function useGoatBotSidebarWaiting() {
+  const legacy = useGoatBotWaitingCount();
+  const { enabled, environment, generation, port } = useGoatBotEnabled();
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const environmentId = environment?.environmentId ?? null;
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const h2 =
+    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
+  const status = useCounts((values) =>
+    environmentId === null ? undefined : values.status.get(environmentId),
+  );
+  if (!h2) return { environmentId, h2, count: legacy, state: "ready" as const };
+  if (
+    !enabled ||
+    environment?.connected !== true ||
+    capabilities?.goatBotStatus !== true ||
+    capabilities.goatBotWaitingRead !== true ||
+    capabilities.threadVisitedTracking !== true
+  )
+    return { environmentId, h2, count: undefined, state: "unavailable" as const };
+  if (status === undefined || status.generation !== generation || status.port !== port)
+    return { environmentId, h2, count: undefined, state: "pending" as const };
+  return {
+    environmentId,
+    h2,
+    count: status.count,
+    state: status.count === undefined ? ("unavailable" as const) : ("ready" as const),
+  };
 }
 
 /** Chip updates while the bot screen is open also refresh the sidebar's shared count. */

@@ -21,6 +21,15 @@ const state = vi.hoisted(() => ({
   detailCalls: vi.fn(),
   shellVisitedAt: "2026-10-12T12:00:00.000Z" as string | null | undefined,
   waiting: 2,
+  h2: false,
+  connected: true,
+  sidebarCount: undefined as number | undefined,
+  sidebarState: "pending" as "pending" | "ready" | "unavailable",
+  work: {
+    eligible: true,
+    list: "ready",
+    work: { running: [] as Array<{ row: { unread: boolean } }>, waiting: [], finished: [] },
+  },
 }));
 const listeners = new Set<() => void>();
 let version = 0;
@@ -70,8 +79,42 @@ vi.mock("./GoatBotModeButton", () => ({
 vi.mock("./useGoatBotHome", () => ({ useGoatBotHome: () => undefined }));
 vi.mock("./useGoatBotWaitingCount", () => ({
   useGoatBotWaitingCount: () => state.waiting,
+  useGoatBotSidebarWaiting: () => ({
+    environmentId: state.botRef?.environmentId ?? null,
+    h2: state.h2,
+    count: state.sidebarCount,
+    state: state.sidebarState,
+  }),
   useMarkGoatBotRead: () => null,
 }));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironment: () => ({
+    connection: { phase: state.connected ? "connected" : "disconnected" },
+    serverConfig: {
+      environment: {
+        capabilities: { goatBotTaskThreadsPaged: state.h2, goatBotTaskLookupSearch: state.h2 },
+      },
+    },
+  }),
+}));
+vi.mock("~/state/channels", async (original) => ({
+  ...(await original<typeof import("~/state/channels")>()),
+  channelEnvironment: { homeCurrentOpenableWorkAtom: () => "main-work" },
+}));
+vi.mock("@effect/atom-react", async (original) => {
+  const actual = await original<typeof import("@effect/atom-react")>();
+  return {
+    ...actual,
+    useAtomValue: (atom: unknown) => {
+      if (atom === "main-work") {
+        useTick();
+        return state.work;
+      }
+      return actual.useAtomValue(atom as never);
+    },
+  };
+});
 vi.mock("./goatBotChannelPort", async () => {
   const React = await import("react");
   return { GoatBotChannelContext: React.createContext(null) };
@@ -160,6 +203,11 @@ beforeEach(() => {
   state.active = false;
   state.shellVisitedAt = "2026-10-12T12:00:00.000Z";
   state.waiting = 2;
+  state.h2 = false;
+  state.connected = true;
+  state.sidebarCount = undefined;
+  state.sidebarState = "pending";
+  state.work = { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
   state.detailCalls.mockClear();
   container = document.createElement("div");
   document.body.append(container);
@@ -302,4 +350,36 @@ it("the main row says waiting once, with the count", async () => {
   const link = screen.getByRole("link", { name: /^2 waiting for you\s*GOAT Bot/ });
   await expect.element(link).toBeVisible();
   await expect.element(link).not.toHaveAccessibleName(/waiting[\s\S]*waiting/i);
+});
+
+it("main row keeps chat unread separate and reflects current-work availability", async () => {
+  state.h2 = true;
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  state.sidebarCount = 1;
+  state.sidebarState = "ready";
+  state.work = {
+    eligible: true,
+    list: "ready",
+    work: { running: [{ row: { unread: true } }], waiting: [], finished: [] },
+  };
+  state.items = [projectedBot("b1", "2026-10-12T12:02:00.000Z", "New chat")];
+  // The mocked router isolates the sidebar row.
+  await using screen = await render(<GoatBotSidebarRow />, { router: false });
+  await expect
+    .element(screen.getByLabelText(/1 unread task.*recent work only; older work may be missing/i))
+    .toBeVisible();
+  await expect.element(screen.getByText(/GOAT Bot, unread/)).toBeVisible();
+  await expect.element(screen.getByRole("img", { name: "1 waiting for you" })).toBeVisible();
+  expect(screen.getByRole("img", { name: "2 waiting for you" }).query()).toBeNull();
+  state.work = { ...state.work, list: "failed" };
+  await act(() => notify());
+  await expect.element(screen.getByLabelText("Unread unavailable")).toBeVisible();
+  state.work = { ...state.work, list: "pending" };
+  state.sidebarCount = undefined;
+  state.sidebarState = "pending";
+  await act(() => notify());
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+  state.sidebarState = "unavailable";
+  await act(() => notify());
+  await expect.element(screen.getByLabelText("waiting unavailable")).toBeVisible();
 });
