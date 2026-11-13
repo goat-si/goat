@@ -776,12 +776,16 @@ it.effect(
   () => {
     const { machine, harness } = placementHarness();
     return Effect.gen(function* () {
+      const writes = yield* taskWriteMilestones();
       const race = yield* secondDispatchBehindPlacement(machine, "placement-race-claimed");
       yield* race.placementEnds;
+      // The remote launch runs in its own fiber: wait until it recorded its attempt and bound.
+      yield* writes.waitFor(
+        (task, state) => task.status === "running" && (state?.attempts ?? 0) > 0,
+      );
       yield* race.release;
       succeeded(yield* Fiber.await(race.second));
-      const writes = yield* taskWriteMilestones();
-      yield* writes.waitFor((task) => task.status === "running");
+      assert.strictEqual((yield* onlyTask).status, "running");
       assert.deepStrictEqual(yield* failedEvents, []);
       assert.lengthOf(machine.launches, 1);
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
@@ -818,10 +822,14 @@ it.effect(
       const placements = trackPlacements();
       yield* placements.observe(dispatcher.dispatch(task.taskId, "placement-owner"));
       yield* placements.settled;
+      // The launch fiber records the attempt before the host call and, once the answer is lost,
+      // ends reading only the task (ChannelRemoteWorkers launchOnce), so the hold below is ours.
+      yield* Deferred.await(machine.launchAnswerLost);
       assert.strictEqual((yield* onlyTask).status, "dispatching");
       // The recorded attempt now names another machine than the claim: attempted elsewhere.
       const sql = yield* SqlClient.SqlClient;
       yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.host', 'other-box') WHERE key = ${"remote-worker:" + task.taskId}`;
+      assert.include(yield* ledger.getRemoteWorker(task.taskId), '"host":"other-box"');
       const state = yield* holdNextLedgerCall("getRemoteWorker");
       const third = yield* Effect.forkChild(dispatcher.dispatch(task.taskId, "placement-owner"));
       yield* state.reached;
