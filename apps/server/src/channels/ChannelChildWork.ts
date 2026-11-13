@@ -34,6 +34,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -59,6 +60,8 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 
 /** At most this many active coding threads per channel task. */
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
+/** Settled remote launches given back their acknowledged thread in one reconcile pass. */
+export const REMOTE_THREAD_REPAIRS_PER_PASS = 20;
 
 const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
   surface === "delegate_local" || surface === "delegate_remote"
@@ -708,6 +711,32 @@ const make = Effect.gen(function* () {
     return false;
   });
 
+  // A remote launch that settled before its bind kept no thread, and the pass above only visits
+  // active records; its dispatch row still holds the thread the host acknowledged. Pages walk the
+  // keys and wrap, so a row that cannot be filled never holds back the ones after it.
+  const repairCursor = yield* Ref.make("");
+  const repairSettledLaunches = Effect.gen(function* () {
+    const after = yield* Ref.get(repairCursor);
+    const page = yield* store.listUnthreadedSettledLaunches(after, REMOTE_THREAD_REPAIRS_PER_PASS);
+    const last = page.at(-1);
+    yield* Ref.set(
+      repairCursor,
+      page.length < REMOTE_THREAD_REPAIRS_PER_PASS || last === undefined ? "" : last.key,
+    );
+    let filled = 0;
+    for (const { record, remoteThreadId } of page) {
+      const correlationId = record.destination?.correlationId;
+      if (correlationId === undefined || !isThreadId(remoteThreadId)) continue;
+      const fill = { ...record, correlationId, threadId: remoteThreadId };
+      if (yield* store.fillSettledLaunchThread(fill)) filled += 1;
+    }
+    return filled;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("settled remote launches not repaired", { cause }).pipe(Effect.as(0)),
+    ),
+  );
+
   const reconcile = Effect.gen(function* () {
     const active = yield* store
       .listActive()
@@ -733,7 +762,7 @@ const make = Effect.gen(function* () {
       );
       if (changed) settled += 1;
     }
-    return settled;
+    return settled + (yield* repairSettledLaunches);
   }).pipe(Effect.withSpan("ChannelChildWork.reconcile"));
 
   return ChannelChildWork.of({
