@@ -174,7 +174,8 @@ export function MobileBotWork(props: {
   const [sheet, setSheet] = useState({ open, generation: 0 });
   if (sheet.open !== open)
     setSheet({ open, generation: open ? sheet.generation + 1 : sheet.generation });
-  const historyScope = JSON.stringify([workScope, member?.botId ?? null, sheet.generation]);
+  // Pages belong to one opening of Home; an accepted read mark to the computer and bot alone.
+  const workOwner = JSON.stringify([workScope, member?.botId ?? null]);
   const history = useMobileBotWorkHistory({
     environmentId,
     botId: member?.botId ?? null,
@@ -182,14 +183,15 @@ export function MobileBotWork(props: {
     current: props.taskId ? null : listData,
     loaded: threads.successResult !== null,
     enabled: enabled && open && !props.taskId,
-    scope: historyScope,
+    scope: JSON.stringify([workOwner, sheet.generation]),
+    owner: workOwner,
   });
   useMobileHistoryAnnouncements(open && !props.taskId ? history : null);
   // Home lists older work with the current list; a task's own screen reads the current list only.
   const homeRows = props.taskId ? rows : history.rows;
   const homeRemote = props.taskId ? (listData?.remoteWork ?? []) : history.remoteWork;
   const [olderHome, setOlderHome] = useState<"open" | "closing" | null>(null);
-  const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android");
+  const afterOlderHome = useAfterSheetGone(props.visible, Platform.OS !== "android", workOwner);
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
   const childTaskId = props.taskId ?? peekTaskId;
@@ -404,7 +406,7 @@ export function MobileBotWork(props: {
     seen: (props.seen ?? props.visible) && enabled && canUpdate,
     task: task?.row ?? null,
     peek: open ? (peekEntry?.row ?? null) : null,
-    scope: history.walk,
+    scope: workOwner,
     // An older task's read-through goes into the walk it was sent from; the list rereads its own.
     onAcknowledged: (taskId, through, scope) => {
       history.markRead(scope, taskId, through);

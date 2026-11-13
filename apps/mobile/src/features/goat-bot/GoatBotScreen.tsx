@@ -729,7 +729,7 @@ export function GoatBotScreen(props: {
             taskTitle={props.taskTitle}
             taskCard={
               taskCard ? (
-                <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />
+                <GoatBotTaskRow card={taskCard.card} statusHidden onSelectThread={onSelectThread} />
               ) : null
             }
           />

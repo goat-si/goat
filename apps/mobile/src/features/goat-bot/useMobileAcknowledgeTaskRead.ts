@@ -67,7 +67,7 @@ export function useMobileHomeTaskReads(props: {
   /** The peeked task while the sheet shows it. */
   readonly peek: ReadRow | null;
   readonly onAcknowledged: (taskId: ChannelTaskId, readThrough: string, scope: string) => void;
-  /** The Home walk the peek belongs to; an acknowledgement settles into that walk only. */
+  /** The computer and bot the peek's Home shows; an accepted mark settles into its current walk. */
   readonly scope?: string | undefined;
 }) {
   const through = (row: ReadRow | null) => (props.seen && row?.unread ? row.lastActivityAt : null);

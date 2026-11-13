@@ -16,7 +16,7 @@ import type {
   EnvironmentId,
   ExecutionEnvironmentCapabilities,
 } from "@goat/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
@@ -41,28 +41,50 @@ export function useMobileBotWorkHistory(input: {
   readonly loaded: boolean;
   /** The computer is connected and lists this bot's tasks; offline nothing is read. */
   readonly enabled: boolean;
+  /** One opening of Home on one computer for one bot: pages belong to it. */
   readonly scope: string;
+  /** The computer and bot alone: an accepted read mark is a fact about them, whichever walk shows. */
+  readonly owner: string;
 }) {
-  const { environmentId, botId, enabled, scope } = input;
+  const { environmentId, botId, enabled, scope, owner } = input;
   const current = input.current ?? NO_LIST;
-  const [held, setHeld] = useState({ scope, id: 0, walk: EMPTY_WALK, written: UNWRITTEN });
+  const [held, setHeld] = useState({
+    scope,
+    owner,
+    id: 0,
+    epoch: 0,
+    walk: EMPTY_WALK,
+    written: UNWRITTEN,
+  });
   if (held.scope !== scope)
-    setHeld((state) => ({ scope, id: state.id + 1, walk: EMPTY_WALK, written: UNWRITTEN }));
+    setHeld((state) => ({
+      ...state,
+      scope,
+      owner,
+      id: state.id + 1,
+      walk: EMPTY_WALK,
+      written: UNWRITTEN,
+    }));
   const walk = held.scope === scope ? held.walk : EMPTY_WALK;
-  // Each time the computer goes offline the epoch moves, which ends any press started before it.
-  const [connection, setConnection] = useState({ enabled, epoch: 0 });
-  if (connection.enabled !== enabled) {
-    setConnection({ enabled, epoch: enabled ? connection.epoch : connection.epoch + 1 });
-    // The press that lost its computer stops counting as busy, so a reconnect can press again.
-    if (!enabled && held.walk.loading)
-      setHeld((state) => ({ ...state, walk: { ...state.walk, loading: false } }));
+  // Going offline moves the epoch, ending any press started before it; that press stops counting
+  // as busy, so a reconnect can press again.
+  const [wasEnabled, setWasEnabled] = useState(enabled);
+  if (wasEnabled !== enabled) {
+    setWasEnabled(enabled);
+    if (!enabled)
+      setHeld((state) => ({
+        ...state,
+        epoch: state.epoch + 1,
+        walk: state.walk.loading ? { ...state.walk, loading: false } : state.walk,
+      }));
   }
   type Press = { readonly id: number; readonly epoch: number };
-  // Null once Home unmounts, which ends any press as going offline does.
-  const live = useRef<Press | null>({ id: held.id, epoch: connection.epoch });
-  // oxlint-disable-next-line goat/react-effect-budget -- A running press checks the walk and connection it started with against the latest ones between its requests.
-  useEffect(() => {
-    live.current = { id: held.id, epoch: connection.epoch };
+  // Null once Home unmounts, which ends any press as going offline does. Set at commit, so a press
+  // resuming right after a disconnect or unmount sees it.
+  const live = useRef<Press | null>({ id: held.id, epoch: held.epoch });
+  // oxlint-disable-next-line goat/react-effect-budget -- A running press checks the walk, connection and mount it started with against the committed ones between its requests.
+  useLayoutEffect(() => {
+    live.current = { id: held.id, epoch: held.epoch };
     return () => {
       live.current = null;
     };
@@ -86,49 +108,55 @@ export function useMobileBotWorkHistory(input: {
         : state,
     );
   }
-  // The press in flight; one that lost its walk or connection no longer blocks a new one.
+  // The press in flight; one that lost its walk, connection or Home no longer blocks a new one.
   const running = useRef<Press | null>(null);
-  const update = (target: number, change: (walk: Walk) => Walk) =>
-    setHeld((state) => (state.id === target ? { ...state, walk: change(state.walk) } : state));
-  // An acknowledgement settles into the walk it was sent from, never a later one.
-  function markRead(sentWalk: string, taskId: ChannelTaskId, through: string) {
-    if (!Number.isFinite(Date.parse(through))) return;
-    update(Number(sentWalk), (state) => markWalkRead(state, taskId, through));
+  /** The press is still this Home's, on the same walk and connection: the one test for writing. */
+  const mine = (press: Press | null) =>
+    press !== null &&
+    live.current !== null &&
+    press.id === live.current.id &&
+    press.epoch === live.current.epoch;
+  // Judged again inside the updater, against the state it writes into.
+  const write = (press: Press, change: (walk: Walk) => Walk) => {
+    if (!mine(press)) return;
+    setHeld((state) =>
+      state.id === press.id && state.epoch === press.epoch
+        ? { ...state, walk: change(state.walk) }
+        : state,
+    );
+  };
+  // An accepted read mark applies to whichever walk shows its computer and bot.
+  function markRead(sentOwner: string, taskId: ChannelTaskId, through: string) {
+    if (!Number.isFinite(Date.parse(through)) || live.current === null) return;
+    setHeld((state) =>
+      state.owner === sentOwner
+        ? { ...state, walk: markWalkRead(state.walk, taskId, through) }
+        : state,
+    );
   }
   async function loadMore() {
-    const same = (other: Press | null) =>
-      other !== null &&
-      live.current !== null &&
-      other.id === live.current.id &&
-      other.epoch === live.current.epoch;
-    if (!view.hasMore || same(running.current) || environmentId === null) return;
-    const press = { id: held.id, epoch: connection.epoch };
-    const valid = () => same(press);
+    if (!view.hasMore || mine(running.current) || environmentId === null) return;
+    const press = { id: held.id, epoch: held.epoch };
     // A press from a render before Home's walk or connection changed sends nothing.
-    if (!valid()) return;
+    if (!mine(press)) return;
     running.current = press;
-    update(press.id, (state) => ({ ...state, loading: true, failed: false }));
+    write(press, (state) => ({ ...state, loading: true, failed: false }));
     const outcome = await readPress({
       environmentId,
       botId,
       capabilities: capabilities as ExecutionEnvironmentCapabilities | undefined,
       cursor: walk.cursor,
       listed: new Set(view.pressRows.map(botThreadKey)),
-      valid,
+      valid: () => mine(press),
     });
+    // A cancelled press writes nothing: whatever ended it already reset the walk or its loading.
     if (outcome.kind === "applied")
-      update(press.id, (state) => applyHistoryPress(state, outcome.result));
-    else if (running.current === press && live.current !== null)
-      update(press.id, (state) => ({
-        ...state,
-        loading: false,
-        failed: state.failed || outcome.kind === "failed",
-      }));
+      write(press, (state) => applyHistoryPress(state, outcome.result));
+    else if (outcome.kind === "failed")
+      write(press, (state) => ({ ...state, loading: false, failed: true }));
     if (running.current === press) running.current = null;
   }
   return {
-    /** The walk's identity, for an acknowledgement to name the walk it was sent from. */
-    walk: String(held.id),
     supported: view.supported,
     markRead,
     currentTaskIds: view.currentTaskIds,

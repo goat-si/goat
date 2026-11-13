@@ -64,7 +64,13 @@ vi.mock("react-native", () => ({
         {props.children}
       </div>
     ) : props.onDismiss ? (
-      <button aria-label="Sheet gone" onClick={props.onDismiss} />
+      <button
+        aria-label="Sheet gone"
+        onClick={props.onDismiss}
+        ref={() => {
+          state.lastDismiss = props.onDismiss ?? null;
+        }}
+      />
     ) : null,
   Alert: { alert: nativeAlert },
   AccessibilityInfo: { announceForAccessibility: (text: string) => state.announced.push(text) },
@@ -138,6 +144,7 @@ const state = vi.hoisted(() => ({
     environmentId: string;
   } | null,
   otherConnected: false,
+  lastDismiss: null as (() => void) | null,
   rows2: [] as BotThreadRow[],
   taskKeys: [] as string[],
   taskSupported: true,
@@ -447,6 +454,7 @@ afterEach(async () => {
     retrySupported: false,
     botRef: { threadId: "bot", environmentId: "env" },
     otherConnected: false,
+    lastDismiss: null,
     rows2: [],
     taskKeys: [],
     taskError: null,
@@ -749,6 +757,63 @@ it("drops the task Home over an older task was opening when that screen loses fo
   await press("Sheet gone");
   expect(state.openTask).not.toHaveBeenCalled();
   expect(home()).toBeNull();
+});
+
+async function holdOldTwo() {
+  await openOlderTask();
+  await press("Open Home");
+  await showOlder();
+  await press("Actions for Old two");
+  await act(async () => choices()[1]?.onPress());
+}
+
+it("drops the task Home over an older task was opening when its computer or bot changes during the slide", async () => {
+  await holdOldTwo();
+  state.botRef = { threadId: "bot-2", environmentId: "env" };
+  await openOlderTask();
+  await press("Sheet gone");
+  expect(state.openTask).not.toHaveBeenCalled();
+});
+
+it("opens nothing from a dismissal reported after the task screen has gone", async () => {
+  await holdOldTwo();
+  const dismissed = state.lastDismiss;
+  await act(async () => root?.unmount());
+  root = undefined;
+  await act(async () => dismissed?.());
+  expect(state.openTask).not.toHaveBeenCalled();
+});
+
+it("opens the held task once when the dismissal is reported twice", async () => {
+  await holdOldTwo();
+  const gone = button("Sheet gone");
+  await act(async () => {
+    gone?.click();
+    gone?.click();
+  });
+  expect(state.openTask).toHaveBeenCalledTimes(1);
+});
+
+it("a read mark sent before Home closed lands in the reopened Home's walk", async () => {
+  resetTaskReadAcknowledgementsForTests();
+  state.run.mockClear();
+  let accept: (value: { _tag: string }) => void = () => {};
+  state.run.mockImplementationOnce(
+    () => new Promise<{ _tag: string }>((resolve) => (accept = resolve)),
+  );
+  await open();
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  await press("Back to home. Old report");
+  await press("Close");
+  await press("Work");
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  await press("Back to home. Old report");
+  expect(reads()).toEqual([{ taskId: "o1", readThrough: at }]);
+  expect(button("Old report")?.getAttribute("aria-label")).toContain("unread");
+  await act(async () => accept({ _tag: "Success" }));
+  expect(button("Old report")?.getAttribute("aria-label")).not.toContain("unread");
 });
 
 const runningCard = (): { taskCard: ReactNode; taskCardInfo: GoatBotTaskCard } => ({
