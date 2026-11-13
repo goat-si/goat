@@ -46,6 +46,7 @@ export function mobileBotTaskListItems(props: {
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
   readonly onToggleExpanded: (id: ChannelTaskId) => void;
+  readonly details: (id: ChannelTaskId) => ReadonlyArray<MobileBotHomeItem>;
   readonly canUpdate: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   /** Task cards in the conversation; ones the list lacks show under "Earlier in chat". */
@@ -186,6 +187,7 @@ export function mobileBotTaskListItems(props: {
           </View>
         ),
       });
+      if (props.expanded.has(row.task.taskId)) items.push(...props.details(row.task.taskId));
     }
     if (section === "finished" && props.work.finished.length > COLLAPSED_FINISHED) {
       items.push({
@@ -238,4 +240,18 @@ export function mobileBotTaskListItems(props: {
     });
   }
   return items;
+}
+
+export function carded(items: ReadonlyArray<MobileBotHomeItem>): MobileBotHomeItem[] {
+  return items.map((item, index) => ({
+    ...item,
+    card:
+      items.length === 1
+        ? "only"
+        : index === 0
+          ? "first"
+          : index === items.length - 1
+            ? "last"
+            : "middle",
+  }));
 }

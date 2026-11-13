@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, useEffect, type ReactNode } from "react";
+import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotId, BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
@@ -26,21 +26,34 @@ vi.mock("react-native", () => ({
   Switch: () => null,
   View: (props: Props) => <div {...forward(props)}>{props.children}</div>,
   ScrollView: (props: Props) => <div {...forward(props)}>{props.children}</div>,
-  FlatList: (
+  FlatList: function FlatList(
     props: {
       data: ReadonlyArray<{ key: string }>;
       renderItem: (info: { item: { key: string }; index: number }) => ReactNode;
+      ref?: Ref<{ scrollToIndex: (value: { index: number }) => void }>;
+      onScrollToIndexFailed?: (info: { index: number; averageItemLength: number }) => void;
+      onContentSizeChange?: () => void;
     } & Record<string, unknown>,
-  ) => (
-    <div {...forward(props as Props)}>
-      {/* Entries listed in state.hidden are off screen: a virtualized list unmounts them. */}
-      {props.data.map((item, index) =>
-        state.hidden.includes(item.key) ? null : (
-          <div key={item.key}>{props.renderItem({ item, index })}</div>
-        ),
-      )}
-    </div>
-  ),
+  ) {
+    useImperativeHandle(props.ref, () => ({
+      scrollToIndex: ({ index }) => {
+        state.scrolled.push(props.data[index]?.key ?? "missing");
+        if (state.failScroll) props.onScrollToIndexFailed?.({ index, averageItemLength: 40 });
+      },
+      scrollToOffset: () => {},
+    }));
+    state.contentChanged = props.onContentSizeChange ?? (() => {});
+    return (
+      <div {...forward(props as Props)}>
+        {/* Entries listed in state.hidden are off screen: a virtualized list unmounts them. */}
+        {props.data.map((item, index) =>
+          state.hidden.includes(item.key) ? null : (
+            <div key={item.key}>{props.renderItem({ item, index })}</div>
+          ),
+        )}
+      </div>
+    );
+  },
   // Android's system back and an iOS swipe-down both reach the sheet as onRequestClose.
   Modal: (props: Props & { visible: boolean; onRequestClose?: () => void }) =>
     props.visible ? (
@@ -74,9 +87,17 @@ const state = vi.hoisted(() => ({
   remoteWork: [] as object[],
   groups: [] as object[],
   childKeys: [] as unknown[],
+  childError: null as string | null,
+  childPending: false,
+  childRefresh: vi.fn(),
+  scrolled: [] as string[],
+  failScroll: false,
+  contentChanged: () => {},
   remoteOpenable: true,
   connected: true,
   taskSupported: true,
+  childSupported: true,
+  membersSupported: true,
   taskError: null as unknown,
   taskPending: false,
   canUpdate: true,
@@ -151,7 +172,13 @@ vi.mock("../../state/environments", () => ({
         "env",
         {
           serverConfig: {
-            environment: { capabilities: { goatBotTaskThreads: state.taskSupported } },
+            environment: {
+              capabilities: {
+                goatBotTaskThreads: state.taskSupported,
+                goatBotChildWork: state.childSupported,
+                goatBotMembers: state.membersSupported,
+              },
+            },
           },
         },
       ],
@@ -166,15 +193,17 @@ vi.mock("../../state/query", () => ({
           ? null
           : { rows: state.rows, remoteWork: state.remoteWork }
         : key === "child"
-          ? { groups: state.groups }
+          ? state.childPending || state.childError
+            ? null
+            : { groups: state.groups }
           : key === "routines"
             ? { tasks: state.routineTasks }
             : null,
-    error: key === "task" ? state.taskError : null,
+    error: key === "task" ? state.taskError : key === "child" ? state.childError : null,
     cause: key === "task" ? state.taskError : null,
-    isPending: false,
+    isPending: key === "child" && state.childPending,
     isSuccess: key !== null,
-    refresh: vi.fn(),
+    refresh: key === "child" ? state.childRefresh : vi.fn(),
   }),
 }));
 // Stands in for the thread-state subscription useAtomValue holds while a consumer is mounted.
@@ -295,9 +324,15 @@ afterEach(async () => {
     remoteWork: [],
     groups: [],
     childKeys: [],
+    childError: null,
+    childPending: false,
+    scrolled: [],
+    failScroll: false,
     remoteOpenable: true,
     connected: true,
     taskSupported: true,
+    childSupported: true,
+    membersSupported: true,
     taskError: null,
     taskPending: false,
     canUpdate: true,
@@ -312,6 +347,7 @@ afterEach(async () => {
   state.draft.mockClear();
   state.openTask.mockClear();
   state.openThread.mockClear();
+  state.childRefresh.mockClear();
 });
 async function open(taskId?: string) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -808,6 +844,9 @@ it("offers an action button for each task and keeps expansion bounded to 50", as
     expect(choices[0]?.text).toBe("Show work");
     await act(async () => choices[0]?.onPress?.());
   }
+  const requests = state.childKeys as Array<{ input: { taskIds: string[] } }>;
+  expect(requests.every((request) => request.input.taskIds.length <= 50)).toBe(true);
+  expect(requests.at(-1)?.input.taskIds).toEqual(Array.from({ length: 50 }, (_, i) => `t${i + 1}`));
   await press("Actions for Task 0");
   expect(((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>)[0]?.text).toBe(
     "Show work",

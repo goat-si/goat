@@ -207,7 +207,14 @@ vi.mock("../../state/environments", () => ({
         "env",
         {
           serverConfig: {
-            environment: { capabilities: { goatBotTaskThreads: true, goatBotTaskRetry: true } },
+            environment: {
+              capabilities: {
+                goatBotTaskThreads: true,
+                goatBotTaskRetry: true,
+                goatBotChildWork: true,
+                goatBotMembers: true,
+              },
+            },
           },
         },
       ],

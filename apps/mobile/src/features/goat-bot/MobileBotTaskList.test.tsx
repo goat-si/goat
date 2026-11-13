@@ -117,6 +117,7 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
         botName="GOAT Bot"
         canUpdate
         expanded={new Set()}
+        details={() => []}
         onToggleExpanded={() => {}}
         showAllFinished={false}
         onToggleFinished={() => {}}

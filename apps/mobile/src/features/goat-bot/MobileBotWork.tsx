@@ -6,18 +6,13 @@ import {
   groupBotWork,
   isRetryableTaskStatus,
   presentTaskStatus,
-  retryRefusalText,
   taskAttemptLabel,
   type GoatBotAccent,
   type GoatBotTaskCard,
   type GoatBotWaitingTurn,
 } from "@goat/client-runtime/goatBot";
 import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
-import {
-  isAtomCommandInterrupted,
-  runAtomCommand,
-  squashAtomCommandFailure,
-} from "@goat/client-runtime/state/runtime";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type {
   BotId,
   BotProfile,
@@ -25,7 +20,7 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { ChannelTaskId } from "@goat/contracts";
+import { CHANNEL_LIST_CHILD_WORK_MAX_TASKS, ChannelTaskId } from "@goat/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -40,7 +35,6 @@ import {
   View,
 } from "react-native";
 import { useNowMinuteMs } from "../../lib/clock";
-import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
@@ -55,10 +49,12 @@ import { MobileBotMemory } from "./MobileBotMemory";
 import type { MobileNoteWording, MobileNoteWordings } from "./mobileNoteWordings";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { type MobileBotHomeItem, mobileBotTaskListItems } from "./MobileBotTaskList";
+import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
-import { accessDenied } from "./mobileBotWorkShared";
+import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
+import { MobileTaskRetry } from "./MobileTaskRetry";
+import { accessDenied, workRowCollapsed } from "./mobileBotWorkShared";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 
@@ -67,21 +63,8 @@ const STICKY_TABS_CLEARANCE = 56;
 /** How many times a scroll to an unmeasured entry is tried again as the list lays out more. */
 const SCROLL_RETRIES = 3;
 const NO_WORDINGS: MobileNoteWordings = new Map();
-function carded(items: ReadonlyArray<MobileBotHomeItem>): MobileBotHomeItem[] {
-  return items.map((item, index) => ({
-    ...item,
-    card:
-      items.length === 1
-        ? "only"
-        : index === 0
-          ? "first"
-          : index === items.length - 1
-            ? "last"
-            : "middle",
-  }));
-}
 type HomeScroll = {
-  readonly index: number;
+  readonly key: string;
   readonly viewPosition: number;
   readonly viewOffset: number;
 };
@@ -155,8 +138,11 @@ export function MobileBotWork(props: {
   const capabilities = environmentId
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
-  const enabled = selected?.connected === true && capabilities?.goatBotTaskThreads === true;
   const member = props.member ?? null;
+  const enabled =
+    selected?.connected === true &&
+    capabilities?.goatBotTaskThreads === true &&
+    (member === null || capabilities?.goatBotMembers === true);
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
@@ -167,12 +153,27 @@ export function MobileBotWork(props: {
         })
       : null,
   );
-  const rows = threads.data?.rows ?? [];
+  const workScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
+  const [lastWork, setLastWork] = useState<{
+    scope: string;
+    signature: string;
+    data: NonNullable<typeof threads.data>;
+  } | null>(null);
+  const listSignature = threads.data === null ? null : JSON.stringify(threads.data);
+  if (
+    threads.data !== null &&
+    (lastWork?.scope !== workScope || lastWork.signature !== listSignature)
+  )
+    setLastWork({ scope: workScope, signature: listSignature ?? "", data: threads.data });
+  const listData =
+    threads.data ??
+    (selected?.connected !== true && lastWork?.scope === workScope ? lastWork.data : null);
+  const rows = listData?.rows ?? [];
   // The task this sheet peeks at; its child work loads like a task screen's.
   const [peekTaskId, setPeekTaskId] = useState<ChannelTaskId | null>(null);
   const childTaskId = props.taskId ?? peekTaskId;
   const children = useEnvironmentQuery(
-    environmentId && enabled && childTaskId
+    environmentId && enabled && capabilities?.goatBotChildWork === true && childTaskId
       ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [childTaskId] } })
       : null,
   );
@@ -182,7 +183,7 @@ export function MobileBotWork(props: {
       : null,
   );
   const work = environmentId
-    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, threads.data?.remoteWork)
+    ? groupBotWork(rows, children.data?.groups ?? [], environmentId, listData?.remoteWork)
     : { inProgress: [], done: [] };
   const task = [...work.inProgress, ...work.done].find(
     (entry) => entry.row.task.taskId === props.taskId,
@@ -215,11 +216,26 @@ export function MobileBotWork(props: {
   const lastScroll = useRef<HomeScroll | null>(null);
   const scrollRetry = useRef<HomeScroll | null>(null);
   const scrollAttempts = useRef(0);
+  const [returnKey, setReturnKey] = useState<string | null>(null);
+  if (!open && returnKey !== null) setReturnKey(null);
+  const attemptScroll = (scroll: HomeScroll) => {
+    const index = homeItems.findIndex((item) => item.key === scroll.key);
+    if (index < 0) {
+      lastScroll.current = null;
+      scrollRetry.current = null;
+      return;
+    }
+    listRef.current?.scrollToIndex({
+      index,
+      viewPosition: scroll.viewPosition,
+      viewOffset: scroll.viewOffset,
+    });
+  };
   const scrollHome = (scroll: HomeScroll) => {
     lastScroll.current = scroll;
     scrollRetry.current = null;
     scrollAttempts.current = 0;
-    listRef.current?.scrollToIndex(scroll);
+    attemptScroll(scroll);
   };
   if (open && props.focus && props.focus.seq !== focusSeq) {
     setFocusSeq(props.focus.seq);
@@ -227,6 +243,7 @@ export function MobileBotWork(props: {
     const focusedTask = props.focus.kind === "task" ? ChannelTaskId.make(props.focus.id) : null;
     setPeekTaskId(focusedTask);
     setTaskFocus(focusedTask);
+    setReturnKey(null);
     setLeaveFor(null);
     setRoutineFocus(
       props.focus.kind === "routine" ? { id: props.focus.id, seq: props.focus.seq } : null,
@@ -275,6 +292,19 @@ export function MobileBotWork(props: {
     Readonly<Record<string, ReadonlyArray<ChannelTaskId>>>
   >({});
   const expanded = expandedByScope[checkInScope] ?? [];
+  const expandedChildren = useEnvironmentQuery(
+    environmentId &&
+      open &&
+      enabled &&
+      capabilities?.goatBotChildWork === true &&
+      expanded.length > 0
+      ? channelEnvironment.listChildWork({ environmentId, input: { taskIds: [...expanded] } })
+      : null,
+  );
+  const detailWork =
+    environmentId && expanded.length > 0
+      ? groupBotWork(rows, expandedChildren.data?.groups ?? [], environmentId, listData?.remoteWork)
+      : null;
   const toggleExpanded = (id: ChannelTaskId) =>
     setExpandedByScope((current) => {
       const ids = current[checkInScope] ?? [];
@@ -282,7 +312,7 @@ export function MobileBotWork(props: {
         ...current,
         [checkInScope]: ids.includes(id)
           ? ids.filter((item) => item !== id)
-          : [...ids, id].slice(-50),
+          : [...ids, id].slice(-CHANNEL_LIST_CHILD_WORK_MAX_TASKS),
       };
     });
   const [showAllFinished, setShowAllFinished] = useState(false);
@@ -294,13 +324,15 @@ export function MobileBotWork(props: {
       [checkInScope]: update(current[checkInScope] ?? MOBILE_CHECK_IN_DRAFT),
     }));
   const peekEntry =
-    peekTaskId === null
+    peekTaskId === null || !enabled
       ? null
       : ([...work.inProgress, ...work.done].find((entry) => entry.row.task.taskId === peekTaskId) ??
         null);
   // A peeked task that left the list is forgotten, so it does not reopen when it returns.
-  if (peekTaskId !== null && peekEntry === null && listedTasks !== null) setPeekTaskId(null);
+  if (peekTaskId !== null && peekEntry === null && (listedTasks !== null || !enabled))
+    setPeekTaskId(null);
   const closeSheet = () => {
+    setReturnKey(null);
     setPeekTaskId(null);
     setTaskFocus(null);
     setOpen(false);
@@ -314,11 +346,21 @@ export function MobileBotWork(props: {
     openTask(leaveFor.id);
   }, [leaveFor, openTask, setOpen]);
   // The system back (Android's button or gesture) leaves a peek before it leaves the sheet.
+  const leavePeek = () => {
+    if (
+      peekTaskId !== null &&
+      environmentId &&
+      workRowCollapsed(rows, environmentId, listData?.remoteWork ?? [], peekTaskId)
+    ) {
+      setShowAllFinished(true);
+      setReturnKey(JSON.stringify(["task", peekTaskId]));
+    }
+    setPeekTaskId(null);
+    setTaskFocus(null);
+  };
   const goBack = () => {
-    if (peekTaskId !== null) {
-      setPeekTaskId(null);
-      setTaskFocus(null);
-    } else closeSheet();
+    if (peekTaskId !== null) leavePeek();
+    else closeSheet();
   };
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (!environmentId || !enabled) return;
@@ -511,39 +553,57 @@ export function MobileBotWork(props: {
           </Text>,
         ),
       );
-    } else {
-      const loading = threads.data === null && !threads.error;
+    }
+    if (enabled || (selected?.connected !== true && listData !== null)) {
+      const loading = enabled && threads.data === null && !threads.error;
       if (loading)
         homeItems.push(
           message(
             "tasks-loading",
             <View accessible accessibilityLabel="Loading tasks…" className="gap-3 py-3">
               {[0, 1, 2].map((index) => (
-                <View key={index} className="h-8 rounded bg-muted" />
+                <View key={index} className="h-8 rounded bg-subtle-strong" />
               ))}
             </View>,
           ),
         );
-      if (threads.data !== null || (props.chatTasks ?? []).length > 0) {
+      if (listData !== null || (props.chatTasks ?? []).length > 0) {
         homeItems.push(
           ...mobileBotTaskListItems({
             botName,
             work: environmentId
-              ? botHomeWork(
-                  rows,
-                  children.data?.groups ?? [],
-                  environmentId,
-                  threads.data?.remoteWork,
-                )
+              ? botHomeWork(rows, children.data?.groups ?? [], environmentId, listData?.remoteWork)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
             onToggleFinished: () => setShowAllFinished((value) => !value),
             expanded: new Set(expanded),
             onToggleExpanded: toggleExpanded,
+            details: (id) => {
+              if (!detailWork) return [];
+              const entry = [...detailWork.inProgress, ...detailWork.done].find(
+                (item) => item.row.task.taskId === id,
+              );
+              return entry
+                ? mobileBotWorkDetails({
+                    entry,
+                    supported: enabled && capabilities?.goatBotChildWork === true,
+                    error: expandedChildren.error,
+                    pending: expandedChildren.isPending,
+                    hasData: expandedChildren.data !== null,
+                    openThread: (thread) => {
+                      closeSheet();
+                      props.onOpenThread(thread);
+                    },
+                  })
+                : [];
+            },
             canUpdate,
             rows,
             chatTasks: props.chatTasks ?? [],
-            onPeekTask: setPeekTaskId,
+            onPeekTask: (id) => {
+              setReturnKey(null);
+              setPeekTaskId(id);
+            },
             onOpenTask: (id) => {
               closeSheet();
               props.onOpenTask(id);
@@ -564,7 +624,6 @@ export function MobileBotWork(props: {
       ...carded(homeItems.slice(workStart)),
     );
     // The routines entry follows its section label, at the next two places in the list.
-    const index = homeItems.length + 1;
     const routinesItem: MobileBotHomeItem = {
       key: "routines",
       render: () => (
@@ -585,7 +644,7 @@ export function MobileBotWork(props: {
             if (routineFocus !== null) routineLanded.current = routineFocus.seq;
             setRoutineFocus(null);
             scrollHome({
-              index,
+              key: "routines",
               viewPosition: 0,
               viewOffset: STICKY_TABS_CLEARANCE - y,
             });
@@ -681,15 +740,26 @@ export function MobileBotWork(props: {
     );
   }
   const routinesIndex = homeItems.findIndex((item) => item.key === "routines");
+  // oxlint-disable-next-line goat/react-effect-budget -- Discard retries when a parent closes the sheet.
+  useEffect(() => {
+    if (open) return;
+    lastScroll.current = null;
+    scrollRetry.current = null;
+  }, [open, lastScroll, scrollRetry]);
+  // oxlint-disable-next-line goat/react-effect-budget -- Return to a newly revealed task after the list has mounted it.
+  useEffect(() => {
+    if (returnKey === null || !open) return;
+    scrollHome({ key: returnKey, viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE });
+    // oxlint-disable-next-line react/set-state-in-effect -- Consume this one-shot scroll after the list has mounted the revealed row.
+    setReturnKey(null);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The request, not list rebuilds, initiates this scroll.
+  }, [returnKey, open]);
   // oxlint-disable-next-line goat/react-effect-budget -- Bring the routines entry into the virtualized list so a focused routine's row mounts and can refine the scroll.
   useEffect(() => {
     if (routineFocus === null || routinesIndex < 0) return;
     if (routineLanded.current === routineFocus.seq) return;
-    const scroll = { index: routinesIndex, viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE };
-    lastScroll.current = scroll;
-    scrollRetry.current = null;
-    scrollAttempts.current = 0;
-    listRef.current?.scrollToIndex(scroll);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- The focus and target index drive the landing, not list rebuilds.
+    scrollHome({ key: "routines", viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE });
   }, [
     routineFocus,
     routinesIndex,
@@ -875,17 +945,18 @@ export function MobileBotWork(props: {
               const scroll = lastScroll.current;
               const retry =
                 scroll !== null &&
-                scroll.index === info.index &&
+                homeItems.findIndex((item) => item.key === scroll.key) === info.index &&
                 scrollAttempts.current < SCROLL_RETRIES;
               if (retry) scrollAttempts.current += 1;
               scrollRetry.current = retry ? scroll : null;
-              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
+              if (retry)
+                listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index });
             }}
             onContentSizeChange={() => {
               const retry = scrollRetry.current;
               if (retry === null) return;
               scrollRetry.current = null;
-              listRef.current?.scrollToIndex(retry);
+              attemptScroll(retry);
             }}
             stickyHeaderIndices={[1]}
             contentContainerStyle={{ paddingBottom: bottomInset }}
@@ -905,7 +976,7 @@ export function MobileBotWork(props: {
                 rows={rows}
                 connected={selected?.connected === true}
                 machineLabel={selected?.label ?? botName}
-                onBack={() => setPeekTaskId(null)}
+                onBack={leavePeek}
                 onOpenThread={(thread) => {
                   closeSheet();
                   props.onOpenThread(thread);
@@ -920,57 +991,5 @@ export function MobileBotWork(props: {
         </View>
       </Modal>
     </>
-  );
-}
-
-function MobileTaskRetry(props: {
-  readonly environmentId: EnvironmentId;
-  readonly taskId: ChannelTaskId;
-  readonly onStarted: () => void;
-}) {
-  const canRetry = useAtomValue(channelEnvironment.retryTask.permissionAtom(props.environmentId));
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  if (!canRetry) return null;
-  const run = async () => {
-    if (busy) return;
-    setBusy(true);
-    setProblem(null);
-    const result = await runAtomCommand(
-      appAtomRegistry,
-      channelEnvironment.retryTask,
-      {
-        environmentId: props.environmentId,
-        input: { taskId: props.taskId, clientRequestId: uuidv4() },
-      },
-      { label: "GOAT Bot task retry", reportFailure: false },
-    );
-    setBusy(false);
-    if (result._tag === "Success") {
-      if (result.value.status === "refused") setProblem(retryRefusalText(result.value.reason));
-      else props.onStarted();
-      return;
-    }
-    if (isAtomCommandInterrupted(result)) return;
-    const failure = squashAtomCommandFailure(result);
-    setProblem(`Couldn't retry: ${failure instanceof Error ? failure.message : String(failure)}`);
-  };
-  return (
-    <View className="gap-1">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: busy }}
-        disabled={busy}
-        onPress={() => void run()}
-        className="min-h-[44px] justify-center"
-      >
-        <Text className="text-foreground">Retry</Text>
-      </Pressable>
-      {problem !== null ? (
-        <Text accessibilityRole="alert" className="text-danger-foreground">
-          {problem}
-        </Text>
-      ) : null}
-    </View>
   );
 }
