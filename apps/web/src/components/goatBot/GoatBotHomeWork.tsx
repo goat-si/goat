@@ -32,7 +32,7 @@ import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
-import { updateHistoryView } from "./botWorkHistoryStore";
+import { updateHistoryView, useHistoryWork } from "./botWorkHistoryStore";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 
@@ -253,6 +253,7 @@ function WorkRow({
   readonly launchesTruncated: boolean;
 }) {
   const row = task.row;
+  useHistoryWork(environmentId, row.task.taskId);
   const title = row.task.title;
   const member = useGoatBotMember();
   const update = useAtomCommand(channelEnvironment.updateTaskView);

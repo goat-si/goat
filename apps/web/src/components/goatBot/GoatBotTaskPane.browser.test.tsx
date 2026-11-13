@@ -6,11 +6,11 @@ import {
   EnvironmentId,
 } from "@goat/contracts";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   noRows: false,
@@ -128,7 +128,11 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
-import { rememberHistoryRows, resetHistoryTasksForTests } from "./botWorkHistoryStore";
+import {
+  rememberHistoryRows,
+  resetHistoryTasksForTests,
+  useHistoryWork,
+} from "./botWorkHistoryStore";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
@@ -377,4 +381,50 @@ it("opens history-only work with its status and actions and acknowledges unread 
   });
   await userEvent.click(screen.getByRole("button", { name: "Pin" }));
   await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
+});
+
+it("opens a visible older task with actions after history cache pressure", async () => {
+  setup();
+  state.noRows = true;
+  const env = EnvironmentId.make("env");
+  const taskId = ChannelTaskId.make("task-1");
+  const row = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId,
+      title: "Earlier task",
+      status: "waiting_input",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  rememberHistoryRows(env, [row]);
+  function HomeAndPane() {
+    const [open, setOpen] = useState(false);
+    const work = useHistoryWork(env, taskId);
+    return open ? (
+      <Pane onClose={() => setOpen(false)} />
+    ) : (
+      <button onClick={() => setOpen(true)}>{work?.task.task.title ?? "Missing task"}</button>
+    );
+  }
+  await using screen = await render(<HomeAndPane />);
+  await act(() =>
+    rememberHistoryRows(
+      env,
+      Array.from({ length: 501 }, (_, index) =>
+        decodeBotThreadRow({
+          ...row,
+          task: { ...row.task, taskId: `pressure-${index}` },
+          view: { ...row.view, taskId: `pressure-${index}` },
+        }),
+      ),
+    ),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Earlier task" }));
+  await expect.element(screen.getByText("Needs your input")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Pin" })).toBeVisible();
 });

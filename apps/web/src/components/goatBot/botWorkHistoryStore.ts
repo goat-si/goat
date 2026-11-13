@@ -17,6 +17,7 @@ interface HistoryWork {
 const LIMIT = 500;
 const entries = new Map<string, HistoryWork>();
 const listeners = new Set<() => void>();
+const inUse = new Map<string, number>();
 const key = (environmentId: EnvironmentId, taskId: ChannelTaskId) =>
   JSON.stringify([environmentId, taskId]);
 let revision = 0;
@@ -53,6 +54,11 @@ export function rememberHistoryRows(
       through !== null && atOrBefore(row.lastActivityAt, through)
         ? { ...row, unread: false, view: { ...row.view, readThrough: through } }
         : row;
+    if (!entries.has(id) && entries.size >= LIMIT) {
+      const evict = [...entries.keys()].find((candidate) => !inUse.has(candidate));
+      if (evict === undefined) continue;
+      entries.delete(evict);
+    }
     entries.delete(id);
     entries.set(id, {
       task,
@@ -63,10 +69,6 @@ export function rememberHistoryRows(
       remoteWork: remoteWork.filter((item) => item.taskId === row.task.taskId),
       acknowledgedThrough: through,
     });
-    if (entries.size > LIMIT) {
-      const oldest = entries.keys().next().value;
-      if (oldest !== undefined) entries.delete(oldest);
-    }
   }
   notify();
 }
@@ -76,7 +78,20 @@ export function historyTask(environmentId: EnvironmentId, taskId: ChannelTaskId)
 }
 
 export function useHistoryWork(environmentId: EnvironmentId, taskId: ChannelTaskId) {
-  return useSyncExternalStore(subscribe, () => entries.get(key(environmentId, taskId)));
+  const id = key(environmentId, taskId);
+  return useSyncExternalStore(
+    (listener) => {
+      inUse.set(id, (inUse.get(id) ?? 0) + 1);
+      const unsubscribe = subscribe(listener);
+      return () => {
+        unsubscribe();
+        const count = (inUse.get(id) ?? 1) - 1;
+        if (count === 0) inUse.delete(id);
+        else inUse.set(id, count);
+      };
+    },
+    () => entries.get(id),
+  );
 }
 
 export function resetHistoryTasksForTests() {
