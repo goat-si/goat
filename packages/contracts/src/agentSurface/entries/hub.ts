@@ -79,9 +79,9 @@ export const hubEntries = {
     verb: "machine_attach",
     name: "goat_hub_machine_attach",
     toolkit: "hostStatus",
-    summary: "Admit a machine you built to this hub's Pen mesh and link it as a disposable Child.",
+    summary: "Admit a machine you built to this hub's Pen mesh with a bound invite.",
     description:
-      "Start one attach for a cloud machine this thread provisioned: GOAT mints a Pen invite bound to its keys and name and returns the token once. The machine joins with pen join; GOAT continues after it is admitted. Read goat_hub_machine_list for progress.",
+      "Start one attach for a cloud machine this thread provisioned: GOAT mints a Pen invite bound to its keys and name and returns the token once. The machine joins with pen join, and the attach ends when Pen admits it; linking it as a Child is not available yet. Read goat_hub_machine_list for its state.",
     guide:
       "Needs the hub setting Attach disposable machines on, unexpired, with this thread named as a provisioner (a person decides in Settings), hub.manage for pen-<nodeId> when goatclaw is on, and a full-access thread in default mode. Pass the keys pen identity --json printed on the machine. The token is a bearer secret: hand it only to that machine and do not store it; GOAT never stores or logs it, and a repeat with the same clientRequestId answers without it. Refusals: switch_off, switch_expired, provisioner_refused, delegation_lost, cap_reached, name_rule, key_in_use, pen_unsupported, opencodex_unsupported, unknown_outcome. A Pen member admitted this way holds the owner's authority on every member until a person removes it from Pen.",
     effect: "write",

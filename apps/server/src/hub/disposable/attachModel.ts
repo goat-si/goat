@@ -227,7 +227,11 @@ export const stateMessage = (
         nextAction: "Run pen join with the token on the machine that holds these keys.",
       };
     case "admitted":
-      return { message: name + " joined Pen; checking its route.", nextAction: null };
+      return {
+        message: name + " joined Pen.",
+        nextAction:
+          "Linking it as a Child is not available yet; it stays a Pen member until a person removes it from Pen.",
+      };
     case "unknown":
       return {
         message: "GOAT cannot tell yet whether the invite admitted the machine.",
