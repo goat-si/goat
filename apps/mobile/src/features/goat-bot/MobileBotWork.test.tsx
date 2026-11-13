@@ -46,12 +46,14 @@ vi.mock("react-native", () => ({
     children,
     className,
     style,
+    accessibilityLabel,
   }: {
     children?: ReactNode;
+    accessibilityLabel?: string;
     className?: string;
     style?: React.CSSProperties;
   }) => (
-    <div className={className} style={style}>
+    <div className={className} style={style} aria-label={accessibilityLabel}>
       {children}
     </div>
   ),
@@ -179,7 +181,7 @@ vi.mock("../../state/channels", () => ({
     listBotArtifacts: () => "artifacts",
     readBotArtifact: {},
     listTasks: () => "computer",
-    updateTaskView: {},
+    updateTaskView: { permissionAtom: () => "permission" },
     retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
   },
 }));
@@ -316,14 +318,14 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   reset();
   await render();
   await press("Work");
-  expect(container.textContent).toContain("Loading tasks");
+  expect(container.querySelector('[aria-label="Loading tasks…"]')).not.toBeNull();
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
   await render();
-  expect(container.textContent).toContain("No tasks yet");
+  expect(container.textContent).toContain("No recent tasks");
   Object.assign(state.task, { error: "failed", isSuccess: false });
   await render();
   // The last read was empty, but a failed read says nothing about whether tasks exist now.
-  expect(container.textContent).not.toContain("No tasks yet");
+  expect(container.textContent).not.toContain("No recent tasks");
   expect(container.textContent).toContain("Couldn't load GOAT Bot's tasks.");
   await press("Try again");
   expect(state.task.refresh).toHaveBeenCalledOnce();
@@ -358,7 +360,7 @@ it("lists the tasks the chat shows while the work list loads or after it failed"
   };
   await render(undefined, undefined, [], [card]);
   await press("Work");
-  expect(container.textContent).toContain("Loading tasks");
+  expect(container.querySelector('[aria-label="Loading tasks…"]')).not.toBeNull();
   expect(container.textContent).toContain("Earlier in chat");
   Object.assign(state.task, { isPending: false, error: "failed" });
   await render(undefined, undefined, [], [card]);
@@ -627,7 +629,7 @@ it("opens the coding thread a task launched, such as a bot turn's", async () => 
   expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
 });
 
-it("lists a turn's coding thread under it in Tasks and opens it", async () => {
+it("keeps a turn's coding thread out of the Work card", async () => {
   reset();
   state.openThread.mockClear();
   const at = "2026-11-07T10:00:00.000Z";
@@ -654,9 +656,8 @@ it("lists a turn's coding thread under it in Tasks and opens it", async () => {
   await render();
   await press("Work");
   expect(container.textContent).toContain("Start one task");
-  await press("Echo question probe");
-  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread:child" });
   expect(container.textContent).not.toContain("Echo question probe");
+  expect(state.openThread).not.toHaveBeenCalled();
 });
 
 it("points to the chat from Tasks when the bot asked a question there", async () => {
@@ -665,7 +666,7 @@ it("points to the chat from Tasks when the bot asked a question there", async ()
   await render(undefined, undefined, ["turn-1"]);
   await press("Work");
   expect(container.textContent).toContain("GOAT Bot is waiting for your answer in the chat");
-  expect(container.textContent).toContain("No tasks yet");
+  expect(container.textContent).toContain("No recent tasks");
   await press("Open the chat");
   expect(container.textContent).not.toContain("waiting for your answer in the chat");
 });

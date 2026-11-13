@@ -241,7 +241,7 @@ vi.mock("../../state/channels", () => ({
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",
-    updateTaskView: {},
+    updateTaskView: { permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/server", () => ({

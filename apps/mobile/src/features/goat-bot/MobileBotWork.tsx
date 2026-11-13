@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  botHomeWork,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   groupBotWork,
@@ -270,6 +271,22 @@ export function MobileBotWork(props: {
   // A save that finishes after the sheet moved to another bot settles that bot's draft only.
   const checkInScope = JSON.stringify([environmentId, member?.threadId ?? home.botRef?.threadId]);
   const [checkIns, setCheckIns] = useState<Readonly<Record<string, MobileCheckInDraft>>>({});
+  const [expandedByScope, setExpandedByScope] = useState<
+    Readonly<Record<string, ReadonlyArray<ChannelTaskId>>>
+  >({});
+  const expanded = expandedByScope[checkInScope] ?? [];
+  const toggleExpanded = (id: ChannelTaskId) =>
+    setExpandedByScope((current) => {
+      const ids = current[checkInScope] ?? [];
+      return {
+        ...current,
+        [checkInScope]: ids.includes(id)
+          ? ids.filter((item) => item !== id)
+          : [...ids, id].slice(-50),
+      };
+    });
+  const [showAllFinished, setShowAllFinished] = useState(false);
+  const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const checkInDraft = checkIns[checkInScope] ?? MOBILE_CHECK_IN_DRAFT;
   const updateCheckIn: MobileCheckInDraftUpdate = (update) =>
     setCheckIns((current) => ({
@@ -498,13 +515,32 @@ export function MobileBotWork(props: {
       const loading = threads.data === null && !threads.error;
       if (loading)
         homeItems.push(
-          message("tasks-loading", <Text className="text-foreground-muted">Loading tasks…</Text>),
+          message(
+            "tasks-loading",
+            <View accessible accessibilityLabel="Loading tasks…" className="gap-3 py-3">
+              {[0, 1, 2].map((index) => (
+                <View key={index} className="h-8 rounded bg-muted" />
+              ))}
+            </View>,
+          ),
         );
       if (threads.data !== null || (props.chatTasks ?? []).length > 0) {
         homeItems.push(
           ...mobileBotTaskListItems({
             botName,
-            work,
+            work: environmentId
+              ? botHomeWork(
+                  rows,
+                  children.data?.groups ?? [],
+                  environmentId,
+                  threads.data?.remoteWork,
+                )
+              : { running: [], waiting: [], finished: [] },
+            showAllFinished,
+            onToggleFinished: () => setShowAllFinished((value) => !value),
+            expanded: new Set(expanded),
+            onToggleExpanded: toggleExpanded,
+            canUpdate,
             rows,
             chatTasks: props.chatTasks ?? [],
             onPeekTask: setPeekTaskId,

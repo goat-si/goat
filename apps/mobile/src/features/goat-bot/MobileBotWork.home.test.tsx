@@ -12,8 +12,10 @@ type Props = Record<string, unknown> & { children?: ReactNode };
 const forward = (props: Props) => ({
   "data-testid": props.testID as string | undefined,
   "data-pointer-events": props.pointerEvents as string | undefined,
+  "aria-label": props.accessibilityLabel as string | undefined,
   "aria-hidden": props.accessibilityElementsHidden === true ? true : undefined,
 });
+const nativeAlert = vi.hoisted(() => vi.fn());
 const nativePlatform = vi.hoisted(() => ({ OS: "ios" as "ios" | "android" }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 34, left: 0, right: 0 }),
@@ -47,7 +49,7 @@ vi.mock("react-native", () => ({
         {props.children}
       </div>
     ) : null,
-  Alert: { alert: vi.fn() },
+  Alert: { alert: nativeAlert },
   Text: (props: Props) => <span>{props.children}</span>,
   Pressable: (
     props: Props & {
@@ -76,6 +78,8 @@ const state = vi.hoisted(() => ({
   connected: true,
   taskSupported: true,
   taskError: null as unknown,
+  taskPending: false,
+  canUpdate: true,
   detail: null as null | { status: string; data: boolean; error: string | null },
   messages: [] as object[],
   life: [] as string[],
@@ -91,7 +95,12 @@ const state = vi.hoisted(() => ({
   routineTasks: [] as object[],
 }));
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: unknown) => (atom === "openable" ? state.remoteOpenable : true),
+  useAtomValue: (atom: unknown) =>
+    atom === "openable"
+      ? state.remoteOpenable
+      : atom === "update-permission"
+        ? state.canUpdate
+        : true,
 }));
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: (props: {
@@ -113,7 +122,7 @@ vi.mock("../../state/channels", () => ({
       return "child";
     },
     remoteWorkOpenable: () => "openable",
-    updateTaskView: {},
+    updateTaskView: { permissionAtom: () => "update-permission" },
     retryTask: { label: "retry", permissionAtom: () => "permission" },
   },
 }));
@@ -153,7 +162,9 @@ vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) => ({
     data:
       key === "task"
-        ? { rows: state.rows, remoteWork: state.remoteWork }
+        ? state.taskPending
+          ? null
+          : { rows: state.rows, remoteWork: state.remoteWork }
         : key === "child"
           ? { groups: state.groups }
           : key === "routines"
@@ -288,6 +299,8 @@ afterEach(async () => {
     connected: true,
     taskSupported: true,
     taskError: null,
+    taskPending: false,
+    canUpdate: true,
     detail: null,
     messages: [],
     life: [],
@@ -754,4 +767,94 @@ it("keeps a check-in being set up with the bot it was set up for, so another bot
   // Back on GOAT Bot's Home, its check-in is still at 07:30.
   await show(null);
   expect(button("Check-in time, 07:30")).toBeDefined();
+});
+
+it("orders running, waiting, and finished work and collapses finished rows", async () => {
+  const row = (id: string, status: string) =>
+    decode({
+      kind: "task",
+      task: { taskId: id, title: id, status, updatedAt: at },
+      view: { taskId: id, pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    });
+  state.rows = [
+    row("waiting", "waiting_input"),
+    ...Array.from({ length: 6 }, (_, i) => row(`finished-${i}`, "completed")),
+    row("running", "running"),
+  ];
+  await open();
+  const content = home()?.textContent ?? "";
+  expect(content.indexOf("running")).toBeLessThan(content.indexOf("waiting"));
+  expect(content.indexOf("waiting")).toBeLessThan(content.indexOf("finished-0"));
+  expect(button("finished-5")).toBeUndefined();
+  await press("Show more");
+  expect(button("finished-5")).toBeDefined();
+  await press("Show less");
+  expect(button("finished-5")).toBeUndefined();
+});
+
+it("offers an action button for each task and keeps expansion bounded to 50", async () => {
+  state.rows = Array.from({ length: 51 }, (_, i) => task(`t${i}`, `Task ${i}`));
+  await open();
+  expect(container.querySelectorAll('[aria-label="Actions for Task 0"]')).toHaveLength(1);
+  for (let i = 0; i < 51; i++) {
+    await press(`Actions for Task ${i}`);
+    const choices = nativeAlert.mock.calls.at(-1)?.[2] as Array<{
+      text: string;
+      onPress?: () => void;
+    }>;
+    expect(choices[0]?.text).toBe("Show work");
+    await act(async () => choices[0]?.onPress?.());
+  }
+  await press("Actions for Task 0");
+  expect(((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>)[0]?.text).toBe(
+    "Show work",
+  );
+  await press("Actions for Task 50");
+  expect(((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>)[0]?.text).toBe(
+    "Hide work",
+  );
+});
+
+it("shows the recent-task empty copy", async () => {
+  await open();
+  expect(home()?.textContent).toContain("No recent tasks");
+  expect(home()?.textContent).toContain(
+    "Unpinned tasks that finished more than three days ago aren't listed here.",
+  );
+});
+
+it("offers only expansion without update permission and Mark read only for unread tasks", async () => {
+  state.rows = [task("t1", "Read task"), decode({ ...task("t2", "Unread task"), unread: true })];
+  state.canUpdate = false;
+  await open();
+  await press("Actions for Unread task");
+  expect(
+    ((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>).map(
+      (item) => item.text,
+    ),
+  ).toEqual(["Show work", "Cancel"]);
+  state.canUpdate = true;
+  await open();
+  await press("Actions for Read task");
+  expect(
+    ((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>).map(
+      (item) => item.text,
+    ),
+  ).toEqual(["Show work", "Pin", "Mark done", "Cancel"]);
+  await press("Actions for Unread task");
+  expect(
+    ((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>).map(
+      (item) => item.text,
+    ),
+  ).toContain("Mark read");
+});
+
+it("labels the static skeleton while the first work read is pending", async () => {
+  state.taskPending = true;
+  await open();
+  expect(container.querySelectorAll('[aria-label="Loading tasks…"]')).toHaveLength(1);
+  expect(home()?.textContent).not.toContain("No recent tasks");
 });

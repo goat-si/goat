@@ -81,7 +81,7 @@ const listedTask: BotWorkTask = {
   remote: [],
   truncated: false,
 };
-const work = (tasks: ReadonlyArray<BotWorkTask>) => ({ inProgress: tasks, done: [] });
+const work = (tasks: ReadonlyArray<BotWorkTask>) => ({ running: [], waiting: tasks, finished: [] });
 const omitted = {
   key: "task-old",
   revision: 3,
@@ -115,6 +115,11 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
     root?.render(
       <TaskList
         botName="GOAT Bot"
+        canUpdate
+        expanded={new Set()}
+        onToggleExpanded={() => {}}
+        showAllFinished={false}
+        onToggleFinished={() => {}}
         work={work([])}
         rows={[]}
         chatTasks={[]}
@@ -142,14 +147,15 @@ it("lists a task with its status, unread and pinned state, and the actions the b
   await act(async () => row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
   const choices = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
   expect(choices.map((choice) => choice.text)).toEqual([
+    "Show work",
     "Unpin",
     "Mark done",
     "Mark read",
     "Cancel",
   ]);
   await act(async () => {
-    choices[0]?.onPress?.();
     choices[1]?.onPress?.();
+    choices[2]?.onPress?.();
   });
   expect(calls.update.mock.calls.slice(-2)).toEqual([
     [{ taskId: "task-1", pinned: false }],
@@ -164,7 +170,7 @@ it("lists a task with its status, unread and pinned state, and the actions the b
 it("lists coding threads no task owns under Other threads, even when there are no tasks", async () => {
   const calls = await show({ rows: [coding] });
   expect(container.textContent).toContain("Other threads");
-  expect(container.textContent).not.toContain("No tasks yet");
+  expect(container.textContent).not.toContain("No recent tasks");
   await act(async () =>
     (
       container.querySelector('[aria-label="GOAT thread: Fix the build"]') as HTMLButtonElement
@@ -197,34 +203,13 @@ it("lists a conversation card only once when the server still lists its task", a
 
 it("says there is no work yet only when nothing at all is listed", async () => {
   await show();
-  expect(container.textContent).toContain("No tasks yet");
+  expect(container.textContent).toContain("No recent tasks");
 });
-it("lists each of a task's threads as its own entry, with keys that stay apart for ids holding colons", async () => {
-  // Two threads whose ids, joined with ":", would read the same.
+it("does not list a task's work threads in the card", async () => {
   const threads = [
-    { environmentId: "env:a", threadId: "b" },
-    { environmentId: "env", threadId: "a:b" },
     { environmentId: "env", threadId: "thread-3" },
   ] as unknown as BotWorkTask["threads"];
-  const props = {
-    botName: "GOAT Bot",
-    work: work([{ ...listedTask, threads }]),
-    rows: [task],
-    chatTasks: [],
-    onOpenTask: vi.fn(),
-    onPeekTask: vi.fn(),
-    onOpenThread: vi.fn(),
-    onUpdate: vi.fn(),
-  };
-  const keys = mobileBotTaskListItems(props).map((item) => item.key);
-  expect(new Set(keys).size).toBe(keys.length);
-  const calls = await show({ work: props.work, rows: props.rows });
-  const threadRows = [...container.querySelectorAll('[aria-label="Work thread: Review"]')];
-  expect(threadRows).toHaveLength(3);
-  for (const row of threadRows) await act(async () => (row as HTMLButtonElement).click());
-  expect(calls.thread.mock.calls.map(([target]) => target)).toEqual([
-    { environmentId: "env:a", id: "b" },
-    { environmentId: "env", id: "a:b" },
-    { environmentId: "env", id: "thread-3" },
-  ]);
+  await show({ work: work([{ ...listedTask, threads }]), rows: [task] });
+  expect(container.querySelector('[aria-label="Work thread: Review"]')).toBeNull();
+  expect(container.querySelectorAll('[aria-label="Actions for Review"]')).toHaveLength(1);
 });

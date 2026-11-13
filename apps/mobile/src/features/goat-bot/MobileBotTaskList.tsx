@@ -1,6 +1,6 @@
 import {
   presentTaskStatus,
-  type BotWorkTask,
+  type BotHomeWork,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import type {
@@ -16,6 +16,7 @@ import { Alert, Pressable, Text, View } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
+import { COLLAPSED_FINISHED } from "./mobileBotWorkShared";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -40,10 +41,12 @@ export function mobileBotTaskLabel(row: TaskRow): string {
  */
 export function mobileBotTaskListItems(props: {
   readonly botName: string;
-  readonly work: {
-    readonly inProgress: ReadonlyArray<BotWorkTask>;
-    readonly done: ReadonlyArray<BotWorkTask>;
-  };
+  readonly work: BotHomeWork;
+  readonly showAllFinished: boolean;
+  readonly onToggleFinished: () => void;
+  readonly expanded: ReadonlySet<ChannelTaskId>;
+  readonly onToggleExpanded: (id: ChannelTaskId) => void;
+  readonly canUpdate: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   /** Task cards in the conversation; ones the list lacks show under "Earlier in chat". */
   readonly chatTasks: ReadonlyArray<GoatBotTaskCard>;
@@ -57,7 +60,9 @@ export function mobileBotTaskListItems(props: {
   readonly failed?: boolean;
 }): ReadonlyArray<MobileBotHomeItem> {
   const listed = new Set(
-    [...props.work.inProgress, ...props.work.done].map((entry) => String(entry.row.task.taskId)),
+    [...props.work.running, ...props.work.waiting, ...props.work.finished].map((entry) =>
+      String(entry.row.task.taskId),
+    ),
   );
   const others = props.rows.filter(
     (row): row is Extract<BotThreadRow, { kind: "coding" }> =>
@@ -72,8 +77,8 @@ export function mobileBotTaskListItems(props: {
             key: "tasks-empty",
             render: () => (
               <MobileBotPanelEmpty
-                title="No tasks yet"
-                next={`Ask ${props.botName} in chat to start work.`}
+                title="No recent tasks"
+                next={`Ask ${props.botName} in chat to start work. Unpinned tasks that finished more than three days ago aren't listed here.`}
               />
             ),
           },
@@ -87,9 +92,17 @@ export function mobileBotTaskListItems(props: {
   };
   const menu = (row: TaskRow) =>
     Alert.alert(row.task.title, undefined, [
-      { text: row.view.pinnedAt ? "Unpin" : "Pin", onPress: () => act(row, "pin") },
-      { text: row.view.doneAt ? "Reopen" : "Mark done", onPress: () => act(row, "done") },
-      { text: "Mark read", onPress: () => act(row, "read") },
+      {
+        text: props.expanded.has(row.task.taskId) ? "Hide work" : "Show work",
+        onPress: () => props.onToggleExpanded(row.task.taskId),
+      },
+      ...(props.canUpdate
+        ? [
+            { text: row.view.pinnedAt ? "Unpin" : "Pin", onPress: () => act(row, "pin") },
+            { text: row.view.doneAt ? "Reopen" : "Mark done", onPress: () => act(row, "done") },
+            ...(row.unread ? [{ text: "Mark read", onPress: () => act(row, "read") }] : []),
+          ]
+        : []),
       { text: "Cancel", style: "cancel" },
     ]);
   const label = (key: string, text: string): MobileBotHomeItem => ({
@@ -98,16 +111,20 @@ export function mobileBotTaskListItems(props: {
   });
   const items: MobileBotHomeItem[] = [];
   for (const [section, tasks] of [
-    ["In progress", props.work.inProgress],
-    ["Done", props.work.done],
+    ["running", props.work.running],
+    ["waiting", props.work.waiting],
+    [
+      "finished",
+      props.showAllFinished
+        ? props.work.finished
+        : props.work.finished.slice(0, COLLAPSED_FINISHED),
+    ],
   ] as const) {
-    if (tasks.length === 0) continue;
-    items.push(label(`section:${section}`, section));
-    for (const { row, threads } of tasks) {
+    for (const { row } of tasks) {
       items.push({
         key: JSON.stringify(["task", row.task.taskId]),
         render: () => (
-          <View>
+          <View className="flex-row items-center">
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={mobileBotTaskLabel(row)}
@@ -116,67 +133,75 @@ export function mobileBotTaskListItems(props: {
                 { name: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
                 { name: "read", label: "Mark read" },
               ]}
-              onAccessibilityAction={(event) => act(row, event.nativeEvent.actionName)}
+              onAccessibilityAction={(event) => {
+                if (props.canUpdate) act(row, event.nativeEvent.actionName);
+              }}
               onLongPress={() => menu(row)}
-              className="min-h-[44px] justify-center"
+              className="min-h-[44px] flex-1 flex-row items-center gap-2"
               onPress={() => props.onPeekTask(row.task.taskId)}
             >
-              <Text className="text-foreground">{row.task.title}</Text>
-              <View className="flex-row items-center gap-1">
-                {row.view.pinnedAt ? (
-                  <SymbolView name="pin" size={12} tintColorClassName="accent-foreground-muted" />
-                ) : null}
-                {row.unread ? (
-                  <View
-                    accessibilityElementsHidden
-                    className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                  />
-                ) : null}
-                <Text className="text-xs text-foreground-muted">
-                  {presentTaskStatus(row.task.status, row.view.doneAt).label}
-                  {row.unread ? " · Unread" : ""}
-                </Text>
+              {section === "running" ? (
+                <View className="h-2 w-2 rounded-full bg-adaptive-blue-500-400" />
+              ) : (
+                <SymbolView
+                  name={section === "waiting" ? "questionmark.bubble" : "checkmark"}
+                  size={14}
+                  tintColorClassName={
+                    section === "waiting" ? "accent-warning-foreground" : "accent-foreground-muted"
+                  }
+                />
+              )}
+              <View className="flex-1">
+                <Text className="text-foreground">{row.task.title}</Text>
+                <View className="flex-row items-center gap-1">
+                  {row.view.pinnedAt ? (
+                    <SymbolView name="pin" size={12} tintColorClassName="accent-foreground-muted" />
+                  ) : null}
+                  {row.unread ? (
+                    <View
+                      accessibilityElementsHidden
+                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                    />
+                  ) : null}
+                  <Text className="text-xs text-foreground-muted">
+                    {presentTaskStatus(row.task.status, row.view.doneAt).label}
+                    {row.unread ? " · Unread" : ""}
+                  </Text>
+                </View>
               </View>
+              <SymbolView
+                name="chevron.right"
+                size={14}
+                tintColorClassName="accent-foreground-muted"
+              />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Actions for ${row.task.title}`}
+              onPress={() => menu(row)}
+              className="h-11 w-11 items-center justify-center"
+            >
+              <Text className="text-foreground-muted">…</Text>
             </Pressable>
           </View>
         ),
       });
-      // Each work thread is an entry of its own, so a task with many threads mounts only those in view.
-      for (const thread of threads) {
-        items.push({
-          key: JSON.stringify([
-            "task-thread",
-            row.task.taskId,
-            thread.environmentId,
-            thread.threadId,
-          ]),
-          render: () => {
-            const coding = props.rows.find(
-              (candidate) =>
-                candidate.kind === "coding" &&
-                candidate.environmentId === thread.environmentId &&
-                candidate.threadId === thread.threadId,
-            );
-            const title = coding?.kind === "coding" ? coding.title || "GOAT thread" : null;
-            return (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={
-                  title === null ? "Work thread: " + row.task.title : "GOAT thread: " + title
-                }
-                className="ml-4 min-h-[44px] justify-center"
-                onPress={() =>
-                  props.onOpenThread({ environmentId: thread.environmentId, id: thread.threadId })
-                }
-              >
-                <Text numberOfLines={1} className="text-foreground-muted">
-                  {title ?? "Work thread"}
-                </Text>
-              </Pressable>
-            );
-          },
-        });
-      }
+    }
+    if (section === "finished" && props.work.finished.length > COLLAPSED_FINISHED) {
+      items.push({
+        key: "finished-toggle",
+        render: () => (
+          <Pressable
+            accessibilityRole="button"
+            onPress={props.onToggleFinished}
+            className="min-h-[44px] items-center justify-center"
+          >
+            <Text className="text-foreground">
+              {props.showAllFinished ? "Show less" : "Show more"}
+            </Text>
+          </Pressable>
+        ),
+      });
     }
   }
   if (others.length > 0) items.push(label("section:other", "Other threads"));
