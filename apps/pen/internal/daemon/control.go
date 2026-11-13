@@ -176,6 +176,7 @@ func (b boundedConn) Close() error {
 
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 	slots := make(chan struct{}, controlConnCap)
+	d.controlSlots = slots
 	for {
 		c, err := ln.Accept()
 		if err != nil {

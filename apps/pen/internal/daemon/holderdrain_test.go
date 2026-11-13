@@ -52,11 +52,19 @@ func rawDial(t *testing.T, n *node) net.Conn {
 	return c
 }
 
+// holdDrains keeps every drain open until its holder closes or the daemon stops, so no deadline ends one in a test.
+func holdDrains(t *testing.T) {
+	was := holderDrainTime
+	holderDrainTime = time.Hour
+	t.Cleanup(func() { holderDrainTime = was })
+}
+
 func TestADrainingHolderKeepsItsControlSlotSoTheCapBoundsOpenControlConnections(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
+	holdDrains(t)
 	was, wait := controlConnCap, controlRequestTimeout
 	controlConnCap, controlRequestTimeout = 2, time.Hour // only the cap may close a connection here
 	defer func() { controlConnCap, controlRequestTimeout = was, wait }()
@@ -64,6 +72,7 @@ func TestADrainingHolderKeepsItsControlSlotSoTheCapBoundsOpenControlConnections(
 	drainingHolder(t, a, ended) // one ended registration draining, one active: the cap of 2 is reached
 	extra := rawDial(t, a)
 	extra.Write([]byte(`{"op":"status"}` + "\n"))
+	// A refused connection ends with EOF or a reset, either an error; only a served one gets a line.
 	if line, err := bufio.NewReader(extra).ReadBytes('\n'); err == nil {
 		t.Fatalf("a connection past the cap was served while a drain held a slot: %s", line)
 	}
@@ -74,6 +83,7 @@ func TestStoppingTheDaemonClosesTheConnectionsItIsDraining(t *testing.T) {
 	defer cancel()
 	rs := relaytest.New()
 	defer rs.Close()
+	holdDrains(t)
 	a, ended := startEnding(t, ctx, rs)
 	draining, active := drainingHolder(t, a, ended)
 	a.d.Stop()
@@ -83,9 +93,9 @@ func TestStoppingTheDaemonClosesTheConnectionsItIsDraining(t *testing.T) {
 		if _, err := h.r.ReadBytes('\n'); !errors.Is(err, io.EOF) {
 			t.Fatalf("a holder after the stop read %v, want the half-close", err)
 		}
-		// The node's side is closed once Run has returned, so a write finds no reader.
-		if _, err := h.c.Write([]byte("{}\n")); err == nil {
-			t.Fatalf("holder %v could still write after Run returned: its drain outlived the daemon", h.reply["id"])
-		}
+	}
+	// A control slot is freed only by its connection's Close, so none held means every control connection is closed.
+	if n := len(a.d.controlSlots); n != 0 {
+		t.Fatalf("%d control connection(s) still open after Run returned", n)
 	}
 }

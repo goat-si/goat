@@ -32,11 +32,11 @@ const (
 )
 
 // Bounds of the discard when a registration ends: after its last line the daemon half-closes and reads what the
-// holder still sends, for at most holderDrainTime and holderDrainCap bytes, before it closes the connection.
-const (
-	holderDrainTime = 5 * time.Second
-	holderDrainCap  = 64 << 10
-)
+// holder still sends, for at most holderDrainTime and holderDrainCap bytes, before it closes the connection
+// (holderDrainTime is a variable for tests).
+var holderDrainTime = 5 * time.Second
+
+const holderDrainCap = 64 << 10
 
 // serviceInvite is one service invite; its identity is the pointer, so a replacement never revives it.
 type serviceInvite struct {
