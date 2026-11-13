@@ -109,10 +109,12 @@ const make = Effect.gen(function* () {
               resume(Effect.fail(unknown("control socket unreachable"))),
             );
             connection.once("connect", () => resume(Effect.succeed(connection)));
-            // An interrupt (the op timeout) before "connect" would otherwise leave this socket open.
+            // The op timeout interrupts a connect that never completes; this closes its socket.
             return Effect.sync(() => connection.destroy());
           }),
           (connection) => Effect.sync(() => connection.destroy()),
+          // Without this the acquire runs uninterruptibly and the timeout cannot reach the connect.
+          { interruptible: true },
         );
         const reader = lineReader(socket);
         socket.write(encodeLine(op) + "\n");
