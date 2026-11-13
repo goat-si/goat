@@ -154,6 +154,11 @@ class NotNamed extends Data.TaggedError("NotNamed")<{}> {}
 /** Pen is asked by invite id once GOAT knows it, so a lost entry never reads as a fresh fence. */
 const refOf = (effect: AttachEffect): PenInviteRef =>
   effect.inviteId === undefined ? { mintId: effect.id } : { inviteId: effect.inviteId };
+// Every settings writer waits while a transaction holds the lock, so each is bounded as the store's is.
+const lockBound = Effect.timeoutOrElse({
+  duration: "15 seconds",
+  orElse: () => Effect.fail(storageFailed()),
+});
 /** The goatclaw policy a grant was resolved from is the one in force. */
 const samePolicy = (a: ServerSettings, b: ServerSettings) =>
   JSON.stringify(a.goatclaw) === JSON.stringify(b.goatclaw);
@@ -365,23 +370,25 @@ export const make = Effect.gen(function* () {
     if (ended !== undefined || before === undefined) return ended ?? ("switch_off" as const);
     return yield* settings
       .withSettingsSnapshot((current) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            const locked = lockedEnded(row, before, current, yield* Clock.currentTimeMillis);
-            if (locked !== undefined) return locked;
-            const [now] =
-              yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
-            if (
-              now === undefined ||
-              now.fence !== row.fence ||
-              now.effects_json !== row.effects_json
-            )
-              return "conflict" as const;
-            yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const locked = lockedEnded(row, before, current, yield* Clock.currentTimeMillis);
+              if (locked !== undefined) return locked;
+              const [now] =
+                yield* sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${row.attach_id}`;
+              if (
+                now === undefined ||
+                now.fence !== row.fence ||
+                now.effects_json !== row.effects_json
+              )
+                return "conflict" as const;
+              yield* sql`UPDATE disposable_machines SET effects_json = ${encodeEffects(effects)},
                 updated_at = ${yield* nowIso} WHERE attach_id = ${row.attach_id}`;
-            return "admitted" as const;
-          }),
-        ),
+              return "admitted" as const;
+            }),
+          )
+          .pipe(lockBound),
       )
       .pipe(Effect.mapError(storageFailed));
   });
@@ -581,44 +588,46 @@ export const make = Effect.gen(function* () {
               if (!samePolicy(current, atGrant)) return "delegation_lost" as const;
               if (!matchesDisposableNameRule(value.nameRule, input.name))
                 return "name_rule" as const;
-              return yield* sql.withTransaction(
-                Effect.gen(function* () {
-                  const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
-                  if (!gate.open) return gate.reason;
-                  const [taken] = yield* sql<{
-                    readonly n: number;
-                  }>`SELECT COUNT(*) AS n FROM disposable_machines
+              return yield* sql
+                .withTransaction(
+                  Effect.gen(function* () {
+                    const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
+                    if (!gate.open) return gate.reason;
+                    const [taken] = yield* sql<{
+                      readonly n: number;
+                    }>`SELECT COUNT(*) AS n FROM disposable_machines
                     WHERE ${sql.unsafe(OPEN)} AND (node_id = ${nodeId} OR expected_sign_pub = ${input.signPub}
                       OR expected_noise_pub = ${input.noisePub})`;
-                  if ((taken?.n ?? 0) > 0) return "key_in_use" as const;
-                  // A slot is held by every open record and by every admitted key still in Pen.
-                  const [held] = yield* sql<{
-                    readonly n: number;
-                  }>`SELECT COUNT(*) AS n FROM disposable_machines
+                    if ((taken?.n ?? 0) > 0) return "key_in_use" as const;
+                    // A slot is held by every open record and by every admitted key still in Pen.
+                    const [held] = yield* sql<{
+                      readonly n: number;
+                    }>`SELECT COUNT(*) AS n FROM disposable_machines
                     WHERE (${sql.unsafe(OPEN)}) OR (${sql.unsafe(IN_PEN)})`;
-                  if ((held?.n ?? 0) >= value.cap) return "cap_reached" as const;
-                  const now = yield* nowIso;
-                  yield* sql`INSERT INTO disposable_machines ${sql.insert({
-                    attach_id: attachId,
-                    provisioner_json: encodeProvisioner(caller.provisioner),
-                    delegation_json: encodeDelegation(delegation),
-                    name: input.name,
-                    label: input.label ?? null,
-                    expected_sign_pub: input.signPub,
-                    expected_noise_pub: input.noisePub,
-                    node_id: nodeId,
-                    grant_id: gate.grant,
-                    state: "reserved",
-                    step: "reserve",
-                    effects_json: encodeEffects([intent]),
-                    request_key: requestKey,
-                    created_at: now,
-                    state_since: now,
-                    updated_at: now,
-                  })}`;
-                  return "reserved" as const;
-                }),
-              );
+                    if ((held?.n ?? 0) >= value.cap) return "cap_reached" as const;
+                    const now = yield* nowIso;
+                    yield* sql`INSERT INTO disposable_machines ${sql.insert({
+                      attach_id: attachId,
+                      provisioner_json: encodeProvisioner(caller.provisioner),
+                      delegation_json: encodeDelegation(delegation),
+                      name: input.name,
+                      label: input.label ?? null,
+                      expected_sign_pub: input.signPub,
+                      expected_noise_pub: input.noisePub,
+                      node_id: nodeId,
+                      grant_id: gate.grant,
+                      state: "reserved",
+                      step: "reserve",
+                      effects_json: encodeEffects([intent]),
+                      request_key: requestKey,
+                      created_at: now,
+                      state_since: now,
+                      updated_at: now,
+                    })}`;
+                    return "reserved" as const;
+                  }),
+                )
+                .pipe(lockBound);
             }),
           )
           .pipe(Effect.mapError(storageFailed));
