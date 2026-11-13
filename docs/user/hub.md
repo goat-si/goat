@@ -107,6 +107,16 @@ once, for both aliases, the machine, the old link and the new host key, and GOAT
 leaves the old alias and links the new one. If the new link fails, the same
 approval finishes the move later. Aliases that name different machines are refused.
 
+## Disposable machines
+
+A person can turn on **Attach disposable machines** in **Settings → Hub** to let
+named provisioner threads and a person in Settings admit machines to the Pen mesh.
+Only a person can change this consent. A provisioner thread uses
+`goat_hub_machine_attach` with the keys from `pen identity --json` on the machine;
+the returned invite token is a secret. Each machine is a full Pen member and can
+reach services on your machines' loopback. It remains a Pen member until a person
+removes it from Pen.
+
 ## Sync OpenCodex models
 
 **Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first

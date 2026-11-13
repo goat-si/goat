@@ -138,6 +138,9 @@ function HubDevicesList({
 }) {
   const listed = useEnvironmentQuery(serverEnvironment.hubNodesLive({ environmentId, input: {} }));
   const status = useEnvironmentQuery(serverEnvironment.hostStatus({ environmentId, input: {} }));
+  const machines = useEnvironmentQuery(
+    serverEnvironment.hubMachinesList({ environmentId, input: {} }),
+  );
   const { environments } = useEnvironments();
   const hubSettings =
     environments.find((entry) => entry.environmentId === environmentId)?.serverConfig?.settings
@@ -231,6 +234,44 @@ function HubDevicesList({
             disabled={!canConfigure || !hubSettings.enabled || busy !== null}
             onValueChange={saveCloudAutoJoin}
           />
+        </View>
+      )}
+      {hubSettings?.attachDisposableMachines && (
+        <View className="gap-3 rounded-xl bg-grouped-card p-4">
+          <View className="flex-row items-center gap-3">
+            <View className="flex-1 gap-1">
+              <Text className="text-foreground">Attach disposable machines</Text>
+              <Text className="text-sm text-foreground-muted">{`The threads you name here, and you in Settings, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.`}</Text>
+            </View>
+            <ThemedSwitch
+              accessibilityLabel="Attach disposable machines"
+              value={hubSettings.attachDisposableMachines.enabled}
+              disabled={!canConfigure || !hubSettings.enabled || busy !== null}
+              onValueChange={(enabled) =>
+                void run("disposable-machines", () =>
+                  updateSettings({
+                    environmentId,
+                    input: { patch: { hub: { attachDisposableMachines: { enabled } } } },
+                  }),
+                )
+              }
+            />
+          </View>
+          {machines.error && <Text>{machines.error}</Text>}
+          {machines.data?.machines.map((machine) => (
+            <View key={machine.attachId}>
+              <Text>
+                {machine.name} · {machine.state} · {machine.message}
+              </Text>
+              <Text>
+                {machine.provisioner.kind === "person"
+                  ? "Person"
+                  : `Thread ${machine.provisioner.threadId}`}
+                {machine.penMember ? " · Still in Pen" : ""}
+              </Text>
+            </View>
+          ))}
+          <Button label="Refresh machines" onPress={machines.refresh} />
         </View>
       )}
       {isGoatConnectEnabled() && hubSettings !== null && (

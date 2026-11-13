@@ -1,0 +1,105 @@
+import { RegistryContext } from "@effect/atom-react";
+import { DEFAULT_SERVER_SETTINGS, EnvironmentId } from "@goat/contracts";
+import { AtomRegistry } from "effect/reactivity";
+import type { ReactNode } from "react";
+import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
+import { render } from "../../../test/render";
+import "../../index.css";
+
+const state = vi.hoisted(() => ({
+  save: vi.fn(),
+  attach: vi.fn(),
+  reissue: vi.fn(),
+  hub: undefined as unknown,
+}));
+vi.mock("~/hooks/useSettings", () => ({ useEnvironmentSettings: () => state.hub }));
+vi.mock("~/state/server", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const permissionAtom = () => Atom.make(true);
+  const machines = Atom.make(AsyncResult.success({ machines: [] }));
+  return {
+    serverEnvironment: {
+      updateSettings: { label: "settings", run: state.save, permissionAtom },
+      hubMachinesAttach: { label: "attach", run: state.attach, permissionAtom },
+      hubMachinesReissue: { label: "reissue", run: state.reissue, permissionAtom },
+      hubMachinesList: () => machines,
+    },
+  };
+});
+vi.mock("./settingsLayout", () => ({
+  SettingsSection: ({ title, children }: { title: string; children: ReactNode }) => (
+    <section>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  ),
+  SettingsRow: ({
+    title,
+    description,
+    control,
+  }: {
+    title: string;
+    description: ReactNode;
+    control: ReactNode;
+  }) => (
+    <div>
+      <h3>{title}</h3>
+      <p>{description}</p>
+      {control}
+    </div>
+  ),
+}));
+import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
+
+const environmentId = EnvironmentId.make("test-hub");
+function setup(enabled: boolean) {
+  state.hub = {
+    ...DEFAULT_SERVER_SETTINGS.hub,
+    enabled: true,
+    attachDisposableMachines: { ...DEFAULT_SERVER_SETTINGS.hub.attachDisposableMachines, enabled },
+  };
+  state.save.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+  state.attach.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: { invite: { token: "secret-token", expiresAt: "2026-12-01T00:00:00.000Z" } },
+  });
+  state.reissue.mockReset();
+  const registry = AtomRegistry.make();
+  return { registry, [Symbol.dispose]: () => registry.dispose() };
+}
+
+it("saves disposable machine consent and describes Pen access", async () => {
+  using fixture = setup(false);
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await expect
+    .element(screen.getByText(/may admit up to 10 machines to your Pen mesh/))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("switch", { name: "Attach disposable machines" }));
+  expect(state.save).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
+  });
+});
+
+it("shows the invite once and clears it when the attach dialog closes", async () => {
+  using fixture = setup(true);
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Attach a machine" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Machine name" }), "cloud-a");
+  await userEvent.type(screen.getByRole("textbox", { name: "Signing public key" }), "sign");
+  await userEvent.type(screen.getByRole("textbox", { name: "Noise public key" }), "noise");
+  await userEvent.click(screen.getByRole("button", { name: "Create invite" }));
+  await expect.element(screen.getByText("secret-token")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Close", exact: true }).first());
+  await userEvent.click(screen.getByRole("button", { name: "Attach a machine" }));
+  await expect.element(screen.getByText("secret-token")).not.toBeInTheDocument();
+});
