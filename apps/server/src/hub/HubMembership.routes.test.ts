@@ -395,6 +395,7 @@ it.effect(
       const refused = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
       expect(refused).toMatchObject({
         state: "failed",
+        code: "ocx_unstartable",
         message: "ocx could not be started on this hub, so nothing changed.",
       });
       expect(yield* hub.consumed).toEqual([]);

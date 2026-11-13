@@ -377,3 +377,55 @@ it("a continued change that fails without a refusal code settles the waiting cha
   await expect.element(screen.getByRole("textbox", { name: "New route for mini" })).toBeEnabled();
   registry.dispose();
 });
+it("a continued change whose ocx could not be started keeps the waiting change, and the same decision runs it later", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini"]));
+  state.update
+    .mockReset()
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "needs_human",
+        message: "Changing a Child's routes needs an owner's approval.",
+        linkId: "lnk_0123456789abcdef",
+        decisionId: "decision-1",
+      } satisfies HubDeviceRoutesResult,
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "failed",
+        code: "ocx_unstartable",
+        message: "ocx could not be started on this hub, so nothing changed.",
+        linkId: "lnk_0123456789abcdef",
+      } satisfies HubDeviceRoutesResult,
+    })
+    .mockResolvedValueOnce(listed(["mini-lan", "mini"]));
+  const registry = AtomRegistry.make();
+  await using screen = await render(
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="hub-initiated"
+      />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Routes" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
+  await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent("ocx could not be started on this hub, so nothing changed.");
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await expect.element(screen.getByText("mini-lan")).toBeVisible();
+  const change = { op: "add", route: "mini-lan" };
+  expect(state.update.mock.calls.map((call) => call[1].input)).toEqual([
+    { deviceAlias: "mini", change },
+    { deviceAlias: "mini", change, decisionId: "decision-1" },
+    { deviceAlias: "mini", change, decisionId: "decision-1" },
+  ]);
+  registry.dispose();
+});

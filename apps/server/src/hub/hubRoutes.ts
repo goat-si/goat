@@ -330,6 +330,7 @@ export const makeRoutes = (deps: RoutesDeps) => {
                 deviceAlias: alias,
                 linkId: link.linkId,
                 state: "failed",
+                  code: "ocx_unstartable",
                 message: "ocx could not be started on this hub, so nothing changed.",
               }
             : ran.output === null
