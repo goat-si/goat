@@ -10,7 +10,7 @@ func pipeQueue(t *testing.T) (*holderQueue, net.Conn) {
 	t.Helper()
 	near, far := net.Pipe()
 	t.Cleanup(func() { near.Close(); far.Close() })
-	q := newHolderQueue(near)
+	q := newHolderQueue(near, nil) // a pipe cannot half-close, so nothing is drained
 	go q.run()
 	t.Cleanup(q.fail)
 	return q, far

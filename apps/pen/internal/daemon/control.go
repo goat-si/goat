@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
@@ -137,17 +138,20 @@ func (d *Daemon) listenControl() (net.Listener, error) {
 	return ln, nil
 }
 
-// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations)
-// included; controlRequestTimeout bounds the wait for a connection's request line, and controlWriteTimeout
-// each write to a client, so one that stops reading frees its slot (variables for tests).
+// controlConnCap bounds the control connections open at once, long-lived ones (watches, registrations) and ended
+// registrations still draining included; controlRequestTimeout bounds the wait for a connection's request line, and
+// controlWriteTimeout each write to a client, so one that stops reading frees its slot (variables for tests).
 var (
 	controlConnCap        = 512
 	controlRequestTimeout = 10 * time.Second
 	controlWriteTimeout   = 5 * time.Second
 )
 
-// boundedConn gives every write its own deadline.
-type boundedConn struct{ net.Conn }
+// boundedConn gives every write its own deadline; closed runs after its Close and frees its control slot.
+type boundedConn struct {
+	net.Conn
+	closed func()
+}
 
 func (b boundedConn) Write(p []byte) (int, error) {
 	if err := b.Conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout)); err != nil {
@@ -164,6 +168,12 @@ func (b boundedConn) CloseWrite() error {
 	return errors.ErrUnsupported
 }
 
+func (b boundedConn) Close() error {
+	err := b.Conn.Close()
+	b.closed()
+	return err
+}
+
 func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 	slots := make(chan struct{}, controlConnCap)
 	for {
@@ -177,10 +187,9 @@ func (d *Daemon) serveControl(ctx context.Context, ln net.Listener) {
 			c.Close()
 			continue
 		}
-		d.spawn(func() {
-			defer func() { <-slots }()
-			d.handleControl(ctx, boundedConn{c})
-		})
+		// The slot is freed when the connection closes, which for a registration's holder may be after
+		// handleControl returns (holderQueue.failWith).
+		d.spawn(func() { d.handleControl(ctx, boundedConn{c, sync.OnceFunc(func() { <-slots })}) })
 	}
 }
 

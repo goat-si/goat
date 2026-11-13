@@ -468,7 +468,7 @@ func (d *Daemon) controlRegister(ctx context.Context, c net.Conn, r *bufio.Reade
 	idb := make([]byte, 16)
 	rand.Read(idb)
 	reg := &serviceReg{id: strings.ToLower(regIDs.EncodeToString(idb)), name: req.Name, port: req.Port, key: key, holder: c,
-		out: newHolderQueue(c), endDone: make(chan struct{})}
+		out: newHolderQueue(c, func(c net.Conn) { d.spawn(func() { discardAndClose(ctx, c) }) }), endDone: make(chan struct{})}
 	reg.out.whileWriting = d.opt.HolderWriting
 	reg.out.whileFilling = d.opt.HolderFilling
 	reg.wmu.Lock()

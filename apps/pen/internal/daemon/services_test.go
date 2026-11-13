@@ -815,7 +815,7 @@ func TestAControlWriteToAClientThatStopsReadingEndsAtItsDeadline(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 	var ne net.Error
-	if _, err := (boundedConn{server}).Write([]byte("line\n")); !errors.As(err, &ne) || !ne.Timeout() {
+	if _, err := (boundedConn{Conn: server}).Write([]byte("line\n")); !errors.As(err, &ne) || !ne.Timeout() {
 		t.Fatalf("got %v, want a write timeout", err)
 	}
 }
