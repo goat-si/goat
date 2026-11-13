@@ -125,7 +125,8 @@ routes on the hub; an older one says so.
 ## Disposable machines
 
 A disposable machine is one you build for a short job, such as a cloud VM, and
-admit to your Pen mesh with a one-time invite. Turn on **Attach disposable
+admit to your Pen mesh with a one-time invite. The hub must run on macOS or
+Linux. Turn on **Attach disposable
 machines** in **Settings → Hub** (the hub must be on), then name the threads that
 may attach machines by their thread ID (**Copy → Thread ID** in a thread's menu).
 Only a person can change this consent, and it lasts 30 days: when it ends,
@@ -149,8 +150,12 @@ on that route only. The machine list says where each machine is and what to do
 next. On web and desktop, a machine GOAT cannot reach yet shows the machine key
 with **Copy machine key**; on mobile its text says where to find the key. The link
 needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
-release can yet; until one can, the machine waits at the link step. A machine with a full OpenCodex install, or one that shares its
-SSH host key with another disposable machine, stops for you to decide.
+release can yet; until one can, the machine waits at the link step. OpenCodex
+also refuses the key while a folder on its path can be written by its group or
+others: GOAT tightens its own folders, and for any other the machine list names
+the folder and the `chmod go-w` that fixes it. A machine with a full OpenCodex
+install, or one that shares its SSH host key with another disposable machine,
+stops for you to decide.
 
 Each machine is a full Pen member and can reach services on your machines'
 loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
