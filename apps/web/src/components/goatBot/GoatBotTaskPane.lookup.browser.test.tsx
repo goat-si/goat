@@ -711,6 +711,20 @@ it("keeps an older task during a list refresh and rereads only after an action s
   await vi.waitFor(() => expect(state.lookup).toHaveBeenCalledTimes(1));
 });
 
+it("retries a failed lookup when Try again is pressed during a list refresh", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("offline")) });
+  state.lookup.mockReturnValue(new Promise(() => {}));
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Couldn't load this task.");
+  state.listPending = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(state.lookup).toHaveBeenCalledTimes(2);
+});
+
 it("shows Home guidance while the first list read is pending", async () => {
   setup();
   state.noRows = true;

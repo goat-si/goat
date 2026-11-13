@@ -75,7 +75,6 @@ export function GoatBotTaskPane({
     taskId,
     member?.botId ?? BotId.make("main"),
     established === listKey && !failed && listedTask === undefined && member?.state !== "deleted",
-    pending,
   );
   const found = listedTask === undefined ? lookup.value?.task : undefined;
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);

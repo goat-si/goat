@@ -19,7 +19,6 @@ export function useBotTaskLookup(
   taskId: ChannelTaskId,
   botId: BotId,
   needed: boolean,
-  paused = false,
 ) {
   const configs = useServerConfigs();
   const supported =
@@ -88,7 +87,7 @@ export function useBotTaskLookup(
     };
   }, [environmentId, botId, taskId, needed, supported, permitted, run]);
   const reload = useStableCallback((force = false) => {
-    if (!paused) run(environmentId, taskId, botId, needed, supported, permitted, force);
+    run(environmentId, taskId, botId, needed, supported, permitted, force);
   });
   return {
     supported,
