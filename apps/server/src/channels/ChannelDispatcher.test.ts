@@ -1,5 +1,9 @@
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
   ChannelInputId,
@@ -33,6 +37,9 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { holdNextLedgerCall, trackPlacements } from "./testkit/dispatchRace.ts";
+import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
+import { RemoteMachine, remoteScript } from "./testing/RemoteMachine.ts";
 import {
   defaultScript,
   goatInput,
@@ -677,3 +684,167 @@ it.effect("a stop whose worker thread vanished still stops its recorded thread c
     assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
   }).pipe(Effect.provide(harness.layer));
 });
+
+const placementHarness = () => {
+  const machine = new RemoteMachine();
+  machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+  machine.hostQuotas = { codex: 20 };
+  const harness = makeHarness({
+    sshRemote: machine.layer,
+    projects: 1,
+    repositoryIdentity: {
+      canonicalKey: "github.com/goat-si/goat",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "https://github.com/goat-si/goat.git",
+      },
+    },
+    settingsLayer: ServerSettings.layerTest({
+      channelAutoPlacement: true,
+      textGenerationModelSelection: modelSelection,
+    }).pipe(Layer.orDie),
+    providerInstances: [{ instanceId: "codex", displayName: "Local Codex", weeklyUsedPercent: 80 }],
+  });
+  harness.script.current = remoteScript;
+  return { machine, harness };
+};
+
+/** A Slack request received for automatic placement, owned by "placement-owner". */
+const receivedForPlacement = (key: string) =>
+  Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* (yield* ChannelLedger.ChannelLedger).claimOwnership({
+      token: "placement-owner",
+      now,
+      staleBefore: now,
+    });
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const input = yield* gateway.ingest(slackInput("do: inspect the build", key), slackContext);
+    yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+      input.inputId,
+      "placement-owner",
+    );
+    return yield* onlyTask;
+  });
+
+/**
+ * Parks the task's automatic placement while it lists the remote projects, before it claims, and
+ * holds a second dispatch after it read the task and before it checks for that placement.
+ */
+const secondDispatchBehindPlacement = (machine: RemoteMachine, key: string) =>
+  Effect.gen(function* () {
+    const task = yield* receivedForPlacement(key);
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    const listing = yield* Deferred.make<void>();
+    const listed = yield* Deferred.make<void>();
+    machine.onProjectList = Effect.suspend(() => {
+      machine.onProjectList = Effect.void;
+      return Deferred.succeed(listing, undefined).pipe(Effect.andThen(Deferred.await(listed)));
+    });
+    const placements = trackPlacements();
+    yield* placements.observe(dispatcher.dispatch(task.taskId, "placement-owner"));
+    yield* Deferred.await(listing);
+    const identity = yield* holdNextLedgerCall("findIdentity");
+    const second = yield* Effect.forkChild(dispatcher.dispatch(task.taskId, "placement-owner"));
+    yield* identity.reached;
+    return {
+      second,
+      /** The placement finishes: it claims or fails the task, and its fiber has ended. */
+      placementEnds: Deferred.succeed(listed, undefined).pipe(Effect.andThen(placements.settled)),
+      release: identity.release,
+    };
+  });
+
+const succeeded = (exit: Exit.Exit<void, ChannelLedger.ChannelLedgerError>) =>
+  assert.isTrue(Exit.isSuccess(exit), Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "");
+
+const failedEvents = SqlClient.SqlClient.pipe(
+  Effect.flatMap(
+    (sql) =>
+      sql<{
+        readonly reason: string;
+      }>`SELECT json_extract(event_json, '$.payload.reason') AS reason FROM channel_task_events WHERE type = 'task.failed'`,
+  ),
+  Effect.map((rows) => rows.map((row) => row.reason)),
+);
+
+it.effect(
+  "regression #3159: a dispatch that read the task before its automatic placement claimed it leaves the claimed work running",
+  () => {
+    const { machine, harness } = placementHarness();
+    return Effect.gen(function* () {
+      const writes = yield* taskWriteMilestones();
+      const race = yield* secondDispatchBehindPlacement(machine, "placement-race-claimed");
+      yield* race.placementEnds;
+      // The remote launch runs in its own fiber: wait until it recorded its attempt and bound.
+      yield* writes.waitFor(
+        (task, state) => task.status === "running" && (state?.attempts ?? 0) > 0,
+      );
+      yield* race.release;
+      succeeded(yield* Fiber.await(race.second));
+      assert.strictEqual((yield* onlyTask).status, "running");
+      assert.deepStrictEqual(yield* failedEvents, []);
+      assert.lengthOf(machine.launches, 1);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "regression #3159: a dispatch that read the task before its placement failed a revoked requester leaves that one failure",
+  () => {
+    const { machine, harness } = placementHarness();
+    return Effect.gen(function* () {
+      const race = yield* secondDispatchBehindPlacement(machine, "placement-race-revoked");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+      yield* race.placementEnds;
+      yield* race.release;
+      succeeded(yield* Fiber.await(race.second));
+      assert.strictEqual((yield* onlyTask).status, "failed");
+      assert.deepStrictEqual(yield* failedEvents, ["permission_changed"]);
+      assert.lengthOf(machine.launches, 0);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "regression #3159: a launch-uncertain failure that another writer beats leaves the task to the next pass",
+  () => {
+    const { machine, harness } = placementHarness();
+    machine.loseNextLaunchAnswer = true;
+    return Effect.gen(function* () {
+      const task = yield* receivedForPlacement("placement-race-uncertain");
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const placements = trackPlacements();
+      yield* placements.observe(dispatcher.dispatch(task.taskId, "placement-owner"));
+      yield* placements.settled;
+      // The launch fiber records the attempt before the host call and, once the answer is lost,
+      // ends reading only the task (ChannelRemoteWorkers launchOnce), so the hold below is ours.
+      yield* Deferred.await(machine.launchAnswerLost);
+      assert.strictEqual((yield* onlyTask).status, "dispatching");
+      // The recorded attempt now names another machine than the claim: attempted elsewhere.
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.host', 'other-box') WHERE key = ${"remote-worker:" + task.taskId}`;
+      assert.include(yield* ledger.getRemoteWorker(task.taskId), '"host":"other-box"');
+      const state = yield* holdNextLedgerCall("getRemoteWorker");
+      const third = yield* Effect.forkChild(dispatcher.dispatch(task.taskId, "placement-owner"));
+      yield* state.reached;
+      // The requester stops the task between that dispatch's read and its failure write.
+      const moved = yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        { type: "task.cancelled", payload: { reason: "Stopped by Owner." } },
+        { owner: "placement-owner" },
+      );
+      assert.isDefined(moved);
+      yield* state.release;
+      succeeded(yield* Fiber.await(third));
+      assert.strictEqual((yield* onlyTask).status, "cancelled");
+      assert.deepStrictEqual(yield* failedEvents, []);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  },
+);

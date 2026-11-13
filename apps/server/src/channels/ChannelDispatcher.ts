@@ -69,6 +69,7 @@ import {
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { PlacementStarted, unlessMovedOn } from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
@@ -826,18 +827,20 @@ const make = Effect.gen(function* () {
           Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         );
         if (requester === undefined) {
-          yield* commitTransition(
-            ledger,
-            stored,
-            {
-              type: "task.failed",
-              payload: {
-                generation: stored.task.generation,
-                reason: "permission_changed",
-                summary: "The requester’s permission to start this work changed.",
+          yield* unlessMovedOn(
+            commitTransition(
+              ledger,
+              stored,
+              {
+                type: "task.failed",
+                payload: {
+                  generation: stored.task.generation,
+                  reason: "permission_changed",
+                  summary: "The requester’s permission to start this work changed.",
+                },
               },
-            },
-            { owner, narrate: true },
+              { owner, narrate: true },
+            ),
           );
           return;
         }
@@ -848,20 +851,25 @@ const make = Effect.gen(function* () {
         // An automatic placement in flight owns the task until it claims or gives up; its own
         // remote attempt must not read as an attempt elsewhere.
         if (yield* FiberMap.has(placements, taskId)) return;
-        const elsewhere = yield* remoteWorkers.attemptedElsewhere(stored);
+        // A placement that ended after the read above moved the task on; the next pass reads it.
+        const current = yield* ledger.getTask(taskId);
+        if (current === undefined || current.task.version !== stored.task.version) return;
+        const elsewhere = yield* remoteWorkers.attemptedElsewhere(current);
         if (elsewhere !== undefined) {
-          yield* commitTransition(
-            ledger,
-            stored,
-            {
-              type: "task.failed",
-              payload: {
-                generation: stored.task.generation,
-                reason: "launch_uncertain",
-                summary: ChannelRemoteWorkers.REMOTE_COPY.launchUncertain(elsewhere),
+          yield* unlessMovedOn(
+            commitTransition(
+              ledger,
+              current,
+              {
+                type: "task.failed",
+                payload: {
+                  generation: current.task.generation,
+                  reason: "launch_uncertain",
+                  summary: ChannelRemoteWorkers.REMOTE_COPY.launchUncertain(elsewhere),
+                },
               },
-            },
-            { owner, narrate: true },
+              { owner, narrate: true },
+            ),
           );
           return;
         }
@@ -898,7 +906,7 @@ const make = Effect.gen(function* () {
         (yield* serverSettings.getSettings.pipe(Effect.orDie)).channelAutoPlacement
       ) {
         yield* Ref.update(remoteReservations, (map) => new Map(map).set(taskId, requester));
-        yield* FiberMap.run(
+        const placement = yield* FiberMap.run(
           placements,
           taskId,
           autoPlace(stored, owner).pipe(
@@ -909,6 +917,7 @@ const make = Effect.gen(function* () {
           ),
           { onlyIfMissing: true },
         );
+        yield* (yield* PlacementStarted)(placement);
         return;
       }
       if (stored.task.host !== undefined) {
