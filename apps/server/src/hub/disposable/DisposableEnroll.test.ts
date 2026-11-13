@@ -568,3 +568,25 @@ it("ssh's own refusal lines decide how a reach ended", () => {
     "unreachable",
   );
 });
+
+it.effect("a stop that lost its record to another step writes no audit row", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId, nodeId } = yield* joined(pen, host, 1);
+      host.control.routes.set(nodeId, { kind: "refused", reason: "other_pen" });
+      const hold = yield* makeHold();
+      host.control.holdRoute = hold;
+      const pass = yield* Effect.forkChild(enroll);
+      yield* Deferred.await(hold.arrived);
+      pen.members.delete(key(1));
+      yield* listed(attachId);
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(pass);
+      const sql = yield* SqlClient.SqlClient;
+      const stops = yield* sql<{ readonly n: number }>`SELECT COUNT(*) AS n FROM audit_events
+        WHERE target = ${attachId} AND outcome LIKE 'stopped:%'`;
+      expect(stops[0]?.n).toBe(0);
+    }),
+  ),
+);

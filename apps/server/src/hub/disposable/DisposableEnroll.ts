@@ -98,9 +98,12 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         return saved.length === 1;
       }),
     );
+  // The audit row follows only a stop the record kept; a moved fence means another step decided.
   const stop = (row: Row, enroll: Enroll, code: string, columns: Columns = {}) =>
-    Effect.flatMap(note(row, { ...enroll, stop: code }, { state: "paused", ...columns }), () =>
-      audit(row.attach_id, "hub.machine_enroll", "stopped:" + code),
+    Effect.flatMap(
+      note(row, { ...enroll, stop: code }, { state: "paused", ...columns }),
+      (saved) =>
+        saved ? audit(row.attach_id, "hub.machine_enroll", "stopped:" + code) : Effect.void,
     );
   /** Lost authority stops the record before any further effect; a person resumes it. */
   const pause = Effect.fn("DisposableEnroll.pause")(function* (row: Row, reason: string) {
