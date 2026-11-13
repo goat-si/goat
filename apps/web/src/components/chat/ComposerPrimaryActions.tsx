@@ -132,8 +132,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onToggleKeepFullHistory,
 }: ComposerPrimaryActionsProps) {
   const stop = useComposerStopState(runId, canInterrupt, canOperateThread);
-  const stopLabel =
-    stop.phase === "landed" ? "Stopped" : stop.phase === "pending" ? "Stopping" : "Stop generation";
+  const stopLabel = stop.phase === "pending" ? "Stopping" : "Stop generation";
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
@@ -185,9 +184,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       >
         <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
       </TooltipTrigger>
-      <TooltipPopup>
-        {stop.phase === "pending" ? "Stopping…" : stop.phase === "landed" ? "Stopped" : "Interrupt"}
-      </TooltipPopup>
+      <TooltipPopup>{stop.phase === "pending" ? "Stopping…" : "Interrupt"}</TooltipPopup>
     </Tooltip>
   );
 
@@ -222,6 +219,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           className={cn(messageActionPillClassName, compact ? "px-3" : "px-4")}
           {...pointerFocusProps}
+          onClick={(event) => {
+            if (stop.phase === "landed") event.preventDefault();
+          }}
           disabled={
             !canOperateThread ||
             isEnvironmentUnavailable ||
@@ -236,7 +236,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             questionIndex: pendingAction.questionIndex,
           })}
         </button>
-        {canInterrupt || stop.phase !== null ? renderStopGenerationButton() : null}
+        {canInterrupt || stop.phase === "pending" || stop.phase === "timedOut"
+          ? renderStopGenerationButton()
+          : null}
       </div>
     );
   }
@@ -254,7 +256,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           >
             {isConnecting || isSendBusy ? "Sending..." : "Refine"}
           </button>
-          {stop.phase !== null ? renderStopGenerationButton() : null}
+          {stop.phase === "pending" || stop.phase === "timedOut"
+            ? renderStopGenerationButton()
+            : null}
         </>
       );
     }
@@ -306,7 +310,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             </MenuPopup>
           </Menu>
         </div>
-        {stop.phase !== null ? renderStopGenerationButton() : null}
+        {stop.phase === "pending" || stop.phase === "timedOut"
+          ? renderStopGenerationButton()
+          : null}
       </>
     );
   }
@@ -372,7 +378,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         "bg-composer-send text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action",
       )}
       {...pointerFocusProps}
-      onClick={showResume ? onResume : onSubmitMessage}
+      onClick={(event) => {
+        if (stop.phase === "landed") {
+          event.preventDefault();
+          return;
+        }
+        if (showResume) onResume?.();
+        else onSubmitMessage?.(event);
+      }}
       disabled={
         isSendBusy ||
         isSendDisabled ||
@@ -409,7 +422,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return (
       <>
         {submit}
-        {stop.phase !== null ? renderStopGenerationButton() : null}
+        {stop.phase === "pending" || stop.phase === "timedOut"
+          ? renderStopGenerationButton()
+          : null}
       </>
     );
 
@@ -458,7 +473,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </TooltipPopup>
       </Tooltip>
       {submit}
-      {stop.phase !== null ? renderStopGenerationButton() : null}
+      {stop.phase === "pending" || stop.phase === "timedOut" ? renderStopGenerationButton() : null}
     </div>
   );
 });

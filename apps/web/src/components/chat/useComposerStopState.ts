@@ -16,8 +16,11 @@ export function useComposerStopState(
   }
   // oxlint-disable-next-line goat/react-effect-budget -- allow retry if the stop never settles
   useEffect(() => {
-    if (phase !== "pending") return;
-    const timeout = setTimeout(() => setPhase("timedOut"), 10_000);
+    if (phase !== "pending" && phase !== "landed") return;
+    const timeout =
+      phase === "pending"
+        ? setTimeout(() => setPhase("timedOut"), 10_000)
+        : setTimeout(() => setPhase(null), 500);
     return () => clearTimeout(timeout);
   }, [phase]);
   return {
