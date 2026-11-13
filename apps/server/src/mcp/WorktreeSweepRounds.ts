@@ -6,6 +6,8 @@ import * as Semaphore from "effect/Semaphore";
 
 // Removing sweeps of one scope, running or waiting, as ThreadForkWorkspace caps callers of one fork.
 const MAX_REMOVING_SWEEPS_PER_SCOPE = 4;
+// Repo scopes whose rounds are kept; an evicted idle scope only restarts its round on its next call.
+const MAX_SWEEP_ROUNDS = 64;
 
 /**
  * One repo scope's cleanup round: when each worktree's check last started (least recent goes
@@ -20,20 +22,27 @@ export interface SweepRound {
   listed: ReadonlyArray<string> | undefined;
 }
 
-export const makeSweepRounds = () => {
+/**
+ * Rounds by repo scope, least recently used first. Past the cap the oldest idle rounds go; one with
+ * a sweep running or waiting stays, so only scopes with a call in flight can exceed it.
+ */
+export const makeSweepRounds = (maxRounds = MAX_SWEEP_ROUNDS) => {
   const rounds = new Map<string, SweepRound>();
   return (key: string): SweepRound => {
-    const existing = rounds.get(key);
-    if (existing !== undefined) return existing;
-    const created: SweepRound = {
+    const round: SweepRound = rounds.get(key) ?? {
       lastStart: new Map(),
       decided: new Set(),
       sweeping: Semaphore.makeUnsafe(1),
       removingSweeps: 0,
       listed: undefined,
     };
-    rounds.set(key, created);
-    return created;
+    rounds.delete(key);
+    rounds.set(key, round);
+    for (const [other, entry] of rounds) {
+      if (rounds.size <= maxRounds) break;
+      if (other !== key && entry.removingSweeps === 0) rounds.delete(other);
+    }
+    return round;
   };
 };
 

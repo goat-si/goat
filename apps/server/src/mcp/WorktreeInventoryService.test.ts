@@ -22,6 +22,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
+import { makeSweepRounds } from "./WorktreeSweepRounds.ts";
 
 interface ThreadFixture {
   readonly id: string;
@@ -897,5 +898,31 @@ describe("WorktreeInventoryService", () => {
         });
         for (const path of [dirty, local, live, pushed]) expect(yield* fs.exists(path)).toBe(true);
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+});
+
+describe("WorktreeSweepRounds", () => {
+  it.effect(
+    "bound: many repo scopes keep at most the cap of idle rounds, evicting the least recently used",
+    () =>
+      Effect.sync(() => {
+        const roundOf = makeSweepRounds(2);
+        const first = roundOf("/repo/a");
+        const second = roundOf("/repo/b");
+        expect(roundOf("/repo/a")).toBe(first);
+        for (let i = 0; i < 100; i++) roundOf("/repo/other-" + i);
+        expect(roundOf("/repo/a")).not.toBe(first);
+        expect(roundOf("/repo/b")).not.toBe(second);
+      }),
+  );
+
+  it.effect("bound: a round with a sweep running or waiting is never evicted", () =>
+    Effect.sync(() => {
+      const roundOf = makeSweepRounds(2);
+      const busy = roundOf("/repo/a");
+      busy.removingSweeps = 1;
+      for (let i = 0; i < 100; i++) roundOf("/repo/other-" + i);
+      expect(roundOf("/repo/a")).toBe(busy);
+    }),
   );
 });
