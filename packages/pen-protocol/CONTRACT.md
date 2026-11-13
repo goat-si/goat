@@ -544,6 +544,11 @@ connection may exit 2 or 1, whichever end the child sees first. Bytes after the 
 A v1.2 child forwards nothing, so a program that sends ops through it gets no answer. When stdin ends, a v1.3 child
 half-closes the connection, prints the node's answers to the ops it forwarded, and exits 0, or 1 when the node closed
 the connection before answering every op it forwarded (a v1.2 node does).
+After the half-close the child waits for the node's close at most 30 s: then it exits 0 when every op it forwarded was
+answered, and 1 naming the unanswered ops otherwise. While stdin is open no time limit ends the registration. On
+Windows a pending read of the control socket can miss the other side's half-close or close, so the child's reads of the
+node's lines and the node's reads of the holder's ops each give way to a fresh read every 30 s: a registration whose
+other side is gone ends within that time on both sides, and one that is only idle reads again.
 
 ### Local delivery
 
