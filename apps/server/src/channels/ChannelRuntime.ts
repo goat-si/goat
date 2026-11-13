@@ -284,6 +284,22 @@ const make = Effect.gen(function* () {
     const waiting = (yield* ledger.listTasksByStatus(["received", "dispatching"])).toSorted(
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
+    // One task's failure must not end the pass; a lost owner does, since no later write could commit.
+    const perTask = (taskId: string, step: Effect.Effect<void, ChannelLedger.ChannelLedgerError>) =>
+      step.pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("channel task step failed", {
+            taskId,
+            reason: error.reason,
+            detail: error.detail,
+          }),
+        ),
+        Effect.as(1),
+        Effect.catchIf(
+          (error) => error.reason !== "ownership_lost",
+          () => Effect.succeed(0),
+        ),
+      );
     for (const stored of waiting) {
       // The acknowledgement goes out before the work starts: while its delivery could still
       // reach the person, the task waits at received until that delivery settles.
@@ -301,17 +317,14 @@ const make = Effect.gen(function* () {
             : hasUnsettledChannelDelivery(sql, stored.task.originInputId);
         if (yield* unsettled) continue;
       }
-      yield* dispatcher.dispatch(stored.task.taskId, owner);
-      started += 1;
+      started += yield* perTask(stored.task.taskId, dispatcher.dispatch(stored.task.taskId, owner));
     }
     yield* sessionFirst.observe(owner);
     for (const pending of yield* ledger.listPendingForwards(50)) {
-      yield* dispatcher.forward(pending, owner);
-      started += 1;
+      started += yield* perTask(pending.event.taskId, dispatcher.forward(pending, owner));
     }
     for (const pending of yield* ledger.listPendingNarrations(50)) {
-      yield* reception.narrate(pending, owner);
-      started += 1;
+      started += yield* perTask(pending.event.taskId, reception.narrate(pending, owner));
     }
     // Child-work records settle against their destinations in the same pass, so capacity freed
     // by a finished child is visible before worker reports check completion holds or admit more.
