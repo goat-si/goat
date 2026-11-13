@@ -285,18 +285,24 @@ describe("remote answers when the requester's or sender's authority is lost", ()
           Effect.asVoid,
         );
         onFirstSend(machine, away);
+        let denied = false;
         machine.onAuthorizationDenied = (call) =>
           call.tool === "goat_thread_send"
             ? Effect.suspend(() => {
                 machine.onAuthorizationDenied = undefined;
+                denied = true;
                 return back;
               })
             : Effect.void;
         yield* answer("unreadable");
         yield* forwards.settled;
-        yield* nextAttempt(forwards);
+        // The drain may already have retried; only a forward still pending needs another pass.
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        if ((yield* ledger.listPendingForwards(10)).length > 0) yield* nextAttempt(forwards);
+        assert.isTrue(denied);
         assert.lengthOf(machine.sends, 1);
         assert.deepStrictEqual(yield* openQuestionTexts, []);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
       }).pipe(forwards.observe, Effect.provide(harness.layer));
     },
   );

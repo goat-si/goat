@@ -15,11 +15,13 @@ export const trackForwards = () => {
           }),
         ),
       ),
-    /** Every forward started so far has ended; a test that started none is wrong. */
-    settled: Effect.suspend(() =>
-      started.size === 0
-        ? Effect.die("no answer forward started")
-        : Effect.forEach([...started], (fiber) => Fiber.await(fiber), { discard: true }),
-    ),
+    /** The forwards started since the last wait have ended; a wait that saw none is wrong. */
+    settled: Effect.suspend(() => {
+      const fibers = [...started];
+      started.clear();
+      return fibers.length === 0
+        ? Effect.die("no answer forward started since the last wait")
+        : Effect.forEach(fibers, (fiber) => Fiber.await(fiber), { discard: true });
+    }),
   };
 };
