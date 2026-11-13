@@ -121,6 +121,7 @@ import {
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
+import { CollapsedComposerPromptButton } from "./CollapsedComposerPromptPreview";
 import {
   ComposerBannerStack,
   type ComposerBannerStackContent,
@@ -3575,20 +3576,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           >
             {showCollapsedMobilePromptRow ? (
               <div className="flex items-center justify-between gap-2 px-3 py-2">
-                <button
-                  type="button"
-                  data-chat-composer-transition-prompt="true"
-                  className={cn(
-                    "min-w-0 flex-1 truncate bg-transparent p-0 text-left text-sm focus:outline-none",
-                    prompt.trim() ? "text-foreground" : "text-placeholder",
-                  )}
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={expandMobileComposerStable}
-                  aria-label="Expand composer"
-                >
-                  {prompt.trim() ||
-                    (showProviderUnavailable ? "Enable a provider in Settings" : "Ask anything...")}
-                </button>
+                <CollapsedComposerPromptButton
+                  prompt={prompt}
+                  skills={selectedProviderSkills}
+                  contextRecords={composerContextRecords}
+                  theme={resolvedTheme}
+                  showProviderUnavailable={showProviderUnavailable}
+                  onExpand={expandMobileComposerStable}
+                />
                 {collapsedComposerImagePreviews}
                 <button
                   type="button"
