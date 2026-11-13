@@ -280,6 +280,7 @@ function WorkRow({
           variant="ghost"
           size="icon-sm"
           aria-label={`Actions for ${title}`}
+          aria-haspopup="menu"
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             void menu({ x: rect.left, y: rect.bottom });
