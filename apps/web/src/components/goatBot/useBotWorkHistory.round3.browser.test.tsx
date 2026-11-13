@@ -150,10 +150,19 @@ it("caps a crossing page and warns while keeping the earlier work", async () => 
   });
   mock.read.mockResolvedValueOnce(page(last, { nextCursor: "still-more" }));
   await using screen = await render(<History list={current([])} />);
-  for (let batch = 0; batch < 11; batch++)
+  await userEvent.click(screen.getByRole("button", { name: "Read history" }));
+  const firstId = ChannelTaskId.make("item-0");
+  await act(() =>
+    updateHistoryView(env, firstId, {
+      ...old.view,
+      taskId: firstId,
+      pinnedAt: "2026-11-13T01:00:00Z",
+    }),
+  );
+  for (let batch = 1; batch < 11; batch++)
     await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
-  await expect.element(screen.getByText("Task item-0 Unpinned")).toBeVisible();
+  await expect.element(screen.getByText("Task item-0 Pinned")).toBeVisible();
   await expect.element(screen.getByText("Task item-499 Unpinned")).toBeVisible();
   await expect.element(screen.getByText("Task item-500 Unpinned")).not.toBeInTheDocument();
   expect(mock.read).toHaveBeenCalledTimes(11);
