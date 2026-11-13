@@ -199,7 +199,15 @@ measurement says how long it covers. Bytes whose route GOAT could not confirm
 are shown apart from relay and direct ones. A row says **not measured** when the
 hub's OpenCodex does not report a number yet.
 
+GOAT keeps these counts in memory, so they start over when GOAT restarts on the
+hub, and the hub-wide warning covers only what it counted since then. GOAT reads
+the numbers only while someone has Hub or Fleet open or an agent reads host
+status: bytes across a longer gap are spread evenly over it, and the row says
+**averaged**. A row says the figures are a lower bound when some requests to the
+hub carried no length, or while a link WebSocket is open.
+
 GOAT warns in Hub and Fleet when one Child sends more than 5 GB through the relay
 in 24 hours, or all of them together more than 30 GB. Change both, or set 0 to
-turn a warning off, in **Settings → Hub → Relay traffic warning**. A warning
-never stops a turn or a link.
+turn a warning off, in **Settings → Hub → Relay traffic warning** on the web or
+desktop app, or ask an agent to change them. A warning never stops a turn or a
+link.
