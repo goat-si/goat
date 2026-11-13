@@ -22,7 +22,11 @@ import { HubDeviceCard } from "./HubDeviceCard";
 import { pairingLinkConnectFlow } from "./PairingLinkConnectFlow";
 import "../../index.css";
 
-const mocks = vi.hoisted(() => ({ createCredential: vi.fn() }));
+type EnvironmentRow = { environmentId: EnvironmentId; label: string; entry: { enabled: boolean } };
+const mocks = vi.hoisted(() => ({
+  createCredential: vi.fn(),
+  environments: null as ReadonlyArray<EnvironmentRow> | null,
+}));
 vi.mock("~/environments/primary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/environments/primary")>()),
   createServerPairingCredential: mocks.createCredential,
@@ -35,6 +39,7 @@ vi.mock("~/state/session", async (importOriginal) => ({
 vi.mock("~/state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/environments")>()),
   usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
+  useEnvironments: () => ({ environments: mocks.environments ?? [] }),
 }));
 vi.mock("./settingsSearch", () => ({
   searchableSetting: (id: string) => ({ id, title: id }),
@@ -84,6 +89,7 @@ function exposure(
 
 function setup() {
   cancelConnectFlowResume();
+  mocks.environments = null;
   mocks.createCredential.mockReset().mockResolvedValue({
     id: "phone-link",
     credential: "PHONE1234",
@@ -218,9 +224,16 @@ it("phone QR: offers Tailscale HTTPS only while Serve is off; an unreachable Ser
   }
 });
 
-function CreateLink({ actions }: { readonly actions: ReturnType<typeof setup> }) {
+function CreateLink({
+  actions,
+  environmentId,
+}: {
+  readonly actions: ReturnType<typeof setup>;
+  readonly environmentId?: EnvironmentId;
+}) {
   return (
     <AuthorizedClientsHeaderAction
+      {...(environmentId === undefined ? {} : { environmentId })}
       onPairingLinkCreated={() => undefined}
       clientSessions={null}
       isRevokingOtherClients={false}
@@ -257,6 +270,66 @@ it("Create link: offers Network access in the dialog and reopens it after a rela
     await using _screen = await render(<CreateLink actions={actions} />, { router: false });
     await expect.element(page.getByRole("button", { name: "Create link" })).toBeVisible();
     expect(dialog().query()).toBeNull();
+  }
+});
+
+it("Create link names the environment the link pairs with and the other environments the app shows", async () => {
+  const actions = setup();
+  const row = (id: string, label: string, enabled = true): EnvironmentRow => ({
+    environmentId: EnvironmentId.make(id),
+    label,
+    entry: { enabled },
+  });
+  // Primary and a saved SSH runtime, an enabled one that is offline, and a disabled one.
+  mocks.environments = [
+    row("primary", "Desk PC"),
+    row("withgame", "Withgame box"),
+    row("laptop", "Old laptop"),
+    row("retired", "Retired box", false),
+  ];
+  {
+    // These renders exercise the dialog alone; nothing here navigates.
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/pair with Desk PC as an authorized client/))
+      .toBeVisible();
+    await expect
+      .element(
+        dialog().getByText(
+          /also shows Withgame box and Old laptop, which this link does not pair with/,
+        ),
+      )
+      .toBeVisible();
+    expect(
+      dialog()
+        .getByText(/Retired box/)
+        .query(),
+    ).toBeNull();
+  }
+  {
+    // The saved-environment access view passes its own environment.
+    await using _screen = await render(
+      <CreateLink actions={actions} environmentId={EnvironmentId.make("withgame")} />,
+      { router: false },
+    );
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/pair with Withgame box as an authorized/))
+      .toBeVisible();
+    await expect.element(dialog().getByText(/also shows Desk PC and Old laptop/)).toBeVisible();
+  }
+  mocks.environments = [row("primary", "Desk PC")];
+  {
+    // A single environment needs no second sentence.
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect.element(dialog().getByText(/pair with Desk PC as an authorized/)).toBeVisible();
+    expect(
+      dialog()
+        .getByText(/also shows/)
+        .query(),
+    ).toBeNull();
   }
 });
 
