@@ -13,6 +13,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -39,7 +40,25 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
   binaryPath: string,
   environment: ProviderInstanceEnvironment = [],
   hostEnvironment?: NodeJS.ProcessEnv,
+  providedHome?: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
+  const home =
+    providedHome ?? (yield* fs.makeTempDirectoryScoped({ prefix: "claude-launch-home-" }));
+  const host = hostEnvironment ?? { PATH: "/usr/bin:/bin", HOME: home };
+  host.HOME = home;
+  host.CLAUDE_CONFIG_DIR = home;
+  const guarded = {
+    ...fs,
+    readFileString: (file: string) =>
+      fs.readFileString(
+        (file.endsWith("settings.json") || file.endsWith("settings.local.json")) &&
+          !file.startsWith(home + "/") &&
+          !file.startsWith(home + "\\")
+          ? home + "/missing-managed-settings"
+          : file,
+      ),
+  };
   const environments: Array<NodeJS.ProcessEnv | undefined> = [];
   const executablePaths: Array<string | undefined> = [];
   const taskToolEnvironment: Array<string | undefined> = [];
@@ -53,6 +72,9 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
     },
     {},
   ).pipe(
+    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.Environment, host),
+    Effect.provideService(FileSystem.FileSystem, guarded),
     Effect.provide(
       ServerConfig.layerTest(process.cwd(), {
         prefix: "goat-claude-binary-path-",
@@ -109,6 +131,33 @@ const captureSdkExecutablePaths = Effect.fn("captureSdkExecutablePaths")(functio
 });
 
 describe("ClaudeAdapterV2 executable path", () => {
+  it.effect("never reads host Claude settings during launch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "claude-launch-test-" });
+      const host = { PATH: "/usr/bin:/bin" };
+      const outside: string[] = [];
+      const guarded = {
+        ...fs,
+        readFileString: (file: string) => {
+          if (
+            file.endsWith("settings.json") &&
+            !file.startsWith(home + "/") &&
+            !file.startsWith(home + "\\")
+          ) {
+            outside.push(file);
+            return fs.readFileString(home + "/missing");
+          }
+          return fs.readFileString(file);
+        },
+      };
+      yield* captureSdkExecutablePaths("claude", [], host, home).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(FileSystem.FileSystem, guarded),
+      );
+      assert.equal(outside.length, 0);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
   it.effect(
     "regression #3079: a new query uses the host PATH current at its start, and an instance PATH still wins",
     () =>

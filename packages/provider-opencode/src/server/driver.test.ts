@@ -62,6 +62,12 @@ const layer = Layer.mergeAll(
   McpProviderSessions.layer,
   ProviderLatestVersions.layer,
   TestProviderHost.layer(),
+  Layer.succeed(HostProcess.HomeDirectory, "/fixture/opencode-test"),
+  Layer.succeed(HostProcess.Environment, {
+    HOME: "/fixture/opencode-test",
+    XDG_DATA_HOME: "/fixture/opencode-test",
+    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+  }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
     ProviderEventLoggers.NoOpProviderEventLoggers,
@@ -129,7 +135,14 @@ it.live("discovers models through a home-relative OpenCode wrapper", () =>
         ...OpenCodeDriver.defaultConfig(),
         binaryPath: windows ? "~/opencode.cmd" : "~/opencode",
       },
-    }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+    }).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Environment, {
+        HOME: home,
+        XDG_DATA_HOME: home,
+        PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+      }),
+    );
     const snapshot = yield* instance.snapshot.refresh;
     assert.strictEqual(snapshot.status, "ready");
     assert.strictEqual(snapshot.version, "1.18.32");
@@ -736,6 +749,12 @@ const layerUpdate = Layer.mergeAll(
   McpProviderSessions.layer,
   ProviderLatestVersions.layer,
   TestProviderHost.layer(),
+  Layer.succeed(HostProcess.HomeDirectory, "/fixture/opencode-test"),
+  Layer.succeed(HostProcess.Environment, {
+    HOME: "/fixture/opencode-test",
+    XDG_DATA_HOME: "/fixture/opencode-test",
+    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+  }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
     ProviderEventLoggers.NoOpProviderEventLoggers,

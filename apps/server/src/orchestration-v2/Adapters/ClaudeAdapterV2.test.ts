@@ -160,6 +160,15 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "claude-adapter-test-" });
+      return Context.make(HostProcess.HomeDirectory, home).pipe(
+        Context.add(HostProcess.Environment, { HOME: home, PATH: "/usr/bin:/bin" }),
+      );
+    }),
+  ).pipe(Layer.provide(NodeServices.layer)),
 );
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({

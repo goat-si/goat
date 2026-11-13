@@ -8,6 +8,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -19,7 +20,9 @@ it.effect(
   "refreshes the host PATH while preserving instance overrides and dropping host credentials",
   () =>
     Effect.gen(function* () {
-      const host = { PATH: "/usr/bin:/bin", META_API_KEY: "secret" };
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "muse-driver-home-" });
+      const host = { HOME: home, PATH: "/usr/bin:/bin", META_API_KEY: "secret" };
       const launches: NodeJS.ProcessEnv[] = [];
       const spawner = ChildProcessSpawner.make((command) => {
         if (ChildProcess.isStandardCommand(command)) launches.push(command.options.env ?? {});
@@ -42,10 +45,12 @@ it.effect(
         });
       const inherited = yield* create([]).pipe(
         Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(HostProcess.HomeDirectory, home),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
       const overridden = yield* create([{ name: "PATH", value: host.PATH, sensitive: false }]).pipe(
         Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(HostProcess.HomeDirectory, home),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
       yield* inherited.snapshot.refresh;

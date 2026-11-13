@@ -20,6 +20,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
@@ -121,7 +122,7 @@ const makeTildeProviderFixtures = Effect.fn(
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const homePath = yield* HostProcess.HomeDirectory;
-  const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
+  const fixtureDir = yield* fileSystem.makeTempDirectory({
     directory: homePath,
     prefix: ".goat-provider-path-test-",
   });
@@ -174,6 +175,31 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       }),
     ),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(
+      Layer.effectContext(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const home = yield* fs.makeTempDirectoryScoped({ prefix: "provider-registry-home-" });
+          return Context.make(HostProcess.HomeDirectory, home).pipe(
+            Context.add(HostProcess.Environment, {
+              HOME: home,
+              PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+            }),
+            Context.add(FileSystem.FileSystem, {
+              ...fs,
+              readFileString: (file: string) =>
+                fs.readFileString(
+                  file.endsWith("/managed-settings.json") ||
+                    file.endsWith("\\managed-settings.json")
+                    ? path.join(home, "missing")
+                    : file,
+                ),
+            }),
+          );
+        }),
+      ).pipe(Layer.provide(NodeServices.layer)),
+    ),
     Layer.provideMerge(
       Layer.mock(CodexInstallation.CodexInstallation)({
         managedDirectory: "unused-managed-installation",
