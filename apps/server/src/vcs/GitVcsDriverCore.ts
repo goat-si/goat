@@ -1,3 +1,4 @@
+import { checkConflictMarkers } from "./commitConflictMarkers.ts";
 import { gitCommandContext } from "./gitCommandContext.ts";
 import { inProgressHeads } from "./commitOperationHeads.ts";
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
@@ -2365,6 +2366,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       );
     } else {
+      yield* checkConflictMarkers(cwd, env, fileSystem, path, executeGit);
       yield* runGit(
         "GitVcsDriver.commit.addAll",
         cwd,
