@@ -152,6 +152,10 @@ vi.mock("react-native", () => ({
   Platform: box.platform,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
+// The row menu is native; these tests do not open it.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: { label: string }) => <button aria-label={props.label} />,
+}));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
     themeAppearance: "light",

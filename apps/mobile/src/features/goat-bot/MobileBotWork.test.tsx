@@ -104,6 +104,10 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+// The row menu is native; these tests do not open it.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: { label: string }) => <button aria-label={props.label} />,
+}));
 const state = vi.hoisted(() => ({
   connected: true,
   task: {
