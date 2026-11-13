@@ -11,10 +11,12 @@ export function GoatBotRowSignals({
   environmentId,
   botId,
   waiting,
+  waitingState,
 }: {
   readonly environmentId: EnvironmentId | null;
   readonly botId: BotId;
   readonly waiting: number | undefined;
+  readonly waitingState: "ready" | "pending" | "unavailable";
 }) {
   const environment = useEnvironment(environmentId);
   const work = useAtomValue(
@@ -22,6 +24,9 @@ export function GoatBotRowSignals({
       ? NO_WORK
       : channelEnvironment.homeCurrentOpenableWorkAtom([environmentId, botId]),
   );
+  const capabilities = environment?.serverConfig?.environment.capabilities;
+  const h2 =
+    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
   const available =
     environment?.connection.phase === "connected" &&
     work?.eligible === true &&
@@ -32,10 +37,17 @@ export function GoatBotRowSignals({
       ).length
     : undefined;
   const missing = [
-    unread === undefined ? "Unread" : null,
-    waiting === undefined ? "waiting" : null,
+    unread === undefined &&
+    (environment?.connection.phase !== "connected" || !work?.eligible || work.list === "failed")
+      ? "Unread"
+      : null,
+    waiting === undefined &&
+    (environment?.connection.phase !== "connected" || waitingState === "unavailable")
+      ? "waiting"
+      : null,
   ].filter(Boolean);
   const label = `${unread} unread task${unread === 1 ? "" : "s"}; recent work only; older work may be missing`;
+  if (!h2) return null;
   return (
     <>
       {unread !== undefined && unread > 0 ? (
@@ -44,7 +56,12 @@ export function GoatBotRowSignals({
         </Badge>
       ) : null}
       {missing.length > 0 ? (
-        <Badge size="sm" variant="secondary" aria-label={`${missing.join(" and ")} unavailable`}>
+        <Badge
+          size="sm"
+          variant="outline"
+          aria-label={`${missing.join(" and ")} unavailable`}
+          title={`${missing.join(" and ")} unavailable`}
+        >
           –
         </Badge>
       ) : null}

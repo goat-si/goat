@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   waitingRead: true,
   status: true,
   success: true,
+  error: null as string | null,
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
@@ -27,6 +28,7 @@ vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
     data: { waitingCount: 3 },
     isSuccess: state.success,
+    error: state.error,
     refresh: () => {},
   }),
 }));
@@ -41,7 +43,9 @@ function View() {
   const status = useGoatBotMemberStatus(bot);
   return (
     <output>
-      {status.sidebarWaitingCount === undefined ? "unavailable" : status.sidebarWaitingCount}
+      {status.sidebarWaitingCount === undefined
+        ? status.sidebarWaitingState
+        : status.sidebarWaitingCount}
     </output>
   );
 }
@@ -50,12 +54,17 @@ it("exposes a waiting count only for a successful connected visit-aware status r
   state.waitingRead = true;
   state.status = true;
   state.success = true;
+  state.error = null;
   await using screen = await render(<View key="success" />);
   await expect.element(screen.getByText("3")).toBeVisible();
   state.success = false;
+  await screen.rerender(<View key="pending" />);
+  await expect.element(screen.getByText("pending")).toBeVisible();
+  state.error = "failed";
   await screen.rerender(<View key="failure" />);
   await expect.element(screen.getByText("unavailable")).toBeVisible();
   state.success = true;
+  state.error = null;
   state.waitingRead = false;
   await screen.rerender(<View key="no-visit-count" />);
   await expect.element(screen.getByText("unavailable")).toBeVisible();

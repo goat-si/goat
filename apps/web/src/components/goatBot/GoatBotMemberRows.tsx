@@ -165,7 +165,11 @@ function GoatBotMemberRow({
 }) {
   const status = useGoatBotMemberStatus(bot);
   const { latest } = status;
-  const count = status.sidebarWaitingCount;
+  const presentation = useEnvironment(bot.environmentId);
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  const h2 =
+    capabilities?.goatBotTaskThreadsPaged === true && capabilities.goatBotTaskLookupSearch === true;
+  const count = h2 ? status.sidebarWaitingCount : status.waitingCount;
   // The row's second line is what the bot last said or was asked; a new bot shows its purpose.
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -212,6 +216,7 @@ function GoatBotMemberRow({
               environmentId={bot.environmentId}
               botId={bot.botId}
               waiting={count}
+              waitingState={status.sidebarWaitingState}
             />
             {count !== undefined && count > 0 ? (
               <Badge size="sm" variant="secondary" aria-hidden>

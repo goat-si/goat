@@ -35,6 +35,8 @@ const server = vi.hoisted(() => ({
       finished: Array<{ row: { unread: boolean } }>;
     };
   },
+  h2: true,
+  statusPending: false,
   statusAvailable: true,
   connected: true,
   waitingRead: true,
@@ -120,6 +122,11 @@ vi.mock("../ui/toast", () => ({
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberStatus: (bot: BotProfile) => ({
     waitingCount: server.waiting[bot.botId] ?? 0,
+    sidebarWaitingState: server.statusPending
+      ? "pending"
+      : server.connected && server.waitingRead && server.statusAvailable
+        ? "ready"
+        : "unavailable",
     sidebarWaitingCount:
       server.connected && server.waitingRead && server.statusAvailable
         ? (server.waiting[bot.botId] ?? 0)
@@ -137,6 +144,8 @@ vi.mock("~/state/environments", async (original) => ({
     serverConfig: {
       environment: {
         capabilities: {
+          goatBotTaskThreadsPaged: server.h2,
+          goatBotTaskLookupSearch: server.h2,
           goatBotMembers: true,
           goatBotProfiles: true,
           goatBotProfileEdit: true,
@@ -200,6 +209,8 @@ function setup() {
   server.waiting = {};
   server.tasks = {};
   server.work = { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
+  server.h2 = true;
+  server.statusPending = false;
   server.statusAvailable = true;
   server.connected = true;
   server.waitingRead = true;
@@ -363,4 +374,38 @@ it("member row reports recent unread work and marks unavailable signals independ
   server.bots = server.bots.map((bot) => ({ ...(bot as BotProfile) }));
   await act(() => publish());
   await expect.element(screen.getByLabelText(/unread.*waiting.*unavailable/i)).toBeVisible();
+});
+
+it("keeps legacy waiting and omits new marks on an older server", async () => {
+  setup();
+  server.h2 = false;
+  server.statusAvailable = false;
+  server.waiting = { research: 2 };
+  server.work = { ...server.work, eligible: false, list: "failed" };
+  await using screen = await render(<Roster />, { router: false });
+  await expect
+    .element(screen.getByRole("link", { name: /^2 waiting for you\s*Research/ }))
+    .toBeVisible();
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+  expect(screen.getByLabelText(/unread task/i).query()).toBeNull();
+});
+it("leaves first pending signals blank and marks failed or offline signals", async () => {
+  setup();
+  server.statusPending = true;
+  server.statusAvailable = false;
+  server.work = { ...server.work, list: "pending" };
+  await using screen = await render(<Roster />, { router: false });
+  expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+  expect(screen.getByLabelText(/unread task/i).query()).toBeNull();
+  server.statusPending = false;
+  server.work = { ...server.work, list: "failed" };
+  await act(() => publish());
+  await expect
+    .element(screen.getByLabelText(/unread and waiting unavailable/i))
+    .toHaveAttribute("title", "Unread and waiting unavailable");
+  server.work = { ...server.work, list: "pending" };
+  server.statusPending = true;
+  server.connected = false;
+  await act(() => publish());
+  await expect.element(screen.getByLabelText(/unread and waiting unavailable/i)).toBeVisible();
 });
