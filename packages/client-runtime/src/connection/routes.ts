@@ -27,6 +27,16 @@ export type ConnectionRouteKind =
 
 export const RELAY_ROUTE_ID = "relay";
 
+export const penRouteConnectionId = (meshId: string, nodeId: string): string =>
+  `ssh:pen:${meshId}:${nodeId}`;
+
+export function penRouteOwner(connectionId: string): { meshId: string; nodeId: string } | null {
+  const match = /^ssh:pen:([a-z2-7]{26}):([a-z2-7]{26})$/u.exec(connectionId);
+  return match?.[0] === connectionId && match[1] !== undefined && match[2] !== undefined
+    ? { meshId: match[1], nodeId: match[2] }
+    : null;
+}
+
 export function connectionRouteId(target: ConnectionTarget): string {
   switch (target._tag) {
     case "PrimaryConnectionTarget":
@@ -181,6 +191,9 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
     case "vpn":
       return "VPN";
     case "ssh": {
+      if (route.target._tag === "SshConnectionTarget" && penRouteOwner(route.target.connectionId)) {
+        return "Pen";
+      }
       const profile = Option.getOrNull(route.profile);
       return profile?._tag === "SshConnectionProfile"
         ? `SSH ${profile.target.username ? `${profile.target.username}@` : ""}${profile.target.hostname}`
