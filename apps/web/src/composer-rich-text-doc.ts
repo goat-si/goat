@@ -1,3 +1,5 @@
+import { parseListPrefix, type ListLinePrefix } from "./composer-list-prefix";
+import { listNormalizationPlugin } from "./composer-list-normalization";
 import { atomJsonForSegment } from "./composerAtomJson";
 import { styledEdge, touchesMarkdownSource } from "./composerMarkdownSourceHelpers";
 import { joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
@@ -455,6 +457,12 @@ const ComposerListItemExtension = ListItem.extend({
 
 export const ComposerListExtensions = [
   BulletList.extend({
+    addProseMirrorPlugins() {
+      return [
+        ...(this.parent?.() ?? []),
+        listNormalizationPlugin(() => this.editor.view.composing),
+      ];
+    },
     addKeyboardShortcuts() {
       return withoutBlockChords(this.parent?.(), ["Mod-Shift-8"]);
     },
@@ -521,29 +529,6 @@ export const ComposerBlockExtensions = [
   ComposerHeadingExtension,
 ];
 
-interface TaskLinePrefix {
-  indent: string;
-  checked: boolean;
-  markerSpace: string;
-  contentSpace: string;
-}
-
-function parseTaskPrefix(head: string): { prefix: TaskLinePrefix; markerLength: number } | null {
-  const match = head.match(/^([ \t]*)-([ \t]+)\[([ xX])\]([ \t]*)/);
-  if (!match) return null;
-  const after = head.slice(match[0].length);
-  if (after.length > 0 && !match[4]) return null;
-  return {
-    prefix: {
-      indent: match[1] ?? "",
-      checked: (match[3] ?? " ").toLowerCase() === "x",
-      markerSpace: match[2]!,
-      contentSpace: match[4]!,
-    },
-    markerLength: match[0].length,
-  };
-}
-
 export function parseOpeningFence(line: string): { fence: string; language: string } | null {
   // Unlike `.`, `[^\n]` accepts the stored \r in CRLF lines.
   const match = /^(`{3,}|~{3,})([^\n]*)$/.exec(line);
@@ -559,30 +544,6 @@ export function isClosingFence(line: string, fence: string): boolean {
   if (!match) return false;
   const run = match[1]!;
   return run[0] === fence[0] && run.length >= fence.length;
-}
-
-type ListLinePrefix =
-  | ({ kind: "task" } & TaskLinePrefix)
-  | { kind: "bullet" | "ordered"; indent: string; marker: string; space: string };
-
-function parseListPrefix(line: string): { prefix: ListLinePrefix; markerLength: number } | null {
-  const task = parseTaskPrefix(line);
-  if (task) return { prefix: { kind: "task", ...task.prefix }, markerLength: task.markerLength };
-  const ordered = /^([ \t]*)(\d+[.)])((?:[ \t]+)|$)/.exec(line);
-  if (ordered) {
-    return {
-      prefix: { kind: "ordered", indent: ordered[1]!, marker: ordered[2]!, space: ordered[3]! },
-      markerLength: ordered[0].length,
-    };
-  }
-  const bullet = /^([ \t]*)([-*+])((?:[ \t]+)|$)/.exec(line);
-  if (bullet) {
-    return {
-      prefix: { kind: "bullet", indent: bullet[1]!, marker: bullet[2]!, space: bullet[3]! },
-      markerLength: bullet[0].length,
-    };
-  }
-  return null;
 }
 
 function listKey(prefix: ListLinePrefix): string {
