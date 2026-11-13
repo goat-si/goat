@@ -53,15 +53,16 @@ export const encodeRoute = Schema.encodeSync(RouteJson);
 /** OpenCodex's link operations a Home must declare before GOAT links a machine (O1, O5, O6). */
 export const LINK_CONTRACTS = ["link.route/1", "link.operation/1", "link.recover/1"] as const;
 /**
- * An explicit route on OpenCodex dev carries no identity: the Home offers its own agent and default
- * keys. A disposable machine trusts only the hub's machine key, so the link waits for a Home that
- * takes one with the route (proposed contract; GOAT and OpenCodex agree on the name before it ships).
+ * Without this contract an explicit route carries no identity and the Home offers its own agent and
+ * default keys. A disposable machine trusts only the hub's machine key, so the link waits for a Home
+ * that takes it with the route (opencodex#8714; on OpenCodex dev, in no release yet).
  */
 export const LINK_IDENTITY_CONTRACT = "link.route/2";
 export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file", identityFile];
 /**
- * An entry open longer than this has no ocx left running it: ocx gives up at 360 s and an alias-lock
- * waiter at 120 s. OpenCodex recovers a dead open entry only when the same id is repeated.
+ * How long an entry stays open before GOAT repeats its id. OpenCodex recovers a dead open entry only
+ * on a repeat; while another apply still runs, its alias lock makes the repeat wait or refuse with
+ * nothing journalled, so the repeat is safe whenever it lands.
  */
 export const STALE_OPEN_MS = 10 * 60 * 1000;
 /** OpenCodex replays an operation id's recorded answer for this long (link operation journal). */

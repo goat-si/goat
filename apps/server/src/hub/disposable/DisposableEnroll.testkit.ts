@@ -108,6 +108,8 @@ export const fakeEnrollHost = () => {
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
     journalUnreadable: false,
+    /** A repeat of an open entry leaves it open, as a Home that keeps failing to recover it would. */
+    openStaysOpen: false,
     holdOperations: undefined as Hold | undefined,
     journal,
     links,
@@ -123,7 +125,7 @@ export const fakeEnrollHost = () => {
     const known = journal.get(operationId);
     if (known !== undefined) {
       // A repeat recovers a dead open entry by its reserved ids (link-operation.ts recoverEnroll).
-      if (known.state === "open") known.state = "unknown";
+      if (known.state === "open" && !control.openStaysOpen) known.state = "unknown";
       return output(known.state === "committed" ? 0 : 1);
     }
     const script = control.adds.shift() ?? "commit";

@@ -755,3 +755,25 @@ it.effect("a machine key path OpenCodex would refuse stops the link before any o
     }),
   ),
 );
+
+it.effect("an entry that stays open through three sends of its id stops for a person", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.adds.push("open");
+      host.control.openStaysOpen = true;
+      for (let pass = 0; pass < 4; pass += 1) yield* enroll;
+      for (let round = 0; round < 4; round += 1) {
+        yield* TestClock.adjust(11 * 60 * 1000);
+        yield* enroll;
+        yield* enroll;
+      }
+      expect(linkAdds(host.control.calls)).toHaveLength(3);
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "unknown",
+        message: expect.stringContaining("left the link operation open"),
+      });
+    }),
+  ),
+);
