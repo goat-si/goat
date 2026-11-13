@@ -30,6 +30,12 @@ func StatusOf(s *Store, iv *Invites, id, mintID string, clock func() time.Time) 
 	iv.mu.Lock()
 	x, ok := iv.findLocked(id, mintID)
 	now := clock()
+	if ok && x.Subject != nil && expired(x, now) {
+		// Settled before it is reported, so a clock stepped back later cannot make it live again; a failed save still
+		// answers expired, as Lookup and Burn refuse it by the same clock.
+		_ = iv.saveLocked(now)
+		x, ok = iv.findLocked(id, mintID)
+	}
 	iv.mu.Unlock()
 	out := InviteStatus{T: "invite-status", InviteID: id, MintID: mintID, State: InviteAbsent}
 	if !ok {

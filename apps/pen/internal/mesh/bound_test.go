@@ -698,3 +698,24 @@ func TestCancelAckAndStatusReadTheirClockUnderTheBooksLock(t *testing.T) {
 		t.Fatalf("%s read its clock without holding the book's lock", outside)
 	}
 }
+
+// invite.status settles an expired bound invite before it answers expired, so a wall clock stepped back afterwards
+// cannot make it live again.
+func TestStatusSettlesAnExpiredBoundInvite(t *testing.T) {
+	_, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := StatusOf(s, iv, x.ID, "", at(now.Add(2*time.Minute))); got.State != InviteExpired {
+		t.Fatalf("past its expiry: %+v", got)
+	}
+	back := now.Add(30 * time.Second)
+	if got := StatusOf(s, iv, x.ID, "", at(back)); got.State != InviteExpired {
+		t.Fatalf("after the clock went back: %+v; want still expired", got)
+	}
+	if _, ok := iv.Lookup(x.ID, back); ok {
+		t.Fatal("the invite is usable again after the clock went back")
+	}
+}
