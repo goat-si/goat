@@ -551,7 +551,12 @@ export const ChannelGetBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, bot
 export type ChannelGetBotTaskInput = typeof ChannelGetBotTaskInput.Type;
 export const ChannelSearchBotTasksInput = Schema.Struct({
   botId: BotId,
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  query: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(256),
+    Schema.makeFilter((value) => !value.includes("\0"), {
+      expected: "a search query without NUL characters",
+    }),
+  ),
   cursor: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
   limit: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
 });

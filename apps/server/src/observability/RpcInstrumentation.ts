@@ -222,6 +222,8 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.retryTask]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getInput]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: "channel",
