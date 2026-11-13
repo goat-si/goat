@@ -129,7 +129,7 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
         try {
           listener(view);
         } catch {
-          listeners.delete(listener);
+          // A listener that failed once must still hear the next view: it may be a revocation.
         }
       }
     },

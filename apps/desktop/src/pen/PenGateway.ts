@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off -- Desktop owns the listener and session expiry clock.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off -- Desktop owns the listener and session expiry clock.
 import * as NodeHttp from "node:http";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeStream from "node:stream";
@@ -21,6 +21,10 @@ import {
 } from "./penGatewayPolicy.ts";
 import { openPenPipe, resolvePenBinary, type PenPipeDeps } from "./penPipe.ts";
 import { exchangePenResponse, mintPenSession } from "./penUpstream.ts";
+
+const MINT_DEADLINE_MS = 30_000;
+const UPGRADE_REFUSAL_BODY_CAP = 64 * 1024;
+const EARLY_UPGRADE_BYTES = 64 * 1024;
 
 interface Route {
   readonly pin: DesktopPenPin;
@@ -91,10 +95,18 @@ export function makePenGateway(deps: Dependencies) {
       else route.sockets.set(socket, count - 1);
     };
   };
-  const saturated = (route: Route) =>
-    route.active >= 16 || route.dialing.size >= 6 || children >= 128;
-  const dial = async (route: Route, signal?: AbortSignal) => {
-    while (!route.closed && saturated(route)) {
+  // A session mint is not held behind live forwards: sixteen open sockets must not starve it.
+  const saturated = (route: Route, mint: boolean) =>
+    (!mint && route.active >= 16) || route.dialing.size >= 6 || children >= 128;
+  const untilAborted = <A>(promise: Promise<A>, signal: AbortSignal) =>
+    new Promise<A>((resolve, reject) => {
+      const abort = () => reject(new Error("closed"));
+      if (signal.aborted) return abort();
+      signal.addEventListener("abort", abort, { once: true });
+      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+  const dial = async (route: Route, signal?: AbortSignal, mint = false) => {
+    while (!route.closed && saturated(route, mint)) {
       if (route.waiting.length >= 8) throw new Error("busy");
       await new Promise<void>((resolve, reject) => {
         const abort = () => {
@@ -170,14 +182,24 @@ export function makePenGateway(deps: Dependencies) {
     if (route.token && route.token.expiresAt > (deps.now ?? Date.now)() + 60_000)
       return route.token;
     route.flight ??= (async () => {
-      const pipe = await dial(route);
+      // One deadline for the whole mint, so requests waiting on it are answered.
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), MINT_DEADLINE_MS);
+      let pipe: Awaited<ReturnType<typeof openPenPipe>> | undefined;
+      const expire = () => void pipe?.kill();
+      deadline.signal.addEventListener("abort", expire, { once: true });
       try {
+        pipe = await dial(route, deadline.signal, true);
         const session = await mintPenSession(pipe);
-        if (route.closed) throw new Error("closed");
+        if (route.closed || deadline.signal.aborted) throw new Error("closed");
         route.token = session;
         return session;
+      } catch (error) {
+        throw deadline.signal.aborted ? new Error("closed") : error;
       } finally {
-        await release(route, pipe);
+        clearTimeout(timer);
+        deadline.signal.removeEventListener("abort", expire);
+        if (pipe) await release(route, pipe);
       }
     })().finally(() => {
       route.flight = undefined;
@@ -226,7 +248,7 @@ export function makePenGateway(deps: Dependencies) {
       }
       const session = isPublicPenDescriptor(req.method ?? "", decision.path)
         ? undefined
-        : await token(route);
+        : await untilAborted(token(route), controller.signal);
       if (res.destroyed) return;
       const pipe = await dial(route, controller.signal);
       if (res.destroyed) {
@@ -260,6 +282,13 @@ export function makePenGateway(deps: Dependencies) {
               if (event.status === 401) route.token = undefined;
               if (event.status >= 300 && event.status < 400 && event.status !== 304)
                 throw new Error("redirect refused");
+              // A body that ends only when the pipe does cannot be told from a cut one.
+              const framed = event.headers.some(
+                ([name]) => name === "content-length" || name === "transfer-encoding",
+              );
+              const bodiless =
+                req.method === "HEAD" || event.status === 204 || event.status === 304;
+              if (!framed && !bodiless) throw new Error("unframed response");
               res.writeHead(
                 event.status,
                 filterPenResponseHeaders(event.headers, decision.responseHeaders),
@@ -341,6 +370,17 @@ export function makePenGateway(deps: Dependencies) {
       untrack();
       controller.abort();
     });
+    // Reading keeps the departure of the client visible; what it sent early waits for the 101.
+    const early: Buffer[] = initial.length ? [initial] : [];
+    let earlyBytes = initial.length;
+    const onEarly = (chunk: Buffer) => {
+      early.push(chunk);
+      earlyBytes += chunk.length;
+      if (earlyBytes > EARLY_UPGRADE_BYTES) socket.destroy();
+    };
+    const onEnd = () => socket.destroy();
+    socket.on("data", onEarly);
+    socket.once("end", onEnd);
     const wsKey = decision.headers["sec-websocket-key"];
     const offered = decision.headers["sec-websocket-protocol"];
     const protocols = offered?.split(",").map((value) => value.trim());
@@ -349,11 +389,17 @@ export function makePenGateway(deps: Dependencies) {
     const protocol = protocols?.[0];
     let pipe: Awaited<ReturnType<typeof openPenPipe>> | undefined;
     let handshakeWritten = false;
+    let abandon: (() => void) | undefined;
     try {
       if ((await deps.membership.requireMember(route.pin)) !== "member")
         return refuse(503, decision.responseHeaders);
-      const session = await token(route);
+      const session = await untilAborted(token(route), controller.signal);
       pipe = await dial(route, controller.signal);
+      // Until the socket owns the pipe, a client that leaves must not leave its child behind.
+      const dialed = pipe;
+      abandon = () => void release(route, dialed);
+      socket.once("close", abandon);
+      if (socket.destroyed) return;
       let response:
         | Extract<import("@goat/pen-protocol/client/http1").ResponseEvent, { type: "head" }>
         | undefined;
@@ -376,7 +422,10 @@ export function makePenGateway(deps: Dependencies) {
           if (event.type === "head") response = event;
           if (event.type === "end" && event.delimiter === "upgrade") upgraded = true;
         },
-        { upgrade: { key: wsKey, ...(protocol ? { protocol } : {}), headers: upgradeHeaders } },
+        {
+          bodyCap: UPGRADE_REFUSAL_BODY_CAP,
+          upgrade: { key: wsKey, ...(protocol ? { protocol } : {}), headers: upgradeHeaders },
+        },
       );
       if (!response || !upgraded) {
         if (response?.status === 401) route.token = undefined;
@@ -397,11 +446,16 @@ export function makePenGateway(deps: Dependencies) {
       // An idle socket is normal once it is a WebSocket; the listener's idle limit is for requests.
       if ("setTimeout" in socket && typeof socket.setTimeout === "function") socket.setTimeout(0);
       if (result.leftover.length) socket.write(result.leftover);
-      if (initial.length) await pipe.write(initial);
+      socket.removeListener("data", onEarly);
+      socket.removeListener("end", onEnd);
+      socket.pause();
+      for (const chunk of early) await pipe.write(chunk);
       const active = pipe;
       const stdin = active.child.stdin;
       if (!stdin) throw new Error("Pen pipe is missing stdin");
       pipe = undefined;
+      socket.removeListener("close", abandon);
+      abandon = undefined;
       const done = () => {
         socket.destroy();
         void release(route, active);
@@ -412,11 +466,13 @@ export function makePenGateway(deps: Dependencies) {
       if (handshakeWritten) socket.destroy();
       else refuse(502, decision.responseHeaders);
     } finally {
+      if (abandon) socket.removeListener("close", abandon);
       if (pipe) await release(route, pipe);
     }
   };
-  const listen = () =>
-    (listening ??= new Promise<number>((resolve, reject) => {
+  const listen = () => {
+    if (listening) return listening;
+    const attempt = new Promise<number>((resolve, reject) => {
       const instance = guardErrors(
         NodeHttp.createServer(
           { maxHeaderSize: 16 * 1024, insecureHTTPParser: false },
@@ -436,12 +492,13 @@ export function makePenGateway(deps: Dependencies) {
       instance.headersTimeout = 5000;
       instance.requestTimeout = 600000;
       instance.keepAliveTimeout = 5000;
+      instance.timeout = 120000;
       instance.on("connection", (socket) => {
         sockets.add(socket);
-        socket.setTimeout(120000, () => socket.destroy());
         socket.on("close", () => sockets.delete(socket));
         guardErrors(socket, () => socket.destroy());
       });
+      instance.on("timeout", (socket) => socket.destroy());
       instance.on("upgrade", (request, socket, initial) => {
         void handleUpgrade(request, socket, initial).catch(() => socket.destroy());
       });
@@ -456,7 +513,14 @@ export function makePenGateway(deps: Dependencies) {
         port = address.port;
         resolve(port);
       });
-    }));
+    });
+    listening = attempt;
+    // A listener that failed to bind is not kept: the next open tries again.
+    attempt.catch(() => {
+      if (listening === attempt) listening = undefined;
+    });
+    return attempt;
+  };
   return {
     open: (pin: DesktopPenPin): Promise<DesktopPenRouteResult> => {
       const routeKey = key(pin);

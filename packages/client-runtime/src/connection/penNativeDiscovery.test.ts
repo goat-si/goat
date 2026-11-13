@@ -250,3 +250,134 @@ it.effect("drops a descriptor arriving after leave or key rotation", () =>
     expect(registered).toEqual(["Node"]);
   }),
 );
+
+it.effect(
+  "a stored route is read once per run, and replaced when the member's GOAT answers as another environment",
+  () =>
+    Effect.gen(function* () {
+      const stored = EnvironmentId.make("old");
+      const id = penConnectionId("mesh", "node");
+      const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
+      >(
+        new Map([
+          [
+            stored,
+            {
+              enabled: true,
+              target: new PenConnectionTarget({
+                environmentId: stored,
+                label: "Node",
+                connectionId: id,
+              }),
+              profile: Option.some(
+                new PenConnectionProfile({
+                  ...pin,
+                  environmentId: stored,
+                  label: "Node",
+                  connectionId: id,
+                }),
+              ),
+            },
+          ],
+        ]),
+      );
+      const ready = {
+        kind: "ready" as const,
+        seq: 1,
+        meshId: "mesh",
+        selfNodeId: "self",
+        members: [
+          {
+            nodeId: "node",
+            name: "Node",
+            online: true,
+            noisePub: "key",
+            route: { kind: "refused" as const, reason: "not-pen-route" as const },
+          },
+        ],
+      };
+      const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
+        Option.some(ready),
+      );
+      const removed: string[] = [];
+      const registered: string[] = [];
+      let opens = 0;
+      const unused = () => Effect.die("unexpected registry call");
+      const unusedStream = () => Stream.die("unexpected registry stream");
+      const registry = EnvironmentRegistry.of({
+        entries,
+        networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
+        start: Effect.void,
+        register: (value) =>
+          Effect.sync(() => {
+            registered.push(value.target.environmentId);
+            return true;
+          }),
+        registerPlatform: unused,
+        assertKnownAddress: unused,
+        reconcilePlatform: unused,
+        remove: unused,
+        removeRoute: (environmentId, route) =>
+          Effect.sync(() => {
+            removed.push(`${environmentId} ${route}`);
+          }),
+        reorderRoutes: unused,
+        removeRelayEnvironments: unused,
+        retryNow: unused,
+        reconnect: unused,
+        setEnabled: unused,
+        setCompatibility: unused,
+        state: unused,
+        stateChanges: unusedStream,
+        run: unused,
+        runStream: unusedStream,
+        followStream: unusedStream,
+      });
+      yield* Effect.gen(function* () {
+        const discovery = yield* makePenNativeDiscovery();
+        yield* discovery.pass(ready);
+        yield* discovery.pass({ ...ready, seq: 2 });
+      }).pipe(
+        Effect.provideService(EnvironmentRegistry, registry),
+        Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
+        Effect.provideService(PenViewerPolicy, { enabled: true }),
+        Effect.provideService(
+          PenRouteGateway,
+          Option.some({
+            open: () =>
+              Effect.sync(() => {
+                opens++;
+                return {
+                  kind: "open" as const,
+                  httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
+                  socketUrl: "ws://127.0.0.1/ws",
+                };
+              }),
+            close: () => Effect.void,
+          }),
+        ),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  environmentId: "new",
+                  label: "Node",
+                  platform: { os: "darwin", arch: "arm64" },
+                  serverVersion: "1.0.0",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(removed).toEqual([`old ${id}`]);
+      expect(registered).toEqual(["new"]);
+      expect(opens).toBe(1);
+    }),
+);

@@ -302,12 +302,15 @@ together, after the review at the end of this section.
   responses carry `Referrer-Policy: no-referrer`, never `Set-Cookie`, and a redirect from the target is a 502.
 - **Nothing is passed through raw.** Node parses the request; the request is re-serialized and the
   response parsed by the Pen client's HTTP/1.1 code (`packages/pen-protocol/src/client/http1.ts`), one
-  request per pipe with `Connection: close`. On an upgrade no client byte reaches the member before
-  a validated 101, and no WebSocket extension is offered, because that parser refuses one.
+  request per pipe with `Connection: close`. A response with no length is refused, because its end
+  could not be told from a cut pipe. On an upgrade no client byte reaches the member before a
+  validated 101, and no WebSocket extension is offered, because that parser refuses one.
 - **One route per member key, checked at every dial.** `requireMember` needs a live list that names
   the node with that Noise key; it runs when the route opens, before every dial and again after
   the ready line. A list without the member, or without this machine, ends the route in main with
-  no help from the renderer. An unreachable daemon keeps the route and refuses new dials.
+  no help from the renderer. An unreachable daemon keeps the route and refuses new dials; sockets
+  already upgraded keep flowing until the list returns, so a revocation in that window is acted on
+  late.
 - **A Pen route is never this device.** Its URL is loopback like an ssh forward's, so every check
   that reads "loopback" as "local" excludes it by target (`connection/loopbackHost.ts`).
 - **A stored Pen route is inert while the gate is closed,** on web and mobile too: it lives in its
@@ -323,7 +326,8 @@ Before both gates open, one review checks at least:
 3. Capability containment in diagnostics bundles, crash reports and the clipboard, and whether to
    bind it to an HttpOnly cookie main sets, so a copied URL alone is useless.
 4. Where `pen` comes from: a PATH lookup is discovery inside the user's boundary, not a trust root.
-5. Session lifetime: a leave, revoke or key rotation closes live sockets on the target and in main.
+5. Session lifetime: a leave, revoke or key rotation closes live sockets on the target and in main,
+   including one that happens while this machine's member list is unreadable.
 6. `proxied_person` parity with the hub proxy on every RPC and HTTP row; nothing grants `hub:proxy`.
 7. The conditions already attached to `PEN_TARGET_ENABLED` (thread origin, dispatch upload,
    confirmation); `PlacementAdmissionEnabled` is a separate decision.

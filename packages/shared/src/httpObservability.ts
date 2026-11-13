@@ -1,18 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Headers from "effect/http/Headers";
-import * as HttpClient from "effect/http/HttpClient";
 import * as UrlParams from "effect/http/UrlParams";
-import { isPenRouteUrl } from "./penRouteUrl.ts";
 
 export const layer = Layer.mergeAll(
-  Layer.effect(
-    HttpClient.TracerDisabledWhen,
-    Effect.map(
-      HttpClient.TracerDisabledWhen,
-      (previous) => (request) => isPenRouteUrl(request.url) || previous(request),
-    ),
-  ),
   Layer.effect(
     Headers.CurrentRedactedNames,
     // `expo-session` carries the `eas login` session secret on Expo API requests.

@@ -86,8 +86,23 @@ export const layerRemoteHttpClient = (
   fetchFn: typeof globalThis.fetch,
 ): Layer.Layer<HttpClient.HttpClient> =>
   Layer.merge(
-    FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
+    Layer.effect(
+      HttpClient.HttpClient,
+      Effect.map(HttpClient.HttpClient, withoutPenRouteSpans),
+    ).pipe(
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
+    ),
     HttpObservability.layer,
+  );
+
+// The client span records the request URL, and a Pen route's URL carries this app's capability.
+// Decided per request, so it holds whatever tracing predicate the caller's context provides.
+const withoutPenRouteSpans = (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+  HttpClient.transform(client, (effect, request) =>
+    isPenRouteUrl(request.url)
+      ? Effect.provideService(effect, HttpClient.TracerDisabledWhen, () => true)
+      : effect,
   );
 
 const remoteApiBaseUrl = (httpBaseUrl: string): string => {
