@@ -602,12 +602,14 @@ export const make = Effect.gen(function* () {
       WHERE final_at IS NULL AND ((${sql.unsafe(IN_PEN)} AND state IN ('admitted', 'attaching'))
         OR state = 'left_pen')
       ORDER BY created_at LIMIT ${ENROLL_LIMIT}`.pipe(Effect.mapError(storageFailed));
+    // One read of the Home's contracts serves every record in the pass.
+    const contracts = yield* Effect.cached(home.contracts);
     // One record's failure is logged and never stops the others.
     yield* Effect.forEach(
       due,
       ({ attach_id }) =>
         enrollment
-          .advance(attach_id)
+          .advance(attach_id, contracts)
           .pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Disposable machine enrollment step failed", Cause.squash(cause)),

@@ -225,14 +225,18 @@ export interface Grant {
 export const world = <A, E>(
   body: (
     pen: ReturnType<typeof fakePen>,
-    home: { contracts: Set<string>; settingsUnreadable: boolean },
+    home: { contracts: Set<string>; settingsUnreadable: boolean; contractsAsked: number },
     grant: Grant,
     host: ReturnType<typeof fakeEnrollHost>,
   ) => Effect.Effect<A, E, World>,
 ) => {
   const pen = fakePen();
   const host = fakeEnrollHost();
-  const home = { contracts: new Set<string>(HOME_ATTACH_CONTRACTS), settingsUnreadable: false };
+  const home = {
+    contracts: new Set<string>(HOME_ATTACH_CONTRACTS),
+    settingsUnreadable: false,
+    contractsAsked: 0,
+  };
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 147 });
@@ -254,7 +258,12 @@ export const world = <A, E>(
     Effect.provideService(MachineKey, fakeMachineKey),
     Effect.provideService(
       HomeContracts,
-      HomeContracts.of({ contracts: Effect.sync(() => home.contracts) }),
+      HomeContracts.of({
+        contracts: Effect.sync(() => {
+          home.contractsAsked += 1;
+          return home.contracts;
+        }),
+      }),
     ),
     Effect.provideService(
       Attach.Provisioners,

@@ -611,3 +611,19 @@ it.effect("a 404 from a Home that does not serve the journal is not read as neve
     }),
   ),
 );
+
+it.effect(
+  "one enrollment pass asks OpenCodex for its contracts once, however many machines wait",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        yield* joined(pen, host, 1);
+        yield* joined(pen, host, 2);
+        yield* enroll;
+        yield* enroll; // both at the link step now
+        const before = home.contractsAsked;
+        yield* enroll;
+        expect(home.contractsAsked - before).toBe(1);
+      }),
+    ),
+);

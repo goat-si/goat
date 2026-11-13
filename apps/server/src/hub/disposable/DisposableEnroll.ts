@@ -40,6 +40,7 @@ import { disposableKnownHosts } from "./routeContract.ts";
 // ocx link add gives up at 360 s; the margin lets it report before GOAT stops waiting.
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
+type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const WAITING_ROUTE = new Set(["no_exact_block", "no_user", "no_key"]);
 
@@ -386,8 +387,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     before: ServerSettings,
     enroll: Enroll,
     route: StoredRoute,
+    pass: Contracts | undefined,
   ) {
-    const contracts = yield* home.contracts;
+    const contracts = yield* pass ?? home.contracts;
     // A Home without explicit routes can be updated; no release takes the key with a route yet.
     const missing = !declares(contracts, LINK_CONTRACTS)
       ? "opencodex_unsupported"
@@ -462,7 +464,10 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       yield* audit(row.attach_id, "hub.machine_link", "linked");
   });
 
-  const step = Effect.fn("DisposableEnroll.step")(function* (row: Row) {
+  const step = Effect.fn("DisposableEnroll.step")(function* (
+    row: Row,
+    contracts: Contracts | undefined,
+  ) {
     const enroll = decodeEnroll(row.enroll_json);
     if (enroll.stop !== undefined) return;
     // Unreadable settings prove nothing ended, so they pause nothing; the next pass reads again.
@@ -473,7 +478,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const route = decodeRoute(row.route_json);
     if (route === undefined) return yield* routeStep(row, before, enroll);
     if (enroll.reach?.outcome !== "ok") return yield* reachStep(row, before, enroll, route);
-    if (row.link_id === null) return yield* linkStep(row, before, enroll, route);
+    if (row.link_id === null) return yield* linkStep(row, before, enroll, route, contracts);
     return yield* verifyStep(row, before, enroll, route, row.link_id);
   });
 
@@ -497,7 +502,11 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
   });
 
   /** One step for one record, if it is due; its failures are the caller's pass to log. */
-  const advance = Effect.fn("DisposableEnroll.advance")(function* (attachId: string) {
+  /** `contracts` is the pass's own read of the Home's contracts, shared by its records. */
+  const advance = Effect.fn("DisposableEnroll.advance")(function* (
+    attachId: string,
+    contracts?: Contracts,
+  ) {
     const claimed = yield* Ref.modify(running, (set) =>
       set.has(attachId) ? [false, set] : [true, new Set([...set, attachId])],
     );
@@ -505,7 +514,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     yield* Effect.gen(function* () {
       const row = yield* read(attachId);
       if (row?.state === "left_pen" && row.final_at === null) yield* settleLeft(row);
-      else if (row !== undefined && due(row)) yield* step(row);
+      else if (row !== undefined && due(row)) yield* step(row, contracts);
     }).pipe(
       Effect.ensuring(
         Ref.update(running, (set) => new Set([...set].filter((id) => id !== attachId))),
