@@ -241,8 +241,7 @@ const WAITING: Record<string, string> = {
   no_exact_block: "Pen has not written this machine's route yet.",
   no_user: "Pen has not recorded this machine's SSH user yet.",
   no_key: "Pen has not recorded this machine's SSH host key yet.",
-  unreachable:
-    "GOAT cannot reach the machine with the hub's machine key yet; add machineKey to its user's authorized_keys.",
+  unreachable: "GOAT cannot reach the machine with this hub's machine key yet.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:
@@ -302,7 +301,7 @@ export const enrollMessage = (
   enroll: Enroll,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   const keyStep =
-    "Add machineKey to the authorized_keys of the machine's SSH user if it is not there yet.";
+    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet. Settings → Hub shows it with the machine on web and desktop.";
   if (enroll.stop !== undefined && (state === "paused" || state === "unknown"))
     return {
       message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),

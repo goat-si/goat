@@ -66,6 +66,10 @@ export function DisposableMachinesSettings({
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
+  const [keyCopiedFor, setKeyCopiedFor] = useState<string | null>(null);
+  const rowKey = useCopyToClipboard({
+    onError: () => setError("Could not copy. Select the machine key and copy it yourself."),
+  });
   const [thread, setThread] = useState("");
   const [cap, setCap] = useState(String(settings.cap));
   const [rule, setRule] = useState(settings.nameRule);
@@ -318,6 +322,27 @@ export function DisposableMachinesSettings({
                     : `thread ${machine.provisioner.threadId}`}
                   {machine.penMember ? " · Still in Pen" : ""}
                 </span>
+                {waitsForKey(machine) && machine.machineKey && (
+                  <>
+                    <code className="max-w-48 truncate text-muted-foreground">
+                      {machine.machineKey}
+                    </code>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      aria-label={`Copy the machine key for ${machine.name}`}
+                      onClick={() => {
+                        setError(null);
+                        setKeyCopiedFor(machine.attachId);
+                        rowKey.copyToClipboard(machine.machineKey ?? "");
+                      }}
+                    >
+                      {rowKey.isCopied && keyCopiedFor === machine.attachId
+                        ? "Copied"
+                        : "Copy machine key"}
+                    </Button>
+                  </>
+                )}
                 {machine.state === "invited" && (
                   <Button
                     size="xs"
@@ -345,6 +370,10 @@ export function DisposableMachinesSettings({
     </SettingsSection>
   );
 }
+
+/** A machine GOAT cannot reach yet: the person still has to add the hub's key to it. */
+const waitsForKey = (machine: HubMachineStatus) =>
+  machine.state === "admitted" || (machine.state === "attaching" && machine.step === "reach");
 
 /** A token shown once, with the hub key the machine must trust. */
 type Invite = NonNullable<HubMachineStatus["invite"]> & { readonly machineKey?: string };
