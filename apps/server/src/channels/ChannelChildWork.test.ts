@@ -940,41 +940,39 @@ describe("ChannelChildWork repair of settled remote launches", () => {
     }).pipe(Effect.provide(makeLayer())),
   );
 
-  it.effect("contract: repairs at most a bounded page per pass and stops once all are filled", () =>
-    Effect.gen(function* () {
-      yield* seedWorker;
-      const childWork = yield* ChannelChildWork.ChannelChildWork;
-      const bound = ChannelChildWork.REMOTE_THREAD_REPAIRS_PER_PASS;
-      for (let index = 0; index <= bound; index += 1) {
-        yield* settledWithoutThread(String(index), "completed", "remote-thread-" + index);
-      }
-      yield* settledWithoutThread("unacknowledged", "completed", null);
-      assert.strictEqual(yield* childWork.reconcile, bound);
-      assert.strictEqual(yield* childWork.reconcile, 1);
-      assert.strictEqual(yield* childWork.reconcile, 0);
-    }).pipe(Effect.provide(makeLayer())),
-  );
-
   it.effect(
-    "regression: pages of acknowledged ids no ThreadId accepts never starve a later one",
+    "contract: a pass inspects one page of child work, so a launch behind a page of unrepairable ones is filled, and a walk that fills nothing ends the repair",
     () =>
       Effect.gen(function* () {
         const taskId = yield* seedWorker;
         const childWork = yield* ChannelChildWork.ChannelChildWork;
         const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
         const sql = yield* SqlClient.SqlClient;
-        const bound = ChannelChildWork.REMOTE_THREAD_REPAIRS_PER_PASS;
+        const page = ChannelChildWork.REMOTE_THREAD_REPAIR_PAGE;
+        // Acknowledged ids no ThreadId accepts: they match the dispatch but can never be filled.
         const records = [];
-        for (let index = 0; index <= 2 * bound; index += 1) {
+        for (let index = 0; index <= page; index += 1) {
           records.push(yield* settledWithoutThread(String(index), "completed", "\u00a0"));
         }
-        const last = records.toSorted((a, b) => a.childWorkId.localeCompare(b.childWorkId)).at(-1);
+        // Byte order, as SQLite orders the keys.
+        const last = records.toSorted((a, b) => (a.childWorkId < b.childWorkId ? -1 : 1)).at(-1);
         if (last === undefined) return yield* Effect.die("expected records");
         yield* sql`UPDATE remote_dispatches SET remote_thread_id = 'remote-thread'
         WHERE correlation_id = ${childWorkCorrelationIdFor(last.childWorkId)}`;
+        const counted = store as {
+          pageSettledLaunches: typeof store.pageSettledLaunches;
+        };
+        const read = counted.pageSettledLaunches;
+        let pageReads = 0;
+        counted.pageSettledLaunches = (after, limit) => {
+          pageReads += 1;
+          return read(after, limit);
+        };
         const passes = [];
-        for (let pass = 0; pass < 3; pass += 1) passes.push(yield* childWork.reconcile);
-        assert.deepStrictEqual(passes, [0, 0, 1]);
+        for (let pass = 0; pass < 6; pass += 1) passes.push(yield* childWork.reconcile);
+        // Two pages fill the last row; a second walk fills nothing, and then no page is read again.
+        assert.deepStrictEqual(passes, [0, 1, 0, 0, 0, 0]);
+        assert.strictEqual(pageReads, 4);
         const filled = yield* store.get(taskId, last.childWorkId);
         assert.strictEqual(filled?.destination?.threadId, "remote-thread");
       }).pipe(Effect.provide(makeLayer())),

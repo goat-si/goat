@@ -60,8 +60,8 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 8;
 
 /** At most this many active coding threads per channel task. */
 export const CHANNEL_CHILD_WORK_MAX_ACTIVE_THREADS = 4;
-/** Settled remote launches given back their acknowledged thread in one reconcile pass. */
-export const REMOTE_THREAD_REPAIRS_PER_PASS = 20;
+/** Child-work rows one reconcile pass reads while repairing settled remote launches. */
+export const REMOTE_THREAD_REPAIR_PAGE = 200;
 
 const channelChildWorkCapacityFor = (surface: ChannelChildWorkSurface): number =>
   surface === "delegate_local" || surface === "delegate_remote"
@@ -712,24 +712,27 @@ const make = Effect.gen(function* () {
   });
 
   // A remote launch that settled before its bind kept no thread, and the pass above only visits
-  // active records; its dispatch row still holds the thread the host acknowledged. Pages walk the
-  // keys and wrap, so a row that cannot be filled never holds back the ones after it.
-  const repairCursor = yield* Ref.make("");
+  // active records; its dispatch row still holds the thread the host acknowledged. Binds fill
+  // every newer record, so the walk ends for this process once a whole walk fills nothing.
+  const repairWalk = yield* Ref.make({ after: "", filled: 0, done: false });
   const repairSettledLaunches = Effect.gen(function* () {
-    const after = yield* Ref.get(repairCursor);
-    const page = yield* store.listUnthreadedSettledLaunches(after, REMOTE_THREAD_REPAIRS_PER_PASS);
-    const last = page.at(-1);
-    yield* Ref.set(
-      repairCursor,
-      page.length < REMOTE_THREAD_REPAIRS_PER_PASS || last === undefined ? "" : last.key,
-    );
+    const walk = yield* Ref.get(repairWalk);
+    if (walk.done) return 0;
+    const page = yield* store.pageSettledLaunches(walk.after, REMOTE_THREAD_REPAIR_PAGE);
     let filled = 0;
-    for (const { record, remoteThreadId } of page) {
+    for (const { record, remoteThreadId } of page.candidates) {
       const correlationId = record.destination?.correlationId;
       if (correlationId === undefined || !isThreadId(remoteThreadId)) continue;
       const fill = { ...record, correlationId, threadId: remoteThreadId };
       if (yield* store.fillSettledLaunchThread(fill)) filled += 1;
     }
+    const ended = page.inspected < REMOTE_THREAD_REPAIR_PAGE || page.lastKey === undefined;
+    yield* Ref.set(
+      repairWalk,
+      ended
+        ? { after: "", filled: 0, done: walk.filled + filled === 0 }
+        : { after: page.lastKey, filled: walk.filled + filled, done: false },
+    );
     return filled;
   }).pipe(
     Effect.catchCause((cause) =>
