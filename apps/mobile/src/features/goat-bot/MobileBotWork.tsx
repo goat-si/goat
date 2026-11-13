@@ -407,10 +407,9 @@ export function MobileBotWork(props: {
     task: task?.row ?? null,
     peek: open ? (peekEntry?.row ?? null) : null,
     scope: workOwner,
-    // An older task's read-through goes into the walk it was sent from; the list rereads its own.
-    onAcknowledged: (taskId, through, scope) => {
-      history.markRead(scope, taskId, through);
-      threads.refresh();
+    // A mark reaches the walk showing its computer and bot; only a sent one on this Home rereads.
+    onAcknowledged: (taskId, through, scope, sent) => {
+      if (history.markRead(scope, taskId, through) && sent) threads.refresh();
     },
   });
   const now = useNowMinuteMs();

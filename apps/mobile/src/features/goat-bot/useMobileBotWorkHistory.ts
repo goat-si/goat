@@ -89,17 +89,19 @@ export function useMobileBotWorkHistory(input: {
       live.current = null;
     };
   });
-  // A server that answered a page walks history; offline its capabilities may not be known.
-  const capabilities = walk.started
+  // Rows a started walk read stay listed, offline too, where capabilities may be unknown; offering
+  // and sending reads follow what the connected computer reports now.
+  const listedCapabilities = walk.started
     ? { ...input.capabilities, goatBotTaskThreadsPaged: true }
     : input.capabilities;
   const view = botWorkHistoryView({
     walk,
     current,
-    capabilities: capabilities as ExecutionEnvironmentCapabilities | undefined,
+    capabilities: listedCapabilities as ExecutionEnvironmentCapabilities | undefined,
     botId,
     loaded: input.loaded && enabled,
   });
+  const hasMore = view.hasMore && botThreadsHistoryInput(input.capabilities, botId) !== null;
   if (held.scope === scope && view.reported !== held.written) {
     const id = held.id;
     setHeld((state) =>
@@ -110,13 +112,14 @@ export function useMobileBotWorkHistory(input: {
   }
   // The press in flight; one that lost its walk, connection or Home no longer blocks a new one.
   const running = useRef<Press | null>(null);
-  /** The press is still this Home's, on the same walk and connection: the one test for writing. */
+  /** The press is still this Home's, on the same walk and connection. */
   const mine = (press: Press | null) =>
     press !== null &&
     live.current !== null &&
     press.id === live.current.id &&
     press.epoch === live.current.epoch;
-  // Judged again inside the updater, against the state it writes into.
+  // A result lands only in the walk it was started for (compared inside the state update) and
+  // never after unmount; a disconnect stops further requests and any failure notice.
   const write = (press: Press, change: (walk: Walk) => Walk) => {
     if (!mine(press)) return;
     setHeld((state) =>
@@ -125,17 +128,20 @@ export function useMobileBotWorkHistory(input: {
         : state,
     );
   };
-  // An accepted read mark applies to whichever walk shows its computer and bot.
+  // An accepted read mark applies to whichever walk shows its computer and bot. True when it is
+  // this mounted Home's computer and bot, so the caller may reread the current list.
   function markRead(sentOwner: string, taskId: ChannelTaskId, through: string) {
-    if (!Number.isFinite(Date.parse(through)) || live.current === null) return;
-    setHeld((state) =>
-      state.owner === sentOwner
-        ? { ...state, walk: markWalkRead(state.walk, taskId, through) }
-        : state,
-    );
+    if (live.current === null) return false;
+    if (Number.isFinite(Date.parse(through)))
+      setHeld((state) =>
+        state.owner === sentOwner
+          ? { ...state, walk: markWalkRead(state.walk, taskId, through) }
+          : state,
+      );
+    return sentOwner === owner;
   }
   async function loadMore() {
-    if (!view.hasMore || mine(running.current) || environmentId === null) return;
+    if (!hasMore || mine(running.current) || environmentId === null) return;
     const press = { id: held.id, epoch: held.epoch };
     // A press from a render before Home's walk or connection changed sends nothing.
     if (!mine(press)) return;
@@ -144,7 +150,7 @@ export function useMobileBotWorkHistory(input: {
     const outcome = await readPress({
       environmentId,
       botId,
-      capabilities: capabilities as ExecutionEnvironmentCapabilities | undefined,
+      capabilities: input.capabilities,
       cursor: walk.cursor,
       listed: new Set(view.pressRows.map(botThreadKey)),
       valid: () => mine(press),
@@ -164,7 +170,7 @@ export function useMobileBotWorkHistory(input: {
     remoteWork: view.remoteWork,
     launchesTruncated: view.launchesTruncated,
     incomplete: view.incomplete,
-    hasMore: view.hasMore,
+    hasMore,
     loading: walk.loading,
     failed: walk.failed,
     loadMore,

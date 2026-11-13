@@ -416,6 +416,33 @@ it("drops a page whose walk changes after its last check, in the same batch as t
   expect(view().loading).toBe(false);
 });
 
+it("follows a computer that stops offering paged history while connected: no Show more, no read, rows stay", async () => {
+  setup();
+  await show();
+  await press();
+  await net.calls[0]?.answer(page([task("a"), task("b"), task("c"), task("d"), task("e")], "c1"));
+  expect(view().hasMore).toBe(true);
+  await show({ capabilities: { goatBotTaskThreadsPaged: false } as Props["capabilities"] });
+  expect(view().hasMore).toBe(false);
+  await press();
+  expect(net.calls).toHaveLength(1);
+  expect(titles()).toEqual(["now", "a", "b", "c", "d", "e"]);
+});
+
+it("says a read mark is this Home's only while mounted and for its own computer and bot", async () => {
+  setup();
+  await show();
+  let ours = false;
+  await act(async () => void (ours = view().markRead("env:bot", "a" as never, at(5))));
+  expect(ours).toBe(true);
+  await act(async () => void (ours = view().markRead("other", "a" as never, at(5))));
+  expect(ours).toBe(false);
+  const late = view().markRead;
+  await act(async () => root?.unmount());
+  root = null;
+  expect(late("env:bot", "a" as never, at(5))).toBe(false);
+});
+
 it("a late mark for earlier activity reads the task through that activity only", async () => {
   setup();
   await show();

@@ -133,6 +133,7 @@ const state = vi.hoisted(() => ({
   childError: null as string | null,
   childPending: false,
   childRefresh: vi.fn(),
+  taskRefresh: vi.fn(),
   scrolled: [] as string[],
   failScroll: false,
   contentChanged: () => {},
@@ -287,7 +288,7 @@ vi.mock("../../state/query", () => ({
     cause: key === "task" ? state.taskError : null,
     isPending: key === "child" && state.childPending,
     isSuccess: key !== null,
-    refresh: key === "child" ? state.childRefresh : vi.fn(),
+    refresh: key === "child" ? state.childRefresh : key === "task" ? state.taskRefresh : vi.fn(),
   }),
 }));
 // Stands in for the thread-state subscription useAtomValue holds while a consumer is mounted.
@@ -475,6 +476,7 @@ afterEach(async () => {
   state.openTask.mockClear();
   state.openThread.mockClear();
   state.childRefresh.mockClear();
+  state.taskRefresh.mockClear();
 });
 async function open(taskId?: string) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -804,6 +806,55 @@ it("a failed read mark marks nothing in Home's walk", async () => {
   await press("Back to home. Old report");
   expect(reads()).toEqual([{ taskId: "o1", readThrough: at }]);
   expect(button("Old report")?.getAttribute("aria-label")).toContain("unread");
+});
+
+function deferAck() {
+  resetTaskReadAcknowledgementsForTests();
+  state.run.mockClear();
+  const ack = { accept: (_value: { _tag: string }) => {} };
+  state.run.mockImplementationOnce(
+    () => new Promise<{ _tag: string }>((resolve) => (ack.accept = resolve)),
+  );
+  return ack;
+}
+
+it("a mark accepted before the reopened Home read the task shows it read on the next peek, sending nothing", async () => {
+  const ack = deferAck();
+  await open();
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  await press("Back to home. Old report");
+  await press("Close");
+  await press("Work");
+  await press("Show more");
+  await act(async () => ack.accept({ _tag: "Success" }));
+  await state.pages.at(-1)?.answer(page(fiveOlder(older("o1", "Old report", true))));
+  expect(button("Old report")?.getAttribute("aria-label")).toContain("unread");
+  await press("Old report");
+  await press("Back to home. Old report");
+  expect(reads()).toHaveLength(1);
+  expect(button("Old report")?.getAttribute("aria-label")).not.toContain("unread");
+});
+
+it("a late accepted mark rereads the task list only for the Home that is still showing its computer", async () => {
+  let ack = deferAck();
+  await open();
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  state.taskRefresh.mockClear();
+  await act(async () => root?.unmount());
+  root = undefined;
+  await act(async () => ack.accept({ _tag: "Success" }));
+  expect(state.taskRefresh).not.toHaveBeenCalled();
+  ack = deferAck();
+  await open();
+  await showOlder(fiveOlder(older("o1", "Old report", true)));
+  await press("Old report");
+  state.taskRefresh.mockClear();
+  state.botRef = { threadId: "bot-2", environmentId: "env" };
+  await open();
+  await act(async () => ack.accept({ _tag: "Success" }));
+  expect(state.taskRefresh).not.toHaveBeenCalled();
 });
 
 it("a read mark sent before Home closed lands in the reopened Home's walk", async () => {
