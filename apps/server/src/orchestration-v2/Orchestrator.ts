@@ -40,7 +40,6 @@ import {
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
 import { dispatchRunStartHold } from "./goat/RunStartHold.ts";
 import { pinSettlement } from "./goat/PinSettlement.ts";
-import { warnLaunchWakeKeyCrossing } from "./goat/launchWakeKeyWarning.ts";
 import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 import {
   completionDeliveryRun,
@@ -13341,8 +13340,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
 
-    // After the commit and still under the thread lock, so the queue read is this commit's.
-    if (committed.committed) yield* warnLaunchWakeKeyCrossing(projectionStore, command);
     return {
       sequence: committed.receipt.resultSequence,
       storedEvents: committed.storedEvents,

@@ -13,10 +13,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../../fleet/pressure/pressureModel.ts";
 import { finishedWake, newLaunchWatch } from "../../mcp/launchWatch.ts";
 import { foldIntoQueuedNotice } from "../TurnDigest.ts";
-import { launchWakeKeyCrossing } from "./launchWakeFolds.ts";
-
-/** Distinct launching runs a thread may queue wakes for before the warning. */
-const LAUNCH_WAKE_KEY_WARNING = 8;
 
 type Projection = Pick<OrchestrationV2ThreadProjection, "runs" | "messages">;
 type Dispatch = Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
@@ -209,30 +205,5 @@ describe("launch wakes on task threads fold only by launching run", () => {
       now,
     );
     expect(fold?.runId).toBe("run:queued-0");
-  });
-});
-
-describe("the queued launch-wake key warning", () => {
-  const keys = (count: number) =>
-    Array.from({ length: count }, (_, index) =>
-      asNotice(wake(`k${index}`, session, `run:k${index}`)),
-    );
-
-  it("contract: reports the wake that made the ninth key, and nothing at eight or ten", () => {
-    const nine = keys(LAUNCH_WAKE_KEY_WARNING + 1);
-    const last = nine.at(-1)!;
-    expect(launchWakeKeyCrossing(queue(nine), last.id, RunId.make("run:k8"))).toBe(9);
-    const eight = keys(LAUNCH_WAKE_KEY_WARNING);
-    expect(
-      launchWakeKeyCrossing(queue(eight), eight.at(-1)!.id, RunId.make("run:k7")),
-    ).toBeUndefined();
-    const ten = keys(LAUNCH_WAKE_KEY_WARNING + 2);
-    expect(launchWakeKeyCrossing(queue(ten), ten.at(-1)!.id, RunId.make("run:k9"))).toBeUndefined();
-  });
-
-  it("contract: a wake that folded into its run's turn does not report a crossing", () => {
-    const nine = keys(LAUNCH_WAKE_KEY_WARNING + 1);
-    const folded = wake("k0-again", session, "run:k0");
-    expect(launchWakeKeyCrossing(queue(nine), folded.id, RunId.make("run:k0"))).toBeUndefined();
   });
 });

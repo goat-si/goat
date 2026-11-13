@@ -1,4 +1,4 @@
-import { assert, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
@@ -11,7 +11,6 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { resolveSessionRun } from "../channels/channelBotSessionRuns.ts";
@@ -410,63 +409,5 @@ it.effect(
       const queued = yield* queuedIds;
       expect(queued.map((message) => message.id)).toEqual([first.messageId, pressure]);
       expect(queued[0]!.text).toContain(later.messageId);
-    }).pipe(Effect.provide(layer)),
-);
-
-it.effect(
-  "contract: queuing a ninth launching run's wake logs one warning, even when two wakes race; a replay and a tenth log none",
-  () =>
-    Effect.gen(function* () {
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const store = yield* ProjectionStore.ProjectionStoreV2;
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("create-warn"),
-        threadId: supervisor,
-        projectId: ProjectId.make("project:notice-digest"),
-        title: "Supervisor",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("work-warn"),
-        threadId: supervisor,
-        messageId: MessageId.make("message:work-warn"),
-        text: "Work",
-        attachments: [],
-        modelSelection,
-        dispatchMode: { type: "start_immediately" },
-        createdBy: "user",
-        creationSource: "web",
-      });
-      const launcher = ThreadId.make("goat-bot-session:warn");
-      const wakes = Array.from({ length: 10 }, (_, index) =>
-        notice(runEnd(`warn-${index}`, null, launcher, RunId.make(`run:launch-${index}`))),
-      );
-      const warnings: Array<string> = [];
-      const logger = Logger.make(({ message }) => {
-        const text = String(message);
-        if (text.includes("queued launch wake keys")) warnings.push(text);
-      });
-      const logged = Logger.layer([logger], { mergeWithExisting: false });
-      for (const wake of wakes.slice(0, 7))
-        yield* orchestrator.dispatch(wake).pipe(Effect.provide(logged));
-      assert.lengthOf(warnings, 0);
-      yield* Effect.forEach(wakes.slice(7, 9), (wake) => orchestrator.dispatch(wake), {
-        concurrency: 2,
-      }).pipe(Effect.provide(logged));
-      assert.lengthOf(warnings, 1);
-      const replay = yield* orchestrator.dispatch(wakes[8]!).pipe(Effect.provide(logged));
-      assert.isTrue(replay.replayed === true);
-      yield* orchestrator.dispatch(wakes[9]!).pipe(Effect.provide(logged));
-      assert.lengthOf(warnings, 1);
-      const projection = yield* store.getThreadProjection(supervisor);
-      assert.lengthOf(queuedRunsInDeliveryOrder(projection), 10);
     }).pipe(Effect.provide(layer)),
 );

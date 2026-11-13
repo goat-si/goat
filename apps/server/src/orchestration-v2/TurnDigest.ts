@@ -211,9 +211,10 @@ export const isNoticeMessage = (message: {
   isNoticeId(message.id);
 
 /**
- * The event that folds a queued notice into the notice turn already waiting at the end of the
- * queue, or undefined when it should queue its own turn. Only a notice behind a notice folds,
- * so a user message keeps its place, and a notice never waits behind one sent after it.
+ * The event that folds a queued notice into the notice turn at the end of the queue, or undefined
+ * when it should queue its own turn: a user message keeps its place, and a notice never waits
+ * behind one sent after it. A stamped launch wake instead joins its launching run's newest queued
+ * turn, never past a queued user message, so it may run ahead of earlier notices.
  */
 export function foldIntoQueuedNotice(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
