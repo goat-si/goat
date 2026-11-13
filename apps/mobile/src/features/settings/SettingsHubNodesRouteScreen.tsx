@@ -258,7 +258,7 @@ function HubDevicesList({
           <View className="flex-row items-center gap-3">
             <View className="flex-1 gap-1">
               <Text className="text-foreground">Attach disposable machines</Text>
-              <Text className="text-sm text-foreground-muted">{`The threads you name here, and you in Settings, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.`}</Text>
+              <Text className="text-sm text-foreground-muted">{`Threads you name in Settings on desktop or web, and you there, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.`}</Text>
             </View>
             <ThemedSwitch
               accessibilityLabel="Attach disposable machines"
@@ -286,7 +286,7 @@ function HubDevicesList({
           {machines.data?.machines.map((machine) => (
             <View key={machine.attachId}>
               <Text>
-                {machine.name} · {machine.state} · {machine.message}
+                {machine.name} · {machine.message}
               </Text>
               <Text>
                 {machine.provisioner.kind === "person"
