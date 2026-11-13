@@ -340,6 +340,12 @@ export type RemoteResolution =
   | { readonly type: "local" }
   | { readonly type: "retry" };
 
+/** Sees each answer forward's fiber as it starts; tests await the attempts through it. */
+export const ForwardStarted = Context.Reference<(fiber: Fiber.Fiber<void>) => Effect.Effect<void>>(
+  "goat/channels/ChannelRemoteWorkers/ForwardStarted",
+  { defaultValue: () => () => Effect.void },
+);
+
 export class ChannelRemoteWorkers extends Context.Service<
   ChannelRemoteWorkers,
   {
@@ -421,8 +427,6 @@ export class ChannelRemoteWorkers extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
-    /** Waits for the forwards already running, as the runtime waits for its receptions. */
-    readonly awaitForwards: Effect.Effect<void>;
     /**
      * The machine an earlier attempt of this generation may already run on, when the task now
      * points elsewhere. Starting it anywhere else could run it twice.
@@ -2431,7 +2435,7 @@ const make = Effect.gen(function* () {
   const observerKey = (taskId: ChannelTaskId, generation: number) =>
     "observe:" + taskId + ":" + generation;
 
-  const background = <E>(key: string, effect: Effect.Effect<void, E>) =>
+  const backgroundFiber = <E>(key: string, effect: Effect.Effect<void, E>) =>
     FiberMap.run(
       fibers,
       key,
@@ -2441,7 +2445,9 @@ const make = Effect.gen(function* () {
         ),
       ),
       { onlyIfMissing: true },
-    ).pipe(Effect.asVoid);
+    );
+  const background = <E>(key: string, effect: Effect.Effect<void, E>) =>
+    backgroundFiber(key, effect).pipe(Effect.asVoid);
 
   const launch: ChannelRemoteWorkers["Service"]["launch"] = (taskId, owner) =>
     background("launch:" + taskId, launchAndObserve(taskId, owner));
@@ -2698,18 +2704,12 @@ const make = Effect.gen(function* () {
     );
 
   const forward: ChannelRemoteWorkers["Service"]["forward"] = (pending, owner) =>
-    background(
-      "forward:" + pending.event.eventId,
-      serialized(pending.event.taskId)(sendAnswer(pending, owner)),
+    Effect.flatMap(ForwardStarted, (started) =>
+      backgroundFiber(
+        "forward:" + pending.event.eventId,
+        serialized(pending.event.taskId)(sendAnswer(pending, owner)),
+      ).pipe(Effect.flatMap(started)),
     );
-
-  const awaitForwards = Effect.suspend(() =>
-    Effect.forEach(
-      [...fibers].flatMap(([key, fiber]) => (key.startsWith("forward:") ? [fiber] : [])),
-      (fiber) => Fiber.await(fiber),
-      { discard: true },
-    ),
-  );
 
   const ensure: ChannelRemoteWorkers["Service"]["ensure"] = (owner) =>
     Effect.gen(function* () {
@@ -3026,7 +3026,6 @@ const make = Effect.gen(function* () {
     launch,
     dispatch,
     forward,
-    awaitForwards,
     stop,
     ensure,
     attemptedElsewhere,

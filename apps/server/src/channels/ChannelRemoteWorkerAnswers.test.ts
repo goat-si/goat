@@ -8,11 +8,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { REMOTE_COPY } from "./channelRemoteCopy.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
+import { trackForwards } from "./testkit/remoteForwardFibers.ts";
 import {
   linkSlackUser,
   makeHarness,
@@ -200,16 +200,12 @@ const openQuestionTexts = Effect.map(onlyTask, (task) =>
   task.openQuestions.map((question) => question.text),
 );
 
-/** The answer forwards already running have ended; nothing new starts before the next drain. */
-const forwardsSettled = ChannelRemoteWorkers.ChannelRemoteWorkers.pipe(
-  Effect.flatMap((workers) => workers.awaitForwards),
-);
-
 /** One more runtime pass, with the forward attempt it starts run to its end. */
-const nextAttempt = ChannelRuntime.ChannelRuntime.pipe(
-  Effect.flatMap((runtime) => runtime.drain),
-  Effect.andThen(forwardsSettled),
-);
+const nextAttempt = (forwards: ReturnType<typeof trackForwards>) =>
+  ChannelRuntime.ChannelRuntime.pipe(
+    Effect.flatMap((runtime) => runtime.drain),
+    Effect.andThen(forwards.settled),
+  );
 
 const answerFrom = (user: string, key: string) =>
   ChannelGateway.ChannelGateway.pipe(
@@ -251,23 +247,24 @@ describe("remote answers when the requester's or sender's authority is lost", ()
     "regression: an answer whose reply was lost is not sent again once the requester is revoked",
     () => {
       const { machine, harness } = pinnedHarness();
+      const forwards = trackForwards();
       return Effect.gen(function* () {
         yield* askedOnRemote(machine, "do@mac-studio: ask me", "lost-reply");
         machine.dropSendReply = true;
         yield* answer("lost-reply");
-        yield* forwardsSettled;
+        yield* forwards.settled;
         assert.isAtLeast(machine.sends.length, 1);
         yield* revoke();
         // Every send counted here was authorized before the revocation committed.
         const delivered = machine.sends.length;
         machine.dropSendReply = false;
-        yield* nextAttempt;
+        yield* nextAttempt(forwards);
         const told = REMOTE_COPY.requesterChanged(machine.host);
         assert.deepStrictEqual(yield* openQuestionTexts, [told]);
         // The words allow that an earlier attempt arrived; nothing is sent after the revocation.
         assert.include(told, "may not have passed on");
         assert.lengthOf(machine.sends, delivered);
-      }).pipe(Effect.provide(harness.layer));
+      }).pipe(forwards.observe, Effect.provide(harness.layer));
     },
   );
 
@@ -275,6 +272,7 @@ describe("remote answers when the requester's or sender's authority is lost", ()
     "authority: a failed read of the requester's link leaves the answer to send later",
     () => {
       const { machine, harness } = pinnedHarness();
+      const forwards = trackForwards();
       return Effect.gen(function* () {
         yield* askedOnRemote(machine, "do@mac-studio: ask me", "unreadable");
         const sql = yield* SqlClient.SqlClient;
@@ -295,11 +293,11 @@ describe("remote answers when the requester's or sender's authority is lost", ()
               })
             : Effect.void;
         yield* answer("unreadable");
-        yield* forwardsSettled;
-        yield* nextAttempt;
+        yield* forwards.settled;
+        yield* nextAttempt(forwards);
         assert.lengthOf(machine.sends, 1);
         assert.deepStrictEqual(yield* openQuestionTexts, []);
-      }).pipe(Effect.provide(harness.layer));
+      }).pipe(forwards.observe, Effect.provide(harness.layer));
     },
   );
 
@@ -421,19 +419,20 @@ describe("remote answer refusals", () => {
     "authority: a mode refusal after a delivered answer whose reply was lost says it may have arrived",
     () => {
       const { machine, harness } = pinnedHarness();
+      const forwards = trackForwards();
       return Effect.gen(function* () {
         yield* askedOnRemote(machine, "do@mac-studio: ask me", "lost-then-refused");
         machine.dropSendReply = true;
         yield* answer("lost-then-refused");
-        yield* forwardsSettled;
+        yield* forwards.settled;
         assert.isAtLeast(machine.sends.length, 1);
         machine.dropSendReply = false;
         machine.refuseSendWith = "runtime_mode_escalation_denied";
-        yield* nextAttempt;
+        yield* nextAttempt(forwards);
         const refused = REMOTE_COPY.answerRefused(machine.host, "the first");
         assert.deepStrictEqual(yield* openQuestionTexts, [refused]);
         assert.include(refused, "may not have passed on");
-      }).pipe(Effect.provide(harness.layer));
+      }).pipe(forwards.observe, Effect.provide(harness.layer));
     },
   );
 
