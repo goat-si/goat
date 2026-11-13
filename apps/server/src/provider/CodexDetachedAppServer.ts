@@ -859,6 +859,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       ),
   );
 
+  /** When a kept process started, as its record says. */
+  const keptStartedAt = (name: string) =>
+    Effect.sync(() => Date.parse(fences.get(name)?.createdAt ?? "") || undefined);
+
   /**
    * A kept record whose group exited stops being offered for recovery, so the session starts
    * afresh. Its file stays for fence writes and startup cleanup settles it, as it does any gone record.
@@ -967,6 +971,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     connectExisting,
     preserveForRecovery,
     listPreservedForSession,
+    keptStartedAt,
     settleKept,
     ensureReleasedClear,
     retainOnClose,

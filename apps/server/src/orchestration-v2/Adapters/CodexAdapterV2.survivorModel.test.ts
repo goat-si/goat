@@ -23,6 +23,9 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { TestClock } from "effect/testing";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Test fixture paths.
+import * as NodePath from "node:path";
 
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
@@ -190,4 +193,82 @@ it.effect("a restart continuation with no survivor to adopt is model-checked bef
     const refused = Exit.isFailure(started) ? Cause.squash(started.cause) : undefined;
     assert.strictEqual(restartRequiredIn(refused)?.modelStatus, "predated");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect(
+  "a Codex session reads the catalog its config points at and reports a changed model",
+  () =>
+    Effect.gen(function* () {
+      const scenario = "catalog-freshness";
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const model = CODEX_TEST_MODEL_SELECTION.model;
+      const writeCatalog = (contextWindow: number, writtenAtMs: number) =>
+        fs
+          .writeFileString(
+            NodePath.join(home, "catalog.json"),
+            JSON.stringify({ models: [{ slug: model, context_window: contextWindow }] }),
+          )
+          .pipe(
+            Effect.andThen(
+              fs.utimes(
+                NodePath.join(home, "catalog.json"),
+                writtenAtMs / 1000,
+                writtenAtMs / 1000,
+              ),
+            ),
+          );
+      yield* writeCatalog(272_000, 1_000);
+      yield* TestClock.adjust("10 seconds");
+      const transcript = makeCodexReplayTranscript({
+        scenario,
+        entries: codexReplayPreamble({
+          nativeThreadId: "native",
+          nativeTurnId: "t",
+          prompt: "x",
+        }).slice(0, 3),
+      });
+      const driver = yield* CodexReplay.makeReplayDriver(transcript);
+      const adapter = yield* CodexAdapter.makeCodexAdapterV2({
+        instanceId: CodexAdapter.CODEX_DEFAULT_INSTANCE_ID,
+        settings: yield* decodeCodexSettings({}),
+        environment: { HOME: home },
+        offeredModels: Effect.succeed([
+          { slug: model, name: model, isCustom: false, capabilities: null },
+        ]),
+        clientFactory: {
+          open: () =>
+            Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+              Effect.map((context) => Context.get(context, CodexClient.CodexAppServerClient)),
+              Effect.map((client): CodexClient.CodexAppServerClient["Service"] => ({
+                ...client,
+                request: ((method: string, params: unknown) => {
+                  if (method === "model/list")
+                    return Effect.succeed({ data: [{ model }], nextCursor: null });
+                  if (method === "config/read") {
+                    return Effect.succeed({ config: { model_catalog_json: "~/catalog.json" } });
+                  }
+                  return client.request(method as never, params as never);
+                }) as typeof client.request,
+              })),
+              Effect.orDie,
+            ),
+        },
+        crypto: yield* Crypto.Crypto,
+        fileSystem: fs,
+        idAllocator: yield* IdAllocator.IdAllocatorV2,
+        serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),
+      }).pipe(Effect.provideService(CodexSurvivors.CodexSurvivors, noSurvivors));
+      const runtime = yield* adapter.openSession({
+        threadId: ThreadId.make("thread-catalog-freshness"),
+        providerSessionId: ProviderSessionId.make("session"),
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+      });
+      const modelStatus = runtime.modelStatus ?? (() => Effect.die("no model check"));
+
+      assert.strictEqual(yield* modelStatus(model), "ready");
+      yield* writeCatalog(1_048_576, 20_000);
+      assert.strictEqual(yield* modelStatus(model), "outdated");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
