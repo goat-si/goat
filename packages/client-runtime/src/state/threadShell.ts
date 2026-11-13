@@ -20,6 +20,7 @@ import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { goatBotObservationThreadKeys, type GoatBotWorkRef } from "../goatBot/visibility.ts";
+import type { HomeCurrentOpenableLink } from "../goatBot/homeCurrentOpenableWork.ts";
 import {
   arrayElementsEqual,
   parseProjectRefCollectionKey,
@@ -146,6 +147,10 @@ export function createEnvironmentThreadShellAtoms(input: {
    * The work GOAT Bot's rows list, read again for an environment when its signal changes:
    * a bot launch or worker appeared, or a bot conversation recorded something.
    */
+  readonly goatBotHomeWork?: (environmentId: EnvironmentId) => Atom.Atom<{
+    readonly byBot: ReadonlyArray<{ readonly eligible: boolean }>;
+    readonly links: ReadonlyArray<HomeCurrentOpenableLink>;
+  }>;
   readonly goatBotListedWork?: (source: {
     readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
     readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
@@ -455,8 +460,15 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotEnvironmentIdsAtom = Atom.make((get) => [
     ...enabledEnvironmentIds(get(input.catalogValueAtom)),
   ]).pipe(Atom.withLabel("environment-goat-bot-environment-ids"));
+  const legacyBotEnvironmentIdsAtom = Atom.make((get) =>
+    get(goatBotEnvironmentIdsAtom).filter((id) => {
+      if (input.goatBotHomeWork === undefined) return true;
+      const work = get(input.goatBotHomeWork(id));
+      return !work.byBot.every((bot) => bot.eligible);
+    }),
+  );
   const goatBotListedWorkAtom = input.goatBotListedWork?.({
-    environmentIdsAtom: goatBotEnvironmentIdsAtom,
+    environmentIdsAtom: legacyBotEnvironmentIdsAtom,
     signal: goatBotWorkSignalAtom,
   });
 
@@ -465,6 +477,15 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotObservationThreadKeysAtom = Atom.make((get) => {
     const next = goatBotObservationThreadKeys({
       threads: get(quietThreadShellsAtom),
+      homeWork:
+        input.goatBotHomeWork === undefined
+          ? []
+          : get(goatBotEnvironmentIdsAtom).flatMap((id) => {
+              const homeWork = input.goatBotHomeWork;
+              if (homeWork === undefined) return [];
+              const work = get(homeWork(id));
+              return work.byBot.every((bot) => bot.eligible) ? work.links : [];
+            }),
       ...(goatBotListedWorkAtom === undefined ? {} : { listedWork: get(goatBotListedWorkAtom) }),
     });
     if (
