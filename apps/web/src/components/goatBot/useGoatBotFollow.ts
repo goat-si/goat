@@ -53,11 +53,14 @@ export function useGoatBotFollow({
     });
   // These sets live in this keyed timeline and hold its row IDs plus this sitting's sends.
   const initialized = useRef(baselineIds === undefined);
-  const seen = useRef(new Set(baselineIds === undefined ? rows.map((row) => row.id) : []));
-  const eligibleSources = useRef(new Set<string>());
+  // Created once per mount; a useRef argument would be rebuilt on every streamed update.
+  const [seen] = useState(
+    () => new Set<string>(baselineIds === undefined ? rows.map((row) => row.id) : []),
+  );
+  const [eligibleSources] = useState(() => new Set<string>());
   // sentHere tracks displayed send motion; submitted also tracks folded sends without a user row.
-  const submitted = useRef(new Set(submissions.map((send) => send.key)));
-  const pending = useRef(new Map<string, GoatBotLocalSubmission>());
+  const [submitted] = useState(() => new Set(submissions.map((send) => send.key)));
+  const [pending] = useState(() => new Map<string, GoatBotLocalSubmission>());
   const anchor = useRef<string | null>(null);
   const jumpPadding = useRef<string | null>(null);
   const [cueIds, setCueIds] = useState<ReadonlyArray<string>>([]);
@@ -90,7 +93,7 @@ export function useGoatBotFollow({
     return true;
   };
   const clear = () => {
-    for (const row of rows) seen.current.add(row.id);
+    for (const row of rows) seen.add(row.id);
     setCue([]);
   };
   const clearJumpPadding = () => {
@@ -121,15 +124,16 @@ export function useGoatBotFollow({
       lastScrollTopRef.current = scroll.scrollTop;
     }
     if (!initialized.current && baselineIds !== null && baselineIds !== undefined) {
-      seen.current = new Set(baselineIds);
+      seen.clear();
+      for (const id of baselineIds) seen.add(id);
       initialized.current = true;
     }
     for (const send of submissions) {
-      if (submitted.current.has(send.key)) continue;
-      submitted.current.add(send.key);
-      pending.current.set(send.key, send);
+      if (submitted.has(send.key)) continue;
+      submitted.add(send.key);
+      pending.set(send.key, send);
     }
-    for (const [key] of pending.current) {
+    for (const [key] of pending) {
       const sent = rows.find(
         (row) =>
           row.kind === "user" && (row.sendKey === key || row.id === committedSends?.get(key)),
@@ -142,7 +146,7 @@ export function useGoatBotFollow({
               row.answerInputRowId === committedSends?.get(key))),
       );
       if (!sent && !question) continue;
-      pending.current.delete(key);
+      pending.delete(key);
       clearJumpPadding();
       if (question && !sent) {
         setCue([]);
@@ -162,19 +166,19 @@ export function useGoatBotFollow({
     }
     if (!initialized.current || baselineIds === null) return;
     if (baselineIds !== undefined && sourceIds !== undefined) {
-      for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.current.add(id);
+      for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.add(id);
     }
     const next = cueRef.current.filter((id) => membership.ids.has(id));
     for (const row of rows) {
-      if (seen.current.has(row.id)) continue;
+      if (seen.has(row.id)) continue;
       if (row.kind !== "bot" && row.kind !== "task") {
-        seen.current.add(row.id);
+        seen.add(row.id);
         continue;
       }
-      const eligible = baselineIds === undefined || eligibleSources.current.has(row.id);
+      const eligible = baselineIds === undefined || eligibleSources.has(row.id);
       if (eligible && !followingRef.current) next.push(row.id);
       // A baseline source item can first become visible after filtering; it is never new.
-      if (eligible || baselineIds?.has(row.id)) seen.current.add(row.id);
+      if (eligible || baselineIds?.has(row.id)) seen.add(row.id);
     }
     if (followingRef.current) clear();
     else setCue(next);
