@@ -19,6 +19,8 @@ export type MobileTaskSearchState = {
   readonly cursor?: string;
   readonly partial: boolean;
   readonly endedEarly: boolean;
+  /** Held at the limit while the server had more, or stopped early. */
+  readonly capped: boolean;
   readonly loading: boolean;
   readonly failed: boolean;
 };
@@ -26,6 +28,7 @@ const EMPTY: MobileTaskSearchState = {
   tasks: [],
   partial: false,
   endedEarly: false,
+  capped: false,
   loading: true,
   failed: false,
 };
@@ -134,7 +137,8 @@ export function useMobileBotTaskSearch(input: {
     setState((current) => {
       const before = current?.key === sentKey && cursor !== undefined ? current.value : null;
       const tasks = [...(before?.tasks ?? []), ...page.tasks].slice(0, TASK_SEARCH_MAX_RESULTS);
-      const more = page.nextCursor !== undefined && tasks.length < TASK_SEARCH_MAX_RESULTS;
+      const full = tasks.length >= TASK_SEARCH_MAX_RESULTS;
+      const more = page.nextCursor !== undefined && !full;
       return {
         key: sentKey,
         value: {
@@ -142,6 +146,7 @@ export function useMobileBotTaskSearch(input: {
           ...(more ? { cursor: page.nextCursor } : {}),
           partial: (before?.partial ?? false) || page.partial === true,
           endedEarly: page.endedEarly === true,
+          capped: full && (page.nextCursor !== undefined || page.endedEarly === true),
           loading: false,
           failed: false,
         },

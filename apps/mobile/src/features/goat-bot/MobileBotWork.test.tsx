@@ -960,3 +960,38 @@ it("looks nothing up until the current list has settled, and not when the settle
   expect(container.textContent).toContain("Review");
   expect(state.lookup).not.toHaveBeenCalled();
 });
+
+it("a looked-up task stays on screen while the current list refreshes, with no second lookup", async () => {
+  reset();
+  state.lookupCapable = true;
+  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed")));
+  await render(ChannelTaskId.make("task-old"));
+  expect(state.lookup).toHaveBeenCalledOnce();
+  Object.assign(state.task, { isPending: true });
+  await render(ChannelTaskId.make("task-old"));
+  expect(container.textContent).toContain("Summarize the README");
+  expect(container.textContent).toContain("Done");
+  Object.assign(state.task, { isPending: false });
+  await render(ChannelTaskId.make("task-old"));
+  expect(container.textContent).toContain("Summarize the README");
+  expect(state.lookup).toHaveBeenCalledOnce();
+  const at = "2026-11-04T10:00:00.000Z";
+  const row = decodeRow({
+    kind: "task",
+    task: {
+      taskId: "task-old",
+      title: "Summarize the README now",
+      status: "running",
+      updatedAt: at,
+    },
+    view: { taskId: "task-old", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  Object.assign(state.task, { data: { rows: [row] } });
+  await render(ChannelTaskId.make("task-old"));
+  expect(container.textContent).toContain("Summarize the README now");
+  expect(state.lookup).toHaveBeenCalledOnce();
+});

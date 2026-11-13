@@ -92,7 +92,9 @@ export function MobileBotTaskSearch(props: {
               Some tasks that might match could not be checked or shown.
             </Text>
           ) : null}
-          {value.endedEarly ? (
+          {value.capped ? (
+            <Text className="text-foreground-muted">Showing the first 50 matching tasks.</Text>
+          ) : value.endedEarly ? (
             <Text className="text-foreground-muted">Search stopped early.</Text>
           ) : value.cursor !== undefined && !value.loading && !value.failed ? (
             <Pressable

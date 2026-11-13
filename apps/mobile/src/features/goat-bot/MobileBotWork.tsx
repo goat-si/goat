@@ -219,6 +219,7 @@ export function MobileBotWork(props: {
     botId: botId,
     taskId: props.taskId ?? null,
     needed: older && enabled,
+    holding: !task && enabled && threads.isPending && threads.data !== null,
     supported: capabilities?.goatBotTaskLookupSearch === true,
     childGroups: childData?.groups ?? [],
   });

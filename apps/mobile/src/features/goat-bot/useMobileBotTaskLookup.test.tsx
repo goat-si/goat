@@ -227,3 +227,18 @@ it("after leaving a task and coming back, an earlier reload rereads that same ta
   await net.calls[3]?.answer(known("t1"));
   expect(state()).toBe("known");
 });
+
+it("Try again pressed twice before the screen shows it loading reads once", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.fail("persistence_failed");
+  const failed = seen.current;
+  expect(failed?.state).toBe("failed");
+  await act(async () => {
+    if (failed?.state === "failed") {
+      failed.reload();
+      failed.reload();
+    }
+  });
+  expect(net.calls).toHaveLength(2);
+});

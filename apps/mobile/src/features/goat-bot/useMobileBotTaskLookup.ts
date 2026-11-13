@@ -64,6 +64,9 @@ export function useMobileBotTaskLookup(input: {
   readonly taskId: ChannelTaskId | null;
   /** The current list settled without the task and the computer is connected. */
   readonly needed: boolean;
+  /** The current list is being read again and its last answer lacked the task: a lookup it
+   * settled on keeps its answer and sends nothing new. */
+  readonly holding?: boolean;
   readonly supported: boolean;
   /** Child work read for this task, for its subagents. */
   readonly childGroups: ReadonlyArray<ChannelChildWorkGroup>;
@@ -74,12 +77,17 @@ export function useMobileBotTaskLookup(input: {
       ? NO_PERMISSION
       : channelEnvironment.getBotTask.permissionAtom(environmentId),
   );
-  const asking =
-    input.needed && supported && permitted && environmentId !== null && taskId !== null;
   const key = JSON.stringify([environmentId, botId, taskId]);
+  // The task a settled list sent this screen to look up; a refresh of that list keeps it.
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  if (input.needed && settledKey !== key) setSettledKey(key);
+  const wanted = input.needed || (input.holding === true && settledKey === key);
+  const asking = wanted && supported && permitted && environmentId !== null && taskId !== null;
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [failedKey, setFailedKey] = useState<string | null>(null);
   const sequence = useRef(0);
+  // A Try again already sent for this answer; a second press before it lands sends nothing.
+  const retried = useRef(false);
   // The task this screen reads now, while it asks; a reload kept from before sends nothing.
   const shown = useRef<string | null>(null);
   const read = (environmentId: EnvironmentId, botId: BotId, taskId: ChannelTaskId) => {
@@ -92,6 +100,7 @@ export function useMobileBotTaskLookup(input: {
       { label: "GOAT Bot task lookup", reportFailure: false },
     ).then((result) => {
       if (sent !== sequence.current) return;
+      retried.current = false;
       if (result._tag === "Success") {
         setFailedKey(null);
         setAnswer({ key, value: result.value });
@@ -112,21 +121,26 @@ export function useMobileBotTaskLookup(input: {
   useEffect(() => {
     if (!asking || environmentId === null || taskId === null) return;
     shown.current = key;
+    retried.current = false;
     readShown(environmentId, botId, taskId);
     return () => {
       shown.current = null;
       sequence.current++;
     };
   }, [asking, key, environmentId, botId, taskId]);
-  if (!input.needed || !supported || environmentId === null || taskId === null)
-    return { state: "off" };
+  if (!wanted || !supported || environmentId === null || taskId === null) return { state: "off" };
   if (!permitted) return { state: "denied" };
   const reload = () => {
     if (shown.current !== key) return;
     setFailedKey(null);
     read(environmentId, botId, taskId);
   };
-  if (failedKey === key) return { state: "failed", reload };
+  const retry = () => {
+    if (retried.current) return;
+    retried.current = true;
+    reload();
+  };
+  if (failedKey === key) return { state: "failed", reload: retry };
   if (answer?.key !== key) return { state: "loading" };
   if (answer.denied) return { state: "denied" };
   if (answer.missing || answer.value === undefined) return { state: "missing" };

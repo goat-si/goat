@@ -333,3 +333,31 @@ it("counts the query in UTF-8 bytes as the server does: up to 256 is sent, past 
     vi.useRealTimers();
   }
 });
+
+const many = (from: number, count: number) =>
+  Array.from({ length: count }, (_, index) => hit(`t${from + index}`, `Report ${from + index}`));
+async function walkTo50(last: { nextCursor?: string; endedEarly?: boolean }) {
+  await setup();
+  await type("report");
+  await wait(TASK_SEARCH_DEBOUNCE_MS);
+  await net.calls[0]?.answer({ tasks: many(0, 20), nextCursor: "c1" });
+  await act(async () => button("Load more")?.click());
+  await net.calls[1]?.answer({ tasks: many(20, 20), nextCursor: "c2" });
+  await act(async () => button("Load more")?.click());
+  await net.calls[2]?.answer({ tasks: many(40, 10), ...last });
+}
+
+it("at 50 hits says only the first 50 are shown when the server had more, and nothing when it had no more", async () => {
+  vi.useFakeTimers();
+  try {
+    await walkTo50({ nextCursor: "c3" });
+    expect(text()).toContain("Showing the first 50 matching tasks.");
+    await walkTo50({ endedEarly: true });
+    expect(text()).toContain("Showing the first 50 matching tasks.");
+    await walkTo50({});
+    expect(text()).not.toContain("Showing the first 50");
+    expect(button("Load more")).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
