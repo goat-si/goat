@@ -1,5 +1,6 @@
 import {
   BotId,
+  BotProfile,
   BotThreadRow,
   ChannelTaskId,
   type ChannelTaskStatus,
@@ -21,6 +22,7 @@ const state = vi.hoisted(() => ({
   listFailed: false,
   listPending: false,
   canUpdate: true,
+  canRead: true,
   lookupSupported: false,
   lookup: vi.fn(),
   showMenu: vi.fn(),
@@ -46,7 +48,12 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: (atom: unknown) => (atom === "update-permission" ? state.canUpdate : true),
+  useAtomValue: (atom: unknown) =>
+    atom === "update-permission"
+      ? state.canUpdate
+      : atom === "read-permission"
+        ? state.canRead
+        : true,
 }));
 vi.mock("~/localApi", async (original) => ({
   ...(await original<typeof import("~/localApi")>()),
@@ -54,7 +61,7 @@ vi.mock("~/localApi", async (original) => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
-    getBotTask: { permissionAtom: () => null },
+    getBotTask: { permissionAtom: () => "read-permission" },
     updateTaskView: { permissionAtom: () => "update-permission" },
     retryTask: { permissionAtom: () => null },
   },
@@ -70,6 +77,7 @@ vi.mock("~/state/entities", () => ({
         "env",
         { environment: { capabilities: { goatBotTaskLookupSearch: state.lookupSupported } } },
       ],
+      ["env-2", { environment: { capabilities: { goatBotTaskLookupSearch: true } } }],
     ]),
   useThreadShell: () => ({}),
   resolveThreadDetailRef: () => null,
@@ -140,16 +148,25 @@ vi.mock("./useGoatBotSession", () => ({
   },
 }));
 import { channelEnvironment } from "~/state/channels";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useBotTaskLookup } from "./useBotTaskLookup";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
-function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: string }) {
+function Pane({
+  onClose,
+  taskId = "task-1",
+  environmentId = "env",
+}: {
+  onClose: () => void;
+  taskId?: string;
+  environmentId?: string;
+}) {
   const session = useGoatBotSession();
   return (
     <GoatBotTaskPane
-      environmentId={EnvironmentId.make("env")}
+      environmentId={EnvironmentId.make(environmentId)}
       session={session}
       taskId={ChannelTaskId.make(taskId)}
       narrow
@@ -170,13 +187,19 @@ function setup() {
   state.listPending = false;
   state.listFailed = false;
   state.canUpdate = true;
+  state.canRead = true;
   state.lookup.mockReset();
   state.lookup.mockImplementation(
-    (call: { readonly input: { readonly taskId: string } }) =>
+    (call: {
+      readonly environmentId: string;
+      readonly input: { readonly taskId: string; readonly botId: string };
+    }) =>
       new Promise((resolve) =>
         calls.push({
+          environmentId: call.environmentId,
           taskId: call.input.taskId,
-          answer: (title) => resolve(found(call.input.taskId, title)),
+          botId: call.input.botId,
+          answer: (title, unread) => resolve(found(call.input.taskId, title, unread)),
           fail: () => resolve({ _tag: "Failure", cause: Cause.fail(new Error("offline")) }),
         }),
       ),
@@ -189,25 +212,33 @@ function setup() {
   state.session.mockClear();
 }
 
-type Read = { taskId: string; answer: (title: string) => void; fail: () => void };
+const decodeProfile = Schema.decodeSync(BotProfile);
+
+type Read = {
+  environmentId: string;
+  taskId: string;
+  botId: string;
+  answer: (title: string, unread?: boolean) => void;
+  fail: () => void;
+};
 const calls: Array<Read> = [];
 
-function taskRow(taskId: string, title: string) {
+function taskRow(taskId: string, title: string, unread = false) {
   return decodeBotThreadRow({
     kind: "task",
     task: { taskId, title, status: "running", updatedAt: "2026-11-04T10:00:00.000Z" },
     view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
     lastActivityAt: "2026-11-04T10:00:00.000Z",
-    unread: false,
+    unread,
     mainMessagesSinceQuiet: 0,
   });
 }
 
-function found(taskId: string, title: string) {
+function found(taskId: string, title: string, unread = false) {
   return {
     _tag: "Success",
     value: {
-      task: { state: "known", row: taskRow(taskId, title) },
+      task: { state: "known", row: taskRow(taskId, title, unread) },
       codingRows: [],
       remoteWork: [],
       launchesTruncated: false,
@@ -219,7 +250,7 @@ function found(taskId: string, title: string) {
 /** The pane on task-1, its lookup answered, and Pin starting a refresh that stays in flight. */
 async function openOlderTask() {
   setup();
-  const stack = new AsyncDisposableStack();
+  await using stack = new AsyncDisposableStack();
   const screen = stack.use(await render(<Pane onClose={() => {}} />));
   await vi.waitFor(() => expect(calls).toHaveLength(1));
   await act(() => calls[0]?.answer("Older task"));
@@ -328,7 +359,7 @@ function Lookup({ refreshing }: { refreshing: boolean }) {
   );
   return (
     <>
-      <button onClick={() => lookup.invalidate()}>Action completed</button>
+      <button onClick={() => lookup.complete(lookup.key)}>Action completed</button>
       {lookup.error === "failed" && <button onClick={() => lookup.retry()}>Try again</button>}
     </>
   );
@@ -346,4 +377,174 @@ it("counts Try again during a refresh as the reread a pending action asked for",
   await act(() => calls[1]?.answer("Older task"));
   await screen.rerender(<Lookup refreshing={false} />);
   expect(calls).toHaveLength(2);
+});
+
+it("ignores a read that outlived leaving the task for a listed one and coming back", async () => {
+  setup();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  state.listTasks = ["task-2"];
+  await screen.rerender(<Pane taskId="task-2" onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Listed task-2" })).toBeVisible();
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls.map((call) => call.taskId)).toEqual(["task-1", "task-1"]));
+  await act(() => calls[0]?.answer("Answer from before"));
+  await expect.element(screen.getByText("Loading task…")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Answer from before" }).query()).toBeNull();
+  await act(() => calls[1]?.answer("Answer from now"));
+  await expect.element(screen.getByRole("heading", { name: "Answer from now" })).toBeVisible();
+});
+
+it("ignores a read that outlived the task entering and leaving the list", async () => {
+  setup();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  state.listTasks = ["task-1"];
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Listed task-1" })).toBeVisible();
+  state.listTasks = [];
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[0]?.answer("Answer from before"));
+  expect(screen.getByRole("heading", { name: "Answer from before" }).query()).toBeNull();
+  await act(() => calls[1]?.answer("Answer from now"));
+  await expect.element(screen.getByRole("heading", { name: "Answer from now" })).toBeVisible();
+});
+
+it("reports no error when a read answers after the pane unmounted", async () => {
+  setup();
+  using errors = vi.spyOn(console, "error");
+  {
+    await using _screen = await render(<Pane onClose={() => {}} />);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+  }
+  await act(() => calls[0]?.answer("Too late"));
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it("shows only dev's pane when the capability goes with a read pending, and reads once on return", async () => {
+  setup();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Loading task…")).toBeVisible();
+  state.lookupSupported = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByText("Status and actions for older work are in GOAT Bot's Home."))
+    .toBeVisible();
+  expect(screen.getByText("Loading task…").query()).toBeNull();
+  await act(() => calls[0]?.answer("Answer from before"));
+  expect(screen.getByRole("heading", { name: "Answer from before" }).query()).toBeNull();
+  state.lookupSupported = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Answer from now"));
+  await expect.element(screen.getByRole("heading", { name: "Answer from now" })).toBeVisible();
+});
+
+/** An update the test settles itself, for actions and acknowledgements still on their way. */
+function holdUpdate() {
+  let settle!: () => void;
+  state.update.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = () => resolve({ _tag: "Success" });
+      }),
+  );
+  return () => act(() => settle());
+}
+
+it("drops a late acknowledgement for the same task id in another environment", async () => {
+  setup();
+  const acknowledged = holdUpdate();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Unread task", true));
+  await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+  await screen.rerender(<Pane environmentId="env-2" onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Other environment's task"));
+  await acknowledged();
+  expect(state.refresh).not.toHaveBeenCalled();
+  expect(calls.map((call) => call.environmentId)).toEqual(["env", "env-2"]);
+});
+
+it("drops a late acknowledgement for the same task id under another bot", async () => {
+  setup();
+  const acknowledged = holdUpdate();
+  const member = decodeProfile({
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-research",
+    createdAt: "2026-11-04T10:00:00.000Z",
+    updatedAt: "2026-11-04T10:00:00.000Z",
+  });
+  await using screen = await render(
+    <GoatBotMemberContext value={null}>
+      <Pane onClose={() => {}} />
+    </GoatBotMemberContext>,
+  );
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Unread task", true));
+  await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+  await screen.rerender(
+    <GoatBotMemberContext value={member}>
+      <Pane onClose={() => {}} />
+    </GoatBotMemberContext>,
+  );
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Member's task"));
+  await acknowledged();
+  expect(state.refresh).not.toHaveBeenCalled();
+  expect(calls.map((call) => call.botId)).toEqual(["main", "research"]);
+});
+
+it("refreshes and rereads once when an acknowledgement for the open task completes", async () => {
+  setup();
+  const acknowledged = holdUpdate();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Unread task", true));
+  await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+  await acknowledged();
+  expect(state.refresh).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Read task"));
+  await expect.element(screen.getByRole("heading", { name: "Read task" })).toBeVisible();
+  expect(calls).toHaveLength(2);
+});
+
+it("drops an action that completes after the pane moved to another task", async () => {
+  setup();
+  const pinned = holdUpdate();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Older task"));
+  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await screen.rerender(<Pane taskId="task-2" onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Second task"));
+  await pinned();
+  expect(state.refresh).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("heading", { name: "Second task" })).toBeVisible();
+  expect(calls.map((call) => call.taskId)).toEqual(["task-1", "task-2"]);
+});
+
+it("shows no loading line when read permission goes with a read pending", async () => {
+  setup();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Loading task…")).toBeVisible();
+  state.canRead = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByText("Permission to read this task is unavailable."))
+    .toBeVisible();
+  expect(screen.getByText("Loading task…").query()).toBeNull();
+  await act(() => calls[0]?.answer("Answer from before"));
+  expect(screen.getByRole("heading", { name: "Answer from before" }).query()).toBeNull();
 });
