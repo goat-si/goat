@@ -484,7 +484,7 @@ func (d *Daemon) controlInvite(ctx context.Context, c net.Conn, req Request, rep
 // the invite's cancel signal, attached when the invite was made. Admission needs no
 // such care: nobody holds the token before r is answered, after the waiter is registered.
 func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id string, cancelled <-chan struct{}, reply func(any)) {
-	wait := make(chan *mesh.Member, 1)
+	wait := make(chan joinOutcome, 1)
 	d.mu.Lock()
 	d.inviteWait[id] = wait
 	d.mu.Unlock()
@@ -498,8 +498,15 @@ func (d *Daemon) awaitJoin(ctx context.Context, c net.Conn, r InviteReply, id st
 	t := time.NewTimer(time.Until(time.UnixMilli(r.ExpiresAt)))
 	defer t.Stop()
 	select {
-	case m := <-wait:
-		reply(map[string]any{"t": "admitted", "member": *m})
+	case o := <-wait:
+		switch {
+		case o.delivered:
+			reply(map[string]any{"t": "admitted", "member": *o.member})
+		case o.member != nil:
+			reply(map[string]any{"t": "admitted", "member": *o.member, "delivered": false})
+		default:
+			reply(map[string]any{"t": "burned"})
+		}
 	case <-cancelled:
 		reply(map[string]any{"t": "cancelled"})
 	case <-t.C:

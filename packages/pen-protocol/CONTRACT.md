@@ -867,11 +867,19 @@ inviting machine that already knows the new machine's keys (GOAT) makes an invit
 - Control op `invite` with a `subject`, on the control socket only (the dashboard cannot send it):
   `{"op":"invite","subject":{"signPub":S,"noisePub":N,"name":X},"ttlMs":T,"wait":W}`. S and N are canonical base64url
   32-byte keys and X a valid node name; the subject has exactly these three members and the line no unknown member.
-  An invite line that carries a `subject` member at all is a bound request: a null, a string or any malformed subject is
-  refused, and so is any member that is null. `ttlMs` and `wait` mean what they mean for an ordinary invite (10 minutes
-  when absent); a caller waiting on an invite that is cancelled is answered `{"t":"cancelled"}` and the wait ends. The
-  answer is the ordinary invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}` and
-  makes nothing.
+  An invite line that carries a `subject` member at all is a bound request: a null, a string or any malformed subject
+  is refused, and so is any member that is null. `ttlMs` and `wait` mean what they mean for an ordinary invite (10
+  minutes when absent); a caller waiting on an invite that is cancelled is answered `{"t":"cancelled"}` and the wait
+  ends. A join that finishes is answered `{"t":"admitted","member":M}` as before. A join that fails after it used the
+  invite (its burn committed) is answered `{"t":"admitted","member":M,"delivered":false}` when the node's view makes
+  the joiner a member (its admit was signed, but the joiner did not receive the record set), or `{"t":"burned"}` when
+  no admit took effect, never `expired`. These two answers are additive and come only on the wait: an older `pen
+  invite` prints an admission for the first, and for `burned` exits 1 naming the event (one before that exit printed
+  an admission). For a bound invite, `invite.status` already reports the same cases from what the node saved
+  (`burned` or `burned-unsaved` with `admit` and `member` true, or `burned` with `member` false or without an admit
+  when nobody was admitted), so a caller that settles from it needs nothing new and no feature name marks the change.
+  The answer is the ordinary invite answer plus `"id"`, the invite id ("Sessions"). A refusal is `{"error":"..."}`
+  and makes nothing.
 - The invite's entry in `offers.json` keeps the subject, and keeps its secret and expiry under `boundSecret` and
   `boundExpiresAt` instead of `secret` and `expiresAt`; an ordinary invite's entry is exactly as before. A joiner whose Noise key is not the subject's gets no psk for
   it and closes 4401 at the handshake, so another machine holding the token cannot hold a join session open. In

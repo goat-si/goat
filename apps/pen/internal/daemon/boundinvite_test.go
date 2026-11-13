@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -450,5 +451,95 @@ func TestCancelEndsAWaitOnAnOrdinaryInvite(t *testing.T) {
 	var ev struct{ T string }
 	if err := cl.Next(&ev); err != nil || ev.T != "cancelled" {
 		t.Fatalf("the waiting caller got %+v (%v); want cancelled", ev, err)
+	}
+}
+
+// recordsFail fails the inviter's sends once it starts sending the record set (tests).
+type recordsFail struct{ mesh.Link }
+
+func (l recordsFail) Send(p []byte) error {
+	if bytes.Contains(p, []byte(`"t":"records"`)) {
+		l.Link.Close(4400)
+		return errors.New("send failed after the admit")
+	}
+	return l.Link.Send(p)
+}
+
+// A caller waiting on an invite whose join failed after the admit was signed hears that the joiner was admitted but
+// did not receive the set, never that the invite expired; for a bound and an ordinary invite alike.
+func TestAWaitHearsAnAdmissionWhoseJoinDidNotFinish(t *testing.T) {
+	old := serveJoinLink
+	serveJoinLink = func(l mesh.Link) mesh.Link { return recordsFail{l} }
+	t.Cleanup(func() { serveJoinLink = old })
+	for _, bound := range []bool{true, false} {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		rs := relaytest.New()
+		defer rs.Close()
+		clk := &clock{}
+		clk.ms.Store(time.Now().UnixMilli())
+		a := founder(t, ctx, rs, "a", clk)
+		jst := shortDir(t)
+		jid := identity(t, jst, rs.URL, "j")
+		cl, err := Dial(a.st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+		if bound {
+			fmt.Fprintf(cl, "%s\n", fmt.Sprintf(`{"op":"invite","wait":true,"mintId":"m1","expiresAt":%d,"subject":%s}`, clk.now().Add(time.Hour).UnixMilli(), subjectLine(jid, "j")))
+		} else if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+			t.Fatal(err)
+		}
+		var r InviteReply
+		if err := cl.Next(&r); err != nil {
+			t.Fatal(err)
+		}
+		tok, _ := mesh.ParseToken(r.Token)
+		if _, err := Join(ctx, jst, jid, tok, "j"); err == nil {
+			t.Fatalf("bound %v: the join finished though the set was never sent", bound)
+		}
+		var ev struct {
+			T         string
+			Member    mesh.Member
+			Delivered *bool
+		}
+		if err := cl.Next(&ev); err != nil || ev.T != "admitted" || ev.Delivered == nil || *ev.Delivered || ev.Member.NoisePub != ident.B64.EncodeToString(jid.NoisePub) {
+			t.Fatalf("bound %v: the waiting caller got %+v (%v); want admitted with delivered false naming the joiner", bound, ev, err)
+		}
+	}
+}
+
+// The answer to a join that finished is exactly what it was before: members member and t.
+func TestAFinishedJoinsWaitAnswerIsUnchanged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	jst := shortDir(t)
+	jid := identity(t, jst, rs.URL, "j")
+	cl, err := Dial(a.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	if err := cl.Send(Request{Op: "invite", TTLMs: 3_600_000, Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	var r InviteReply
+	if err := cl.Next(&r); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := mesh.ParseToken(r.Token)
+	if _, err := Join(ctx, jst, jid, tok, "j"); err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err := cl.Next(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if keys, err := strictjson.Keys(raw); err != nil || strings.Join(keys, ",") != "member,t" {
+		t.Fatalf("admitted answer %s; want exactly the members member and t", raw)
 	}
 }
