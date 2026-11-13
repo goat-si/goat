@@ -7,6 +7,7 @@ import type {
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { launchWakeFoldTarget } from "./goat/launchWakeFolds.ts";
 
 import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
@@ -230,7 +231,10 @@ export function foldIntoQueuedNotice(
     !isNoticeMessage({ ...command, id: command.messageId })
   )
     return undefined;
-  const target = queuedRunsInDeliveryOrder(projection).at(-1);
+  const foldTarget = launchWakeFoldTarget(projection, command);
+  if (foldTarget === "own") return undefined;
+  const target =
+    foldTarget === "none" ? queuedRunsInDeliveryOrder(projection).at(-1) : foldTarget.run;
   const queued: OrchestrationV2ConversationMessage | undefined = projection.messages.find(
     (message) => message.id === target?.userMessageId,
   );

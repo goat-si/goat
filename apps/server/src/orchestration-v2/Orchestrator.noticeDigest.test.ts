@@ -45,9 +45,15 @@ const layer = Layer.mergeAll(
 
 const supervisor = ThreadId.make("thread:supervisor");
 
-const runEnd = (lane: string, host: string | null) => {
+const runEnd = (
+  lane: string,
+  host: string | null,
+  launcherThreadId = supervisor,
+  launcherRunId?: RunId,
+) => {
   const watch = newLaunchWatch({
-    launcherThreadId: supervisor,
+    launcherThreadId,
+    ...(launcherRunId === undefined ? {} : { launcherRunId }),
     host,
     threadId: ThreadId.make(`thread:${lane}`),
     projectId: null,
@@ -303,4 +309,68 @@ it.effect("a stored command notice belongs to the task whose run started the com
     const owner = yield* resolveSessionRun(sql, supervisor, projection, noticeRun.id);
     expect(owner?.task_id).toBe("task:logistics");
   }).pipe(Effect.provide(Layer.merge(layer, databaseLayer))),
+);
+
+it.effect(
+  "regression: a launching run's later wake folds into its queued turn across a user message queued after it, and another run's wake keeps its own turn",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-stamped"),
+        threadId: supervisor,
+        projectId: ProjectId.make("project:notice-digest"),
+        title: "Supervisor",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("work-stamped"),
+        threadId: supervisor,
+        messageId: MessageId.make("message:work-stamped"),
+        text: "Work",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const launcher = ThreadId.make("goat-bot-session:test");
+      const a = runEnd("stamped-a", null, launcher, RunId.make("run:owner-a"));
+      const b = runEnd("stamped-b", null, launcher, RunId.make("run:owner-b"));
+      const c = runEnd("stamped-c", null, launcher, RunId.make("run:owner-a"));
+      yield* orchestrator.dispatch(notice(a));
+      yield* orchestrator.dispatch(notice(b));
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("between"),
+        threadId: supervisor,
+        messageId: MessageId.make("message:between"),
+        text: "Between",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch(notice(c));
+      const projection = yield* store.getThreadProjection(supervisor);
+      const queued = queuedRunsInDeliveryOrder(projection).map((run) =>
+        projection.messages.find((message) => message.id === run.userMessageId)!,
+      );
+      expect(queued.map((message) => message.id)).toEqual([
+        a.messageId,
+        b.messageId,
+        "message:between",
+      ]);
+      expect(queued[0]!.text).toContain(c.messageId);
+    }).pipe(Effect.provide(layer)),
 );

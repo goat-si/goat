@@ -1,6 +1,9 @@
 import type { ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
+import { launchWakeKeyCrossing } from "../orchestration-v2/goat/launchWakeFolds.ts";
+import { LAUNCH_WATCH_MESSAGE_PREFIX } from "./launchWatch.ts";
 
 import type * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type { LaunchWatchWake } from "./launchWatch.ts";
@@ -10,12 +13,12 @@ import type { LaunchWatchWake } from "./launchWatch.ts";
  * use for a finished or waiting launch, and handoffs use when a person answers. The wake's ids
  * are deterministic per event, so a replayed dispatch is a receipt, not a second message.
  */
-export const wakeThread = (
+export const wakeThread = Effect.fn("threadWake.wakeThread")(function* (
   threads: ThreadManagementService.ThreadManagementService["Service"],
   threadId: ThreadId,
   message: LaunchWatchWake,
-) =>
-  threads.dispatch({
+) {
+  const result = yield* threads.dispatch({
     type: "message.dispatch",
     commandId: message.commandId,
     threadId,
@@ -27,6 +30,20 @@ export const wakeThread = (
     createdBy: "agent",
     creationSource: "server",
   });
+  const key = message.notification.aboutRunId;
+  if (message.messageId.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX) && key !== undefined) {
+    // This diagnostic is best-effort when wakes arrive concurrently.
+    const records = yield* threads
+      .getThreadRecords(threadId, ["runs", "messages"])
+      .pipe(Effect.option);
+    if (Option.isSome(records)) {
+      const count = launchWakeKeyCrossing(records.value, message.messageId, key);
+      if (count !== undefined)
+        yield* Effect.logWarning(`Thread ${threadId} has ${count} queued launch wake keys`);
+    }
+  }
+  return result;
+});
 
 /**
  * Orchestrator refusals a retry cannot change. A previously rejected command
