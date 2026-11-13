@@ -1,4 +1,5 @@
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
+import { untrackedExceedsLimit } from "./untrackedSize.ts";
 import {
   parseReviewNumstat,
   REVIEW_DIFF_ARGS,
@@ -2894,6 +2895,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     untrackedPaths: ReadonlyArray<string>,
     includeStagedDeletions = false,
+    maxBytes?: number,
   ) {
     const [stagedDeletionsStdout, indexValue] = yield* Effect.all(
       [
@@ -2925,6 +2927,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       (relativePath) => includeStagedDeletions || !stagedDeletions.has(relativePath),
     );
     if (pathsToAdd.length === 0) return undefined;
+    if (maxBytes !== undefined && (yield* untrackedExceedsLimit(cwd, pathsToAdd, maxBytes)))
+      return null;
 
     const indexPath = path.isAbsolute(indexValue.trim())
       ? indexValue.trim()
@@ -2995,6 +2999,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     pathArgs: ReadonlyArray<string>,
     onlyPath?: string,
     includeStagedDeletions = false,
+    maxBytes?: number,
   ) {
     const untracked = yield* executeGit(
       "GitVcsDriver.review.listUntracked",
@@ -3011,7 +3016,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (paths.length === 0) return { env: undefined };
     if (paths.length > REVIEW_UNTRACKED_MAX_FILES)
       return { unavailable: "Too many untracked files to count." };
-    const env = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions).pipe(
+    const env = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions, maxBytes).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>
           Effect.fail(
@@ -3025,6 +3030,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ),
       }),
     );
+    if (env === null) return { unavailable: "Untracked files are too large to count." };
     return { env };
   });
   const prepareUntrackedReviewIndex = (
@@ -3111,7 +3117,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const untracked = yield* untrackedTotalsBackoff(
       cwd,
       roots,
-      prepareUntrackedReviewIndexOrReason(cwd, pathspecs),
+      prepareUntrackedReviewIndexOrReason(cwd, pathspecs, undefined, false, 256 * 1024 * 1024),
     );
     const readNumstat = (ref: string) =>
       executeGit(
