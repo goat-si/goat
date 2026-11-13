@@ -5,7 +5,7 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { botHomeWork, type BotWorkTask } from "./botWork.ts";
+import { botHomeWork, type BotHomeWork } from "./botWork.ts";
 import { resolveRemoteBotWork } from "./remoteWork.ts";
 
 export type HomeCurrentOpenableLink = {
@@ -16,7 +16,8 @@ export type HomeCurrentOpenableLink = {
 };
 export type HomeCurrentOpenableWork = {
   readonly eligible: boolean;
-  readonly tasks: ReadonlyArray<BotWorkTask>;
+  readonly list: "ready" | "pending" | "failed";
+  readonly work: BotHomeWork;
   readonly links: ReadonlyArray<HomeCurrentOpenableLink>;
 };
 
@@ -24,13 +25,15 @@ export function selectHomeCurrentOpenableWork(input: {
   readonly sourceEnvironmentId: EnvironmentId;
   readonly botId: BotId;
   readonly eligible: boolean;
+  readonly list: "ready" | "pending" | "failed";
   readonly current: ChannelListBotThreadsResult | null;
   readonly isOpenable: (id: EnvironmentId) => boolean;
 }): HomeCurrentOpenableWork {
-  const { eligible, current, sourceEnvironmentId, isOpenable } = input;
-  if (!eligible || current === null) return { eligible, tasks: [], links: [] };
-  const grouped = botHomeWork(current.rows, [], sourceEnvironmentId, current.remoteWork ?? []);
-  const tasks = [...grouped.running, ...grouped.waiting, ...grouped.finished];
+  const { eligible, list, current, sourceEnvironmentId, isOpenable } = input;
+  if (!eligible || list !== "ready" || current === null)
+    return { eligible, list, work: { running: [], waiting: [], finished: [] }, links: [] };
+  const work = botHomeWork(current.rows, [], sourceEnvironmentId, current.remoteWork ?? []);
+  const tasks = [...work.running, ...work.waiting, ...work.finished];
   const links: HomeCurrentOpenableLink[] = [];
   for (const task of tasks) {
     const taskId = task.row.task.taskId;
@@ -43,5 +46,5 @@ export function selectHomeCurrentOpenableWork(input: {
         links.push({ taskId, ...target.ref, remoteChildWorkId: item.childWorkId });
     }
   }
-  return { eligible, tasks, links };
+  return { eligible, list, work, links };
 }
