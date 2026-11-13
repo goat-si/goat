@@ -145,6 +145,18 @@ export function rightEarAndHorn(): { readonly ear: Point[]; readonly horn: Point
 }
 
 /** Web's avatar circles and the head each draws (GoatBotAvatar's CIRCLE and HEAD), in px. */
+/** The head's share of mobile's avatar circle (apps/mobile GoatBotFace.tsx). */
+export const MOBILE_HEAD_RATIO = 0.86;
+
+/** The open space between a "z" mark's top and bottom bars, in art units. */
+export function zInnerGap(path: string, width: number): number {
+  const ys = flattenPath(path)
+    .flat()
+    .map((point) => point.y);
+  return Math.max(...ys) - Math.min(...ys) - width;
+}
+
+/** Web's avatar circles and the head each draws (GoatBotAvatar's CIRCLE and HEAD), in px. */
 export const WEB_AVATAR_SIZES = [
   { circle: 20, head: 18 },
   { circle: 28, head: 24 },

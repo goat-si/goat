@@ -17,10 +17,12 @@ export const GOAT_BOT_HEAD_PATH = [
 
 export const GOAT_BOT_HEAD_STROKE_WIDTH = 1.35;
 /**
- * A small "z" beside the right horn. Its stroke stays inside the avatar circle at every size; the
- * 20 px circle's 18 px head is the tightest case, so the art box's inner radius is 10 / 0.9.
+ * A small "z" beside the right horn, inside the avatar circle at every size (the 20 px circle's
+ * 18 px head is the tightest case). Its own stroke is thinner than the eyes' so its bars stay
+ * apart and it reads as a z at 20 px.
  */
-export const GOAT_BOT_HEAD_SLEEP_MARK_PATH = "M16.9 4.1 H18.4 L16.9 5.7 H18.4";
+export const GOAT_BOT_HEAD_SLEEP_MARK_PATH = "M16.8 4.2 H18.7 L16.8 6.1 H18.7";
+export const GOAT_BOT_HEAD_SLEEP_MARK_STROKE_WIDTH = 1;
 /** The eye line (y 12.4 in the 2..22 box); a blink scales around it. */
 export const GOAT_BOT_HEAD_EYES_ORIGIN = "50% 52%";
 
