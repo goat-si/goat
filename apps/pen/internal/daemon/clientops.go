@@ -40,8 +40,8 @@ var holderDrainTime = 5 * time.Second
 const holderDrainCap = 64 << 10
 
 // holderRecheck is how long one read of a registration's ops waits before a fresh read replaces it (a variable for
-// tests). On Windows a pending AF_UNIX read can miss the holder's half-close or close, and a fresh read sees it: a
-// registration whose holder is gone ends within this time, and an idle one only reads again.
+// tests). On Windows a pending AF_UNIX read can miss the holder's half-close or close; a fresh read that sees the end
+// ends a registration whose holder is gone, and an idle one only reads again.
 var holderRecheck = 30 * time.Second
 
 // serviceInvite is one service invite; its identity is the pointer, so a replacement never revives it.

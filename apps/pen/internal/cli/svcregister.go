@@ -32,7 +32,8 @@ const (
 // After stdin ends and the child half-closes, the node answers the ops it was sent and closes; the child waits for
 // that close at most serviceEndGrace (afterEndGrace is its timer, a variable for tests). While it holds the
 // registration, each read of the node's lines waits at most serviceRecheck before a fresh read replaces it: on
-// Windows a pending AF_UNIX read can miss the node's half-close or close, and a fresh read sees it.
+// Windows a pending AF_UNIX read can miss the node's half-close or close, and a fresh read may see it. The grace needs
+// no close notice: its deadline ends the read.
 var (
 	serviceEndGrace = 30 * time.Second
 	serviceRecheck  = 30 * time.Second
