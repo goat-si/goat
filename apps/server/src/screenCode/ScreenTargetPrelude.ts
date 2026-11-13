@@ -448,8 +448,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return {
       ...arg,
       ...(wanted.text === undefined ? {} : { text: wanted.text }),
-      // A url without * is a substring, as before; with * it is matched as a whole-URL glob.
-      ...(wanted.url === undefined ? {} : { urlGlob: wanted.url }),
+      // A url without * stays the substring any host reads; with * it is a whole-URL glob.
+      ...(wanted.url === undefined ? {} : typeof wanted.url === 'string' && wanted.url.includes('*') ? { urlGlob: wanted.url } : { urlIncludes: wanted.url }),
       ...(wanted.download === undefined ? {} : { download: wanted.download }),
       ...(wanted.load === undefined ? {} : { loadState: wanted.load }),
       ...(wanted.enabled === undefined ? {} : { enabled: wanted.enabled }),

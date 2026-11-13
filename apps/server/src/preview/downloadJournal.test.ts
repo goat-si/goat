@@ -104,3 +104,13 @@ it("overlapping downloads of one URL each settle with what their own save return
   await expect(journal.wait(0, live(), always)).rejects.toThrow("The download did not save");
   expect((await journal.wait(0, live(), always)).file).toBe(record);
 });
+
+it("a wait that only observes reports a failure without taking it, so the owner's wait still sees it", async () => {
+  const journal = new DownloadJournal();
+  journal.input("click");
+  journal.started().failed("it was cancelled");
+  await expect(journal.wait(1, live(), always, false)).rejects.toThrow("it was cancelled");
+  await expect(journal.wait(1, live(), always)).rejects.toThrow("it was cancelled");
+  journal.started().saved(file("next.csv"));
+  expect((await journal.wait(1, live(), always)).file.fileName).toBe("next.csv");
+});

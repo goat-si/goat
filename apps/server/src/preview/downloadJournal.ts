@@ -65,11 +65,15 @@ export class DownloadJournal {
     };
   }
 
-  /** The earliest unclaimed download started since input number `since`, once it saved. */
+  /**
+   * The earliest unclaimed download started since input number `since`, once it saved. A wait
+   * that may not claim (one that only observes the tab) reports a failure without taking it.
+   */
   wait(
     since: number,
     signal: AbortSignal,
     kept: (file: SavedDownload) => boolean,
+    claims = true,
   ): Promise<{ readonly file: SavedDownload; readonly claim: () => void }> {
     return new Promise((resolve, reject) => {
       const check = () => {
@@ -81,7 +85,7 @@ export class DownloadJournal {
           const file = entry.file;
           return resolve({ file, claim: () => void (entry.claimed = true) });
         }
-        entry.claimed = true;
+        if (claims) entry.claimed = true;
         reject(
           unsaved(
             entry.state === "saved"

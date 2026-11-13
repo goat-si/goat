@@ -90,7 +90,7 @@ it.live(
 );
 
 it.live(
-  "a tab wait matches its url as a glob and returns the download a download wait took",
+  "a tab wait sends a url with * as a glob and a plain one as the substring any host reads, and returns a download",
   () => {
     const file = { fileName: "report.csv", path: "/artifacts/report.csv", sizeBytes: 3 };
     const { broker, sent } = tabBroker((request) =>
@@ -101,10 +101,11 @@ it.live(
     return runCells(broker, [
       `const tab = await screen.tab({tabId: 'form'});
     const url = await tab.waitFor({ url: '**/done' });
+    const plain = await tab.waitFor({ url: '/done' });
     const saved = await tab.waitFor({ download: true });
     let refused;
     try { await tab.waitFor({ download: 'yes' }); } catch (error) { refused = [error.code, error.nothingSent]; }
-    return { url: url.met, saved: saved.download, refused };`,
+    return { url: url.met && plain.met, saved: saved.download, refused };`,
     ]).pipe(
       Effect.map(([result]) => {
         expect(result).toMatchObject({
@@ -116,6 +117,7 @@ it.live(
         });
         expect(sent.map((request) => request.input)).toEqual([
           { urlGlob: "**/done" },
+          { urlIncludes: "/done" },
           { download: true },
         ]);
       }),

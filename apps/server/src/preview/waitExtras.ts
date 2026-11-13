@@ -26,9 +26,11 @@ export const extraWaits = (
               "A download wait needs the server browser's download journal.",
             ),
           )
-        : downloads.journal.wait(downloads.since, ended.signal, downloads.kept).then((each) => {
-            found = each;
-          });
+        : downloads.journal
+            .wait(downloads.since, ended.signal, downloads.kept, downloads.claims)
+            .then((each) => {
+              found = each;
+            });
   // It can fail after the wait already ended another way; that is no unhandled rejection.
   void download?.catch(constVoid);
   return {
