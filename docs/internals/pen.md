@@ -288,7 +288,7 @@ these may look like success to a local program.
   - With `PEN_HOME` set there is no task and no turn (Pen runs detached), so a `pen down` that overlaps a
     `pen up` can find nothing to stop while the start completes; run `pen down` again.
 - **A pending AF_UNIX read can miss the other side's close.** A blocked read of the control socket may never return
-  after the peer half-closes or closes, so no read there waits without a bound: a registration's reads on both
+  after the peer half-closes or closes, so no read of a registration waits without a bound: a registration's reads on both
   sides give way to a fresh read every 30 s (which sees the close), and `pen service register` waits for the node's
   close at most 30 s after its own half-close.
 - **A file another process holds open cannot be renamed over.** Go opens files without `FILE_SHARE_DELETE`, so
