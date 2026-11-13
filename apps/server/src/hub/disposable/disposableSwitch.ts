@@ -12,33 +12,43 @@ const consent = (hub: HubSettings) => {
 };
 
 /**
- * Gives the switch a new grantId whenever the person's consent changes, and an expiry 30 days
- * ahead when it is on without a future one.
+ * Turning the hub off turns the switch off, so only a person reopens it. While the switch is or
+ * becomes on, each consent change gets a new grantId; 30 days start only when the switch itself
+ * turns on without a chosen expiry, and any expiry is held to 30 days ahead (a past one stays).
  */
 const stampDisposableSwitch = (
   current: ServerSettings,
   next: ServerSettings,
-): Effect.Effect<ServerSettings> =>
-  consent(current.hub) === consent(next.hub)
-    ? Effect.succeed(next)
-    : DateTime.now.pipe(
-        Effect.map((now): ServerSettings => {
-          const value = next.hub.attachDisposableMachines;
-          const expired =
-            value.expiresAt === null || Date.parse(value.expiresAt) <= DateTime.toEpochMillis(now);
-          const expiresAt =
-            value.enabled && expired
-              ? DateTime.formatIso(DateTime.add(now, { days: DISPOSABLE_SWITCH_DAYS }))
-              : value.expiresAt;
-          return {
-            ...next,
-            hub: {
-              ...next.hub,
-              attachDisposableMachines: { ...value, expiresAt, grantId: NodeCrypto.randomUUID() },
-            },
-          };
-        }),
-      );
+): Effect.Effect<ServerSettings> => {
+  const before = current.hub.attachDisposableMachines;
+  const asked = next.hub.attachDisposableMachines;
+  const hubTurnedOff = current.hub.enabled && !next.hub.enabled;
+  const value = hubTurnedOff && asked.enabled ? { ...asked, enabled: false } : asked;
+  const hub = { ...next.hub, attachDisposableMachines: value };
+  if (consent(current.hub) === consent(hub) || (!before.enabled && !value.enabled))
+    return Effect.succeed(value === asked ? next : { ...next, hub });
+  return DateTime.now.pipe(
+    Effect.map((now): ServerSettings => {
+      const ceiling = DateTime.add(now, { days: DISPOSABLE_SWITCH_DAYS });
+      const turnedOn = !before.enabled && value.enabled;
+      const chosen = value.expiresAt !== before.expiresAt && value.expiresAt !== null;
+      const expiresAt =
+        turnedOn && !chosen
+          ? DateTime.formatIso(ceiling)
+          : value.expiresAt !== null &&
+              Date.parse(value.expiresAt) > DateTime.toEpochMillis(ceiling)
+            ? DateTime.formatIso(ceiling)
+            : value.expiresAt;
+      return {
+        ...next,
+        hub: {
+          ...hub,
+          attachDisposableMachines: { ...value, expiresAt, grantId: NodeCrypto.randomUUID() },
+        },
+      };
+    }),
+  );
+};
 
 /** Wraps a settings commit's update so every write path, patch or not, stamps the switch. */
 export const withDisposableStamp =

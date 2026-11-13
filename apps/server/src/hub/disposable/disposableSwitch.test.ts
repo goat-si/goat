@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
@@ -62,13 +63,17 @@ it.effect("every change to the switch writes a new grant to disk; other changes 
       { hub: { attachDisposableMachines: { provisioners: ["thread-a" as never] } } },
       { hub: { attachDisposableMachines: { expiresAt: iso(5) } } },
       { hub: { enabled: false } },
-      { hub: { enabled: true } },
     ] satisfies ReadonlyArray<ServerSettingsPatch>) {
       const next = yield* grantOf(patch);
       expect(seen.has(next.grantId), JSON.stringify(patch)).toBe(false);
       seen.add(next.grantId);
     }
     const before = (yield* service.getSettings).hub.attachDisposableMachines.grantId;
+    // Turning the hub off turned the switch off; with it off, a consent change grants nothing.
+    expect((yield* grantOf({ hub: { enabled: true } })).grantId).toBe(before);
+    expect((yield* grantOf({ hub: { attachDisposableMachines: { cap: 4 } } })).grantId).toBe(
+      before,
+    );
     expect((yield* grantOf({ hub: { cloudHolder: "auto" } })).grantId).toBe(before);
     expect((yield* grantOf({ defaultThreadEnvMode: "worktree" })).grantId).toBe(before);
     // A patch cannot name the grant; only the server writes one.
@@ -103,6 +108,69 @@ it.effect("turning the hub off and on through provider changes still ends the ol
     yield* service.updateProviderInstance(upsert("Kilo"), { hub: { enabled: false } });
     yield* service.updateProviderInstance(upsert("Kilo 2"), { hub: { enabled: true } });
     expect(yield* grant).not.toBe(before);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+// hub.enabled is not the person's switch: any write that turns the hub off and on must not renew it.
+it.effect("an expired switch stays closed when any write turns the hub off and on", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    yield* service.start;
+    yield* service.updateSettings({
+      hub: { enabled: true, attachDisposableMachines: { enabled: true } },
+    });
+    yield* TestClock.adjust(31 * DAY_MS);
+    const instanceId = ProviderInstanceId.make("kilo-disposable");
+    const upsert = {
+      operation: "upsert",
+      instanceId,
+      instance: {
+        driver: ProviderDriverKind.make("acpRegistry"),
+        displayName: "Kilo",
+        config: { agentId: "kilo", distribution: "auto" },
+      },
+    } as const;
+    const closed = Effect.gen(function* () {
+      const hub = (yield* service.getSettings).hub;
+      expect(disposableSwitch(hub, 31 * DAY_MS).open).toBe(false);
+      expect(hub.attachDisposableMachines.expiresAt).toBe(iso(30));
+    });
+    yield* service.updateSettings({ hub: { enabled: false } });
+    yield* service.updateSettings({ hub: { enabled: true } });
+    yield* closed;
+    yield* service.updateProviderInstance(upsert, { hub: { enabled: false } });
+    yield* service.updateProviderInstance(upsert, { hub: { enabled: true } });
+    yield* closed;
+    // Turning the hub off turns the switch off, so only a person opens it again.
+    expect((yield* service.getSettings).hub.attachDisposableMachines.enabled).toBe(false);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("a person's past expiry keeps the switch closed, and a far one is held to 30 days", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    yield* service.start;
+    yield* TestClock.adjust(5 * DAY_MS);
+    const value = service.getSettings.pipe(
+      Effect.map((settings) => settings.hub.attachDisposableMachines),
+    );
+    yield* service.updateSettings({
+      hub: { enabled: true, attachDisposableMachines: { enabled: true, expiresAt: iso(2) } },
+    });
+    expect((yield* value).expiresAt).toBe(iso(2));
+    expect(disposableSwitch((yield* service.getSettings).hub, 5 * DAY_MS)).toEqual({
+      open: false,
+      reason: "switch_expired",
+    });
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { cap: 3 } } });
+    expect((yield* value).expiresAt).toBe(iso(2));
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { expiresAt: iso(400) } } });
+    expect((yield* value).expiresAt).toBe(iso(35));
+    // Turning the switch off and on again gives it a new 30 days.
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: false } } });
+    yield* TestClock.adjust(DAY_MS);
+    yield* service.updateSettings({ hub: { attachDisposableMachines: { enabled: true } } });
+    expect((yield* value).expiresAt).toBe(iso(36));
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
