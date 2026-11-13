@@ -2,6 +2,7 @@ package state
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -26,7 +27,7 @@ func TestWindowsAFUnixCloseProbe(t *testing.T) {
 	}
 	defer ln.Close()
 	const rounds, bound, maxMisses = 300, time.Second, 10
-	type outcome struct{ misses, errs, ran int }
+	type outcome struct{ misses, errs, ran, rearmSaw int }
 	run := func(name string, end func(child, node net.Conn)) outcome {
 		var o outcome
 		for i := 0; i < rounds && o.misses < maxMisses; i++ {
@@ -54,8 +55,10 @@ func TestWindowsAFUnixCloseProbe(t *testing.T) {
 				continue
 			}
 			nodeRead, childRead := make(chan error, 1), make(chan error, 1)
+			var nodeR, childR *bufio.Reader
 			go func() {
 				r := bufio.NewReader(node)
+				nodeR = r
 				if _, err := r.ReadBytes('\n'); err != nil {
 					nodeRead <- err
 					return
@@ -67,15 +70,16 @@ func TestWindowsAFUnixCloseProbe(t *testing.T) {
 			child.Write([]byte("register\n"))
 			cr := bufio.NewReader(child)
 			cr.ReadBytes('\n')
+			childR = cr
 			go func() {
 				_, err := io.Copy(io.Discard, cr)
 				childRead <- err
 			}()
 			child.Write([]byte("op\n"))
 			end(child, node)
-			waitFor := nodeRead
+			waitFor, waiter := nodeRead, node
 			if name == "node closes, child's pending read" {
-				waitFor = childRead
+				waitFor, waiter = childRead, child
 			}
 			select {
 			case err := <-waitFor:
@@ -89,6 +93,20 @@ func TestWindowsAFUnixCloseProbe(t *testing.T) {
 				o.misses++
 				if o.misses <= 3 {
 					t.Logf("%s round %d: the pending read did not wake within %v", name, i, bound)
+				}
+				// Re-arm: expire the pending read, then read once more with a fresh deadline. Does a new read see
+				// the close the pending one missed?
+				waiter.SetReadDeadline(time.Now())
+				first := <-waitFor
+				waiterR := nodeR
+				if waiter == child {
+					waiterR = childR
+				}
+				waiter.SetReadDeadline(time.Now().Add(bound))
+				_, again := waiterR.ReadByte()
+				t.Logf("%s round %d: the expired read ended with %v; a fresh read then returned %v (%#v)", name, i, first, again, again)
+				if again != nil && !errors.Is(again, os.ErrDeadlineExceeded) {
+					o.rearmSaw++
 				}
 			}
 			child.Close()
@@ -110,7 +128,8 @@ func TestWindowsAFUnixCloseProbe(t *testing.T) {
 	}
 	for _, c := range cases {
 		o := run(c.name, c.end)
-		t.Logf("%s: %d of %d rounds missed (bound %v, stops after %d misses), %d ended with an error", c.name, o.misses, o.ran, bound, maxMisses, o.errs)
+		t.Logf("%s: %d of %d rounds missed (bound %v, stops after %d misses), %d ended with an error; after a miss a fresh read saw the end %d time(s)",
+			c.name, o.misses, o.ran, bound, maxMisses, o.errs, o.rearmSaw)
 	}
 	t.Errorf("AF_UNIX close probe done: deliberate failure so go test prints the lines above")
 }
