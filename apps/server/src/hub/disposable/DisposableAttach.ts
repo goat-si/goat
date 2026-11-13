@@ -784,6 +784,10 @@ export const make = Effect.gen(function* () {
     input: HubMachineReissueInput,
   ) {
     const requestKey = digest(principal + "\n" + input.clientRequestId);
+    // Probed before the lock, which a slow ocx spawn would hold; a replay needs neither probe.
+    const seen = yield* sql`SELECT 1 FROM disposable_machine_requests
+      WHERE request_key = ${requestKey}`.pipe(Effect.mapError(storageFailed));
+    if (seen.length === 0) yield* requireFeatures;
     return yield* exclusive(
       Effect.gen(function* () {
         const row = yield* read(input.attachId);
@@ -829,7 +833,6 @@ export const make = Effect.gen(function* () {
             "conflict",
             "This attach has used all its invites; attach the machine again with a new request.",
           );
-        yield* requireFeatures;
         const ended = yield* authorityEnded(
           row,
           yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
