@@ -116,6 +116,7 @@ export const run = <A, E>(
     readonly shell?: ReturnType<typeof liveThreadShell>;
     readonly children?: Readonly<Record<string, OpenCodexChildBootstrapStatus>>;
     readonly opencodex?: OpenCodexInventorySnapshot;
+    readonly opencodexRead?: Effect.Effect<OpenCodexInventorySnapshot>;
     /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
     readonly optIns?: Readonly<Record<string, boolean>>;
     readonly hostCall?: (
@@ -169,7 +170,7 @@ export const run = <A, E>(
       ),
       Layer.provide(
         Layer.mock(OpenCodexInventory.OpenCodexInventory)({
-          read: Effect.succeed(options.opencodex ?? inventory),
+          read: options.opencodexRead ?? Effect.succeed(options.opencodex ?? inventory),
         }),
       ),
       Layer.provide(

@@ -29,6 +29,7 @@ import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import { makeHostStatusOpenCodex } from "./hostStatusOpenCodex.ts";
 import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
@@ -127,6 +128,7 @@ const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
   const parity = yield* HubParity.HubParity;
+  const readOpenCodex = yield* makeHostStatusOpenCodex(opencodex.read, layerScope);
   // Optional so layers built for one tool need not schedule OpenCodex updates.
   const opencodexUpdate = yield* Effect.serviceOption(
     OpenCodexManagedUpdate.OpenCodexManagedUpdate,
@@ -276,7 +278,7 @@ const make = Effect.gen(function* () {
         ...(yield* readQuotas()),
         ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
         ...(Option.isSome(browserReadiness) ? { browser: yield* browserReadiness.value } : {}),
-        opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
+        opencodex: yield* parityEvidence ? parity.readLocal : readOpenCodex,
         ...(storageHealth === null ? {} : { storage: storageHealth }),
         ...(strayScan === null ? {} : { strays: strayScan }),
       },

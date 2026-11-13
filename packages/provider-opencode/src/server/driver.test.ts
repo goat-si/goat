@@ -62,6 +62,12 @@ const layer = Layer.mergeAll(
   McpProviderSessions.layer,
   ProviderLatestVersions.layer,
   TestProviderHost.layer(),
+  Layer.succeed(HostProcess.HomeDirectory, "/fixture/opencode-test"),
+  Layer.succeed(HostProcess.Environment, {
+    HOME: "/fixture/opencode-test",
+    XDG_DATA_HOME: "/fixture/opencode-test",
+    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+  }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
     ProviderEventLoggers.NoOpProviderEventLoggers,
@@ -129,7 +135,14 @@ it.live("discovers models through a home-relative OpenCode wrapper", () =>
         ...OpenCodeDriver.defaultConfig(),
         binaryPath: windows ? "~/opencode.cmd" : "~/opencode",
       },
-    }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+    }).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Environment, {
+        HOME: home,
+        XDG_DATA_HOME: home,
+        PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+      }),
+    );
     const snapshot = yield* instance.snapshot.refresh;
     assert.strictEqual(snapshot.status, "ready");
     assert.strictEqual(snapshot.version, "1.18.32");
@@ -166,6 +179,49 @@ const lazyMiseShim = {
 } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
+  it.effect(
+    "refreshes the probe environment after the host PATH changes while preserving instance overrides",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-path-" });
+        const host = { PATH: "/usr/bin:/bin", HOME: home, XDG_DATA_HOME: home };
+        const environments: NodeJS.ProcessEnv[] = [];
+        const runtime = {
+          ...openCode2Runtime,
+          runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
+            Effect.sync(() => {
+              environments.push(environment ?? {});
+              return { stdout: "opencode v2.0.18\n", stderr: "", code: 0 };
+            }),
+        };
+        const makeInstance = (override: boolean) =>
+          OpenCodeDriver.create({
+            instanceId: ProviderInstanceId.make(override ? "override" : "inherited"),
+            displayName: undefined,
+            environment: override
+              ? [{ name: "PATH", value: "/usr/bin:/bin", sensitive: false }]
+              : [],
+            enabled: true,
+            config: OpenCodeDriver.defaultConfig(),
+          }).pipe(
+            Effect.provideService(HttpClient.HttpClient, noHttp),
+            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+            Effect.provideService(HostProcess.Environment, host),
+            Effect.provideService(HostProcess.HomeDirectory, home),
+            Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+          );
+        const inherited = yield* makeInstance(false);
+        const overridden = yield* makeInstance(true);
+        host.PATH = "/new/bin:/usr/bin:/bin";
+        yield* inherited.snapshot.refresh;
+        assert.strictEqual(environments.at(-1)?.PATH, "/new/bin:/usr/bin:/bin");
+        assert.strictEqual(environments.at(-1)?.MISE_OFFLINE, "1");
+        assert.strictEqual(Object.getPrototypeOf(environments.at(-1)), Object.prototype);
+        yield* overridden.snapshot.refresh;
+        assert.strictEqual(environments.at(-1)?.PATH, "/usr/bin:/bin");
+      }).pipe(Effect.scoped),
+  );
   it.effect("starts workspace discovery servers with mise offline", () =>
     Effect.gen(function* () {
       const environments: NodeJS.ProcessEnv[] = [];
@@ -693,6 +749,12 @@ const layerUpdate = Layer.mergeAll(
   McpProviderSessions.layer,
   ProviderLatestVersions.layer,
   TestProviderHost.layer(),
+  Layer.succeed(HostProcess.HomeDirectory, "/fixture/opencode-test"),
+  Layer.succeed(HostProcess.Environment, {
+    HOME: "/fixture/opencode-test",
+    XDG_DATA_HOME: "/fixture/opencode-test",
+    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+  }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
     ProviderEventLoggers.NoOpProviderEventLoggers,

@@ -20,6 +20,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
@@ -121,7 +122,7 @@ const makeTildeProviderFixtures = Effect.fn(
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const homePath = yield* HostProcess.HomeDirectory;
-  const fixtureDir = yield* fileSystem.makeTempDirectoryScoped({
+  const fixtureDir = yield* fileSystem.makeTempDirectory({
     directory: homePath,
     prefix: ".goat-provider-path-test-",
   });
@@ -174,6 +175,31 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       }),
     ),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(
+      Layer.effectContext(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const home = yield* fs.makeTempDirectoryScoped({ prefix: "provider-registry-home-" });
+          return Context.make(HostProcess.HomeDirectory, home).pipe(
+            Context.add(HostProcess.Environment, {
+              HOME: home,
+              PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+            }),
+            Context.add(FileSystem.FileSystem, {
+              ...fs,
+              readFileString: (file: string) =>
+                fs.readFileString(
+                  file.endsWith("/managed-settings.json") ||
+                    file.endsWith("\\managed-settings.json")
+                    ? path.join(home, "missing")
+                    : file,
+                ),
+            }),
+          );
+        }),
+      ).pipe(Layer.provide(NodeServices.layer)),
+    ),
     Layer.provideMerge(
       Layer.mock(CodexInstallation.CodexInstallation)({
         managedDirectory: "unused-managed-installation",
@@ -446,6 +472,68 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         auth: { status: "authenticated" },
       });
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live(
+    "regression #3079: a Claude status check reads the host PATH current at the check, and an instance PATH still wins",
+    () =>
+      Effect.gen(function* () {
+        if (yield* HostProcess.isWindows) return;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const testHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-host-" });
+        const fixtures = yield* makeTildeProviderFixtures().pipe(
+          Effect.provideService(HostProcess.HomeDirectory, testHome),
+        );
+        const path = yield* Path.Path;
+        const folder = path.dirname(path.join(testHome, fixtures.claudeBinaryPath.slice(2)));
+        // The fixture runs on node; keep it reachable without the fixture folder.
+        const before = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+        const host = { HOME: testHome, PATH: before };
+        const hostileLog = path.join(testHome, "hostile.log");
+        vi.stubEnv("GOAT_CLAUDE_REQUIRED_CWD", testHome);
+        vi.stubEnv("GOAT_CLAUDE_PROBE_LOG", hostileLog);
+        vi.stubEnv("GOAT_CLAUDE_LOGIN_MARKER", path.join(testHome, "missing"));
+        vi.stubEnv("GOAT_CLAUDE_USAGE_FAILS_UNTIL", path.join(testHome, "missing"));
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+        const config = makeClaudeConfig({
+          enabled: true,
+          binaryPath: "claude",
+          homePath: fixtures.claudeHomePath,
+        });
+        const inheritedId = ProviderInstanceId.make("claude_host_path");
+        const pinnedId = ProviderInstanceId.make("claude_instance_path");
+        const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+          drivers: [ClaudeDriver],
+          configMap: {
+            [inheritedId]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              config,
+            },
+            [pinnedId]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+              environment: [{ name: "PATH", value: `${folder}:${before}`, sensitive: false }],
+              config,
+            },
+          },
+        }).pipe(
+          Effect.provideService(HostProcess.HomeDirectory, testHome),
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        const inherited = yield* registry.getInstance(inheritedId);
+        const pinned = yield* registry.getInstance(pinnedId);
+        expect(yield* inherited!.snapshot.refresh).toMatchObject({ installed: false });
+
+        host.PATH = `${folder}:${before}`;
+        expect(yield* inherited!.snapshot.refresh).toMatchObject({
+          installed: true,
+          version: "2.1.219",
+        });
+        host.PATH = before;
+        expect(yield* pinned!.snapshot.refresh).toMatchObject({ installed: true });
+        expect(yield* fileSystem.exists(hostileLog)).toBe(false);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("scopes Claude's one-probe fallback to the logged-in organization", () =>

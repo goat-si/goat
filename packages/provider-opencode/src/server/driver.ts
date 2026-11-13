@@ -240,7 +240,12 @@ export const OpenCodeDriver: ProviderDriver<
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const hostEnvironment = yield* HostProcess.Environment;
+    const currentEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
+    );
+    const processEnv = yield* currentEnvironment;
+    const probeEnvironment = currentEnvironment.pipe(Effect.map(providerProbeEnvironment));
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
       instanceId,
@@ -264,7 +269,7 @@ export const OpenCodeDriver: ProviderDriver<
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       );
     const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
-      probeRuntime(providerProbeEnvironment(processEnv)),
+      probeEnvironment.pipe(Effect.flatMap(probeRuntime)),
     );
     const resolveRuntime =
       effectiveConfig.serverUrl.trim().length > 0
@@ -273,7 +278,11 @@ export const OpenCodeDriver: ProviderDriver<
             Effect.flatMap(
               Option.match({
                 onSome: Effect.succeed,
-                onNone: () => probeRuntime(processEnv).pipe(Effect.tap(runtimeProbe.record)),
+                onNone: () =>
+                  currentEnvironment.pipe(
+                    Effect.flatMap(probeRuntime),
+                    Effect.tap(runtimeProbe.record),
+                  ),
               }),
             ),
           );
@@ -288,10 +297,17 @@ export const OpenCodeDriver: ProviderDriver<
         Effect.flatMap((generation) =>
           Option.isNone(generation)
             ? Effect.succeed(noUpdate)
-            : resolveProviderMaintenanceCapabilitiesEffect(openCodeUpdateFor(generation.value), {
-                binaryPath: effectiveConfig.binaryPath,
-                env: processEnv,
-              }),
+            : currentEnvironment.pipe(
+                Effect.flatMap((env) =>
+                  resolveProviderMaintenanceCapabilitiesEffect(
+                    openCodeUpdateFor(generation.value),
+                    {
+                      binaryPath: effectiveConfig.binaryPath,
+                      env,
+                    },
+                  ),
+                ),
+              ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -346,6 +362,7 @@ export const OpenCodeDriver: ProviderDriver<
       serverPassword: effectiveConfig.serverPassword,
       directory: host.paths.cwd,
       environment: providerProbeEnvironment(processEnv),
+      currentEnvironment: probeEnvironment,
     }).pipe(
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       Effect.provideService(
@@ -429,6 +446,7 @@ export const OpenCodeDriver: ProviderDriver<
       directory: host.paths.cwd,
       ...(effectiveConfig.serverPassword ? { serverPassword: effectiveConfig.serverPassword } : {}),
       environment: providerProbeEnvironment(processEnv),
+      currentEnvironment: probeEnvironment,
     });
     const textGeneration = selectOpenCodeRuntimeTextGeneration(
       runtimeProbe,

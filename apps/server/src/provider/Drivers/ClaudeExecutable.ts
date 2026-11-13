@@ -36,34 +36,50 @@ export const ClaudeExecutableFileCheck = Context.Reference<ExecutableFileCheck>(
   },
 );
 
+export interface ClaudeSdkExecutable {
+  readonly path: string;
+  /** False on Windows when no file was found for the binary; other platforms leave lookup to spawn. */
+  readonly found: boolean;
+}
+
 /** On Windows the SDK skips shell and PATH/PATHEXT lookup: bare names and .cmd shims fail. */
-export const resolveClaudeSdkExecutablePath = Effect.fn("resolveClaudeSdkExecutablePath")(
-  function* (binaryPath: string, environment: NodeJS.ProcessEnv): Effect.fn.Return<string> {
-    const platform = yield* HostProcess.Platform;
-    if (platform !== "win32") {
-      return binaryPath;
-    }
+export const resolveClaudeSdkExecutable = Effect.fn("resolveClaudeSdkExecutable")(function* (
+  binaryPath: string,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<ClaudeSdkExecutable> {
+  const platform = yield* HostProcess.Platform;
+  if (platform !== "win32") {
+    return { path: binaryPath, found: true };
+  }
 
-    const resolveExecutable = yield* SpawnExecutableResolution;
-    const isFile = yield* ClaudeExecutableFileCheck;
-    const resolved = resolveExecutable(binaryPath, platform, environment) ?? binaryPath;
-    const extension = NodePath.win32.extname(resolved).toLowerCase();
-    if (!WINDOWS_SHIM_EXTENSIONS.has(extension)) {
-      return resolved;
-    }
+  const resolveExecutable = yield* SpawnExecutableResolution;
+  const isFile = yield* ClaudeExecutableFileCheck;
+  const resolved = resolveExecutable(binaryPath, platform, environment);
+  if (resolved === undefined) {
+    return { path: binaryPath, found: false };
+  }
+  const extension = NodePath.win32.extname(resolved).toLowerCase();
+  if (!WINDOWS_SHIM_EXTENSIONS.has(extension)) {
+    return { path: resolved, found: true };
+  }
 
-    const shimDirectory = NodePath.win32.dirname(resolved);
-    for (const entrySegments of NPM_PACKAGE_ENTRY_CANDIDATES) {
-      const candidate = NodePath.win32.join(shimDirectory, ...entrySegments);
-      if (isFile(candidate)) {
-        return candidate;
-      }
+  const shimDirectory = NodePath.win32.dirname(resolved);
+  for (const entrySegments of NPM_PACKAGE_ENTRY_CANDIDATES) {
+    const candidate = NodePath.win32.join(shimDirectory, ...entrySegments);
+    if (isFile(candidate)) {
+      return { path: candidate, found: true };
     }
+  }
 
-    yield* Effect.logWarning(
-      "Claude launcher shim resolved but no known package entry was found next to it; the Claude Agent SDK cannot spawn launcher scripts directly.",
-      { binaryPath, resolvedShimPath: resolved },
-    );
-    return binaryPath;
-  },
-);
+  yield* Effect.logWarning(
+    "Claude launcher shim resolved but no known package entry was found next to it; the Claude Agent SDK cannot spawn launcher scripts directly.",
+    { binaryPath, resolvedShimPath: resolved },
+  );
+  return { path: binaryPath, found: false };
+});
+
+export const resolveClaudeSdkExecutablePath = (
+  binaryPath: string,
+  environment: NodeJS.ProcessEnv,
+): Effect.Effect<string> =>
+  resolveClaudeSdkExecutable(binaryPath, environment).pipe(Effect.map((resolved) => resolved.path));
