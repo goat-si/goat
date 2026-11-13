@@ -650,6 +650,7 @@ type snapLine struct {
 		Online                                bool
 	}
 	Revoked []NameRef
+	Relays  []struct{ URL, Uplink string }
 }
 
 func snapWatch(t *testing.T, n *node) (*holder, func() snapLine) {
@@ -689,6 +690,11 @@ func TestSnapshotWatchSendsCompleteLinesWhoseGenerationRisesByOnePerChange(t *te
 	a := founder(t, ctx, rs, "a", nil)
 	_, next1 := snapWatch(t, a)
 	first := next1()
+	// The relay counts the node online before the daemon reads its answer and marks the uplink up, a change
+	// that raises the generation; the second watcher attaches after it.
+	for len(first.Relays) != 1 || first.Relays[0].Uplink != "up" {
+		first = next1()
+	}
 	_, next2 := snapWatch(t, a)
 	if second := next2(); second.Gen != first.Gen {
 		t.Fatalf("a new watcher raised the generation: %d then %d", first.Gen, second.Gen)
