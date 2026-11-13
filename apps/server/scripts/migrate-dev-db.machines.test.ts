@@ -48,6 +48,15 @@ it.layer(NodeServices.layer)("migrate-dev-db and the developer's machines", (it)
             VALUES ('claim-1', 'owner', 'clisu-oracle', 'Goal', 'main', '2026-08-01')`;
           yield* sql`INSERT INTO fleet_host_states (host, cordoned, draining, changed_at)
             VALUES ('mini', 1, 0, '2026-08-01')`;
+          // An open attach: a dev server's reconcile would cancel this invite on the real Pen.
+          yield* sql`INSERT INTO disposable_machines
+            (attach_id, provisioner_json, delegation_json, name, expected_sign_pub,
+              expected_noise_pub, node_id, grant_id, state, created_at, state_since, updated_at)
+            VALUES ('attach-1', '{"kind":"person"}', '{}', 'cc-1', 'sign', 'noise', 'node-1',
+              'grant-1', 'invited', '2026-08-01', '2026-08-01', '2026-08-01')`;
+          yield* sql`INSERT INTO disposable_machine_requests
+            (request_key, attach_id, outcome, created_at, updated_at)
+            VALUES ('key-1', 'attach-1', 'running', '2026-08-01', '2026-08-01')`;
         }),
       );
 
@@ -71,6 +80,8 @@ it.layer(NodeServices.layer)("migrate-dev-db and the developer's machines", (it)
             "fleet_goal_events",
             "fleet_goal_actions",
             "fleet_reschedule_claims",
+            "disposable_machines",
+            "disposable_machine_requests",
             // Kept: an import marker stops a re-import, and cordon flags dial nothing.
             "hub_node_imports",
             "fleet_host_states",
@@ -95,6 +106,8 @@ it.layer(NodeServices.layer)("migrate-dev-db and the developer's machines", (it)
         fleet_goal_events: 0,
         fleet_goal_actions: 0,
         fleet_reschedule_claims: 0,
+        disposable_machines: 0,
+        disposable_machine_requests: 0,
         hub_node_imports: 1,
         fleet_host_states: 1,
         remote_reports: 2,
