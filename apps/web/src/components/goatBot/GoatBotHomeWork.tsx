@@ -151,6 +151,13 @@ export function GoatBotHomeWork({
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
       older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
+      currentRemoteIds={
+        currentLinks === null
+          ? null
+          : ([...current.work.running, ...current.work.waiting, ...current.work.finished]
+              .find((entry) => entry.row.task.taskId === task.row.task.taskId)
+              ?.remote.map((item) => item.childWorkId) ?? [])
+      }
       currentLinks={
         history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)
           ? null
@@ -270,6 +277,7 @@ function WorkRow({
   launchesTruncated,
   older,
   currentLinks,
+  currentRemoteIds,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -283,6 +291,7 @@ function WorkRow({
   readonly launchesTruncated: boolean;
   readonly older: boolean;
   readonly currentLinks: ReadonlyArray<HomeCurrentOpenableLink> | null;
+  readonly currentRemoteIds: ReadonlyArray<string> | null;
 }) {
   const row = task.row;
   const title = row.task.title;
@@ -400,6 +409,7 @@ function WorkRow({
             rows={rows}
             remoteWork={remoteWork}
             currentLinks={currentLinks?.filter((link) => link.taskId === row.task.taskId) ?? null}
+            currentRemoteIds={older ? null : currentRemoteIds}
           />
         </div>
       )}
