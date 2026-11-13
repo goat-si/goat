@@ -1,5 +1,6 @@
 import type { ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import { launchWakeKeyCrossing } from "../orchestration-v2/goat/launchWakeFolds.ts";
@@ -32,11 +33,9 @@ export const wakeThread = Effect.fn("threadWake.wakeThread")(function* (
   });
   const key = message.notification.aboutRunId;
   if (message.messageId.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX) && key !== undefined) {
-    // This diagnostic is best-effort when wakes arrive concurrently.
-    const records = yield* threads
-      .getThreadRecords(threadId, ["runs", "messages"])
-      .pipe(Effect.option);
-    if (Option.isSome(records)) {
+    // A diagnostic, best-effort under concurrent wakes: no outcome of this read reaches the wake.
+    const records = yield* Effect.exit(threads.getThreadRecords(threadId, ["runs", "messages"]));
+    if (Exit.isSuccess(records)) {
       const count = launchWakeKeyCrossing(records.value, message.messageId, key);
       if (count !== undefined)
         yield* Effect.logWarning(`Thread ${threadId} has ${count} queued launch wake keys`);

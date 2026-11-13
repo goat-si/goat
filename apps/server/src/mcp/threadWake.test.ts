@@ -60,3 +60,36 @@ it.effect("contract: only a stamped launch wake reads its thread after the wake 
     assert.strictEqual(handoff.counter.reads, 0);
   }),
 );
+it.effect(
+  "invariant: a failing or dying queue read after the wake was sent never fails the wake",
+  () =>
+    Effect.gen(function* () {
+      const stamped = finishedWake({
+        watch: newLaunchWatch({
+          launcherThreadId: session,
+          launcherRunId: RunId.make("run:launching"),
+          host: null,
+          threadId: ThreadId.make("thread:child"),
+          projectId: null,
+          title: "child",
+          incarnation: "test",
+          notifyWebhook: false,
+          now: 0,
+        }),
+        runId: RunId.make("run:child"),
+        status: "completed",
+        title: "child",
+        branch: null,
+        worktreePath: null,
+        excerpt: "Done.",
+      });
+      const sent = { run: "sent" } as never;
+      for (const read of [Effect.fail("unreadable"), Effect.die("broken")]) {
+        const threads = {
+          dispatch: () => Effect.succeed(sent),
+          getThreadRecords: () => read,
+        } as unknown as ThreadManagementService.ThreadManagementService["Service"];
+        assert.strictEqual(yield* wakeThread(threads, session, stamped), sent);
+      }
+    }),
+);
