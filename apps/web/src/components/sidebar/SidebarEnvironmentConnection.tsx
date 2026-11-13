@@ -54,16 +54,27 @@ export function SidebarEnvironmentConnectionStatus({
   const nowMinute = useNowMinute();
   if (
     environment === null ||
-    (environment.connection.phase === "connected" && syncMessage === null)
+    (environment.connection.penHold === undefined &&
+      environment.connection.phase === "connected" &&
+      syncMessage === null)
   )
     return null;
-  const age = connectionRowShowsSnapshotAge(environment.connection)
-    ? offlineSnapshotAgeLabel(capturedAt, Date.parse(`${nowMinute}:59.999Z`))
-    : null;
+  const age =
+    environment.connection.penHold !== undefined ||
+    connectionRowShowsSnapshotAge(environment.connection)
+      ? offlineSnapshotAgeLabel(capturedAt, Date.parse(`${nowMinute}:59.999Z`))
+      : null;
   return (
     <span className="shrink-0">
       ·{" "}
-      {environment.connection.phase === "connected" ? (
+      {environment.connection.penHold !== undefined ? (
+        <>
+          {environment.connection.penHold === "offline"
+            ? "Offline in Pen"
+            : "Not open: this computer keeps 16 Pen machines open at a time"}
+          {age === null ? null : ` · ${age}`}
+        </>
+      ) : environment.connection.phase === "connected" ? (
         syncMessage
       ) : (
         <>

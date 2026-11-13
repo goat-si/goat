@@ -1,4 +1,7 @@
 import { PenDiscovery, PenMembership, type PenMemberStatus } from "@goat/client-runtime/connection";
+import type { ClientCapabilities } from "@goat/client-runtime/platform";
+import type { DesktopPenBridge } from "@goat/contracts";
+import { useState } from "react";
 import { createRuntimeCommand } from "@goat/client-runtime/state/runtime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -10,6 +13,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { toastManager } from "../ui/toast";
 import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -35,6 +39,12 @@ const retry = createRuntimeCommand(connectionAtomRuntime, {
   execute: (nodeId: string) =>
     PenDiscovery.PenDiscovery.pipe(Effect.flatMap((service) => service.retry(nodeId))),
 });
+const connect = createRuntimeCommand(connectionAtomRuntime, {
+  label: "pen:connect",
+  concurrency: { mode: "singleFlight", key: (nodeId: string) => nodeId },
+  execute: (nodeId: string) =>
+    PenDiscovery.PenDiscovery.pipe(Effect.flatMap((service) => service.connect(nodeId))),
+});
 // Installs GOAT on that machine, so it runs only from a person's click on Set up.
 const setUp = createRuntimeCommand(connectionAtomRuntime, {
   label: "pen:set-up",
@@ -48,12 +58,48 @@ export function PenMachinesView({
   guidance,
   onRetry,
   onSetUp,
+  onConnect,
+  membership,
+  revokePenMember,
 }: {
   readonly statuses: ReadonlyArray<PenMemberStatus>;
   readonly guidance: string | null;
   readonly onRetry: (nodeId: string) => void;
   readonly onSetUp: (nodeId: string) => void;
+  readonly onConnect?: (nodeId: string) => void;
+  readonly membership?: ClientCapabilities.PenMembersInput | undefined;
+  readonly revokePenMember?: DesktopPenBridge["revokePenMember"];
 }) {
+  const [removing, setRemoving] = useState(false);
+  const remove = async (member: PenMemberStatus) => {
+    if (removing || membership?.kind !== "ready" || revokePenMember === undefined) return;
+    const current = membership.members.find((item) => item.nodeId === member.nodeId);
+    if (current === undefined) return;
+    setRemoving(true);
+    try {
+      const result = await revokePenMember({
+        meshId: membership.meshId,
+        nodeId: current.nodeId,
+        noisePub: current.noisePub,
+      });
+      if (result.status === "revoked")
+        toastManager.add({ type: "success", title: `Removed ${current.name} from Pen` });
+      if (result.status === "failed")
+        toastManager.add({
+          type: "error",
+          title: "Could not remove from Pen",
+          description: result.message,
+        });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not remove from Pen",
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setRemoving(false);
+    }
+  };
   const settings = useScopedSettings();
   const update = useUpdateScopedSettings();
   return (
@@ -77,15 +123,33 @@ export function PenMachinesView({
               title={member.name}
               description={penMemberText(member)}
               control={
-                member.state === "not-set-up" ? (
-                  <Button size="sm" variant="outline" onClick={() => onSetUp(member.nodeId)}>
-                    Set up
-                  </Button>
-                ) : member.state === "failed" || member.state === "key-rejected" ? (
-                  <Button size="sm" variant="outline" onClick={() => onRetry(member.nodeId)}>
-                    Retry
-                  </Button>
-                ) : undefined
+                <div className="flex items-center gap-2">
+                  {member.state === "waiting" ? (
+                    <Button size="sm" variant="outline" onClick={() => onConnect?.(member.nodeId)}>
+                      Connect
+                    </Button>
+                  ) : member.state === "not-set-up" ? (
+                    <Button size="sm" variant="outline" onClick={() => onSetUp(member.nodeId)}>
+                      Set up
+                    </Button>
+                  ) : member.state === "failed" || member.state === "key-rejected" ? (
+                    <Button size="sm" variant="outline" onClick={() => onRetry(member.nodeId)}>
+                      Retry
+                    </Button>
+                  ) : null}
+                  {revokePenMember !== undefined &&
+                  membership?.kind === "ready" &&
+                  membership.members.some((item) => item.nodeId === member.nodeId) ? (
+                    <Button
+                      size="sm"
+                      variant="ghost-destructive"
+                      disabled={removing}
+                      onClick={() => void remove(member)}
+                    >
+                      Remove from Pen...
+                    </Button>
+                  ) : null}
+                </div>
               }
             />
           ))
@@ -116,6 +180,8 @@ function PenMachinesSection() {
   const membership = useEnvironmentQuery(membershipAtom).data;
   const retryMember = useAtomCommand(retry);
   const setUpMember = useAtomCommand(setUp);
+  const connectMember = useAtomCommand(connect);
+  const currentMembership = membership == null ? undefined : Option.getOrUndefined(membership);
   return (
     <PenMachinesView
       statuses={statuses}
@@ -125,6 +191,9 @@ function PenMachinesSection() {
           : Option.getOrUndefined(membership),
         statuses,
       )}
+      membership={currentMembership}
+      revokePenMember={window.desktopBridge?.revokePenMember}
+      onConnect={(nodeId) => void connectMember(nodeId)}
       onRetry={(nodeId) => void retryMember(nodeId)}
       onSetUp={(nodeId) => void setUpMember(nodeId)}
     />

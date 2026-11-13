@@ -4,7 +4,8 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import "../../index.css";
 
-const state = vi.hoisted(() => ({ update: vi.fn() }));
+const state = vi.hoisted(() => ({ update: vi.fn(), toast: vi.fn() }));
+vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast }, stackedThreadToast: vi.fn() }));
 vi.mock("./useScopedSettings", () => ({
   useScopedSettings: () => ({ showPenMachines: true }),
   useUpdateScopedSettings: () => state.update,
@@ -121,4 +122,80 @@ it("a connected row follows its live connection, not the last member list", () =
   expect(
     penLiveStatus({ nodeId: "2", name: "new", state: "not-set-up" }, { phase: "connected" }).state,
   ).toBe("not-set-up");
+});
+
+it("shows held machines and connects a waiting member", async () => {
+  setup();
+  const connect = vi.fn();
+  await using screen = await render(
+    <PenMachinesView
+      statuses={[
+        { nodeId: "offline", name: "Offline", state: "offline" },
+        { nodeId: "waiting", name: "Waiting", state: "waiting" },
+      ]}
+      guidance={null}
+      onRetry={() => {}}
+      onSetUp={() => {}}
+      onConnect={connect}
+    />,
+  );
+  await expect
+    .element(screen.getByText("Offline in Pen. Threads are as this computer last saw them."))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText("Not open. This computer keeps 16 Pen machines open at a time."))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+  expect(connect).toHaveBeenCalledWith("waiting");
+});
+
+it("offers removal only with the bridge and submits the current member pin", async () => {
+  setup();
+  state.toast.mockReset();
+  const membership = {
+    kind: "ready",
+    seq: 1,
+    meshId: "mesh",
+    selfNodeId: "self",
+    members: [
+      {
+        nodeId: "node",
+        name: "Box",
+        noisePub: "key",
+        online: true,
+        route: { kind: "refused", reason: "not-in-pen-config" },
+      },
+    ],
+  } as const;
+  const statuses = [{ nodeId: "node", name: "Box", state: "offline" }] as const;
+  const revoke = vi.fn().mockResolvedValue({ status: "failed", message: "Pen refused removal" });
+  await using screen = await render(
+    <PenMachinesView
+      statuses={statuses}
+      guidance={null}
+      membership={membership}
+      onRetry={() => {}}
+      onSetUp={() => {}}
+      onConnect={() => {}}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Remove from Pen..." }).elements()).toHaveLength(0);
+  await screen.rerender(
+    <PenMachinesView
+      statuses={statuses}
+      guidance={null}
+      membership={membership}
+      revokePenMember={revoke}
+      onRetry={() => {}}
+      onSetUp={() => {}}
+      onConnect={() => {}}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Remove from Pen..." }));
+  expect(revoke).toHaveBeenCalledWith({ meshId: "mesh", nodeId: "node", noisePub: "key" });
+  await vi.waitFor(() =>
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", description: "Pen refused removal" }),
+    ),
+  );
 });

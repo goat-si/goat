@@ -83,13 +83,14 @@ describe("reconcilePenRoutes", () => {
 
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { layer as discoveryLayer, PenDiscovery } from "./penDiscovery.ts";
-import { layer as liveSetLayer } from "./penLiveSet.ts";
+import { layer as liveSetLayer, PenLiveSet } from "./penLiveSet.ts";
 import { PenMembership } from "./penMembership.ts";
 import { ConnectionOnboarding, type SshConnectionInput } from "./onboarding.ts";
-import { EnvironmentRegistry } from "./registry.ts";
+import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "./registry.ts";
 import { ConnectionBlockedError, ConnectionTransientError } from "./model.ts";
 import type { PenMembersInput } from "../platform/capabilities.ts";
 
@@ -638,4 +639,85 @@ it.effect("retries an interrupted attempt in the newer membership state", () =>
       }).pipe(Effect.provide(h.layer));
     }),
   ),
+);
+
+it.effect.each(["connect", "setUp"] as const)(
+  "%s takes a slot for an online candidate when the live set is full",
+  (action) =>
+    Effect.gen(function* () {
+      const machines = Array.from({ length: 17 }, (_, i) => member(String.fromCharCode(98 + i)));
+      const state = readyState(machines);
+      const saved = machines
+        .slice(0, 16)
+        .map((machine) => entry(penRouteConnectionId(mesh, machine.nodeId), machine.name));
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
+      >(new Map(saved.map((item) => [item.target.environmentId, item])));
+      const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
+        Option.some(state),
+      );
+      const baseRegistry = yield* fakeRegistry(entries);
+      const liveIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(new Set());
+      const registry = EnvironmentRegistry.of({
+        ...baseRegistry,
+        setPenLive: (ids) => Ref.set(liveIds, ids),
+        state: (environmentId) => Effect.fail(new EnvironmentNotRegisteredError({ environmentId })),
+      });
+      const calls: SshConnectionInput[] = [];
+      const onboarding = ConnectionOnboarding.of({
+        registerPairing: () => Effect.die("unexpected pairing"),
+        updateBearer: () => Effect.die("unexpected bearer update"),
+        registerSsh: (input) =>
+          Effect.gen(function* () {
+            calls.push(input);
+            const added = entry(
+              penRouteConnectionId(mesh, machines[16]!.nodeId),
+              machines[16]!.name,
+            );
+            yield* SubscriptionRef.update(
+              entries,
+              (current) => new Map([...current, [added.target.environmentId, added]]),
+            );
+            return added.target.environmentId;
+          }),
+      });
+      const deps = Layer.mergeAll(
+        Layer.succeed(EnvironmentRegistry, registry),
+        Layer.succeed(ConnectionOnboarding, onboarding),
+        Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
+      );
+      const live = liveSetLayer.pipe(Layer.provideMerge(deps));
+      const combined = discoveryLayer.pipe(Layer.provideMerge(live));
+      yield* Effect.gen(function* () {
+        const service = yield* PenDiscovery;
+        const liveSet = yield* PenLiveSet;
+        yield* liveSet.recompute;
+        yield* service.pass(state);
+        expect(calls).toHaveLength(0);
+        expect(
+          (yield* SubscriptionRef.get(service.statuses)).find(
+            (row) => row.nodeId === machines[16]!.nodeId,
+          )?.state,
+        ).toBe("waiting");
+        if (action === "connect") {
+          yield* service.connect(machines[16]!.nodeId);
+          yield* service.pass(state);
+        } else {
+          yield* service.setUp(machines[16]!.nodeId);
+        }
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.keyOnly).toBe(action === "connect");
+        expect(
+          (yield* Ref.get(liveIds)).has(
+            EnvironmentId.make(penRouteConnectionId(mesh, machines[16]!.nodeId)),
+          ),
+        ).toBe(true);
+        expect(
+          (yield* SubscriptionRef.get(liveSet.held)).has(
+            EnvironmentId.make(penRouteConnectionId(mesh, machines[16]!.nodeId)),
+          ),
+        ).toBe(false);
+        expect([...(yield* SubscriptionRef.get(liveSet.held)).values()]).toContain("waiting");
+      }).pipe(Effect.provide(combined));
+    }),
 );
