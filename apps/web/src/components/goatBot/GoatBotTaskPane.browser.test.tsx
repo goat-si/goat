@@ -812,6 +812,9 @@ it("looks up an older task on a capable server and shows its actions", async () 
   await using screen = await render(<Pane onClose={() => {}} />);
   await expect.element(screen.getByRole("heading", { name: "Recovered task" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Pin", exact: true })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Mark done" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Mark read" })).toBeDisabled();
+  await expect.element(screen.getByText("Done", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
   await expect.element(screen.getByText("Show work")).toBeVisible();
   expect(state.lookup).toHaveBeenCalledWith({
@@ -914,4 +917,51 @@ it("does not let a late lookup overwrite the result of a newer action", async ()
   await expect.element(screen.getByRole("heading", { name: "Newest" })).toBeVisible();
   await act(() => finish(result("Outdated")));
   await expect.element(screen.getByRole("heading", { name: "Newest" })).toBeVisible();
+});
+
+it("looks up a member's older task under that member", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  state.lookup.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      task: {
+        state: "unavailable",
+        task: {
+          taskId: "task-1",
+          title: "Member task",
+          status: "running",
+          updatedAt: "2026-11-04T10:00:00.000Z",
+        },
+      },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: true,
+    },
+  });
+  const member = decodeProfile({
+    botId: "research",
+    role: "member",
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-research",
+    createdAt: "2026-11-04T10:00:00.000Z",
+    updatedAt: "2026-11-04T10:00:00.000Z",
+  });
+  await using screen = await render(
+    <GoatBotMemberContext value={member}>
+      <Pane onClose={() => {}} />
+    </GoatBotMemberContext>,
+  );
+  await expect.element(screen.getByRole("heading", { name: "Member task" })).toBeVisible();
+  expect(state.lookup).toHaveBeenCalledWith({
+    environmentId: "env",
+    input: { taskId: "task-1", botId: "research" },
+  });
 });

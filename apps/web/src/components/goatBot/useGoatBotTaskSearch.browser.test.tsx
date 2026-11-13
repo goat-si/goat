@@ -79,7 +79,11 @@ it("searches each bot and follows a cursor through an empty page", async () => {
                 ],
                 endedEarly: true,
               }
-            : { tasks: [] },
+            : {
+                tasks: [
+                  { taskId: "t-main", title: "Main papers", createdAt: "2026-11-07T00:00:00.000Z" },
+                ],
+              },
     }),
   );
   await using screen = await render(<Search query="" />);
@@ -116,6 +120,11 @@ it("searches each bot and follows a cursor through an empty page", async () => {
   expect(state.navigate).toHaveBeenCalledWith({
     to: "/bot",
     search: { task: "t1", taskTitle: "Find papers", bot: "research" },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Main papers" }));
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/bot",
+    search: { task: "t-main", taskTitle: "Main papers" },
   });
 });
 
