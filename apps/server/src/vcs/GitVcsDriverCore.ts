@@ -101,6 +101,7 @@ import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
 import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
+import { commitContextObjects } from "./commitContextObjects.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** GOAT's record of the branch, named as on the host, that a branch was cut from. */
@@ -2405,17 +2406,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     Effect.fn("prepareCommitContext")(function* (cwd, filePaths, options) {
       return yield* Effect.scoped(
         Effect.gen(function* () {
-          const indexValue = yield* runGitStdout(
-            "GitVcsDriver.prepareCommitContext.indexPath",
-            cwd,
-            ["rev-parse", "--git-path", "index"],
-          );
-          const indexPath = path.resolve(cwd, indexValue.trim());
           const directory = yield* fileSystem.makeTempDirectoryScoped({
             prefix: "goat-commit-index-",
           });
           const tempIndexPath = path.join(directory, "index");
-          const env = { GIT_INDEX_FILE: tempIndexPath } satisfies NodeJS.ProcessEnv;
+          const { indexPath, env } = yield* commitContextObjects(
+            cwd,
+            directory,
+            hostPlatform,
+            fileSystem,
+            path,
+            runGitStdout,
+          );
           const config = [
             "-c",
             "core.splitIndex=false",
