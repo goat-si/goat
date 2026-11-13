@@ -50,6 +50,7 @@ vi.mock("~/state/threads", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("~/state/threads")>()),
     environmentThreadDetails: {
+      statusAtom: () => Atom.make("live"),
       threadAtom: () => detail,
       quietVisibleTurnItemsAtom: () => quietItems,
       historyAtom: () => history,
