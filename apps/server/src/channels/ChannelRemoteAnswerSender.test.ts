@@ -23,6 +23,7 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import { trackForwards } from "./testkit/remoteForwardFibers.ts";
 
 /** Answers to work on another machine from someone other than the requester, checked at delivery. */
@@ -101,12 +102,14 @@ const askedOnMachine = (machine: RemoteMachine, colleagueName = "Colleague") =>
     yield* setupBot;
     yield* link("U2", "Teammate");
     yield* link("U1", colleagueName);
+    const writes = yield* taskWriteMilestones();
     yield* say("U2", "do@mac-studio: pick a branch", "start");
-    yield* until("running", (task) => task.status === "running");
+    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    yield* writes.waitFor((task) => task.status === "running");
     const correlationId = correlationOf(machine);
     machine.report(correlationId, "needs_input", "Which branch?");
     machine.finishRun(correlationId, "completed", "Waiting for an answer.");
-    return yield* until("question", (task) => task.status === "waiting_input");
+    return yield* writes.waitFor((task) => task.status === "waiting_input");
   });
 
 const pendingForwards = Effect.flatMap(ChannelLedger.ChannelLedger, (ledger) =>
