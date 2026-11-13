@@ -408,7 +408,9 @@ it.effect(
       const cases = [
         { kind: "unstartable" as const, code: "ocx_unstartable" },
         { kind: "missing" as const, code: "ocx_missing" },
+        { kind: "unreachable" as const, code: "link_status_unreadable" },
         { kind: "failed" as const, code: "link_status_unreadable" },
+        { kind: "child" as const, code: "this_machine_is_child" },
         { kind: "unlinked" as const, code: "link_not_found" },
       ];
       for (const { kind, code } of cases) {
