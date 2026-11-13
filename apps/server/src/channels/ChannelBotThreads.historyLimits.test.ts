@@ -93,6 +93,11 @@ describe("ChannelBotThreads history limits", () => {
         assert.deepStrictEqual(first.tasks, []);
         assert.isUndefined(first.partial);
         assert.isString(first.nextCursor);
+        const cursor = JSON.parse(
+          Buffer.from((first.nextCursor ?? "").slice(3), "base64url").toString("utf8"),
+        );
+        assert.strictEqual(cursor[3], at(499));
+        assert.strictEqual(cursor[4], name(499));
         const second = yield* service.searchBotTasks(
           { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
           owner,
