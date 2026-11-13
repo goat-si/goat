@@ -5,7 +5,6 @@ import {
   type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -123,6 +122,8 @@ export class HubLinkTraffic extends Context.Service<
   {
     readonly observe: (
       rows: ReadonlyArray<LinkStatusRow>,
+      /** When the ocx read started: an overlapping read that answers later is then the older one. */
+      at: number,
     ) => Effect.Effect<ReturnType<typeof deriveLinkRows>>;
   }
 >()("goat/hub/HubLinkTraffic") {}
@@ -134,8 +135,8 @@ export const make = Effect.fn("HubLinkTraffic.make")(function* (
   const book = makeLinkTrafficBook();
   const observe = Effect.fn("HubLinkTraffic.observe")(function* (
     rows: ReadonlyArray<LinkStatusRow>,
+    at: number,
   ) {
-    const at = yield* Clock.currentTimeMillis;
     const aliases = rows.length === 0 ? undefined : yield* penAliases;
     // A settings read that fails warns at the defaults rather than not at all.
     const configured = yield* settings.getSettings.pipe(

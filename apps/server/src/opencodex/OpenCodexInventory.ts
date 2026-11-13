@@ -313,6 +313,8 @@ const make = Effect.gen(function* () {
       return version ? [{ path: candidate, version }] : [];
     });
     const binary = binaries[0]?.path;
+    // Taken before ocx runs: of two overlapping reads, the one that started first is the older.
+    const linkReadAt = yield* Clock.currentTimeMillis;
     const answers = binary
       ? yield* Effect.all(
           [
@@ -388,7 +390,7 @@ const make = Effect.gen(function* () {
     // A Home whose last link went reports standalone; its relay bytes still count for a day.
     const observed =
       link !== undefined && link.role !== "child"
-        ? yield* linkTraffic.observe(homeRows)
+        ? yield* linkTraffic.observe(homeRows, linkReadAt)
         : undefined;
     let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
     if (parity) {
