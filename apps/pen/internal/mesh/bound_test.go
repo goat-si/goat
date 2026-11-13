@@ -881,3 +881,25 @@ func TestACancelSignalsOnlyItsOwnInvite(t *testing.T) {
 		t.Fatal("the reused mintId's invite was not signalled by its own cancel")
 	}
 }
+
+// A bound entry read in #3117's file form is rewritten when the book loads, so a node downgraded before any later
+// save never finds its secret under the members it reads.
+func TestLoadingRewritesABoundEntryInTheEarlierFileForm(t *testing.T) {
+	st := tmpState(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	sub := subjectOf(detID(3), "j")
+	old := []map[string]any{{"id": "AAAAAAAAAAAAAAAA", "secret": make([]byte, 32), "expiresAt": now.Add(time.Minute).UnixMilli(), "subject": sub, "mintId": "m"}}
+	if err := st.WriteJSON("offers.json", old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadInvites(st); err != nil {
+		t.Fatal(err)
+	}
+	var dev []devInvite
+	if _, err := st.ReadJSON("offers.json", &dev); err != nil || len(dev) != 1 {
+		t.Fatalf("offers.json as dev reads it: %+v (%v)", dev, err)
+	}
+	if len(dev[0].Secret) != 0 || dev[0].ExpiresAt != 0 {
+		t.Fatalf("after loading, dev's struct still reads %+v; want no secret and no expiry", dev[0])
+	}
+}

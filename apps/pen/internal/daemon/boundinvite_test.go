@@ -384,7 +384,7 @@ func TestAnOrdinaryInvitesAnswerIsUnchanged(t *testing.T) {
 }
 
 // A cancel (and even its ack) that lands after a bound invite is made but before its waiter is registered still ends
-// the wait: a minted wait is registered under its mintId before the invite exists.
+// the wait: the invite's cancel signal is attached in the same step that makes it (Invites.CreateBoundNotify).
 func TestACancelBeforeTheWaitIsRegisteredStillEndsIt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
