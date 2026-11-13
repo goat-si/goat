@@ -18,6 +18,7 @@ import type {
 } from "@goat/client-runtime/connection";
 import type { RpcSession } from "@goat/client-runtime/rpc/session";
 import * as DateTime from "effect/DateTime";
+import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type { Atom } from "effect/reactivity";
@@ -174,6 +175,7 @@ vi.mock("~/state/threads", async (original) => {
 import { AppAtomRegistryProvider, appAtomRegistry } from "~/rpc/atomRegistry";
 import { useThreadVisibleTurnItems } from "~/state/entities";
 import { makeThreadProjectionFixture } from "~/test-fixtures";
+import { randomUUID } from "~/lib/utils";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -280,7 +282,7 @@ function nextAtom<A>(atom: Atom.Atom<A>, predicate: (value: A) => boolean): Prom
 }
 
 function setup(thread: string, history: ReadonlyArray<OrchestrationV2TurnItem> = []) {
-  const threadRef = { environmentId, threadId: ThreadId.make(`${thread}-${crypto.randomUUID()}`) };
+  const threadRef = { environmentId, threadId: ThreadId.make(`${thread}-${randomUUID()}`) };
   const fixture = makeThreadProjectionFixture();
   mocks.server.threads.set(threadRef.threadId, {
     ...fixture,
