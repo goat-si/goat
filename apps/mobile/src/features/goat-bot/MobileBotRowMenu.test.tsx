@@ -15,7 +15,7 @@ const native = vi.hoisted(() => ({
 }));
 vi.mock("react-native", () => ({
   Platform: native.platform,
-  Pressable: (props: { accessibilityLabel?: string; children?: ReactNode }) => (
+  View: (props: { accessibilityLabel?: string; children?: ReactNode }) => (
     <button aria-label={props.accessibilityLabel}>{props.children}</button>
   ),
   Text: (props: { children?: ReactNode }) => <span>{props.children}</span>,
@@ -27,9 +27,8 @@ const menu = vi.hoisted(() => (kind: string) => (props: MenuProps) => {
     <div>{typeof props.children === "function" ? props.children(() => {}) : props.children}</div>
   );
 });
-vi.mock("../../components/ui/AndroidAnchoredMenu", () => ({
-  AndroidAnchoredMenu: menu("android"),
-}));
+// Android uses the native menu view, which opens above the Home sheet's modal.
+vi.mock("@react-native-menu/menu", () => ({ MenuView: menu("android") }));
 vi.mock("../../components/ui/Menu", () => ({ Menu: menu("ios") }));
 
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
@@ -61,7 +60,7 @@ async function show(os: "ios" | "android") {
   return { container, onSelect, unmount: () => act(async () => root.unmount()) };
 }
 
-it("hands every row action to a native menu on Android, where an alert keeps only three", async () => {
+it("hands every row action to Android's native menu view, which opens above the Home sheet", async () => {
   const view = await show("android");
   expect(native.menus.at(-1)?.kind).toBe("android");
   expect(native.menus.at(-1)?.actions.map((action) => action.title)).toEqual([

@@ -759,10 +759,18 @@ it("marks a shown task read again when newer activity arrives, on its screen and
     { taskId: "t1", readThrough: at },
     { taskId: "t1", readThrough: later },
   ]);
+  // The task's own screen, left open while the task moves on, reads the newer activity once.
+  await open("t1");
+  expect(reads()).toHaveLength(2);
   const evenLater = "2026-11-11T04:00:00.000Z";
   state.rows = [decode({ ...unreadTask("t1", "Check the disks"), lastActivityAt: evenLater })];
   await open("t1");
-  expect(reads().at(-1)).toEqual({ taskId: "t1", readThrough: evenLater });
+  expect(reads()).toEqual([
+    { taskId: "t1", readThrough: at },
+    { taskId: "t1", readThrough: later },
+    { taskId: "t1", readThrough: evenLater },
+  ]);
+  await open("t1");
   expect(reads()).toHaveLength(3);
 });
 
