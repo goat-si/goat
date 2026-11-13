@@ -73,6 +73,7 @@ vi.mock("~/state/channels", async (original) => {
       ...real.channelEnvironment,
       listBotNotes: () => "notes",
       listBotArtifacts: () => artifactsQuery,
+      slackSettings: () => "slack",
     },
   };
 });
@@ -92,7 +93,14 @@ vi.mock("~/state/query", async (original) => ({
   ...(await original<typeof import("~/state/query")>()),
   useEnvironmentQuerySelector: () => settledListing,
   useEnvironmentQuery: (atom: unknown) => ({
-    data: atom === artifactsQuery ? { artifacts: [report], truncated: false } : { tasks: [] },
+    data:
+      atom === null
+        ? null
+        : atom === artifactsQuery
+          ? { artifacts: [report], truncated: false }
+          : atom === "slack"
+            ? []
+            : { tasks: [] },
     failure: null,
     error: null,
     isPending: false,

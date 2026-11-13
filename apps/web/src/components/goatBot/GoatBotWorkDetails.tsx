@@ -23,7 +23,7 @@ function GoatBotRemoteWork({ item }: { item: BotRemoteWork }) {
   if (target.kind === "unavailable")
     return (
       <span className="rounded-full border border-border px-2 py-1">
-        {target.host} · Unavailable
+        {target.host} · {target.label}
       </span>
     );
   return (

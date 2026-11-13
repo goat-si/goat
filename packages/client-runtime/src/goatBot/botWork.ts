@@ -79,3 +79,36 @@ export function groupBotWork(
   }
   return { inProgress, done };
 }
+
+/** A bot's Home work, in the order Home shows it: going, then waiting on a person, then finished. */
+export interface BotHomeWork {
+  readonly running: ReadonlyArray<BotWorkTask>;
+  readonly waiting: ReadonlyArray<BotWorkTask>;
+  readonly finished: ReadonlyArray<BotWorkTask>;
+}
+
+/** Newest activity first, which is the order the server's list is already in. */
+const byActivity = (a: BotWorkTask, b: BotWorkTask) =>
+  Date.parse(b.row.lastActivityAt) - Date.parse(a.row.lastActivityAt);
+
+/**
+ * Home's Work groups. A task a person marked done is finished whatever its run says, and a task
+ * whose worker asks for an answer waits. Running is newest first; finished keeps the server's
+ * order, so recent work reads top to bottom.
+ */
+export function botHomeWork(
+  rows: ReadonlyArray<BotThreadRow>,
+  groups: ReadonlyArray<ChannelChildWorkGroup>,
+  environmentId: EnvironmentId,
+  remoteWork: ReadonlyArray<BotRemoteWork> = [],
+): BotHomeWork {
+  const work = groupBotWork(rows, groups, environmentId, remoteWork);
+  const running: BotWorkTask[] = [];
+  const waiting: BotWorkTask[] = [];
+  for (const task of [...work.inProgress].sort(byActivity)) {
+    if (task.row.view.doneAt === null && task.row.task.status === "waiting_input")
+      waiting.push(task);
+    else running.push(task);
+  }
+  return { running, waiting, finished: work.done };
+}

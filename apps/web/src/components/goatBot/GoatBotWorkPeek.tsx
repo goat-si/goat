@@ -10,6 +10,7 @@ import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
+import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 
 const NO_RETRY = () => {};
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
@@ -25,6 +26,8 @@ export function GoatBotWorkPeek({
   statusLabel,
   rows,
   environmentId,
+  unreadThrough = null,
+  onAcknowledged,
   onRetry,
   onBack,
 }: {
@@ -33,10 +36,16 @@ export function GoatBotWorkPeek({
   readonly statusLabel: string;
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly environmentId: EnvironmentId;
+  /** The activity this task has not been read up to; null when nothing is unread. */
+  readonly unreadThrough?: string | null | undefined;
+  /** Called once the acknowledgment lands, so the list stops showing its mark. */
+  readonly onAcknowledged?: (() => void) | undefined;
   readonly onRetry?: ((clientKey: string) => void) | undefined;
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
+  // Opening a task acknowledges its activity, as its task view does.
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough: unreadThrough, onAcknowledged });
   return (
     <section
       aria-label={title}

@@ -215,7 +215,7 @@ function GoatBotConversationRow({
       >
         {preview?.unread ? <span className="size-2.5 rounded-full bg-info" /> : null}
       </span>
-      <GoatBotMainAvatar size="md" place="list" emoji={avatar} countInLabel />
+      <GoatBotMainAvatar size="md" place="list" surface="sidebar" emoji={avatar} countInLabel />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span

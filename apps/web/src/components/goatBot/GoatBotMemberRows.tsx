@@ -179,6 +179,7 @@ function GoatBotMemberRow({
     <SidebarMenuItem>
       <SidebarMenuButton
         size="lg"
+        className="group/bot-row"
         isActive={active}
         aria-current={active ? "page" : undefined}
         render={
@@ -194,6 +195,7 @@ function GoatBotMemberRow({
         <GoatBotSessionAvatar
           size="md"
           place="list"
+          surface="sidebar"
           waitingCount={count}
           row={status}
           countInLabel

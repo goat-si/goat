@@ -87,6 +87,7 @@ function GoatBotProfileSection() {
 /** Every GOAT Bot control in one place: where it runs, then the channels that reach it. */
 export function GoatBotSettingsPanel() {
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
+  const suggestionsHidden = useClientSettings((settings) => settings.goatBotSuggestedHidden);
   return (
     <SettingsPageContainer>
       <GoatBotStatusSettings />
@@ -102,6 +103,22 @@ export function GoatBotSettingsPanel() {
               checked={besideChat}
               onCheckedChange={(checked) =>
                 void persistClientSettingsPatch({ goatBotTaskThreadsBesideChat: Boolean(checked) })
+              }
+            />
+          }
+        />
+      </SettingsSection>
+      <SettingsSection id="goat-bot-suggestions" title="Home">
+        <SettingsRow
+          {...searchableSetting("goat-bot-suggestions")}
+          title="Suggestions on the bot's home"
+          description="Offer things GOAT can set up for the bot, such as reaching it from Slack. Applies to this device."
+          control={
+            <Switch
+              aria-label="Suggestions on the bot's home"
+              checked={!suggestionsHidden}
+              onCheckedChange={(checked) =>
+                void persistClientSettingsPatch({ goatBotSuggestedHidden: !checked })
               }
             />
           }

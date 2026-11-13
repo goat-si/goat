@@ -1,4 +1,4 @@
-import { BotProfile, EnvironmentId } from "@goat/contracts";
+import { BotProfile, EnvironmentAuthorizationError, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -12,6 +12,10 @@ const state = vi.hoisted(() => ({
   revision: 0 as number | null | "failed",
   supportsChanges: false,
   permitted: true,
+  phase: "connected",
+  members: false,
+  scopedFixture: false,
+  requestedBot: null as string | null,
 }));
 vi.mock("@effect/atom-react", async (original) => {
   const { AsyncResult } = await import("effect/reactivity");
@@ -31,7 +35,12 @@ vi.mock("@effect/atom-react", async (original) => {
 });
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
-    serverConfig: { environment: { capabilities: { goatBotTaskChanges: state.supportsChanges } } },
+    connection: { phase: state.phase },
+    serverConfig: {
+      environment: {
+        capabilities: { goatBotTaskChanges: state.supportsChanges, goatBotMembers: state.members },
+      },
+    },
   }),
 }));
 vi.mock("~/state/channels", () => ({
@@ -40,13 +49,21 @@ vi.mock("~/state/channels", () => ({
     taskChangesPermission: () => "permission",
     listTasks: (target: unknown) => {
       state.requested(target);
+      state.requestedBot = (target as { input: { botId?: string } }).input.botId ?? null;
       return "tasks";
     },
   },
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: state.data,
+    data: state.scopedFixture
+      ? {
+          tasks: [
+            task("main-task", "Main bot work"),
+            ...(state.requestedBot === "main" ? [] : [task("other-task", "Member bot work")]),
+          ],
+        }
+      : state.data,
     failure: state.failure,
     error: state.failure === null ? null : "failed",
     isPending: false,
@@ -68,6 +85,10 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
 });
 function setup(data: unknown, failure: unknown = null) {
   state.revision = 0;
+  state.phase = "connected";
+  state.members = false;
+  state.scopedFixture = false;
+  state.requestedBot = null;
   state.supportsChanges = false;
   state.data = data;
   state.failure = failure;
@@ -187,4 +208,39 @@ it("reads again on window focus once the server refuses or ends the change strea
   state.refresh.mockClear();
   window.dispatchEvent(new Event("focus"));
   await vi.waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
+});
+
+it("does not offer retry when the machine list is denied or offline", async () => {
+  setup(
+    null,
+    new EnvironmentAuthorizationError({ message: "no", requiredScope: "orchestration:read" }),
+  );
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  await expect
+    .element(screen.getByText("This device can't read GOAT Bot's machines."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+});
+
+it("does not offer retry while machines are offline", async () => {
+  setup(null, new Error("socket"));
+  state.phase = "offline";
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  await expect
+    .element(screen.getByText("GOAT Bot's machines are unavailable while the computer is offline."))
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
+});
+
+it("scopes the main bot to its own work on servers with members", async () => {
+  setup(null);
+  state.members = true;
+  state.scopedFixture = true;
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  await expect.element(screen.getByText(/Main bot work/)).toBeVisible();
+  expect(screen.getByText(/Member bot work/).query()).toBeNull();
+  expect(state.requested).toHaveBeenCalledWith({
+    environmentId,
+    input: expect.objectContaining({ botId: "main" }),
+  });
 });
