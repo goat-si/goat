@@ -7,6 +7,7 @@ import type {
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { launchWakeFoldTarget } from "./goat/launchWakeFolds.ts";
 
 import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
@@ -210,9 +211,10 @@ export const isNoticeMessage = (message: {
   isNoticeId(message.id);
 
 /**
- * The event that folds a queued notice into the notice turn already waiting at the end of the
- * queue, or undefined when it should queue its own turn. Only a notice behind a notice folds,
- * so a user message keeps its place, and a notice never waits behind one sent after it.
+ * The event that folds a queued notice into the notice turn at the end of the queue, or undefined
+ * when it should queue its own turn: a user message keeps its place, and a notice never waits
+ * behind one sent after it. A stamped launch wake instead joins its launching run's newest queued
+ * turn, never past a queued user message, so it may run ahead of earlier notices.
  */
 export function foldIntoQueuedNotice(
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
@@ -230,7 +232,10 @@ export function foldIntoQueuedNotice(
     !isNoticeMessage({ ...command, id: command.messageId })
   )
     return undefined;
-  const target = queuedRunsInDeliveryOrder(projection).at(-1);
+  const foldTarget = launchWakeFoldTarget(projection, command);
+  if (foldTarget === "own") return undefined;
+  const target =
+    foldTarget === "none" ? queuedRunsInDeliveryOrder(projection).at(-1) : foldTarget.run;
   const queued: OrchestrationV2ConversationMessage | undefined = projection.messages.find(
     (message) => message.id === target?.userMessageId,
   );

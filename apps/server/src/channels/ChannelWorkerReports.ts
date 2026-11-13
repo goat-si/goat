@@ -56,6 +56,8 @@ import {
   launchedResultOwed,
   type LaunchedEnd,
   readLaunchedEnds,
+  settledLaunchWakes,
+  type WakeReading,
 } from "./channelLaunchedResults.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliverNoticeAnswers, noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
@@ -226,6 +228,7 @@ const make = Effect.gen(function* () {
     ends: ReadonlyArray<LaunchedEnd | "unreadable">,
     runs: ReadonlyArray<OrchestrationV2Run>,
     allRuns: ReadonlyArray<OrchestrationV2Run>,
+    reading: WakeReading,
   ) =>
     Effect.gen(function* () {
       // Agents over MCP never answer, so they are not told.
@@ -236,7 +239,7 @@ const make = Effect.gen(function* () {
         end !== "unreadable" &&
         end.endIso !== null &&
         nowMs - Date.parse(end.endIso) > STALLED_AFTER_MS &&
-        launchedResultOwed(end, runs, allRuns)
+        launchedResultOwed(end, runs, allRuns, reading)
           ? [stallDelivery(task, "launch:" + end.childThreadId + ":" + end.runId, end.endIso)]
           : [],
       );
@@ -259,12 +262,13 @@ const make = Effect.gen(function* () {
     ends: ReadonlyArray<LaunchedEnd | "unreadable">,
     runs: ReadonlyArray<OrchestrationV2Run>,
     allRuns: ReadonlyArray<OrchestrationV2Run>,
+    reading: WakeReading,
   ) =>
     Effect.gen(function* () {
       if (records === "unknown") return "unknown" as const;
       const current = records.filter((record) => record.generation === generation);
       if (current.some((record) => CHILD_WORK_HOLD_STATES.has(record.state))) return true;
-      if (anyLaunchedResultOwed(ends, runs, allRuns)) return true;
+      if (anyLaunchedResultOwed(ends, runs, allRuns, reading)) return true;
       for (const record of current) {
         const childThreadId = localChildThreadId(record.destination);
         if (childThreadId === undefined || record.state !== "completed") continue;
@@ -433,6 +437,7 @@ const make = Effect.gen(function* () {
       const records = yield* threads
         .getThreadRecords(worker.threadId, [
           "runs",
+          "messages",
           "providerThreads",
           "runtimeRequests",
           "subagents",
@@ -458,6 +463,14 @@ const make = Effect.gen(function* () {
       // A background command's notice run answers the request on its own (channelNoticeAnswers),
       // so it is never the task's result; it still belongs to the task for everything else.
       const resultRuns = resultRunsOf(runs, scoped.value.notices);
+      // Wakes a pre-change digest of the session folded under another task's run, read once.
+      const { messages } = records.value;
+      const reading: WakeReading = session
+        ? {
+            messages,
+            settled: yield* settledLaunchWakes(sql, worker.threadId, ends, runs, allRuns, messages),
+          }
+        : { messages };
       // A request belongs to the run whose provider turn raised it; one whose turn cannot be
       // traced to this task's runs is left out rather than shown on the wrong task.
       const runtimeRequests = !session
@@ -649,6 +662,7 @@ const make = Effect.gen(function* () {
           ends,
           runs,
           allRuns,
+          reading,
         );
         if (childWorkActive === "unknown") return latest !== stored;
         const held =
@@ -662,7 +676,7 @@ const make = Effect.gen(function* () {
           if (latest.completionHold !== BACKGROUND_HOLD) {
             yield* ledger.setCompletionHold({ owner, taskId: task.taskId, hold: BACKGROUND_HOLD });
           }
-          yield* launchStallNotices(latest.task, ends, runs, allRuns);
+          yield* launchStallNotices(latest.task, ends, runs, allRuns, reading);
           return true;
         }
         // The answer is stripped against the session's committed first line, so it waits for it.

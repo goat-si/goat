@@ -174,6 +174,7 @@ export interface LaunchWatchServiceShape {
   readonly register: (
     input: LaunchWatchTarget & {
       readonly sourceEnvironmentId?: EnvironmentId | null;
+      readonly launcherRunId?: RunId;
       readonly projectId: ProjectId | null;
       readonly title: string | null;
       readonly runId: RunId | null;
@@ -672,12 +673,9 @@ export const make = Effect.gen(function* () {
     wakeThread(threads, launcherThreadId, message);
 
   /**
-   * Sends a wake. A refusal the orchestrator will repeat settles it, with a
-   * warning; any other failure (a storage failure, or a command id the
-   * orchestrator recorded as rejected) leaves it owed, with the attempt
-   * counted so the retry uses a fresh id. A settled wake that carries a
-   * report also goes to the completion webhook, which never holds it back. A
-   * launcherless watch has no wake: its report goes straight to the webhook.
+   * Sends a wake. A refusal the orchestrator will repeat settles it with a warning; any other
+   * failure leaves it owed, counting the attempt so the retry uses a fresh id. A settled wake's
+   * report also goes to the completion webhook; a launcherless watch's report goes only there.
    */
   const deliver = (
     watch: LaunchWatch,
@@ -1786,6 +1784,7 @@ export const make = Effect.gen(function* () {
           existing ??
           newLaunchWatch({
             launcherThreadId: input.launcherThreadId,
+            ...(input.launcherRunId === undefined ? {} : { launcherRunId: input.launcherRunId }),
             host,
             sourceEnvironmentId,
             threadId: input.threadId,

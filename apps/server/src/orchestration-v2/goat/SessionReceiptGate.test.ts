@@ -121,3 +121,27 @@ it.effect("a background command's notice run answers for the run that started th
     expect((yield* gate.inspect(Fixture.threadId, notice)).state).toBe("invalid");
   }).pipe(Effect.provide(Fixture.layer)),
 );
+it.effect(
+  "contract: a launch wake stamped with its launching run answers for that run without a launch record",
+  () =>
+    Effect.gen(function* () {
+      yield* Fixture.seed;
+      const sql = yield* SqlClient.SqlClient;
+      const gate = yield* SessionReceiptGate.SessionReceiptGate;
+      const wakeId =
+        "message:launch-watch:" +
+        [Fixture.threadId, "", "thread:unrecorded"].map(encodeURIComponent).join(":") +
+        ":run:run:unrecorded:1";
+      const wake = RunId.make("receipt-stamped-wake");
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      SELECT ${wake}, thread_id, 2, provider, 'running', requested_at,
+        json_set(payload_json, '$.id', ${wake}, '$.userMessageId', ${wakeId}, '$.restartContinuationOfRunId', NULL)
+      FROM orchestration_v2_projection_runs WHERE run_id = ${Fixture.runId}`;
+      yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES (${wakeId}, ${Fixture.threadId}, 'user', 0, '1970-01-01', '1970-01-01',
+        ${JSON.stringify({ notification: { source: { kind: "background_task" }, outcome: "completed", summary: "Thread finished", aboutRunId: Fixture.runId } })})`;
+      expect((yield* gate.inspect(Fixture.threadId, wake)).state).toBe("held");
+      yield* Fixture.settle;
+      expect((yield* gate.inspect(Fixture.threadId, wake)).state).toBe("settled");
+    }).pipe(Effect.provide(Fixture.layer)),
+);

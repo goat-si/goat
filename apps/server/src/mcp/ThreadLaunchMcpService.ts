@@ -717,6 +717,9 @@ const make = Effect.gen(function* () {
                           ? launchWatches
                               .register({
                                 launcherThreadId: caller.id,
+                                ...(scope.thread?.runId === undefined
+                                  ? {}
+                                  : { launcherRunId: scope.thread.runId }),
                                 host: null,
                                 threadId: thread.id,
                                 projectId: thread.projectId,

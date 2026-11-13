@@ -171,6 +171,27 @@ describe("a background command's answer goes to the request whose run started it
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect(
+    "regression: a launch wake stamped with its launching run is answered once, as the task's result, never also as a notice answer",
+    () =>
+      Effect.gen(function* () {
+        const notices = [
+          {
+            thread: session,
+            run: "launch-watch:" + encodeURIComponent(session) + "::child:run:run:child:1",
+            about: "run:logistics",
+            status: "completed",
+            answer: "The child thread finished its fix.",
+            completedAt: at,
+          },
+        ];
+        const sql = yield* seed(notices);
+        const { sent, deps } = world(notices, tasks);
+        assert.strictEqual(yield* deliverNoticeAnswers({ sql, ...deps }), 0);
+        assert.lengthOf(sent, 0);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("stays quiet for NO_REPLY, an empty answer, or a notice run that failed", () =>
     Effect.gen(function* () {
       const notices = [
@@ -349,6 +370,17 @@ describe("a notice answer's shape and place", () => {
       ["run:logistics"],
     );
     assert.lengthOf(runs, 2);
+  });
+
+  it("keeps stamped launch wakes as results while excluding command notices", () => {
+    const notices = noticeMessageIds([
+      {
+        id: "message:launch-watch:session::child:run:child",
+        notification: { aboutRunId: "run:parent" },
+      },
+      { id: "message:command", notification: { aboutRunId: "run:parent" } },
+    ]);
+    assert.deepStrictEqual([...notices], ["message:command"]);
   });
 });
 describe("which answer a notice run gives, and to whom", () => {
