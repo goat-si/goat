@@ -15,8 +15,10 @@ export const DISPOSABLE_CAP_DEFAULT = 10;
 export const DISPOSABLE_SWITCH_DAYS = 30;
 
 /** A machine name longer than Pen's longest node name never matches. */
-export const DISPOSABLE_NAME_MAX = 63;
+export const DISPOSABLE_NAME_MAX = 32;
 const NAME_CHAR = /^[a-z0-9_.-]$/u;
+/** Pen's node name (ident.ValidName): 1 to 32 of a-z 0-9 - _ ., starting with a letter or digit. */
+export const isPenNodeName = (name: string) => /^[a-z0-9][a-z0-9_.-]{0,31}$/u.test(name);
 
 type Piece = {
   readonly accepts: (char: string) => boolean;

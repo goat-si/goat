@@ -9,6 +9,7 @@ import {
   HubMachinesError,
   type HubMachinesErrorReason,
   type HubMachineStatus,
+  isPenNodeName,
   matchesDisposableNameRule,
   type ServerSettings,
 } from "@goat/contracts";
@@ -509,6 +510,11 @@ export const make = Effect.gen(function* () {
       return yield* fail(
         "invalid_request",
         "signPub and noisePub must be canonical 32-byte Pen keys.",
+      );
+    if (!isPenNodeName(input.name))
+      return yield* fail(
+        "invalid_request",
+        "Pen names are 1 to 32 of a-z, 0-9, - _ and ., starting with a letter or digit.",
       );
     const requestKey = digest(principal + "\n" + input.clientRequestId);
     const earlier = yield* byRequest(requestKey);

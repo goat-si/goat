@@ -79,13 +79,24 @@ it.effect(
   () =>
     world((pen) =>
       Effect.gen(function* () {
-        expect(yield* reason(attach(1, { name: "CC-1" }))).toBe("name_rule");
+        expect(yield* reason(attach(1, { name: "1cc" }))).toBe("name_rule");
         pen.members.add(key(2));
         expect(yield* reason(attach(2))).toBe("key_in_use");
         yield* attach(3);
         expect(yield* reason(attach(4, { signPub: key(3) }))).toBe("key_in_use");
       }),
     ),
+);
+
+it.effect("a name Pen would refuse is refused before anything is reserved or minted", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      yield* switchTo({ nameRule: "^[a-z0-9-]{1,60}$" });
+      expect(yield* reason(attach(1, { name: "c".repeat(33) }))).toBe("invalid_request");
+      expect(yield* rows).toEqual([]);
+      expect(pen.book.size).toBe(0);
+    }),
+  ),
 );
 
 it.effect("with a cap of one, two concurrent attaches admit exactly one", () =>
