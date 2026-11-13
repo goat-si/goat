@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
@@ -63,6 +64,8 @@ const EXAMPLES = [
 
 export interface GoatBotChatViewProps {
   readonly unreadSince?: string | null | undefined;
+  /** History state naming a Home to open, with its entry's key; each entry opens Home once. */
+  readonly openHome?: { readonly key: string; readonly entry: string } | null | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -138,9 +141,10 @@ export function GoatBotChatView({
   onUnarchive,
   onRestore,
   onCheckAgain,
+  openHome = null,
 }: GoatBotChatViewProps) {
-  const [panelOpen, setPanelOpen] = useState(false);
   const member = useGoatBotMember();
+  const [panelOpen, setPanelOpen] = useState(false);
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -168,6 +172,13 @@ export function GoatBotChatView({
     return field;
   };
   const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
+  // A bot or environment switch remounts Home, so its history walk starts over.
+  const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
+  const [openedHomeEntry, setOpenedHomeEntry] = useState<string | null>(null);
+  if (bot && openHome?.key === homeKey && openHome.entry !== openedHomeEntry) {
+    setOpenedHomeEntry(openHome.entry);
+    setPanelOpen(true);
+  }
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
@@ -475,6 +486,7 @@ export function GoatBotChatView({
       {bot && panelOpen && !narrow && (
         <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
+            key={homeKey}
             environmentId={bot.environmentId}
             threadId={bot.threadId}
             onDraft={onDraft}
@@ -502,6 +514,7 @@ export function GoatBotChatView({
           >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
+              key={homeKey}
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}

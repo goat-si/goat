@@ -46,6 +46,17 @@ describe("acknowledgeTaskRead", () => {
     expect(update).toHaveBeenCalledTimes(2);
   });
 
+  it("compares instants rather than the lexical order of timezone offsets", async () => {
+    const update = setup();
+    expect(await ack(update, "equal", "2026-11-13T01:00:00Z")).toBe("accepted");
+    expect(await ack(update, "equal", "2026-11-13T10:00:00+09:00")).toBe("skipped");
+    expect(await ack(update, "older", "2026-11-13T05:00:00Z")).toBe("accepted");
+    expect(await ack(update, "older", "2026-11-13T09:00:00+09:00")).toBe("skipped");
+    expect(await ack(update, "newer", "2026-11-13T13:00:00+09:00")).toBe("accepted");
+    expect(await ack(update, "newer", "2026-11-13T05:00:00Z")).toBe("accepted");
+    expect(update).toHaveBeenCalledTimes(4);
+  });
+
   it("frees the request after a failure without retrying, so a later call sends again", async () => {
     const update = setup();
     update.mockResolvedValueOnce({ _tag: "Failure" });
@@ -75,13 +86,14 @@ describe("acknowledgeTaskRead", () => {
     expect(update).toHaveBeenCalledTimes(2);
   });
 
-  it("forgets the oldest task once more than the limit are remembered", async () => {
+  it("retains exactly 500 acknowledged tasks and evicts the first of 501", async () => {
     const update = setup();
-    for (let index = 0; index <= TASK_READ_ACKNOWLEDGED_LIMIT; index += 1)
-      await ack(update, `task-${index}`);
-    expect(update).toHaveBeenCalledTimes(TASK_READ_ACKNOWLEDGED_LIMIT + 1);
-    // task-0 was dropped, so it is sent again (dropping task-1 in turn); task-2 is still remembered.
-    expect(await ack(update, "task-0")).toBe("accepted");
-    expect(await ack(update, "task-2")).toBe("skipped");
+    expect(TASK_READ_ACKNOWLEDGED_LIMIT).toBe(500);
+    for (let index = 1; index <= 501; index += 1)
+      expect(await ack(update, `task-${index}`)).toBe("accepted");
+    for (let index = 2; index <= 501; index += 1)
+      expect(await ack(update, `task-${index}`)).toBe("skipped");
+    expect(await ack(update, "task-1")).toBe("accepted");
+    expect(update).toHaveBeenCalledTimes(502);
   });
 });

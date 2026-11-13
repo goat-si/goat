@@ -14,8 +14,8 @@ import type {
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
-import { type ReactNode, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { holdNavigation } from "~/lib/navigationHolds";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -34,6 +34,16 @@ import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
+export type HomeHistory = {
+  readonly supported: boolean;
+  readonly hasMore: boolean;
+  readonly loading: boolean;
+  readonly failed: boolean;
+  readonly incomplete: boolean;
+  readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  readonly currentTaskIds: ReadonlySet<ChannelTaskId>;
+  readonly loadMore: () => void;
+};
 
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
 
@@ -66,6 +76,7 @@ export function GoatBotHomeWork({
   focusTaskId = null,
   focusRef,
   notice = null,
+  history,
 }: {
   readonly environmentId: EnvironmentId;
   /** Kept for the history walk, which will read this bot's older work for these rows. */
@@ -93,12 +104,32 @@ export function GoatBotHomeWork({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
+  /** The bot's older work; rows missing from currentTaskIds came from this walk. */
+  readonly history?: HomeHistory | undefined;
 }) {
+  const historyAvailable = history?.hasMore === true;
   const work = botHomeWork(rows, [], environmentId, remoteWork);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
   const finished = showAll ? work.finished : work.finished.slice(0, COLLAPSED_FINISHED);
+  const showMoreRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<ChannelTaskId, HTMLElement>());
+  const pendingFocus = useRef<Set<ChannelTaskId> | null>(null);
+  const showMore = historyAvailable || hidden > 0;
+  // oxlint-disable-next-line goat/react-effect-budget -- Preserve focus when history removes its continuation button.
+  useLayoutEffect(() => {
+    if (showMore || pendingFocus.current === null) return;
+    if (document.activeElement === document.body) {
+      const added = [...work.running, ...work.waiting, ...finished].find(
+        (task) => !pendingFocus.current?.has(task.row.task.taskId),
+      );
+      const heading = containerRef.current?.closest("section")?.querySelector<HTMLElement>("h3");
+      (added ? rowRefs.current.get(added.row.task.taskId) : heading)?.focus();
+    }
+    pendingFocus.current = null;
+  });
   const row = (task: BotWorkTask, mark: Mark) => (
     <WorkRow
       key={task.row.task.taskId}
@@ -109,12 +140,18 @@ export function GoatBotHomeWork({
       environmentId={environmentId}
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
+      older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
       peekable={peekable}
-      focusRef={task.row.task.taskId === focusTaskId ? focusRef : undefined}
+      focusRef={(element) => {
+        if (element) rowRefs.current.set(task.row.task.taskId, element);
+        else rowRefs.current.delete(task.row.task.taskId);
+        if (task.row.task.taskId === focusTaskId) focusRef?.(element);
+      }}
+      launchesTruncated={history?.launchesTruncated.has(task.row.task.taskId) === true}
     />
   );
   return (
-    <div className="flex flex-col">
+    <div ref={containerRef} tabIndex={-1} aria-label="Work" className="flex flex-col">
       {notice}
       {offline ? (
         <p className="px-3 py-3">
@@ -142,16 +179,48 @@ export function GoatBotHomeWork({
         <div className="space-y-0.5 px-3 py-3">
           <p className="font-medium text-foreground">No recent tasks</p>
           <p className="text-muted-foreground">
-            Ask {botName} in chat to start work. Unpinned tasks that finished more than three days
-            ago aren't listed here.
+            Ask {botName} in chat to start work.
+            {!history?.supported &&
+              " Unpinned tasks that finished more than three days ago aren't listed here."}
           </p>
         </div>
       )}
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {hidden > 0 && (
-        <GoatBotShowMoreRow expanded={showAll} onToggle={() => onShowAllChange(!showAll)} />
+      {/* One region per notice, mounted with Home's history, so one never repeats the other. */}
+      {history && (
+        <div role="status" className="px-3 text-xs text-muted-foreground">
+          {history.incomplete && <p className="py-2">Older work may be missing</p>}
+        </div>
+      )}
+      {history && (
+        <div role="status" className="px-3 text-xs text-muted-foreground">
+          {history.failed && <p className="py-2">Couldn't load older work.</p>}
+        </div>
+      )}
+      {showMore && (
+        <GoatBotShowMoreRow
+          buttonRef={showMoreRef}
+          onBlur={() => {
+            pendingFocus.current = null;
+          }}
+          expanded={showAll}
+          label={historyAvailable ? "Show more" : undefined}
+          onToggle={() => {
+            if (history?.loading) return;
+            if (historyAvailable) {
+              if (document.activeElement === showMoreRef.current)
+                pendingFocus.current = new Set(
+                  [...work.running, ...work.waiting, ...finished].map(
+                    (task) => task.row.task.taskId,
+                  ),
+                );
+              onShowAllChange(true);
+              history?.loadMore();
+            } else onShowAllChange(!showAll);
+          }}
+        />
       )}
     </div>
   );
@@ -175,6 +244,8 @@ function WorkRow({
   onRefresh,
   peekable,
   focusRef,
+  launchesTruncated,
+  older,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
@@ -185,10 +256,13 @@ function WorkRow({
   readonly onRefresh: () => void;
   readonly peekable: boolean;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
+  readonly launchesTruncated: boolean;
+  readonly older: boolean;
 }) {
   const row = task.row;
   const title = row.task.title;
   const member = useGoatBotMember();
+  const navigate = useNavigate();
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const [expanded, setExpanded] = useState(false);
@@ -199,16 +273,23 @@ function WorkRow({
     const release = holdNavigation();
     const action = await api.contextMenu
       .show(
-        [
-          { id: "work", label: expanded ? "Hide work" : "Show work" },
-          ...(canUpdate
-            ? [
-                { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
-                { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
-                { id: "read", label: "Mark read", disabled: !row.unread },
-              ]
-            : []),
-        ],
+        // Older work offers Pin; once pinned it joins the current list, whose row has the rest.
+        older
+          ? [
+              { id: "work", label: expanded ? "Hide work" : "Show work" },
+              { id: "open", label: "Open" },
+              { id: "pin", label: "Pin", disabled: !canUpdate },
+            ]
+          : [
+              { id: "work", label: expanded ? "Hide work" : "Show work" },
+              ...(canUpdate
+                ? [
+                    { id: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
+                    { id: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
+                    { id: "read", label: "Mark read", disabled: !row.unread },
+                  ]
+                : []),
+            ],
         position,
       )
       .catch(() => null)
@@ -218,15 +299,26 @@ function WorkRow({
       setExpanded((value) => !value);
       return;
     }
+    if (action === "open") {
+      if (peekable) onOpenTask(row);
+      else
+        void navigate({
+          to: "/bot",
+          search: { task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) },
+        });
+      return;
+    }
     const input: ChannelUpdateTaskViewInput =
       action === "pin"
-        ? { taskId: row.task.taskId, pinned: row.view.pinnedAt === null }
+        ? { taskId: row.task.taskId, pinned: older || row.view.pinnedAt === null }
         : action === "done"
           ? { taskId: row.task.taskId, done: row.view.doneAt === null }
           : action === "read"
             ? { taskId: row.task.taskId, readThrough: row.lastActivityAt }
             : { taskId: row.task.taskId };
     const result = await update({ environmentId, input });
+    // A pinned older task joins the current list after this refresh, unless the bot has 100
+    // newer listed tasks (the server's first page is capped at 100 rows).
     if (result._tag === "Success") onRefresh();
   }
   return (
@@ -247,7 +339,8 @@ function WorkRow({
         ) : (
           <Link
             to="/bot"
-            search={{ task: row.task.taskId, ...goatBotSearch(member) }}
+            ref={focusRef}
+            search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             <WorkRowText title={title} status={status.label} unread={row.unread} />
@@ -269,6 +362,11 @@ function WorkRow({
           <EllipsisIcon />
         </Button>
       </div>
+      {launchesTruncated && (
+        <p className="px-9 pb-2 text-xs text-muted-foreground">
+          Some threads are listed in Threads.
+        </p>
+      )}
       {expanded && (
         <div className="pb-2 pl-9">
           <GoatBotWorkDetails

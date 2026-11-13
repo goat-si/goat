@@ -6,6 +6,7 @@ import { Atom } from "effect/reactivity";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
+import { Button } from "../ui/button";
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
 
@@ -77,7 +78,14 @@ export function GoatBotWorkDetails({
         <GoatBotRemoteWork key={item.childWorkId} item={item} />
       ))}
       {task.truncated && <span>More work is available.</span>}
-      {query.error && <span>Couldn't load subagents.</span>}
+      {query.error && (
+        <>
+          <span>Couldn't load subagents.</span>
+          <Button variant="outline" size="xs" onClick={query.refresh}>
+            Try again
+          </Button>
+        </>
+      )}
     </div>
   );
 }

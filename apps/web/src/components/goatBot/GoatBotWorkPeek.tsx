@@ -39,7 +39,7 @@ export function GoatBotWorkPeek({
   /** The activity this task has not been read up to; null when nothing is unread. */
   readonly unreadThrough?: string | null | undefined;
   /** Called once the acknowledgment lands, so the list stops showing its mark. */
-  readonly onAcknowledged?: (() => void) | undefined;
+  readonly onAcknowledged?: ((taskId: ChannelTaskId, readThrough: string) => void) | undefined;
   readonly onRetry?: ((clientKey: string) => void) | undefined;
   readonly onBack: () => void;
 }) {
@@ -95,7 +95,9 @@ export function GoatBotWorkPeek({
       <div className="p-3">
         <Button
           className="w-full"
-          render={<Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />}
+          render={
+            <Link to="/bot" search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }} />
+          }
         >
           Go to thread
         </Button>

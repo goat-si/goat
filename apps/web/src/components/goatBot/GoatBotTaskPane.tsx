@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   canSendToGoatBot,
@@ -23,6 +24,7 @@ import { GoatBotStepsProvider, GoatBotStepsReader } from "./GoatBotStepsProvider
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotTaskRetry } from "./GoatBotTaskRetry";
 import { memberThreadsKey, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
@@ -32,12 +34,14 @@ export function GoatBotTaskPane({
   environmentId,
   session,
   taskId,
+  taskTitle,
   onClose,
   narrow,
 }: {
   readonly environmentId: EnvironmentId;
   readonly session: ReturnType<typeof useGoatBotSession>;
   readonly taskId: ChannelTaskId;
+  readonly taskTitle?: string | undefined;
   readonly onClose: () => void;
   readonly narrow: boolean;
 }) {
@@ -53,13 +57,14 @@ export function GoatBotTaskPane({
     focusTaskHeading(taskFocus, taskId, element),
   );
   const member = useGoatBotMember();
+  const navigate = useNavigate();
   const botName = useGoatBotName();
   const { rows, remoteWork, refresh } = useBotThreads(environmentId, memberThreadsKey(member));
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
-  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: refresh });
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: () => refresh() });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);
@@ -107,9 +112,11 @@ export function GoatBotTaskPane({
                 />
               }
             >
-              {task?.kind === "task" ? task.task.title : "Task thread"}
+              {task?.kind === "task" ? task.task.title : (taskTitle ?? "Task thread")}
             </TooltipTrigger>
-            <TooltipPopup>{task?.kind === "task" ? task.task.title : "Task thread"}</TooltipPopup>
+            <TooltipPopup>
+              {task?.kind === "task" ? task.task.title : (taskTitle ?? "Task thread")}
+            </TooltipPopup>
           </Tooltip>
           {task?.kind === "task" && (
             <p className="shrink-0 text-xs text-muted-foreground">
@@ -158,14 +165,37 @@ export function GoatBotTaskPane({
           </>
         )}
       </header>
-      <div className="px-3">
-        <GoatBotWorkDetails
-          environmentId={environmentId}
-          taskId={taskId}
-          rows={rows}
-          remoteWork={remoteWork}
-        />
-      </div>
+      {task === undefined && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pt-3 text-sm text-muted-foreground">
+          <p>Status and actions for older work are in {botName}'s Home.</p>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              const bot = session.availability.kind === "ready" ? session.availability.bot : null;
+              if (bot == null) return onClose();
+              // Straight to the bot's chat: /bot would mount a chat that redirects away.
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId: bot.environmentId, threadId: bot.threadId },
+                state: { goatBotOpenHome: goatBotHomeKey(environmentId, member?.botId ?? null) },
+              });
+            }}
+          >
+            Open Home
+          </Button>
+        </div>
+      )}
+      {task !== undefined && (
+        <div className="px-3">
+          <GoatBotWorkDetails
+            environmentId={environmentId}
+            taskId={taskId}
+            rows={rows}
+            remoteWork={remoteWork}
+          />
+        </div>
+      )}
       <GoatBotStepsProvider
         visibleTurnItems={session.visibleTurnItems}
         environmentId={environmentId}

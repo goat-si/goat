@@ -287,6 +287,19 @@ it("sends a failed acknowledgement once more when update permission comes back",
   expect(sentFor("task-permit")).toBe(2);
 });
 
+it("reports exactly the activity it acknowledged, even when newer activity arrived meanwhile", async () => {
+  setup();
+  const land = holdNextUpdate();
+  actions.update.mockResolvedValueOnce({ _tag: "Failure" });
+  await using screen = await render(ackPeek("task-a", "2026-11-09T00:00:00.000Z"));
+  await vi.waitFor(() => expect(sentFor("task-a")).toBe(1));
+  await screen.rerender(ackPeek("task-a", "2026-11-10T00:00:00.000Z"));
+  await vi.waitFor(() => expect(sentFor("task-a")).toBe(2));
+  land({ _tag: "Success" });
+  await vi.waitFor(() => expect(actions.refresh).toHaveBeenCalledOnce());
+  expect(actions.refresh).toHaveBeenCalledWith("task-a", "2026-11-09T00:00:00.000Z");
+});
+
 it("sends A once when the peek goes from A to B and back while A is still in flight", async () => {
   setup();
   let land = (_result: { _tag: string }) => {};

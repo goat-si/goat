@@ -13,6 +13,9 @@ import { render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({
   canEdit: false,
+  historySupported: false,
+  revision: 0,
+  readHistory: vi.fn(),
   tasks: [] as unknown[],
   routinesError: null as string | null,
   routinesLoaded: true,
@@ -27,8 +30,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
   useEnvironment: () => ({
-    connection: { phase: "disconnected" },
-    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+    connection: { phase: mocks.historySupported ? "connected" : "disconnected" },
+    serverConfig: {
+      environment: {
+        capabilities: { goatBotProfileEdit: true, goatBotTaskThreadsPaged: mocks.historySupported },
+      },
+    },
   }),
 }));
 vi.mock("./GoatBotEditBotDialog", () => ({
@@ -39,6 +46,7 @@ vi.mock("./useBotRoster", () => ({
   useBotThreads: () => ({
     rows: mocks.rows,
     remoteWork: [],
+    revision: mocks.revision,
     supported: true,
     loaded: mocks.threads.loaded,
     failed: mocks.threads.failed,
@@ -94,6 +102,7 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
+    listBotThreadsPage: { execute: mocks.readHistory },
     updateBot: { permissionAtom: () => Atom.make(mocks.canEdit) },
     listBotNotes: () => null,
     listBotArtifacts: () => null,
@@ -109,11 +118,16 @@ vi.mock("~/state/channels", () => ({
   },
 }));
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
+import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { GoatBotMainProfileContext, GoatBotMemberContext } from "./goatBotMemberContext";
 import { navigationBlocked } from "~/lib/navigationHolds";
 
 function setup(tasks: unknown[], turnsWaiting: string[] = [], rows: unknown[] = []) {
+  resetTaskReadAcknowledgementsForTests();
   mocks.canEdit = false;
+  mocks.historySupported = false;
+  mocks.revision = 0;
+  mocks.readHistory.mockReset();
   mocks.tasks = tasks;
   mocks.turnsWaiting = turnsWaiting;
   mocks.rows = rows;
@@ -770,4 +784,188 @@ it("offers Back to chat on the sheet's Home and inside a peek", async () => {
   await userEvent.click(screen.getByRole("button", { name: /^Stop the port/ }));
   await userEvent.click(screen.getByRole("button", { name: "Back to chat" }));
   expect(onShowChat).toHaveBeenCalledOnce();
+});
+
+function historyPanel() {
+  return (
+    <GoatBotWorkPanel
+      environmentId={EnvironmentId.make("env")}
+      threadId={ThreadId.make("bot")}
+      onOpenFile={() => {}}
+      peekRows={() => []}
+    />
+  );
+}
+
+function historyPage(rows: unknown[], history?: Record<string, unknown>) {
+  return {
+    _tag: "Success",
+    value: { rows, mainMessageCount: 0, ...(history === undefined ? {} : { history }) },
+  };
+}
+
+function showMore(screen: Awaited<ReturnType<typeof render>>) {
+  return screen.getByRole("button", { name: "Show more", exact: true });
+}
+
+it("walks through an empty history page, and stops only without a cursor", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory
+    .mockResolvedValueOnce(historyPage([], { nextCursor: "after-empty" }))
+    .mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  expect(mocks.readHistory).toHaveBeenCalledTimes(2);
+  expect(mocks.readHistory.mock.calls[1]?.[0].input.history.cursor).toBe("after-empty");
+  await expect.element(showMore(screen)).not.toBeInTheDocument();
+});
+
+it("a bot with no recent tasks still says so while older work can be shown", async () => {
+  setup([]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older task")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).not.toBeInTheDocument();
+});
+
+it("bounds empty history requests per press and lets the person continue", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  for (let i = 1; i <= 4; i++)
+    mocks.readHistory.mockResolvedValueOnce(historyPage([], { nextCursor: `cursor-${i}` }));
+  mocks.readHistory.mockResolvedValueOnce(historyPage([], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(4);
+  await userEvent.click(showMore(screen));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(5);
+  expect(mocks.readHistory.mock.calls[4]?.[0].input.history.cursor).toBe("cursor-4");
+});
+
+it("falls back to current work when the server omits the history marker", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValue(historyPage([], undefined));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  expect(mocks.readHistory).toHaveBeenCalledTimes(1);
+  await expect.element(screen.getByText("Stop the port 3774 server")).toBeVisible();
+  expect(screen.container.textContent?.toLowerCase()).not.toContain("all work loaded");
+  await expect.element(showMore(screen)).not.toBeInTheDocument();
+});
+
+it.each(["partial", "endedEarly"])("warns when history has %s", async (flag) => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValue(historyPage([], { [flag]: true }));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  expect(mocks.readHistory).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a paged-in task in the peek and exposes its work threads", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+    worker: { environmentId: "env", threadId: "channel-worker:older" },
+  };
+  mocks.readHistory.mockResolvedValue(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older task" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Show work" }));
+  await expect.element(screen.getByRole("link", { name: "Open work thread" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: /^Older task/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Go to thread" }).element().getAttribute("href"),
+  ).toContain("taskTitle=Older");
+});
+
+it("keeps a paged-in peek open when the current list is refreshed", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValue(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await userEvent.click(screen.getByRole("button", { name: /^Older task/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  mocks.revision += 1;
+  await screen.rerender(historyPanel());
+  expect(screen.container.textContent).toContain("Older task");
+  expect(screen.container.textContent).toContain("Go to thread");
+  await userEvent.click(screen.getByRole("button", { name: "Back to Home from Older task" }));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
+});
+
+it("clears a paged task's unread mark after acknowledging its peek", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  const older = {
+    ...runningTask,
+    unread: true,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+    view: { ...runningTask.view, taskId: "older" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await userEvent.click(screen.getByRole("button", { name: /^Older task.*Unread/ }));
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Older task" }))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Back to Home from Older task" }));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Older task.*Unread/ }).query()).toBeNull();
+});
+
+it("reports expansion while walking history and preserves focus when the last button disappears", async () => {
+  setup([], [], [runningTask]);
+  mocks.historySupported = true;
+  for (let i = 1; i <= 4; i++)
+    mocks.readHistory.mockResolvedValueOnce(historyPage([], { nextCursor: `c${i}` }));
+  const older = {
+    ...runningTask,
+    task: { ...runningTask.task, taskId: "older", title: "Older task" },
+  };
+  mocks.readHistory.mockResolvedValueOnce(historyPage([older], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(showMore(screen)).toHaveAttribute("aria-expanded", "true");
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("button", { name: /^Older task/ })).toHaveFocus();
+});
+
+it("returns focus to the Work heading when history ends without adding a row", async () => {
+  setup([]);
+  mocks.historySupported = true;
+  mocks.readHistory.mockResolvedValueOnce(historyPage([], {}));
+  await using screen = await render(historyPanel());
+  await userEvent.click(showMore(screen));
+  await expect.element(screen.getByRole("heading", { name: "Work" })).toHaveFocus();
 });
