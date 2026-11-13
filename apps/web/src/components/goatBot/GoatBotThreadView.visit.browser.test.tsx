@@ -53,7 +53,11 @@ vi.mock("./useGoatBotSession", () => ({
     rows: [],
   }),
 }));
-vi.mock("./GoatBotChatView", () => ({ GoatBotChatView: () => <div>GOAT Bot</div> }));
+vi.mock("./GoatBotChatView", () => ({
+  GoatBotChatView: (props: { openHome?: { key: string; entry: string } | null }) => (
+    <div>GOAT Bot{props.openHome ? ` home:${props.openHome.key}:${props.openHome.entry}` : ""}</div>
+  ),
+}));
 vi.mock("./GoatBotTimeline", async () => {
   const { createContext } = await import("react");
   return { GoatBotActivityContext: createContext(null) };
@@ -98,4 +102,28 @@ it("marks the bot thread visited once using the shell update watermark", async (
     input: { threadId: ThreadId.make("bot"), visitedAt: "2026-10-12T12:03:00.000Z", opened: true },
   });
   expect(state.markThreadVisited).not.toHaveBeenCalled();
+});
+
+it("takes an Open Home request once and removes it from the history entry", async () => {
+  state.visit.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <GoatBotThreadView
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+      />
+    </AppAtomRegistryProvider>,
+  );
+  const router = screen.router;
+  if (!router) throw new Error("missing router");
+  await router.navigate({ to: "/", state: { goatBotOpenHome: "home-key" } });
+  await expect.element(screen.getByText(/GOAT Bot home:home-key:/)).toBeInTheDocument();
+  const shown = screen.container.textContent;
+  await vi.waitFor(() => expect(router.state.location.state.goatBotOpenHome).toBeUndefined());
+  // Away and back to the same entry: nothing is left to act on, so no new request appears.
+  await router.navigate({ to: "/new" });
+  router.history.back();
+  await vi.waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  expect(router.state.location.state.goatBotOpenHome).toBeUndefined();
+  expect(screen.container.textContent).toBe(shown);
 });

@@ -223,8 +223,8 @@ export function GoatBotWorkPanel({
           rows={peekRows(peek.taskId)}
           environmentId={environmentId}
           unreadThrough={peeked?.unread === true ? peeked.lastActivityAt : null}
-          onAcknowledged={() => {
-            if (peeked?.unread) history.markRead(peek.taskId, peeked.lastActivityAt);
+          onAcknowledged={(taskId, through) => {
+            history.markRead(taskId, through);
             refresh();
           }}
           onRetry={onRetryInput}

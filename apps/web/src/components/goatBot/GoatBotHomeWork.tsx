@@ -188,11 +188,12 @@ export function GoatBotHomeWork({
       {work.running.map((task) => row(task, "running"))}
       {work.waiting.map((task) => row(task, "waiting"))}
       {finished.map((task) => row(task, "finished"))}
-      {history?.incomplete && (
-        <p className="px-3 py-2 text-xs text-muted-foreground">Older work may be missing</p>
-      )}
-      {history?.failed && (
-        <p className="px-3 py-2 text-xs text-muted-foreground">Couldn't load older work.</p>
+      {/* Mounted with Home's history, so a new notice is announced once. */}
+      {history && (
+        <div role="status" className="px-3 text-xs text-muted-foreground">
+          {history.incomplete && <p className="py-2">Older work may be missing</p>}
+          {history.failed && <p className="py-2">Couldn't load older work.</p>}
+        </div>
       )}
       {showMore && (
         <GoatBotShowMoreRow

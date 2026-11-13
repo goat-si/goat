@@ -37,6 +37,36 @@ const EMPTY_WALK = {
   failed: false,
 };
 const time = (value: string | null) => (value === null ? NaN : Date.parse(value));
+const taskRows = (rows: readonly BotThreadRow[]) =>
+  new Map(rows.flatMap((row) => (row.kind === "task" ? [[row.task.taskId, row] as const] : [])));
+
+// The server's current list is the authority for any task it holds: its row replaces the walk's
+// entry, so the entry keeps the last reported state after the task leaves that list. The pin is
+// not carried: the server lists every pinned task, so one that left the list was unpinned, apart
+// from pinned tasks its 100-row cut still drops.
+function writeThrough(walk: typeof EMPTY_WALK, current: ChannelListBotThreadsResult) {
+  const listed = taskRows(current.rows);
+  if (!walk.entries.some((entry) => listed.has(entry.task.task.taskId))) return walk;
+  const entry = (row: TaskRow): Entry => {
+    const task = { ...row, view: { ...row.view, pinnedAt: null } };
+    return {
+      task,
+      rows: [
+        task,
+        ...current.rows.filter((row) => row.kind === "coding" && row.taskId === task.task.taskId),
+      ],
+      remoteWork: (current.remoteWork ?? []).filter((item) => item.taskId === task.task.taskId),
+      truncated: false,
+    };
+  };
+  return {
+    ...walk,
+    entries: walk.entries.map((item) => {
+      const row = listed.get(item.task.task.taskId);
+      return row ? { ...entry(row), truncated: item.truncated } : item;
+    }),
+  };
+}
 
 /**
  * A bot's older work, read page by page while its Home panel is open. The panel is keyed by
@@ -53,6 +83,12 @@ export function useBotWorkHistory(
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
   const [walk, setWalk] = useState(EMPTY_WALK);
   const busy = useRef(false);
+  const [seenRows, setSeenRows] = useState(current.rows);
+  if (seenRows !== current.rows) {
+    setSeenRows(current.rows);
+    setWalk((state) => writeThrough(state, current));
+  }
+  const listed = taskRows(current.rows);
   const supported = botThreadsHistoryInput(capabilities, botId) !== null && !walk.unsupported;
   const history: ChannelListBotThreadsResult = {
     rows: walk.entries.flatMap((entry) => entry.rows),
@@ -110,20 +146,25 @@ export function useBotWorkHistory(
         if (!result.supported) return { ...state, unsupported: true, loading: false };
         const entries = [...state.entries];
         const ids = new Set(entries.map((entry) => entry.task.task.taskId));
+        // Only older tasks count toward the limit; current ones stay so they can leave that list.
+        let older = entries.filter((entry) => !listed.has(entry.task.task.taskId)).length;
         let { partial, endedEarly, cursor, capped } = state;
         for (const { result: page } of result.pages) {
           for (const row of page.rows) {
             if (row.kind !== "task" || ids.has(row.task.taskId)) continue;
-            if (entries.length >= HISTORY_LIMIT) {
+            const now = listed.get(row.task.taskId);
+            if (now === undefined && older >= HISTORY_LIMIT) {
               capped = true;
               continue;
             }
             const id = row.task.taskId;
             ids.add(id);
+            if (now === undefined) older += 1;
+            const task = now ? { ...now, view: { ...now.view, pinnedAt: null } } : row;
             entries.push({
-              task: row,
+              task,
               rows: [
-                row,
+                task,
                 ...page.rows.filter((item) => item.kind === "coding" && item.taskId === id),
               ],
               remoteWork: (page.remoteWork ?? []).filter((item) => item.taskId === id),
@@ -134,7 +175,7 @@ export function useBotWorkHistory(
           endedEarly = endedEarly || page.history?.endedEarly === true;
           cursor = page.history?.nextCursor;
         }
-        if (entries.length >= HISTORY_LIMIT && cursor !== undefined) capped = true;
+        if (older >= HISTORY_LIMIT && cursor !== undefined) capped = true;
         return {
           ...state,
           entries,
@@ -155,9 +196,7 @@ export function useBotWorkHistory(
   return {
     supported,
     markRead,
-    currentTaskIds: new Set(
-      current.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
-    ),
+    currentTaskIds: new Set(listed.keys()),
     rows: useMerged ? merged.rows : current.rows,
     remoteWork: useMerged ? merged.remoteWork : (current.remoteWork ?? []),
     launchesTruncated: useMerged ? merged.launchesTruncated : new Set<ChannelTaskId>(),

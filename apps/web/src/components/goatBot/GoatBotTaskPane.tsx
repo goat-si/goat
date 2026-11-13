@@ -64,7 +64,7 @@ export function GoatBotTaskPane({
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const readThrough = task?.kind === "task" && task.unread ? task.lastActivityAt : null;
-  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: refresh });
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged: () => refresh() });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);

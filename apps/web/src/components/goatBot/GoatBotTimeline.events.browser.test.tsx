@@ -49,6 +49,19 @@ it("turns the routine a line names into a chip that opens that routine by id", a
   expect(open).toHaveBeenCalledOnce();
 });
 
+it("a task chip opens the task with its title, so an older task's pane can name it", async () => {
+  const named: GoatBotRow = {
+    ...event,
+    text: "Task Draft notes finished",
+    subject: { kind: "task", id: "task-1", name: "Draft notes" },
+  };
+  await using screen = await render(
+    <GoatBotTimeline environmentId={EnvironmentId.make("env")} rows={[named]} onRetry={() => {}} />,
+  );
+  const link = screen.getByRole("link", { name: "Open task Draft notes" });
+  await expect.element(link).toHaveAttribute("href", expect.stringContaining("taskTitle=Draft"));
+});
+
 it("a routine named like the line's first word gets its chip on the name, not the first word", async () => {
   const named: GoatBotRow = {
     ...event,

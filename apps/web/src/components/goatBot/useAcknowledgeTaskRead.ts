@@ -23,7 +23,8 @@ export function useAcknowledgeTaskRead({
   readonly taskId: ChannelTaskId;
   /** The activity the task is unread through; null when nothing is unread. */
   readonly readThrough: string | null;
-  readonly onAcknowledged?: (() => void) | undefined;
+  /** Called with exactly the task and read-through the accepted request carried. */
+  readonly onAcknowledged?: ((taskId: ChannelTaskId, readThrough: string) => void) | undefined;
 }) {
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
@@ -35,7 +36,7 @@ export function useAcknowledgeTaskRead({
         readThrough: through,
         update,
       }).then((outcome) => {
-        if (outcome === "accepted") onAcknowledged?.();
+        if (outcome === "accepted") onAcknowledged?.(task, through);
       });
     },
   );

@@ -302,10 +302,26 @@ it("offers history continuation and explains incomplete older work and truncated
       }),
     }),
   );
-  await expect.element(screen.getByText("Older work may be missing")).toBeVisible();
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "Older work may be missing" }))
+    .toBeVisible();
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a failed older-work read is announced in the status region", async () => {
+  const rows = setup([]);
+  await using screen = await render(
+    view(rows, { history: history({ supported: true, hasMore: true }) }),
+  );
+  await expect.element(screen.getByRole("status")).toBeInTheDocument();
+  await screen.rerender(
+    view(rows, { history: history({ supported: true, hasMore: true, failed: true }) }),
+  );
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "Couldn't load older work." }))
+    .toBeInTheDocument();
 });
 
 it("an older row's menu offers Show work, Open and Pin, and Pin only refreshes the list", async () => {
