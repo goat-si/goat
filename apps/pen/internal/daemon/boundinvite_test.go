@@ -569,10 +569,10 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	oldLink, oldExpiry := serveJoinLink, inviteExpiry
 	serveJoinLink = func(l mesh.Link) mesh.Link { return holdRecords{l, entered, release} }
-	// Each timer is its own; the first is the invite's expiry, buffered so firing it never waits for the caller.
+	// Each timer is its own: the first is the invite's expiry, the second the wait for the join once it is used.
 	timers := make(chan chan time.Time, 2)
 	inviteExpiry = func(time.Duration) (<-chan time.Time, func() bool) {
-		ch := make(chan time.Time, 1)
+		ch := make(chan time.Time)
 		timers <- ch
 		return ch, func() bool { return true }
 	}
@@ -600,7 +600,13 @@ func TestAWaitOnAnInviteUsedBeforeItsExpiryHearsTheJoin(t *testing.T) {
 	joined := make(chan error, 1)
 	go func() { _, err := Join(ctx, jst, jid, tok, "j"); joined <- err }()
 	<-entered
-	(<-timers) <- time.Now() // the expiry fires while the burned invite's join is held
+	expiry := <-timers
+	// The burned invite's join is held, so no outcome exists yet: either the caller takes the expiry now, or it saw
+	// the burn first and has started waiting for the join.
+	select {
+	case expiry <- time.Now():
+	case <-timers:
+	}
 	close(release)
 	if err := <-joined; err != nil {
 		t.Fatal(err)
