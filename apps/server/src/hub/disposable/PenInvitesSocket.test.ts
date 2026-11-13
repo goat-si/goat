@@ -3,10 +3,14 @@ import * as NodeNet from "node:net";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { guardErrors } from "@goat/shared/errorGuards";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as Settings from "../../serverSettings.ts";
 import { PenInvites } from "./PenInvites.ts";
@@ -136,4 +140,40 @@ it.live("an older Pen whose status lists no features declares none", () =>
       expect(yield* (yield* PenInvites).features).toEqual(new Set());
     }),
   ),
+);
+
+it.effect("the op timeout destroys a control socket whose connect never completes", () =>
+  Effect.gen(function* () {
+    const connecting = yield* Deferred.make<NodeNet.Socket>();
+    const hanging = PenInvitesSocket.layerConnecting((_path, onError) => {
+      const socket = guardErrors(new NodeNet.Socket(), onError);
+      Deferred.doneUnsafe(connecting, Effect.succeed(socket));
+      return socket;
+    });
+    yield* Effect.gen(function* () {
+      const subject = { signPub: SIGN, noisePub: SIGN, name: "cc-1" };
+      const minting = yield* (yield* PenInvites)
+        .mint({ subject, mintId: "m-1", expiresAtMs: 5 })
+        .pipe(Effect.flip, Effect.forkChild);
+      const socket = yield* Deferred.await(connecting);
+      yield* TestClock.adjust("10 seconds");
+      expect((yield* Fiber.join(minting)).reason).toBe("timed out");
+      expect(socket.destroyed).toBe(true);
+    }).pipe(
+      Effect.provide(
+        hanging.pipe(
+          Layer.provide(
+            Settings.ServerSettingsService.layerTest({
+              pen: {
+                executablePath: "/opt/pen",
+                stateDir: "/nonexistent-pen-state",
+                meshId: "a".repeat(26),
+                nodeId: "b".repeat(26),
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  }),
 );

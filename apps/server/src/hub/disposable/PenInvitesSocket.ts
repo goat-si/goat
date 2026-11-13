@@ -91,7 +91,9 @@ const stateOf = (
   }
 };
 
-const make = Effect.gen(function* () {
+type Connect = (path: string, onError: () => void) => NodeNet.Socket;
+
+const make = Effect.fn("PenInvitesSocket.make")(function* (connect: Connect) {
   const settings = yield* Settings.ServerSettingsService;
 
   /** Sends one op to the confirmed Pen's control socket and reads its one answer line. */
@@ -105,7 +107,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const socket = yield* Effect.acquireRelease(
           Effect.callback<NodeNet.Socket, PenInviteUnknown>((resume) => {
-            const connection = guardErrors(NodeNet.createConnection(path), () =>
+            const connection = connect(path, () =>
               resume(Effect.fail(unknown("control socket unreachable"))),
             );
             connection.once("connect", () => resume(Effect.succeed(connection)));
@@ -207,4 +209,9 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(PenInvites, make);
+/** Opens the control socket with `connect`; tests pass one that never completes. */
+export const layerConnecting = (connect: Connect) => Layer.effect(PenInvites, make(connect));
+
+export const layer = layerConnecting((path, onError) =>
+  guardErrors(NodeNet.createConnection(path), onError),
+);
