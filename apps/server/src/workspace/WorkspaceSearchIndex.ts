@@ -1,4 +1,5 @@
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 
 import type {
   DirItem,
@@ -26,6 +27,7 @@ import type {
   ProjectSearchEntriesResult,
 } from "@goat/contracts";
 import { isProjectFaviconPath } from "@goat/shared/projectFavicon";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 // fff-node's native library stays external; single-executables require disk packages instead of importing them.
 const requireForFff = NodeModule.createRequire(import.meta.url);
@@ -288,6 +290,16 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  const home = yield* HostProcess.HomeDirectory;
+  const platform = yield* HostProcess.Platform;
+  const normalize = (value: string) =>
+    platform === "win32" ? NodePath.resolve(value).toLowerCase() : NodePath.resolve(value);
+  if (normalize(cwd) === normalize(home)) {
+    return yield* new WorkspaceSearchIndexCreateFailed({
+      cwd,
+      reason: "The home directory cannot be indexed as a workspace.",
+    });
+  }
   const result = yield* Effect.try({
     try: () =>
       FileFinder.create({
@@ -296,8 +308,6 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
         // Content indexing costs CPU/memory; path-only consumers use the lightweight index.
         disableContentIndexing: variant !== "content",
         aiMode: false,
-        enableFsRootScanning: true,
-        enableHomeDirScanning: true,
       }),
     catch: (cause) =>
       new WorkspaceSearchIndexCreateFailed({
