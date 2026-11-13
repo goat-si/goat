@@ -124,6 +124,7 @@ vi.mock("./useGoatBotSession", () => ({
 }));
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { useGoatBotSession } from "./useGoatBotSession";
 
 function Pane({ onClose }: { onClose: () => void }) {
@@ -140,6 +141,7 @@ function Pane({ onClose }: { onClose: () => void }) {
 }
 
 it("opens the scoped task and acknowledges it, then sends and closes", async () => {
+  resetTaskReadAcknowledgementsForTests();
   state.send.mockClear();
   state.update.mockClear();
   state.session.mockClear();
