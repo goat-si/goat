@@ -232,6 +232,42 @@ it.effect("the switch stays off while the hub is off, so turning the hub on neve
 );
 
 // A route that forwards a patch (an agent tool, a provider change) must not open the switch.
+// A later version may widen the switch's limits; after a downgrade, its saved block must not make
+// this version refuse the whole settings file.
+it.effect("a saved switch this version cannot read reads as off and stays off", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const config = yield* ServerConfig.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(
+      config.settingsPath,
+      JSON.stringify({
+        defaultThreadEnvMode: "worktree",
+        hub: {
+          enabled: true,
+          attachDisposableMachines: {
+            enabled: true,
+            cap: 500,
+            provisioners: Array.from({ length: 33 }, (_, index) => "thread-" + index),
+            nameRule: "(cc|vm)-[0-9]+",
+            expiresAt: iso(10),
+            grantId: "g-future",
+          },
+        },
+      }),
+    );
+    yield* service.start;
+    const loaded = yield* service.getSettings;
+    expect(loaded.defaultThreadEnvMode).toBe("worktree");
+    expect(loaded.hub.enabled).toBe(true);
+    expect(loaded.hub.attachDisposableMachines).toMatchObject({ enabled: false, grantId: null });
+    yield* service.updateSettings({ hub: { cloudHolder: "auto" } });
+    const onDisk = JSON.parse(yield* fs.readFileString(config.settingsPath));
+    expect(onDisk.hub.attachDisposableMachines?.enabled ?? false).toBe(false);
+    expect(disposableSwitch((yield* service.getSettings).hub, 0).open).toBe(false);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.effect("only the person path changes the switch; every other settings writer is refused", () =>
   Effect.gen(function* () {
     const service = yield* ServerSettingsModule.ServerSettingsService;
