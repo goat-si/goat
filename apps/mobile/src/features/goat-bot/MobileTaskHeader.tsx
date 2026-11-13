@@ -98,7 +98,7 @@ export function MobileTaskHeader(props: {
       ) : null}
       {lookup.state === "missing" ? (
         <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-          This task isn't available.
+          This task cannot be found here.
         </Text>
       ) : null}
       {(props.older && lookup.state === "off") ||
@@ -122,7 +122,7 @@ export function MobileTaskHeader(props: {
         </View>
       ) : null}
       {lookup.state === "denied" ? (
-        <Text className="text-foreground-muted">This connection can't look up older tasks.</Text>
+        <Text className="text-foreground-muted">Permission to read this task is unavailable.</Text>
       ) : null}
       {lookup.state === "failed" ? (
         <Pressable

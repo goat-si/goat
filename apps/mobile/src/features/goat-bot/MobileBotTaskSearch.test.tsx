@@ -137,7 +137,7 @@ it("an empty page that can continue offers Load more; only the end of the walk s
     await wait(TASK_SEARCH_DEBOUNCE_MS);
     await net.calls[0]?.answer({ tasks: [], nextCursor: "c1", partial: true });
     expect(text()).not.toContain("No matching tasks.");
-    expect(text()).toContain("Some tasks that might match could not be checked or shown.");
+    expect(text()).toContain("Some results could not be checked.");
     await act(async () => button("Load more")?.click());
     expect(net.calls[1]?.input).toEqual({
       botId: "main",
@@ -160,7 +160,7 @@ it("a walk that stopped early says so and offers no more", async () => {
     await type("report");
     await wait(TASK_SEARCH_DEBOUNCE_MS);
     await net.calls[0]?.answer({ tasks: [hit("t1", "Weekly report")], endedEarly: true });
-    expect(text()).toContain("Search stopped early.");
+    expect(text()).toContain("Search ended early.");
     expect(button("Load more")).toBeUndefined();
   } finally {
     vi.useRealTimers();
@@ -326,7 +326,7 @@ it("counts the query in UTF-8 bytes as the server does: up to 256 is sent, past 
       await type(query);
       await wait(TASK_SEARCH_DEBOUNCE_MS);
       expect(net.calls.length - before).toBe(sent ? 1 : 0);
-      expect(text().includes("Search text is too long.")).toBe(!sent);
+      expect(text().includes("Search text is too long for task titles.")).toBe(!sent);
       await net.calls[before]?.answer({ tasks: [] });
     }
   } finally {
@@ -351,11 +351,11 @@ it("at 50 hits says only the first 50 are shown when the server had more, and no
   vi.useFakeTimers();
   try {
     await walkTo50({ nextCursor: "c3" });
-    expect(text()).toContain("Showing the first 50 matching tasks.");
+    expect(text()).toContain("More tasks may exist. Narrow your search.");
     await walkTo50({ endedEarly: true });
-    expect(text()).toContain("Showing the first 50 matching tasks.");
+    expect(text()).toContain("More tasks may exist. Narrow your search.");
     await walkTo50({});
-    expect(text()).not.toContain("Showing the first 50");
+    expect(text()).not.toContain("More tasks may exist");
     expect(button("Load more")).toBeUndefined();
   } finally {
     vi.useRealTimers();

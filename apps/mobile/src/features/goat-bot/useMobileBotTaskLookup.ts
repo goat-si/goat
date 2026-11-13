@@ -122,11 +122,7 @@ export function useMobileBotTaskLookup(input: {
   // The read in flight, for the answer's check and for a second press before the screen renders.
   const running = useRef<{ key: string; generation: number } | null>(null);
   const generation = useRef(0);
-  // A refresh that returns the task drops its saved answer; a mark for a task left behind goes.
-  if (input.established && input.holdsTask && (saved?.key === key || failedKey === key)) {
-    setSaved(null);
-    setFailedKey(null);
-  }
+  // A mark for a task the screen has left is dropped.
   if (staleKey !== null && staleKey !== key) setStaleKey(null);
   const decision = taskLookupDecision({
     able,
@@ -176,8 +172,9 @@ export function useMobileBotTaskLookup(input: {
       } else setFailedKey(sentKey);
     });
   };
-  // A read belongs to one unbroken period in which this task is the screen's and may be looked
-  // up; a refresh does not end it. When it ends, its answer is ignored and it is no longer in flight.
+  // A read and its answer belong to one unbroken period in which this task is the screen's and may
+  // be looked up; a refresh does not end it. When it ends, a read's answer is ignored and what the
+  // period read or failed is forgotten, so the next period reads again.
   const eligible = able && permitted && input.established && !input.holdsTask;
   // oxlint-disable-next-line goat/react-effect-budget -- Ends the period of a read when the screen's task, its eligibility or the screen itself goes.
   useEffect(() => {
@@ -185,6 +182,8 @@ export function useMobileBotTaskLookup(input: {
     return () => {
       if (running.current?.key === key) running.current = null;
       setInFlight((current) => (current?.key === key ? null : current));
+      setSaved((current) => (current?.key === key ? null : current));
+      setFailedKey((current) => (current === key ? null : current));
     };
   }, [eligible, key]);
   const readShown = useEffectEvent(read);

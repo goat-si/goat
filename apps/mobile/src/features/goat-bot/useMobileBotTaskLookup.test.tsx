@@ -336,3 +336,14 @@ it("read permission withdrawn while a read is out shows the permission line, and
   expect(asked()).toEqual(["t1", "t1"]);
   expect(state()).toBe("loading");
 });
+
+it("an answer belongs to its period: after the capability goes and returns, the task is read again", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  expect(state()).toBe("known");
+  await show({ supported: false });
+  await show();
+  expect(asked()).toEqual(["t1", "t1"]);
+  expect(state()).toBe("loading");
+});

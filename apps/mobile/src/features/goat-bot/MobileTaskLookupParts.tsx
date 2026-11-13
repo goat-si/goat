@@ -16,7 +16,7 @@ export function MobileTaskLookupNotices(props: { readonly result: BotWorkResult 
         <Text className="text-foreground-muted">More of this task's work isn't shown here.</Text>
       ) : null}
       {props.result.partial ? (
-        <Text className="text-foreground-muted">Some of this task's work could not be read.</Text>
+        <Text className="text-foreground-muted">Some task details could not be checked.</Text>
       ) : null}
     </>
   );

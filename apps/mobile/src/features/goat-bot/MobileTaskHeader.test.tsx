@@ -100,7 +100,7 @@ it("a looked-up task shows its status and actions instead of the older-work expl
   expect(button("Pin")).toBeDefined();
   expect(button("Open work thread")).toBeDefined();
   expect(text()).toContain("More of this task's work isn't shown here.");
-  expect(text()).toContain("Some of this task's work could not be read.");
+  expect(text()).toContain("Some task details could not be checked.");
   expect(text()).not.toContain("Status and actions for older work");
   await act(async () => root.unmount());
 });
@@ -122,13 +122,13 @@ it("an unavailable task shows its status and work but nothing that needs its rea
   expect(button("Retry")).toBeDefined();
   expect(button("Open work thread")).toBeDefined();
   expect(text()).toContain("More of this task's work isn't shown here.");
-  expect(text()).toContain("Some of this task's work could not be read.");
+  expect(text()).toContain("Some task details could not be checked.");
   await act(async () => root.unmount());
 });
 
 it("a task the server does not have says so once, with no way to Home", async () => {
   const root = await render({ state: "missing" });
-  expect(text()).toContain("This task isn't available.");
+  expect(text()).toContain("This task cannot be found here.");
   expect(button("Open Home")).toBeUndefined();
   await act(async () => root.unmount());
 });
@@ -148,7 +148,7 @@ it("without the lookup, or without permission, the older-work explanation stays 
   expect(button("Open Home")).toBeDefined();
   await act(async () => root.unmount());
   root = await render({ state: "denied" });
-  expect(text()).toContain("This connection can't look up older tasks.");
+  expect(text()).toContain("Permission to read this task is unavailable.");
   expect(button("Open Home")).toBeDefined();
   await act(async () => root.unmount());
 });
@@ -162,7 +162,7 @@ it("a task the server does not have shows no chat card, so nothing on the screen
     statusLabel: "Done",
     target: { kind: "thread", threadId: "w-1" },
   });
-  expect(text()).toContain("This task isn't available.");
+  expect(text()).toContain("This task cannot be found here.");
   expect(text()).not.toContain("chat card");
   await act(async () => root.unmount());
 });

@@ -48,7 +48,7 @@ export function MobileBotTaskSearch(props: {
         className="min-h-[44px] rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground"
       />
       {search.tooLong ? (
-        <Text className="text-foreground-muted">Search text is too long.</Text>
+        <Text className="text-foreground-muted">Search text is too long for task titles.</Text>
       ) : null}
       {search.query === null || value === null ? null : (
         <>
@@ -88,14 +88,12 @@ export function MobileBotTaskSearch(props: {
             <Text className="text-foreground-muted">No matching tasks.</Text>
           ) : null}
           {value.partial ? (
-            <Text className="text-foreground-muted">
-              Some tasks that might match could not be checked or shown.
-            </Text>
+            <Text className="text-foreground-muted">Some results could not be checked.</Text>
           ) : null}
           {value.capped ? (
-            <Text className="text-foreground-muted">Showing the first 50 matching tasks.</Text>
+            <Text className="text-foreground-muted">More tasks may exist. Narrow your search.</Text>
           ) : value.endedEarly ? (
-            <Text className="text-foreground-muted">Search stopped early.</Text>
+            <Text className="text-foreground-muted">Search ended early.</Text>
           ) : value.cursor !== undefined && !value.loading && !value.failed ? (
             <Pressable
               accessibilityRole="button"
