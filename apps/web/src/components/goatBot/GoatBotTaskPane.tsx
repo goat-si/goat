@@ -272,13 +272,17 @@ export function GoatBotTaskPane({
       {lookup.value?.partial && listedTask === undefined && (
         <p role="status">Some task details could not be checked.</p>
       )}
-      {lookup.loading && <p role="status">Loading task…</p>}
+      {lookup.loading && (
+        <p role="status" className="px-3 pt-3 text-sm text-muted-foreground">
+          Loading task…
+        </p>
+      )}
       {lookup.error === "denied" && (
         <p role="status">Permission to read this task is unavailable.</p>
       )}
       {lookup.error === "missing" && <p role="status">This task cannot be found here.</p>}
       {lookup.error === "failed" && (
-        <div>
+        <div className="flex flex-wrap items-center gap-2 px-3 pt-3 text-sm text-muted-foreground">
           <p role="alert">Couldn't load this task.</p>
           <Button variant="outline" size="xs" onClick={lookup.reload}>
             Try again
