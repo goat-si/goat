@@ -71,6 +71,7 @@ export const searchStatement = (sql: SqlClient.SqlClient, scope: Scope, after: K
   const escaped = scope.query.replace(/[\\%_]/g, (ch) => escape + ch);
   const pattern = "%" + escaped + "%";
   // A stored title is matched up to its first NUL character.
+  // ORDER BY evaluates predicates for at most 500 materialized candidates even when the result limit is smaller.
   return sql<{
     readonly task_id: string;
     readonly created_at: string;
