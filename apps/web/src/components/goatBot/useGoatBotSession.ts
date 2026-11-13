@@ -39,6 +39,7 @@ import {
   useEnvironmentShellsBootstrapped,
   useServerConfigs,
   useThreadShell,
+  useTimelineVisibleTurnItems,
 } from "~/state/entities";
 import { environmentThreadDetails } from "~/state/threads";
 import { channelEnvironment } from "~/state/channels";
@@ -61,6 +62,7 @@ import {
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
+import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 import { registerGoatBotEnvironmentDisposal } from "./goatBotEnvironmentLifecycle";
 
@@ -353,6 +355,7 @@ export function useGoatBotSession(
   visibleTurnItems = EMPTY_ITEMS,
   taskId?: ChannelTaskId | null,
   member: BotProfile | null = null,
+  displayedRef?: ScopedThreadRef | null,
 ) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
@@ -362,6 +365,21 @@ export function useGoatBotSession(
   );
   const revision = useSessions((state) => state.revision);
   const botRef = useGlobalAgentStore((state) => state.botRef);
+  const projectionRef =
+    displayedRef !== undefined
+      ? displayedRef
+      : member
+        ? scopeThreadRef(member.environmentId, member.sessionThreadId)
+        : botRef
+          ? scopeThreadRef(botRef.environmentId, botRef.threadId)
+          : null;
+  const membership = useTimelineVisibleTurnItems(projectionRef);
+  const source = useGoatBotSource(
+    projectionRef,
+    member?.botId ?? "main",
+    visibleTurnItems,
+    membership,
+  );
   const legacyRef = useGlobalAgentStore((state) => state.ref);
   const legacyThreadRef =
     legacyRef === null ? null : scopeThreadRef(legacyRef.environmentId, legacyRef.threadId);
@@ -561,6 +579,8 @@ export function useGoatBotSession(
       : null;
   return {
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
+    projectionRef,
+    source,
     availability,
     canOperate,
     visibleTurnItems,
@@ -579,14 +599,12 @@ export function useGoatBotSession(
     ) => {
       if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, selectedTask, questionId);
-      return true;
+      return queue.submit(text, availability.bot, attachments, selectedTask, questionId);
     },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (!sendable || availability.kind !== "ready") return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, taskId ?? undefined);
-      return true;
+      return queue.submit(text, availability.bot, attachments, taskId ?? undefined);
     },
     onRetryInput: (key: string) => {
       if (sendable) queue?.retry(key);

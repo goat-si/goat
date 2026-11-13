@@ -43,6 +43,7 @@ import { useBotThreads } from "./useBotRoster";
 import { useBotWorkHistory } from "./useBotWorkHistory";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import type { GoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
+import type { GoatBotSourceIds } from "./useGoatBotSource";
 
 // Home is one scroll of what the bot runs and does; Library holds what it keeps.
 const tabs = ["Home", "Library"] as const;
@@ -56,6 +57,7 @@ export function GoatBotWorkPanel({
   onShowChat,
   onClose,
   peekRows,
+  peekSource,
   onRetryInput,
   openFile = null,
   onOpenFile,
@@ -72,6 +74,8 @@ export function GoatBotWorkPanel({
   notesRefreshKey?: string | undefined;
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
+  /** The chat's displayed-thread source that peekRows come from. */
+  peekSource?: GoatBotSourceIds | undefined;
   onRetryInput?: ((clientKey: string) => void) | undefined;
   /** The Library file open in the chat, if any. */
   openFile?: string | null | undefined;
@@ -221,6 +225,7 @@ export function GoatBotWorkPanel({
               : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
           }
           rows={peekRows(peek.taskId)}
+          source={peekSource}
           environmentId={environmentId}
           unreadThrough={peeked?.unread === true ? peeked.lastActivityAt : null}
           onAcknowledged={(taskId, through) => {

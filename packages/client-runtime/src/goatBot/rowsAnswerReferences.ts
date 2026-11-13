@@ -58,7 +58,9 @@ export function foldTaskQuestionAnswer<B extends Omit<BotRow, "firstInGroup" | "
       ...row,
       options: [],
       answer: text,
-      ...(answerIndex >= 0 ? { answerIndex, answeredAt: answer.createdAt } : {}),
+      ...(answerIndex >= 0
+        ? { answerIndex, answeredAt: answer.createdAt, answerInputRowId: answer.id }
+        : {}),
       ...(sending ? { answerSending: true } : {}),
     },
     ...(answerIndex >= 0 ? { folded: answer.id } : {}),

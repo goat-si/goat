@@ -8,7 +8,7 @@ import {
   taskAttemptLabel,
 } from "@goat/client-runtime/goatBot";
 import { ChannelQuestionId, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { cn } from "~/lib/utils";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -29,6 +29,7 @@ import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
+import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -68,6 +69,38 @@ export function GoatBotTaskPane({
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
   const timelineRows = session.rowsForTask(taskId);
+  const sourceIdentity = session.source?.identity ?? null;
+  const [local, setLocal] = useState<{
+    taskId: ChannelTaskId;
+    sourceIdentity: string | null;
+    submissions: ReadonlyArray<GoatBotLocalSubmission>;
+  }>({ taskId, sourceIdentity, submissions: [] });
+  if (local.taskId !== taskId || local.sourceIdentity !== sourceIdentity)
+    setLocal({ taskId, sourceIdentity, submissions: [] });
+  const send = (
+    text: string,
+    attachments: Parameters<typeof session.onSendToTask>[2] = [],
+    questionId?: ChannelQuestionId,
+  ) => {
+    const result =
+      questionId === undefined
+        ? session.onSendToTask(taskId, text, attachments)
+        : session.onSendToTask(taskId, text, attachments, questionId);
+    if (typeof result === "string") {
+      const submission = { key: result };
+      setLocal((previous) => ({
+        taskId,
+        sourceIdentity,
+        submissions: [
+          ...(previous.taskId === taskId && previous.sourceIdentity === sourceIdentity
+            ? previous.submissions
+            : []),
+          submission,
+        ],
+      }));
+    }
+    return result !== false;
+  };
   return (
     <section
       aria-label="Task thread"
@@ -203,8 +236,17 @@ export function GoatBotTaskPane({
       >
         <GoatBotStepsReader rows={timelineRows}>
           <GoatBotTimeline
+            key={`${session.source?.identity ?? ""}:${taskId}`}
             taskDetails
             rows={timelineRows}
+            baselineIds={session.source?.baselineIds}
+            sourceIds={session.source?.sourceIds}
+            submissions={
+              local.taskId === taskId && local.sourceIdentity === sourceIdentity
+                ? local.submissions
+                : []
+            }
+            committedSends={session.source?.committedSends}
             environmentId={environmentId}
             onRetry={session.onRetryInput}
             onDiscard={session.onDiscardInput}
@@ -212,8 +254,7 @@ export function GoatBotTaskPane({
               canSend
                 ? (text, answerTask, questionId) =>
                     // A question id goes only with the task that asked it.
-                    session.onSendToTask(
-                      taskId,
+                    send(
                       text,
                       [],
                       answerTask === taskId && questionId !== undefined
@@ -236,7 +277,7 @@ export function GoatBotTaskPane({
               : `${botName} isn't available`
         }
         attachmentSupport={session.attachmentSupport}
-        onSend={(text, attachments) => session.onSendToTask(taskId, text, attachments)}
+        onSend={(text, attachments) => send(text, attachments)}
       />
     </section>
   );

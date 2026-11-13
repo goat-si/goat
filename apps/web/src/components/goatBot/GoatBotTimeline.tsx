@@ -11,7 +11,13 @@ import {
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { flushSync } from "react-dom";
-import { ArrowUpLeftIcon, CopyIcon, CircleAlertIcon, XIcon } from "~/components/solar";
+import {
+  ArrowUpLeftIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  CircleAlertIcon,
+  XIcon,
+} from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -51,9 +57,11 @@ import { goatBotReplySplit } from "./goatBotReplyParts";
 import { GoatBotStepsContext, GoatBotStepsMark } from "./GoatBotStepsLine";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
+import { useGoatBotFollow, type GoatBotLocalSubmission } from "./useGoatBotFollow";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
+const NO_SUBMISSIONS: ReadonlyArray<GoatBotLocalSubmission> = Object.freeze([]);
 
 /** What the acknowledged work is doing, from the bot conversation's session; null elsewhere. */
 export const GoatBotActivityContext = createContext<GoatBotTimelineActivity | null>(null);
@@ -83,8 +91,16 @@ export function GoatBotTimeline({
   taskDetails = false,
   taskThreads = false,
   retryEnvironmentId = null,
+  baselineIds,
+  sourceIds,
+  submissions = NO_SUBMISSIONS,
+  committedSends,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
+  readonly baselineIds?: ReadonlySet<string> | null | undefined;
+  readonly sourceIds?: ReadonlySet<string> | undefined;
+  readonly submissions?: ReadonlyArray<GoatBotLocalSubmission> | undefined;
+  readonly committedSends?: ReadonlyMap<string, string> | undefined;
   /** When the person last read this chat, read once at open; newer rows get a "New" divider. */
   readonly unreadSince?: string | null | undefined;
   readonly taskDetails?: boolean;
@@ -142,6 +158,17 @@ export function GoatBotTimeline({
   const followingRef = useRef(true);
   // Where the transcript was last scrolled, by the reader or by following.
   const lastScrollTopRef = useRef(0);
+  const follow = useGoatBotFollow({
+    rows,
+    baselineIds,
+    sourceIds,
+    submissions,
+    committedSends,
+    scrollRef,
+    listRef,
+    followingRef,
+    lastScrollTopRef,
+  });
   const [nowMs] = useState(() => Date.now());
   const replying = useReplying(replyingSince);
   const working = useContext(GoatBotActivityContext);
@@ -167,12 +194,19 @@ export function GoatBotTimeline({
     const top = element.scrollTop;
     // Only moving up stops following. A scroll event the timeline's own move left behind can
     // arrive after a message grew, far from the new bottom, without the reader moving at all.
-    if (element.scrollHeight - top - element.clientHeight < FOLLOW_THRESHOLD_PX) {
-      followingRef.current = true;
+    if (
+      top !== lastScrollTopRef.current &&
+      element.scrollHeight - top - element.clientHeight < FOLLOW_THRESHOLD_PX
+    ) {
+      follow.setFollowing(true);
+      follow.reachedBottom();
     } else if (top < lastScrollTopRef.current) {
-      followingRef.current = false;
+      follow.setFollowing(false);
+      follow.readerMoved();
+    } else if (top !== lastScrollTopRef.current) {
+      follow.readerMoved();
     }
-    lastScrollTopRef.current = top;
+    lastScrollTopRef.current = element.scrollTop;
     updateEdges();
   };
   // Messages finish laying out after they render (Markdown, highlighting, images), and the
@@ -183,8 +217,11 @@ export function GoatBotTimeline({
     toggledHeight.current = null;
     if (scroll !== null && toggled !== null && scroll.scrollHeight === toggled) {
       lastScrollTopRef.current = scroll.scrollTop;
+    } else if (scroll !== null && follow.alignAnchor()) {
+      // A folded answer stays beside its question while the transcript resizes.
     } else if (scroll !== null && followingRef.current) {
-      scroll.scrollTop = scroll.scrollHeight;
+      if (scroll.scrollTop < scroll.scrollHeight - scroll.clientHeight)
+        scroll.scrollTop = scroll.scrollHeight;
       lastScrollTopRef.current = scroll.scrollTop;
     }
     updateEdges();
@@ -196,16 +233,16 @@ export function GoatBotTimeline({
     if (!scroll || !list) return;
     return observeResize([scroll, list], followResize);
   }, [updateEdges, followResize]);
-  // New rows and the activity bubble keep the view pinned to the latest message unless the
-  // reader scrolled up.
+  // The activity bubble keeps the view pinned unless the reader scrolled up; new rows are pinned
+  // by useGoatBotFollow and streamed text by followResize.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (element !== null && (rows.length > 0 || activityText !== null) && followingRef.current) {
+    if (element !== null && activityText !== null && followingRef.current) {
       element.scrollTop = element.scrollHeight;
       lastScrollTopRef.current = element.scrollTop;
     }
     updateEdges();
-  }, [rows, activityText, updateEdges]);
+  }, [activityText, updateEdges]);
 
   // Which rows are new is decided once, from the first history and the visit before this open.
   // The divider sits above the first of them still shown, and the pill counts those shown.
@@ -463,6 +500,7 @@ export function GoatBotTimeline({
           <li
             key={row.id}
             data-bot-row={row.id}
+            data-follow-row={row.id}
             tabIndex={0}
             aria-describedby={timeId}
             className={cn(
@@ -532,7 +570,13 @@ export function GoatBotTimeline({
       }
       case "task":
         return (
-          <li key={row.id} className={cn("flex", gap)}>
+          <li
+            key={row.id}
+            data-follow-row={row.id}
+            tabIndex={-1}
+            aria-label={`${row.card.title}, ${row.card.statusLabel}`}
+            className={cn("flex", gap)}
+          >
             {taskDetails || !taskThreads ? (
               <GoatBotTaskChip
                 card={row.card}
@@ -590,6 +634,7 @@ export function GoatBotTimeline({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        tabIndex={-1}
         className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-stable"
       >
         <ol
@@ -636,7 +681,17 @@ export function GoatBotTimeline({
           ) : null}
         </ol>
       </div>
-      {unreadAt >= 0 && dividerAbove && !pillDismissed ? (
+      {follow.cueIds.length > 0 ? (
+        <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2">
+          <Button size="xs" variant="glass" onClick={follow.jump}>
+            <ChevronDownIcon className="size-3.5" />
+            {follow.cueIds.length === 1
+              ? "Jump to latest"
+              : `Jump to latest (${follow.cueIds.length} new)`}
+          </Button>
+        </div>
+      ) : null}
+      {follow.cueIds.length === 0 && unreadAt >= 0 && dividerAbove && !pillDismissed ? (
         <div className="absolute top-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-primary text-primary-foreground shadow-sm ring-2 ring-background">
           <Button size="sm" onClick={jumpToUnread}>
             {unreadRows.length === 1 ? "1 new message" : `${unreadRows.length} new messages`}
