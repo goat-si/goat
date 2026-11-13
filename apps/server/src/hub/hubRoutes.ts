@@ -48,7 +48,7 @@ const REFUSAL: Readonly<Record<string, string>> = {
     "The change was stored, but the Home could not apply it yet; it applies once OpenCodex restarts there.",
 };
 
-export const routesArgs = (linkId: string, change?: HubDeviceRoutesChange) => {
+const routesArgs = (linkId: string, change?: HubDeviceRoutesChange) => {
   const target = ["--link-id", linkId];
   if (change === undefined) return ["link", "routes", ...target, "--json"];
   if (change.op === "add")
@@ -122,11 +122,7 @@ const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
 
 /** What ocx link routes answered, as a result; refusals keep OpenCodex's fixed words only. */
-export const routesAnswer = (
-  alias: string,
-  linkId: string,
-  output: OcxOutput,
-): HubDeviceRoutesResult => {
+const routesAnswer = (alias: string, linkId: string, output: OcxOutput): HubDeviceRoutesResult => {
   const base = { deviceAlias: alias, linkId };
   if (output.code === 0) {
     const document = Option.getOrUndefined(decodeRoutes(output.stdout.trim()));
