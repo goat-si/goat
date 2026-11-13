@@ -20,11 +20,10 @@ import {
   sourceFiles,
 } from "./inventory.ts";
 import { at, files, ref } from "./citations.ts";
+import { AUDIT_DOC_DIRS, AUDIT_OUTPUT as OUTPUT, AUDIT_ROOT_DOCS } from "./auditInputs.ts";
 import { type CliDrift, type CliMention, checkCliMention } from "./cliDrift.ts";
 import { SHIPPED_TOOL_NAMES, toolTokensIn } from "./listedNames.ts";
 import { code, groupBy, list, pct, table, TICK } from "./markdown.ts";
-
-const OUTPUT = "docs/internals/agent-surface-audit.md";
 
 interface Mention {
   readonly token: string;
@@ -32,12 +31,8 @@ interface Mention {
 }
 
 const DOC_FILES = () => [
-  ...sourceFiles(["docs"], ".md").filter((file) => file !== OUTPUT),
-  ...sourceFiles(["structure"], ".md"),
-  ...sourceFiles([".agents/skills"], ".md"),
-  "AGENTS.md",
-  "CONTRIBUTING.md",
-  "README.md",
+  ...AUDIT_DOC_DIRS.flatMap((dir) => sourceFiles([dir], ".md")).filter((file) => file !== OUTPUT),
+  ...AUDIT_ROOT_DOCS,
 ];
 const PROMPT_FILES = () =>
   sourceFiles(["packages/provider-core/src/server"]).filter((file) =>

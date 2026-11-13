@@ -4,7 +4,13 @@ import * as NodeHttp from "node:http";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpClient, HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
+import {
+  HttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 
 import { layerTestLoopback } from "./loopbackHttpServer.ts";
 
@@ -22,20 +28,28 @@ const listenLater = (port: number) =>
         : Effect.void,
   );
 
-it.effect("keeps its port when another server later listens on it", () =>
+it.effect("keeps its port and the address its client dials when a later server listens", () =>
   Effect.gen(function* () {
     const address = (yield* HttpServer.HttpServer).address;
     if (!("port" in address)) return assert.fail(`not a TCP address: ${address._tag}`);
     const later = yield* listenLater(address.port);
     assert.strictEqual(later instanceof NodeHttp.Server ? "bound" : later.code, "EADDRINUSE");
     const client = yield* HttpClient.HttpClient;
-    assert.strictEqual(yield* (yield* client.get("/")).text, "test server");
+    // Linux refuses the later bind against "::" too; a "::" listener still reports "::" here.
+    assert.strictEqual(yield* (yield* client.get("/")).text, `${address.address}:${address.port}`);
   }).pipe(
     Effect.scoped,
     Effect.provide(
-      HttpRouter.serve(HttpRouter.add("GET", "/", HttpServerResponse.text("test server")), {
-        disableListenLog: true,
-      }).pipe(Layer.provideMerge(layerTestLoopback)),
+      HttpRouter.serve(
+        HttpRouter.add(
+          "GET",
+          "/",
+          Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
+            HttpServerResponse.text(request.headers.host ?? ""),
+          ),
+        ),
+        { disableListenLog: true },
+      ).pipe(Layer.provideMerge(layerTestLoopback)),
     ),
   ),
 );

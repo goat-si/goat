@@ -2,11 +2,13 @@
 import { expect, it, vi } from "vite-plus/test";
 
 const shifted = vi.hoisted(() => ({ on: false }));
+const read = vi.hoisted(() => new Set<string>());
 
 // Every source and doc file the audit reads gains a blank first line, so every line it could cite moves.
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const readFileSync = ((file: unknown, ...rest: ReadonlyArray<unknown>) => {
+    read.add(String(file));
     const text = (actual.readFileSync as (...args: ReadonlyArray<unknown>) => unknown)(
       file,
       ...rest,
@@ -35,6 +37,18 @@ it("renders a byte-identical audit when every line of every cited file moves (#1
   expect(after.firstLine).toBe("");
   expect(before.firstLine).not.toBe("");
   expect(after.page).toBe(before.page);
+});
+
+it("check:changed selects the audit for every file the audit reads (#2926)", async () => {
+  read.clear();
+  await renderAudit(false);
+  const { agentSurfaceCheckSteps } = await import("./auditInputs.ts");
+  const { rel } = await import("./inventory.ts");
+  const files = [...read]
+    .map(rel)
+    .filter((file) => !file.startsWith("..") && !file.split("/").includes("node_modules"));
+  expect(files).toContain("docs/user/install.md");
+  expect(files.filter((file) => agentSurfaceCheckSteps([file]).length === 0)).toEqual([]);
 });
 
 it("refuses to measure a served catalog that lists a tool twice or leaves one out", async () => {
