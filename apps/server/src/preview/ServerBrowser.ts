@@ -109,6 +109,7 @@ import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowser
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
+import { closeUnadoptedPopup } from "./popupAdmission.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
@@ -822,7 +823,7 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       updateFileChooserInterception(tab);
       // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
-      page.on("popup", (popup) => void adoptPopup(tab, popup));
+      page.on("popup", (p) => void adoptPopup(tab, p).catch(closeUnadoptedPopup(p, runFork)));
       void startBrowserWatchers(tab, () => Date.now(), adopted?.signal)
         .finally(() => adopted?.release())
         .catch(constVoid);

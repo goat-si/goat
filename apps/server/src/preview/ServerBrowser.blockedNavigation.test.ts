@@ -31,7 +31,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
-import { SessionControl } from "./SessionControl.ts";
+import { cutBlockedUrlObserved } from "./SessionControl.testkit.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -476,15 +476,7 @@ it.effect("a slow blocked popup fences active context tabs before the response a
         quality: 70,
       });
       yield* viewer.input({ type: "takeControl" });
-      const observed = yield* Deferred.make<void>();
-      const cut = SessionControl.prototype.cutBlockedUrl;
-      const spy = vi.spyOn(SessionControl.prototype, "cutBlockedUrl").mockImplementation(function (
-        this: SessionControl,
-      ) {
-        cut.call(this);
-        Deferred.doneUnsafe(observed, Effect.void);
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const observed = yield* cutBlockedUrlObserved;
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
       ).pipe(Effect.forkChild);
@@ -509,10 +501,15 @@ it.effect("a blocked popup at the tab limit still fences its opener", () =>
           input: { reuseExistingTab: false, show: false },
         });
       }
+      const fenced = yield* cutBlockedUrlObserved;
       const popupReady = f.page.waitForEvent("popup");
       yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
       const popup = yield* Effect.promise(() => popupReady);
-      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+      // The press needs the opener's fence; Playwright's close event for the refused popup can be late.
+      yield* Effect.raceFirst(
+        Deferred.await(fenced),
+        popup.isClosed() ? Effect.void : Effect.promise(() => popup.waitForEvent("close")),
+      );
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
     }),
   ).pipe(Effect.provide(layer)),

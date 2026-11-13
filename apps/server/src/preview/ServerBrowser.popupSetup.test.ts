@@ -279,6 +279,42 @@ it.effect("a blocked agent popup closes without setup and is not adopted", () =>
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect(
+  "a popup refused at the tab limit is closed by its page when its CDP close fails (#2565 regression)",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        for (let i = 1; i < 8; i++)
+          yield* f.broker.invoke({
+            scope,
+            operation: "open",
+            input: { reuseExistingTab: false, show: false },
+          });
+        const probe = yield* Effect.promise(() => f.page.context().newCDPSession(f.page));
+        const session = Object.getPrototypeOf(probe) as { send: (...args: unknown[]) => unknown };
+        const send = session.send;
+        // As when the opener's context closes while its refused popup is being closed.
+        const closeTarget = vi.spyOn(session, "send").mockImplementation(function (
+          this: unknown,
+          ...args
+        ) {
+          if (args[0] !== "Target.closeTarget") return Reflect.apply(send, this, args);
+          return Promise.reject(new Error("Target page, context or browser has been closed"));
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => closeTarget.mockRestore()));
+        const popupReady = f.page.waitForEvent("popup");
+        yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
+        const popup = yield* Effect.promise(() => popupReady);
+        const closeEvent = yield* Deferred.make<void>();
+        if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
+        else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
+        yield* Deferred.await(closeEvent);
+        expect(closeTarget).toHaveBeenCalledWith("Target.closeTarget", expect.anything());
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.effect("an allowed popup receives clipboard instrumentation", () =>
   Effect.scoped(
     Effect.gen(function* () {
