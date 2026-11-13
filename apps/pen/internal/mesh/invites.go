@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"maps"
 	"sync"
@@ -11,21 +12,63 @@ import (
 	"github.com/goat-si/goat/apps/pen/internal/state"
 )
 
-// Invite is an entry of offers.json: a live single-use invite, or the terminal state a bound invite reached.
+// Invite is an entry of offers.json: a live single-use invite, or the terminal state a bound invite reached. Its file
+// form is inviteFile.
 type Invite struct {
-	ID        string `json:"id,omitempty"`
-	Secret    []byte `json:"secret,omitempty"`
-	ExpiresAt int64  `json:"expiresAt,omitempty"`
+	ID        string
+	Secret    []byte
+	ExpiresAt int64
 	// Subject, when set, is the only machine the invite admits (a bound invite).
-	Subject *Subject `json:"subject,omitempty"`
+	Subject *Subject
 	// MintID is the caller's name for the request that made a bound invite, or for a cancel that came first.
-	MintID string `json:"mintId,omitempty"`
+	MintID string
 	// State is empty for a live invite, else burned, cancelled or expired. A terminal entry keeps no secret and no
-	// expiresAt, so a node older than bound invites reads it as expired and prunes it.
-	State string `json:"state,omitempty"`
+	// expiry.
+	State string
 	// Nonce is a burned invite's offer nonce, which the admitted card repeats; At is when it reached State.
-	Nonce string `json:"nonce,omitempty"`
-	At    int64  `json:"at,omitempty"`
+	Nonce string
+	At    int64
+}
+
+// inviteFile is an Invite as offers.json stores it. An ordinary invite has exactly dev's members (id, secret,
+// expiresAt). A bound one keeps its secret and expiry under boundSecret and boundExpiresAt, which a node older than
+// bound invites does not read: after a downgrade it sees no secret and no expiry, takes the entry for expired and
+// prunes it instead of admitting any machine with it.
+type inviteFile struct {
+	ID             string   `json:"id,omitempty"`
+	Secret         []byte   `json:"secret,omitempty"`
+	ExpiresAt      int64    `json:"expiresAt,omitempty"`
+	Subject        *Subject `json:"subject,omitempty"`
+	MintID         string   `json:"mintId,omitempty"`
+	BoundSecret    []byte   `json:"boundSecret,omitempty"`
+	BoundExpiresAt int64    `json:"boundExpiresAt,omitempty"`
+	State          string   `json:"state,omitempty"`
+	Nonce          string   `json:"nonce,omitempty"`
+	At             int64    `json:"at,omitempty"`
+}
+
+// MarshalJSON writes the file form.
+func (x Invite) MarshalJSON() ([]byte, error) {
+	f := inviteFile{ID: x.ID, Secret: x.Secret, ExpiresAt: x.ExpiresAt, Subject: x.Subject, MintID: x.MintID, State: x.State,
+		Nonce: x.Nonce, At: x.At}
+	if x.Subject != nil {
+		f.Secret, f.ExpiresAt, f.BoundSecret, f.BoundExpiresAt = nil, 0, x.Secret, x.ExpiresAt
+	}
+	return json.Marshal(f)
+}
+
+// UnmarshalJSON reads the file form.
+func (x *Invite) UnmarshalJSON(b []byte) error {
+	var f inviteFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return err
+	}
+	*x = Invite{ID: f.ID, Secret: f.Secret, ExpiresAt: f.ExpiresAt, Subject: f.Subject, MintID: f.MintID, State: f.State,
+		Nonce: f.Nonce, At: f.At}
+	if f.Subject != nil {
+		x.Secret, x.ExpiresAt = f.BoundSecret, f.BoundExpiresAt
+	}
+	return nil
 }
 
 // Invite states as cancel answers them.

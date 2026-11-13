@@ -748,3 +748,32 @@ func TestAnOrdinaryInvitesEntryIsUnchanged(t *testing.T) {
 		t.Fatalf("offers.json\n%s\nwant\n%s (%v, %v)", got, want, err1, err2)
 	}
 }
+
+// After a downgrade a node older than bound invites reads offers.json with dev's struct: a live bound invite must look
+// expired to it, with no secret, so it prunes the entry instead of admitting any machine with it. This node still uses it.
+func TestALiveBoundInviteIsUnusableToAnOlderBinary(t *testing.T) {
+	st := tmpState(t)
+	iv, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.CreateBound(subjectOf(detID(3), "j"), "m", now.Add(time.Minute), at(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old []devInvite
+	if _, err := st.ReadJSON("offers.json", &old); err != nil || len(old) != 1 {
+		t.Fatalf("offers.json as dev reads it: %+v (%v)", old, err)
+	}
+	if len(old[0].Secret) != 0 || old[0].ExpiresAt > now.UnixMilli() {
+		t.Fatalf("dev's struct reads %+v; want no secret and an expiry already passed", old[0])
+	}
+	again, err := LoadInvites(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if y, ok := again.Lookup(x.ID, now); !ok || string(y.Secret) != string(x.Secret) || y.ExpiresAt != x.ExpiresAt {
+		t.Fatalf("reloaded %+v (found %v); want the live bound invite with its secret and expiry", y, ok)
+	}
+}
