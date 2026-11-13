@@ -23,7 +23,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
-import { GoatBotHomeWork } from "./GoatBotHomeWork";
+import { GoatBotHomeWork, workRowCollapsed } from "./GoatBotHomeWork";
 import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
 import { GoatBotNewRoutineButton, GoatBotRoutines } from "./GoatBotRoutines";
@@ -119,7 +119,13 @@ export function GoatBotWorkPanel({
   const restoreHome = (element: HTMLElement | null) => {
     if (element === null || element === homePanel.current) return;
     homePanel.current = element;
-    if (routineFocus === null) element.scrollTop = homeScroll.current;
+    if (routineFocus === null) {
+      element.scrollTop = homeScroll.current;
+      // A row Back returned focus to may have moved below that scroll while the peek was open.
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && element.contains(active))
+        active.scrollIntoView({ block: "nearest" });
+    }
   };
   const member = useGoatBotMember();
   const botName = useGoatBotName();
@@ -203,6 +209,12 @@ export function GoatBotWorkPanel({
           onAcknowledged={refresh}
           onRetry={onRetryInput}
           onBack={() => {
+            // Work that finished meanwhile may have pushed this row behind Show more.
+            if (
+              peeked !== undefined &&
+              workRowCollapsed(rows, environmentId, remoteWork, peek.taskId)
+            )
+              setShowAllWork(true);
             setFocusTarget(peeked === undefined ? "home" : peek.taskId);
             setPeekHasFocus(false);
             setPeek(null);
@@ -297,6 +309,7 @@ export function GoatBotWorkPanel({
                 failed={failed}
                 failure={failure}
                 supported={supported}
+                offline={offline}
                 onRetry={refresh}
                 peekable={peekRows !== undefined}
                 showAll={showAllWork}

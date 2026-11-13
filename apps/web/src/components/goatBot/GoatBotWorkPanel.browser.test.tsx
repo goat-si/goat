@@ -193,11 +193,13 @@ it("keeps Home scrolled where it was through Show more and a peek", async () => 
   expect(home.scrollHeight).toBeGreaterThan(home.clientHeight);
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   await expect.element(screen.getByText("Done 6")).toBeVisible();
-  home.scrollTop = 12;
-  home.dispatchEvent(new Event("scroll", { bubbles: true }));
-  // A plain click: the browser's own actionability would scroll the row in first and record that.
   const row = screen.getByRole("button", { name: /^Done 6/ }).element();
   if (!(row instanceof HTMLButtonElement)) throw new Error("Expected a task button");
+  // Scrolled so the last row shows, as it must for a person to open it.
+  row.scrollIntoView({ block: "nearest" });
+  home.dispatchEvent(new Event("scroll", { bubbles: true }));
+  const scrolled = home.scrollTop;
+  expect(scrolled).toBeGreaterThan(0);
   row.click();
   await expect
     .element(screen.getByRole("button", { name: /Back to Home from Done 6/ }))
@@ -207,7 +209,7 @@ it("keeps Home scrolled where it was through Show more and a peek", async () => 
   await expect.element(screen.getByRole("button", { name: /^Done 6/ })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: /^Done 6/ })).toHaveFocus();
   const back = screen.getByRole("tabpanel").element();
-  expect(back.scrollTop).toBe(12);
+  expect(back.scrollTop).toBe(scrolled);
 });
 
 it("opens the routine a chip names even when it sits behind Show more", async () => {
@@ -289,7 +291,7 @@ it("Home shows work and routines on one scroll, and Library holds files and memo
       threadId={ThreadId.make("bot")}
     />,
   );
-  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   await expect.element(screen.getByText("Notes need a newer GOAT server.")).toBeVisible();
@@ -374,6 +376,45 @@ it("steps back from a peek to its row with Escape", async () => {
     .toHaveFocus();
 });
 
+/** A finished task whose last activity is the given hour of 9 November. */
+const finishedTask = (id: string, hour: number) => {
+  const when = `2026-11-09T${String(hour).padStart(2, "0")}:00:00.000Z`;
+  return {
+    ...runningTask,
+    task: { taskId: id, title: `Finished ${id}`, status: "completed", updatedAt: when },
+    view: { taskId: id, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: when,
+  };
+};
+
+it("Back returns focus to a peeked row that newer finished work pushed behind Show more, and shows it", async () => {
+  setup([], [], [finishedTask("target", 10)]);
+  const panel = () => (
+    // A short panel, so the row's new place is below the scroll Home returns to.
+    <div className="flex h-96 flex-col">
+      <GoatBotWorkPanel
+        onOpenFile={() => {}}
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+        peekRows={() => []}
+      />
+    </div>
+  );
+  await using screen = await render(panel());
+  await userEvent.click(screen.getByRole("button", { name: /^Finished target/ }));
+  const back = screen.getByRole("button", { name: /Back to Home from Finished target/ });
+  await expect.element(back).toHaveFocus();
+  // Five tasks finish while the peek is open, so the peeked one is now sixth.
+  mocks.rows = [11, 12, 13, 14, 15]
+    .map((hour) => finishedTask(`newer-${hour}`, hour))
+    .concat([finishedTask("target", 10)]);
+  await screen.rerender(panel());
+  await userEvent.click(screen.getByRole("button", { name: /Back to Home from Finished target/ }));
+  const target = screen.getByRole("button", { name: /^Finished target/ });
+  await expect.element(target).toHaveFocus();
+  await expect.element(target).toBeInViewport();
+});
+
 it("closes the peek when the task leaves the bot's work", async () => {
   setup([], [], [runningTask]);
   await using screen = await render(
@@ -395,7 +436,7 @@ it("closes the peek when the task leaves the bot's work", async () => {
     />,
   );
   await expect.element(screen.getByRole("tab", { name: "Home" })).toBeVisible();
-  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   // Focus was on Back, which is gone; it lands on Home instead of the page.
   await expect.element(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   // The task coming back does not reopen a peek nobody asked for.
@@ -431,7 +472,7 @@ it("leaves focus in the composer when a peeked task leaves the list", async () =
   await userEvent.keyboard("still typing");
   setup([]);
   await screen.rerender(panel());
-  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(composer).toHaveFocus();
   await expect.element(composer).toHaveValue("still typing");
 });
@@ -457,7 +498,7 @@ it("leaves focus where it was when a peeked task leaves the list after a click o
   expect(document.activeElement).toBe(document.body);
   setup([]);
   await screen.rerender(panel());
-  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByRole("tab", { name: "Home" })).not.toHaveFocus();
   expect(document.activeElement).toBe(document.body);
 });
@@ -473,7 +514,7 @@ it("says the task list is loading, not empty, before the first read answers", as
     />,
   );
   await expect.element(screen.getByText("Loading tasks…")).toBeVisible();
-  await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
+  await expect.element(screen.getByText("No recent tasks")).not.toBeInTheDocument();
 });
 
 it("a failed task read offers a retry and keeps the tasks it already knew", async () => {
@@ -505,7 +546,7 @@ it("a failed first task read never claims there are no tasks", async () => {
     />,
   );
   await expect.element(screen.getByText("Couldn't load GOAT Bot's tasks.")).toBeVisible();
-  await expect.element(screen.getByText("No tasks yet")).not.toBeInTheDocument();
+  await expect.element(screen.getByText("No recent tasks")).not.toBeInTheDocument();
 });
 
 it("says routines are loading, not empty, before the first read answers", async () => {

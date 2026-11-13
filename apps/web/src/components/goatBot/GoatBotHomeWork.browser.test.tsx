@@ -196,7 +196,7 @@ it("keeps skeleton rows while the first read runs, not an empty claim", async ()
   expect(screen.container.querySelectorAll("[data-slot='skeleton']").length).toBeGreaterThanOrEqual(
     3,
   );
-  expect(screen.container.textContent).not.toContain("No tasks yet");
+  expect(screen.container.textContent).not.toContain("No recent tasks");
 });
 
 it("a failed read keeps the rows it knew and offers one retry", async () => {
@@ -219,9 +219,41 @@ it("an access-denied read explains itself and offers no retry that can never suc
   expect(screen.container.textContent).not.toContain("Try again");
 });
 
-it("an empty list says one thing and offers the one next action", async () => {
+it("an empty list claims only recent work and offers the one next action", async () => {
   const rows = setup([]);
   await using screen = await render(view(rows));
-  await expect.element(screen.getByText("No tasks yet")).toBeVisible();
+  await expect.element(screen.getByText("No recent tasks")).toBeVisible();
   await expect.element(screen.getByText(/Ask GOAT Bot in chat to start work/)).toBeVisible();
+  await expect
+    .element(
+      screen.getByText(/Unpinned tasks that finished more than three days ago aren't listed here/),
+    )
+    .toBeVisible();
+});
+
+it("says the computer is offline instead of loading forever, and an unsupported read never loads", async () => {
+  const rows = setup([]);
+  await using screen = await render(view(rows, { loaded: false, supported: false, offline: true }));
+  await expect
+    .element(screen.getByText("GOAT Bot's tasks are unavailable while the computer is offline."))
+    .toBeVisible();
+  expect(screen.container.textContent).not.toContain("Loading tasks");
+  expect(screen.container.querySelectorAll("[data-slot='skeleton']").length).toBe(0);
+  await screen.rerender(view(rows, { loaded: false, supported: false }));
+  await expect.element(screen.getByText(/Tasks can't be listed from this server/)).toBeVisible();
+  expect(screen.container.textContent).not.toContain("Loading tasks");
+});
+
+it("the row's chevron opens the task like its title, and Show work opens what it ran", async () => {
+  const rows = setup([taskRow("task-a", "Stop the port", "running", "2026-11-09T01:00:00.000Z")]);
+  const onOpenTask = vi.fn();
+  await using screen = await render(view(rows, { onOpenTask }));
+  const chevron = screen.container.querySelector("[data-work-chevron]");
+  expect(chevron).not.toBeNull();
+  await userEvent.click(chevron as Element);
+  expect(onOpenTask).toHaveBeenCalledOnce();
+  const showWork = screen.getByRole("button", { name: "Show work" });
+  await userEvent.click(showWork);
+  await expect.element(showWork).toHaveAttribute("aria-expanded", "true");
+  expect(onOpenTask).toHaveBeenCalledOnce();
 });

@@ -20,6 +20,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   EllipsisIcon,
+  ListIcon,
   MessageCircleQuestionIcon,
 } from "../solar";
 import { Button } from "../ui/button";
@@ -49,6 +50,18 @@ const MARK = {
 } as const;
 type Mark = keyof typeof MARK;
 
+/** Whether Back's row now sits behind Show more, so the list opens to give it focus again. */
+export function workRowCollapsed(
+  rows: ReadonlyArray<BotThreadRow>,
+  environmentId: EnvironmentId,
+  remoteWork: ReadonlyArray<BotRemoteWork>,
+  taskId: ChannelTaskId,
+): boolean {
+  return botHomeWork(rows, [], environmentId, remoteWork)
+    .finished.slice(COLLAPSED_FINISHED)
+    .some((task) => task.row.task.taskId === taskId);
+}
+
 /**
  * Home's Work card: going, then waiting on a person, then finished. Rows come from the bot's task
  * list; a merged history will supply the same rows here without changing this component.
@@ -62,6 +75,7 @@ export function GoatBotHomeWork({
   failed,
   failure = null,
   supported = true,
+  offline = false,
   onRetry,
   onOpenTask,
   peekable = true,
@@ -83,6 +97,8 @@ export function GoatBotHomeWork({
   readonly failure?: unknown;
   /** False on a server that cannot list this bot's work at all. */
   readonly supported?: boolean;
+  /** The computer is offline, so nothing can be read until it reconnects. */
+  readonly offline?: boolean;
   readonly onRetry: () => void;
   /** Opens a row's conversation in place; absent leaves each row a link to the task's thread. */
   readonly onOpenTask: (row: TaskRow) => void;
@@ -118,7 +134,11 @@ export function GoatBotHomeWork({
   return (
     <div className="flex flex-col">
       {notice}
-      {!supported ? (
+      {offline ? (
+        <p className="px-3 py-3 text-muted-foreground">
+          {botName}'s tasks are unavailable while the computer is offline.
+        </p>
+      ) : !supported ? (
         <p className="px-3 py-3 text-muted-foreground">
           Tasks can't be listed from this server right now.
         </p>
@@ -132,7 +152,7 @@ export function GoatBotHomeWork({
           </Button>
         </div>
       ) : null}
-      {!loaded && !failed && (
+      {supported && !offline && !loaded && !failed && (
         <>
           <p className="sr-only">Loading tasks…</p>
           <GoatBotCardSkeleton rows={3} />
@@ -140,8 +160,11 @@ export function GoatBotHomeWork({
       )}
       {loaded && !failed && empty && (
         <div className="space-y-0.5 px-3 py-3">
-          <p className="font-medium text-foreground">No tasks yet</p>
-          <p className="text-muted-foreground">Ask {botName} in chat to start work.</p>
+          <p className="font-medium text-foreground">No recent tasks</p>
+          <p className="text-muted-foreground">
+            Ask {botName} in chat to start work. Unpinned tasks that finished more than three days
+            ago aren't listed here.
+          </p>
         </div>
       )}
       {work.running.map((task) => row(task, "running"))}
@@ -228,23 +251,17 @@ function WorkRow({
             type="button"
             ref={focusRef}
             onClick={() => onOpenTask(row)}
-            className="min-w-0 flex-1 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <span data-work-title className="block truncate">
-              {title}
-            </span>
-            <span className="block truncate text-xs text-muted-foreground">{status.label}</span>
+            <WorkRowText title={title} status={status.label} />
           </button>
         ) : (
           <Link
             to="/bot"
             search={{ task: row.task.taskId, ...goatBotSearch(member) }}
-            className="min-w-0 flex-1 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <span data-work-title className="block truncate">
-              {title}
-            </span>
-            <span className="block truncate text-xs text-muted-foreground">{status.label}</span>
+            <WorkRowText title={title} status={status.label} />
           </Link>
         )}
         {row.unread && (
@@ -260,10 +277,7 @@ function WorkRow({
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          <ChevronRightIcon
-            aria-hidden
-            className={cn("size-4 transition-transform", expanded && "rotate-90")}
-          />
+          <ListIcon aria-hidden />
         </Button>
         {canUpdate ? (
           <Button
@@ -290,5 +304,24 @@ function WorkRow({
         </div>
       )}
     </div>
+  );
+}
+
+/** A row's title and status, then the chevron that says the row opens. */
+function WorkRowText({ title, status }: { readonly title: string; readonly status: string }) {
+  return (
+    <>
+      <span className="min-w-0 flex-1">
+        <span data-work-title className="block truncate">
+          {title}
+        </span>
+        <span className="block truncate text-xs text-muted-foreground">{status}</span>
+      </span>
+      <ChevronRightIcon
+        data-work-chevron
+        aria-hidden
+        className="size-4 shrink-0 text-muted-foreground"
+      />
+    </>
   );
 }
