@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -30,12 +31,16 @@ export const inspectPenExactAlias = Effect.fn("ssh/penAlias.inspectPenExactAlias
   function* (input: {
     readonly alias: string;
     readonly homeDirectory: string;
+    // Allows a test to isolate ssh from the user and system configuration.
+    readonly sshConfigFile?: string;
     readonly sshCommand?: string;
     readonly sshKeygenCommand?: string;
   }) {
     const { alias } = input;
     const error = (detail: string) => new PenAliasUnreadable({ alias, detail });
     if (!PEN_EXACT_ALIAS.test(alias)) return { refused: "not-in-pen-config" as const };
+    const platform = yield* HostProcess.Platform;
+    const environment = yield* HostProcess.Environment;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.join(input.homeDirectory, ".ssh", "pen");
@@ -53,20 +58,25 @@ export const inspectPenExactAlias = Effect.fn("ssh/penAlias.inspectPenExactAlias
           () => error(`${cmd} printed more than GOAT reads`),
         ),
       );
-    const resolved = yield* run(input.sshCommand ?? "ssh", ["-G", alias]);
+    const resolved = yield* run(input.sshCommand ?? "ssh", [
+      ...(input.sshConfigFile === undefined ? [] : ["-F", input.sshConfigFile]),
+      "-G",
+      alias,
+    ]);
     if (resolved.exitCode !== 0) return yield* error("ssh -G failed");
     const settings = sshSettings(resolved.stdout);
     const penKnownHosts = path.join(dir, "known_hosts");
     const preliminary = penExactAliasDecision({
       alias,
       configHosts,
+      platform,
       settings,
       penKnownHosts,
       globalKey: false,
       recorded: "key",
     });
     if (typeof preliminary === "string") return { refused: preliminary };
-    const globals = penGlobalFiles(settings);
+    const globals = penGlobalFiles(settings, { platform, programData: environment.ProgramData });
     const exists = (file: string) =>
       fs.exists(file).pipe(
         Effect.timeout("10 seconds"),
@@ -92,6 +102,7 @@ export const inspectPenExactAlias = Effect.fn("ssh/penAlias.inspectPenExactAlias
     const decision = penExactAliasDecision({
       alias,
       configHosts,
+      platform,
       settings,
       penKnownHosts,
       globalKey,

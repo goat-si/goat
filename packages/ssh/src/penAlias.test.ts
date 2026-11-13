@@ -1,3 +1,5 @@
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Path from "effect/Path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 import { expect, it } from "@effect/vitest";
@@ -108,5 +110,50 @@ it.effect("reports a command timeout as unreadable", () =>
     yield* Deferred.await(started);
     yield* TestClock.adjust("10 seconds");
     expect((yield* Fiber.join(fiber))._tag).toBe("PenAliasUnreadable");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["trusted", "joined-collision"] as const)("inspects Windows %s", (mode) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.makeTempDirectoryScoped();
+    const dir = path.join(home, ".ssh", "pen");
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(path.join(dir, "config"), `Host ${alias}\n`);
+    const global = [
+      "C:\\ProgramData\\ssh/ssh_known_hosts",
+      "C:\\ProgramData\\ssh/ssh_known_hosts2",
+    ];
+    const known = "C:\\Users\\jun\\.ssh\\pen\\known_hosts";
+    const settings = `hostname ${alias}\nport 22\nproxycommand "C:\\pen.exe" pipe --node ${node} --noise ${noise} 22\nproxyjump none\nstricthostkeychecking yes\ncontrolmaster no\nuserknownhostsfile C:/Users/jun/.ssh/pen/known_hosts\nglobalknownhostsfile ${global.join(" ")}\n`;
+    const spawner = lazyChildProcessSpawner((command) => {
+      if (command._tag !== "StandardCommand") return Effect.die("pipeline");
+      if (command.command === "fake-ssh") {
+        expect(command.args).toEqual(["-F", "fixture-config", "-G", alias]);
+        return Effect.succeed(makeSuccessfulProcess(settings));
+      }
+      return Effect.succeed(makeSuccessfulProcess(`${alias} ssh-ed25519 AAA`));
+    });
+    const result = yield* inspectPenExactAlias({
+      alias,
+      homeDirectory: home,
+      sshCommand: "fake-ssh",
+      sshConfigFile: "fixture-config",
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, { ProgramData: "C:\\ProgramData" }),
+      Effect.provideService(Path.Path, {
+        ...path,
+        join: (...parts) => (parts.at(-1) === "known_hosts" ? known : path.join(...parts)),
+      }),
+      Effect.provideService(FileSystem.FileSystem, {
+        ...fs,
+        exists: (file) => Effect.succeed(mode === "joined-collision" && file === global.join(" ")),
+      }),
+    );
+    if (mode === "trusted") expect(result).toMatchObject({ alias, nodeId: node });
+    else expect(result).toEqual({ refused: "global-known-hosts" });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
