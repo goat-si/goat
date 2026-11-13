@@ -56,11 +56,15 @@ vi.mock("./settingsLayout", () => ({
 import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
 
 const environmentId = EnvironmentId.make("test-hub");
-function setup(enabled: boolean) {
+function setup(enabled: boolean, expiresAt: string | null = null) {
   state.hub = {
     ...DEFAULT_SERVER_SETTINGS.hub,
     enabled: true,
-    attachDisposableMachines: { ...DEFAULT_SERVER_SETTINGS.hub.attachDisposableMachines, enabled },
+    attachDisposableMachines: {
+      ...DEFAULT_SERVER_SETTINGS.hub.attachDisposableMachines,
+      enabled,
+      expiresAt,
+    },
   };
   // An older hub drops the switch from the patch and answers with it off.
   state.save.mockReset().mockResolvedValue({ _tag: "Success", value: DEFAULT_SERVER_SETTINGS });
@@ -107,4 +111,20 @@ it("shows the invite once and clears it when the attach dialog closes", async ()
   await userEvent.click(screen.getByRole("button", { name: "Close", exact: true }).first());
   await userEvent.click(screen.getByRole("button", { name: "Attach a machine" }));
   await expect.element(screen.getByText("secret-token")).not.toBeInTheDocument();
+});
+
+it("an expired consent offers a renewal and holds Attach until a person renews", async () => {
+  using fixture = setup(true, "2020-01-01T00:00:00.000Z");
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await expect.element(screen.getByText(/Consent ended/)).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Attach a machine" })).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Renew for 30 days" }));
+  expect(state.save).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: { patch: { hub: { attachDisposableMachines: { expiresAt: expect.any(String) } } } },
+  });
 });

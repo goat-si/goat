@@ -3,6 +3,7 @@ import { disposableSwitchSaveError } from "@goat/client-runtime/hub-devices";
 import { isHubMachinesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
+  DISPOSABLE_SWITCH_DAYS,
   HubMachinesError,
   ThreadId,
   type EnvironmentId,
@@ -33,6 +34,7 @@ import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const isMachinesError = Schema.is(HubMachinesError);
+const DAY_MS = 24 * 60 * 60 * 1000;
 /** The hub's own refusal text; anything else (a dropped connection) gets the fixed fallback. */
 function failureText(failure: unknown, fallback: string): string {
   return isMachinesError(failure) ? failure.detail : fallback;
@@ -54,6 +56,7 @@ export function DisposableMachinesSettings({
   const reissue = useAtomCommand(serverEnvironment.hubMachinesReissue, { reportFailure: false });
   const list = useEnvironmentQuery(serverEnvironment.hubMachinesList({ environmentId, input: {} }));
   const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [thread, setThread] = useState("");
   const [cap, setCap] = useState(String(settings.cap));
@@ -70,6 +73,7 @@ export function DisposableMachinesSettings({
       input: { patch: { hub: { attachDisposableMachines: patch } } },
     });
     setBusy(false);
+    setNow(Date.now());
     if (result._tag === "Failure") {
       const failure = squashAtomCommandFailure(result);
       setError(failureText(failure, "Could not save disposable machine settings."));
@@ -95,9 +99,12 @@ export function DisposableMachinesSettings({
       else setError(`No new invite was made: ${result.value.message}`);
     }
   }
+  // The server keeps an expired switch on and reads it as closed; only a person renews it.
+  const expired =
+    settings.enabled && settings.expiresAt !== null && Date.parse(settings.expiresAt) <= now;
   const expires =
     settings.enabled && settings.expiresAt !== null
-      ? ` Consent ends ${new Date(settings.expiresAt).toLocaleString()}.`
+      ? ` Consent ${expired ? "ended" : "ends"} ${new Date(settings.expiresAt).toLocaleString()}.`
       : "";
   if (list.failure !== null && isHubMachinesUnsupportedError(list.failure))
     return (
@@ -116,12 +123,28 @@ export function DisposableMachinesSettings({
         title="Attach disposable machines"
         description={`The threads you name here, and you in Settings, may admit up to ${settings.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${expires}`}
         control={
-          <Switch
-            aria-label="Attach disposable machines"
-            checked={settings.enabled}
-            disabled={!available}
-            onCheckedChange={(enabled) => void update({ enabled })}
-          />
+          <div className="flex items-center gap-2">
+            {expired && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!available}
+                onClick={() =>
+                  void update({
+                    expiresAt: new Date(Date.now() + DISPOSABLE_SWITCH_DAYS * DAY_MS).toISOString(),
+                  })
+                }
+              >
+                Renew for 30 days
+              </Button>
+            )}
+            <Switch
+              aria-label="Attach disposable machines"
+              checked={settings.enabled}
+              disabled={!available}
+              onCheckedChange={(enabled) => void update({ enabled })}
+            />
+          </div>
         }
       />
       <SettingsRow
@@ -250,7 +273,7 @@ export function DisposableMachinesSettings({
             </Button>
             <Button
               size="xs"
-              disabled={!canAttach || busy || !hub.enabled || !settings.enabled}
+              disabled={!canAttach || busy || !hub.enabled || !settings.enabled || expired}
               onClick={() => setDialog({ kind: "attach" })}
             >
               Attach a machine
