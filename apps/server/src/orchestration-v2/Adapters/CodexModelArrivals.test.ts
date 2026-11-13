@@ -576,3 +576,58 @@ it.effect("a process with no catalog configured never isolates new threads once 
     assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "ready");
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("a catalog that changed into something GOAT cannot parse still counts as changed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const filename = NodePath.join(yield* fs.makeTempDirectoryScoped(), "catalog.json");
+    yield* writeCatalog(filename, { [known]: 272_000 }, 1_000);
+    const { modelStatus } = yield* catalogArrivals(filename, 2_000);
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    // The sync is midway through writing it, or wrote something that is not a catalog.
+    yield* fs.writeFileString(filename, "{ not json");
+    yield* fs.utimes(filename, 3, 3);
+    yield* modelStatus(known);
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a home-relative catalog path GOAT cannot resolve is not taken for no catalog", () =>
+  Effect.gen(function* () {
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known)],
+      offered: Effect.succeed([model(known)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        readConfig: Effect.succeed({ config: { model_catalog_json: "~/catalog.json" } }),
+      },
+    });
+    assert.strictEqual(yield* modelStatus(known), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("custom models stay GOAT's own and skip the catalog check", () =>
+  Effect.gen(function* () {
+    const custom = "custom/my-model";
+    const modelStatus = makeCodexModelArrivals({
+      atStart: [model(known), model(custom, true)],
+      offered: Effect.succeed([model(known), model(custom, true)]),
+      listServed: Effect.succeed([known]),
+      startedAtMs: 2_000,
+      catalog: {
+        cwd: "/",
+        home: undefined,
+        fileSystem: yield* FileSystem.FileSystem,
+        // Codex has not answered yet, so every catalog model counts as unconfirmed.
+        readConfig: Effect.never,
+      },
+    });
+    assert.strictEqual(yield* modelStatus(custom, { cachedOnly: true }), "ready");
+    assert.strictEqual(yield* modelStatus(known, { cachedOnly: true }), "outdated");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

@@ -65,8 +65,15 @@ export const makeCodexCatalogFreshness = <E>(input: {
   let catalogPath: Option.Option<string | undefined> = Option.none();
   let configFailedAtMs: number | undefined;
   let baseline: Entries | "unknown" | undefined;
-  let current: { readonly identity: string; readonly entries: Entries | undefined } | undefined;
+  /** GOAT's last successful read of the catalog file. */
+  let current: { readonly identity: string; readonly entries: Entries } | undefined;
   let refreshing = false;
+
+  const lookupFailed = Effect.fnUntraced(function* (detail: string) {
+    if (configFailedAtMs === undefined) yield* Effect.logWarning(detail);
+    configFailedAtMs = yield* Clock.currentTimeMillis;
+    return undefined;
+  });
 
   const resolvePath = Effect.gen(function* () {
     if (
@@ -78,17 +85,13 @@ export const makeCodexCatalogFreshness = <E>(input: {
       Effect.timeoutOption("10 seconds"),
       Effect.orElseSucceed(() => Option.none<{ readonly config: unknown }>()),
     );
-    if (Option.isNone(answer)) {
-      if (configFailedAtMs === undefined)
-        yield* Effect.logWarning("Codex did not say where its model catalog is; retrying later");
-      configFailedAtMs = yield* Clock.currentTimeMillis;
-      return undefined;
-    }
+    if (Option.isNone(answer))
+      return yield* lookupFailed("Codex did not say where its model catalog is; retrying later");
     const pointer = record(answer.value.config)?.model_catalog_json;
+    if (typeof pointer === "string" && pointer.startsWith("~") && input.home === undefined)
+      return yield* lookupFailed("Codex's model catalog path needs a home directory GOAT lacks");
     const filename =
-      typeof pointer !== "string" ||
-      pointer.length === 0 ||
-      (pointer.startsWith("~") && input.home === undefined)
+      typeof pointer !== "string" || pointer.length === 0
         ? undefined
         : NodePath.resolve(input.cwd, expandHomePath(pointer, input.home ?? ""));
     catalogPath = Option.some(filename);
@@ -102,16 +105,20 @@ export const makeCodexCatalogFreshness = <E>(input: {
       ? parseEntries(yield* input.fileSystem.readFileString(filename))
       : undefined;
     // A rewrite during the read would pair new entries with the old time, so that read is dropped.
-    if (describe(yield* input.fileSystem.stat(filename)).identity !== before.identity) return;
+    // So is a file that is not a catalog GOAT can parse: it never counts as read.
+    if (
+      entries === undefined ||
+      describe(yield* input.fileSystem.stat(filename)).identity !== before.identity
+    )
+      return;
     current = { identity: before.identity, entries };
-    if (entries !== undefined)
-      baseline ??= before.mtimeMs < input.startedAtMs ? entries : "unknown";
+    baseline ??= before.mtimeMs < input.startedAtMs ? entries : "unknown";
   });
   const refresh = (filename: string) =>
     read(filename).pipe(Effect.timeoutOption("2 seconds"), Effect.ignoreCause);
 
   const judge = (model: string) => {
-    const entry = current?.entries?.get(model);
+    const entry = current?.entries.get(model);
     if (entry === undefined || baseline === undefined) return false;
     return baseline === "unknown" || baseline.get(model) !== entry;
   };

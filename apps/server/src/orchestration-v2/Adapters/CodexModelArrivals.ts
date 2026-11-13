@@ -180,6 +180,8 @@ export const makeCodexModelArrivals = <E>(input: {
   ) {
     const status = yield* arrival(model, options);
     if (status !== "ready" && status !== "unconfirmed") return status;
-    return outdated && (yield* outdated(model, options)) ? "outdated" : status;
+    if (!outdated || (yield* input.offered).some((entry) => entry.slug === model && entry.isCustom))
+      return status;
+    return (yield* outdated(model, options)) ? "outdated" : status;
   });
 };
