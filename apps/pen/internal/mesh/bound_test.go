@@ -469,3 +469,22 @@ func TestABurnWhoseAdmitIsNotSavedReportsBurnedUnsaved(t *testing.T) {
 		t.Fatalf("status %+v; want burned-unsaved naming the admit", got)
 	}
 }
+
+// A reference naming neither an id nor a mintId names nothing: ordinary invites carry no mintId and are not matched.
+func TestAnEmptyReferenceNamesNoInvite(t *testing.T) {
+	_, s, iv := joinFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	x, err := iv.Create(time.Minute, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := iv.Cancel("", "", now); err != nil || got != InviteAbsent {
+		t.Fatalf("cancel of nothing: %q, %v; want absent", got, err)
+	}
+	if got := StatusOf(s, iv, "", "", now); got.State != InviteAbsent {
+		t.Fatalf("status of nothing: %+v; want absent", got)
+	}
+	if _, ok := iv.Lookup(x.ID, now); !ok {
+		t.Fatal("the ordinary invite was cancelled by an empty reference")
+	}
+}

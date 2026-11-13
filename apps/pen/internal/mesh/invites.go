@@ -244,6 +244,9 @@ func (iv *Invites) findLocked(id, mintID string) (Invite, bool) {
 		x, ok := iv.byID[id]
 		return x, ok
 	}
+	if mintID == "" {
+		return Invite{}, false
+	}
 	for _, x := range iv.byID {
 		if x.MintID == mintID {
 			return x, true
