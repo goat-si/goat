@@ -643,3 +643,16 @@ it.effect("an attach that loses its authority after the machine joined says so i
     }),
   ),
 );
+
+it.effect("a list of records never makes the machine key; only attach does", () =>
+  world((_pen, _home, _grant, host) =>
+    Effect.gen(function* () {
+      yield* Effect.flatMap(Attach.DisposableAttach, (service) => service.list({}));
+      expect(host.control.keysMade).toBe(0);
+      yield* attach(1);
+      expect(host.control.keysMade).toBe(1);
+      yield* Effect.flatMap(Attach.DisposableAttach, (service) => service.list({}));
+      expect(host.control.keysMade).toBe(1);
+    }),
+  ),
+);

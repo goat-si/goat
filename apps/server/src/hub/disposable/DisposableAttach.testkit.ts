@@ -11,7 +11,7 @@ import * as Settings from "../../serverSettings.ts";
 import type { Delegation } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import * as Store from "./DisposableMachineStore.ts";
-import { fakeEnrollHost, fakeMachineKey } from "./DisposableEnroll.testkit.ts";
+import { fakeEnrollHost } from "./DisposableEnroll.testkit.ts";
 import { EnrollHost } from "./EnrollHost.ts";
 import { MachineKey } from "./machineKey.ts";
 import { withPersonConsent } from "./disposableSwitch.ts";
@@ -255,7 +255,7 @@ export const world = <A, E>(
     Effect.provideServiceEffect(Store.DisposableMachineStore, Store.make),
     Effect.provideService(PenInvites, pen.service),
     Effect.provideService(EnrollHost, host.service),
-    Effect.provideService(MachineKey, fakeMachineKey),
+    Effect.provideService(MachineKey, host.machineKey),
     Effect.provideService(
       HomeContracts,
       HomeContracts.of({
