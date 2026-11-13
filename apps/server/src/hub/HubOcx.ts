@@ -31,7 +31,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
 import { SAFE_LINK_ID } from "./opencodexSyncPlan.ts";
-import { PEN_CONFIG_MAX_BYTES, PEN_READ_TIMEOUT, readPenConfig } from "./penConfigFile.ts";
+import { PEN_CONFIG_MAX_BYTES, PEN_READ_TIMEOUT, readPenConfig } from "@goat/ssh/penConfigFile";
 import {
   fingerprintOfType,
   isPlainRoute,
@@ -40,7 +40,7 @@ import {
   penKnownHostsFile,
   penRevision,
   sshSettings,
-} from "./penSshRoute.ts";
+} from "@goat/ssh/penRoute";
 
 const MAX_BYTES = 256 * 1024;
 // A busy Home's full process listing passes 256 KiB; this bounds that one transient read.

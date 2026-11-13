@@ -35,6 +35,18 @@
       "types": "./src/probeOptions.ts",
       "import": "./src/probeOptions.ts"
     },
+    "./penRoute": {
+      "types": "./src/penRoute.ts",
+      "import": "./src/penRoute.ts"
+    },
+    "./penConfigFile": {
+      "types": "./src/penConfigFile.ts",
+      "import": "./src/penConfigFile.ts"
+    },
+    "./penAlias": {
+      "types": "./src/penAlias.ts",
+      "import": "./src/penAlias.ts"
+    },
     "./preflight": {
       "types": "./src/preflight.ts",
       "import": "./src/preflight.ts"

@@ -17,8 +17,8 @@ import type * as Schema from "effect/Schema";
 import * as Settings from "../serverSettings.ts";
 import { decodeLinkRowRoute, type LinkRowObservationFields } from "./hubOcxJson.ts";
 import { makeLinkTrafficBook, type LinkTrafficView } from "./linkTrafficBook.ts";
-import { readPenConfig } from "./penConfigFile.ts";
-import { penConfigHosts } from "./penSshRoute.ts";
+import { readPenConfig } from "@goat/ssh/penConfigFile";
+import { penConfigHosts } from "@goat/ssh/penRoute";
 
 type Link = OpenCodexInventorySnapshot["link"]["links"][number];
 type Base = Omit<Link, "traffic" | "route" | "transport">;
