@@ -55,7 +55,6 @@ export function useBotWorkHistory(
   botId: BotId | null,
   capabilities: ExecutionEnvironmentCapabilities | undefined,
   current: ChannelListBotThreadsResult,
-  _revision: number,
   loaded: boolean,
 ) {
   const read = useAtomCommand(channelEnvironment.listBotThreadsPage, { reportFailure: false });
@@ -63,7 +62,9 @@ export function useBotWorkHistory(
   const [stored, setStored] = useState(() => emptyWalk(key));
   const identity = useRef<{ key: string } | null>(null);
   const walk = stored.key === key ? stored : emptyWalk(key);
-  if (stored.key !== key) setStored(walk);
+  // Every update starts from this key's walk, so a bot switch never applies to the old one.
+  const update = (change: (state: Walk) => Walk) =>
+    setStored((state) => change(state.key === key ? state : emptyWalk(key)));
   const active = useRef<object | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Invalidate pending pages when the key changes or the panel unmounts.
   useLayoutEffect(() => {
@@ -88,61 +89,41 @@ export function useBotWorkHistory(
   const merged = mergeBotThreadHistory(current, historySupported ? [history] : []);
   const hasMore =
     loaded && historySupported && !walk.capped && (!walk.started || walk.cursor !== undefined);
-  function applyView(taskId: ChannelTaskId, view: ChannelTaskView) {
-    setStored((state) => {
-      if (state.key !== key) return state;
-      return {
-        ...state,
-        entries: state.entries.map((entry) => {
-          if (entry.task.task.taskId !== taskId) return entry;
-          const through = view.readThrough === null ? NaN : Date.parse(view.readThrough);
-          const last = Date.parse(entry.task.lastActivityAt);
-          const task = {
-            ...entry.task,
-            view,
-            unread:
-              entry.task.unread &&
-              !(Number.isFinite(through) && Number.isFinite(last) && last <= through),
-          };
-          return {
-            ...entry,
-            task,
-            rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
-          };
-        }),
-      };
+  // A view from the server replaces the entry's view; a read-through never moves backwards.
+  function applyView(taskId: ChannelTaskId, view: Partial<ChannelTaskView>) {
+    update((state) => {
+      const entries = state.entries.map((entry) => {
+        if (entry.task.task.taskId !== taskId) return entry;
+        const old = entry.task.view.readThrough;
+        const next = view.readThrough ?? null;
+        const readThrough =
+          next === null || (old !== null && Date.parse(old) >= Date.parse(next)) ? old : next;
+        const task = {
+          ...entry.task,
+          view: { ...entry.task.view, ...view, readThrough },
+          unread:
+            entry.task.unread &&
+            !(
+              readThrough !== null &&
+              Date.parse(entry.task.lastActivityAt) <= Date.parse(readThrough)
+            ),
+        };
+        return {
+          ...entry,
+          task,
+          rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
+        };
+      });
+      return { ...state, entries };
     });
   }
-  function markRead(taskId: ChannelTaskId, through: string) {
-    setStored((state) => {
-      if (state.key !== key) return state;
-      return {
-        ...state,
-        entries: state.entries.map((entry) => {
-          if (entry.task.task.taskId !== taskId) return entry;
-          const old = entry.task.view.readThrough;
-          const readThrough = old !== null && Date.parse(old) > Date.parse(through) ? old : through;
-          const task = {
-            ...entry.task,
-            view: { ...entry.task.view, readThrough },
-            unread:
-              entry.task.unread &&
-              !(Date.parse(entry.task.lastActivityAt) <= Date.parse(readThrough)),
-          };
-          return {
-            ...entry,
-            task,
-            rows: entry.rows.map((row) => (row.kind === "task" ? task : row)),
-          };
-        }),
-      };
-    });
-  }
+  const markRead = (taskId: ChannelTaskId, through: string) =>
+    applyView(taskId, { readThrough: through });
   async function loadMore() {
     const token = identity.current;
     if (!hasMore || token === null || token.key !== key || active.current === token) return;
     active.current = token;
-    setStored((state) => (state.key === key ? { ...state, loading: true, failed: false } : state));
+    update((state) => ({ ...state, loading: true, failed: false }));
     try {
       const result = await readBotThreadHistory({
         from: walk.cursor,
@@ -157,8 +138,7 @@ export function useBotWorkHistory(
         },
       });
       if (identity.current !== token) return;
-      setStored((state) => {
-        if (state.key !== key) return state;
+      update((state) => {
         if (!result.supported) return { ...state, unsupported: true, loading: false };
         const entries = [...state.entries];
         const ids = new Set(entries.map((entry) => entry.task.task.taskId));
@@ -200,9 +180,7 @@ export function useBotWorkHistory(
       });
     } catch {
       if (identity.current === token)
-        setStored((state) =>
-          state.key === key ? { ...state, loading: false, failed: true } : state,
-        );
+        update((state) => ({ ...state, loading: false, failed: true }));
     } finally {
       if (active.current === token) active.current = null;
     }

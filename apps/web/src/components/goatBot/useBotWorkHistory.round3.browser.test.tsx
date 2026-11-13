@@ -32,14 +32,12 @@ const page = (rows: readonly unknown[], history: Record<string, unknown>) => ({
 const current = (rows: unknown[]) => ({ rows, mainMessageCount: 0 }) as ChannelListBotThreadsResult;
 function History({
   list,
-  revision = 0,
   botId = null,
 }: {
   list: ChannelListBotThreadsResult;
-  revision?: number;
   botId?: BotId | null;
 }) {
-  const history = useBotWorkHistory(env, botId, capabilities, list, revision, true);
+  const history = useBotWorkHistory(env, botId, capabilities, list, true);
   return (
     <>
       {history.hasMore && <button onClick={history.loadMore}>Read history</button>}
@@ -81,7 +79,7 @@ it("keeps the walk and its pending page when the current list refreshes", async 
   );
   await using screen = await render(<History list={current([])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
-  await screen.rerender(<History list={current([])} revision={1} />);
+  await screen.rerender(<History list={current([])} />);
   await act(() => finish(page([old], {})));
   await expect.element(screen.getByText("Old task Unpinned")).toBeVisible();
   expect(mock.read).toHaveBeenCalledTimes(1);
@@ -95,7 +93,7 @@ it("remembers unsupported history across current-list refreshes", async () => {
   await expect
     .element(screen.getByRole("button", { name: "Read history" }))
     .not.toBeInTheDocument();
-  await screen.rerender(<History list={current([])} revision={1} />);
+  await screen.rerender(<History list={current([])} />);
   await expect
     .element(screen.getByRole("button", { name: "Read history" }))
     .not.toBeInTheDocument();
@@ -191,6 +189,6 @@ it("does not let an unchanged current list undo a newer view update", async () =
   await using screen = await render(<History list={current([old])} />);
   await userEvent.click(screen.getByRole("button", { name: "Read history" }));
   await userEvent.click(screen.getByRole("button", { name: "Pin old" }));
-  await screen.rerender(<History list={current([])} revision={1} />);
+  await screen.rerender(<History list={current([])} />);
   await expect.element(screen.getByText("Old task Pinned")).toBeVisible();
 });

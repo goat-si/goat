@@ -62,7 +62,6 @@ export function useBotThreads(
   return {
     rows: threads.data?.rows ?? [],
     mainMessageCount: threads.data?.mainMessageCount ?? 0,
-    revision: threads.dataUpdatedAt,
     /** Threads the bot launched on other machines; none from servers before this list. */
     remoteWork: threads.data?.remoteWork ?? NO_REMOTE_WORK,
     supported,

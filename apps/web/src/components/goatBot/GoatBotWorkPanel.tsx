@@ -148,7 +148,6 @@ export function GoatBotWorkPanel({
       remoteWork: current.remoteWork,
       mainMessageCount: current.mainMessageCount ?? 0,
     },
-    current.revision ?? 0,
     loaded && !failed,
   );
   const { rows, remoteWork } = history;
