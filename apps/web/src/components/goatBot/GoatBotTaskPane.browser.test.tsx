@@ -213,7 +213,7 @@ it("does not jump a new source when an earlier task submission appears later", a
       state.rows = [];
     },
   };
-  const rows: GoatBotRow[] = Array.from({ length: 40 }, (_, i) => ({
+  const rows: Array<Extract<GoatBotRow, { kind: "user" }>> = Array.from({ length: 40 }, (_, i) => ({
     kind: "user",
     id: `history-${i}`,
     sendKey: null,
