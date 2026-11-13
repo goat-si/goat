@@ -66,7 +66,8 @@ export function HubDeviceRoutes({
   const [readError, setReadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // An exclusive link's one route is fixed at enrollment; OpenCodex refuses every edit.
-  const editable = canChange && routes?.exclusive !== true;
+  // While a change waits for its decision, other edits wait too, so the slot holds that change.
+  const editable = canChange && routes?.exclusive !== true && waiting === null;
 
   /**
    * keepAnswer: a read-back after a change. It updates the list and leaves the change's notice;
@@ -117,12 +118,15 @@ export function HubDeviceRoutes({
     });
     settle(result);
     // A failed call (such as a decision not answered yet) or a fixed refusal leaves the approval
-    // unspent, so a waiting change stays continuable; any other answer settles it.
+    // unspent, so a waiting change stays continuable; only its own decision's answer settles it.
     if (result._tag === "Success") {
       const value = result.value;
+      const own =
+        decisionId !== undefined &&
+        registry.get(waitingRoutesAtom)[waitingKey]?.decisionId === decisionId;
       if (value.state === "needs_human" && value.decisionId !== undefined)
         setWaiting({ change: next, decisionId: value.decisionId });
-      else if (!(value.state === "failed" && value.code !== undefined)) setWaiting(null);
+      else if (own && !(value.state === "failed" && value.code !== undefined)) setWaiting(null);
     }
     // A stored change that the Home could not apply yet still lists, so read it back, as does a
     // change continued from the row before the list was read.
@@ -146,7 +150,8 @@ export function HubDeviceRoutes({
       <div className="space-y-1.5 text-xs">
         <p className="text-muted-foreground">
           A route change waits for a decision. A person who can change this hub's settings answers
-          it in the decision inbox. Then continue here.
+          it in the decision inbox. Then continue here. Other edits wait until it is continued or
+          discarded. Discard forgets it here; the decision stays in the inbox until it is answered.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>

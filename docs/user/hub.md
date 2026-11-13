@@ -116,11 +116,11 @@ up or down, or remove one; the pinned alias stays. A link created with one
 exclusive route keeps that route and cannot be edited, and a Child that opened
 its own link to the hub has no routes to change. When you cannot answer hub
 decisions yourself, a change waits in the decision inbox; continue it from the
-row once it is approved. If the hub does not answer within 2 minutes, the change
-may still finish there, so open the routes again before you retry. Agents use
-`goat_hub_device_routes_update`, and a profile other than owner asks you first.
-Routes need an OpenCodex release with link routes on the hub; an older one says
-so.
+row once it is approved, until the page reloads. If the hub does not answer
+within 2 minutes, the change may still finish there, so open the routes again
+before you retry. Agents use `goat_hub_device_routes_update`, and a profile
+other than owner asks you first. Routes need an OpenCodex release with link
+routes on the hub; an older one says so.
 
 ## Sync OpenCodex models
 

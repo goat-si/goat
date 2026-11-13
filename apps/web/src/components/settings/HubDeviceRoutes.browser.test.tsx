@@ -275,3 +275,105 @@ it("a waiting change that can no longer be continued can be discarded, and stays
   expect(state.update).toHaveBeenCalledTimes(1);
   registry.dispose();
 });
+it("while a change waits for a decision, other edits are off and the row says why; Discard says the decision stays open", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini", "pen-mini"]));
+  state.update.mockReset().mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      deviceAlias: "mini",
+      state: "needs_human",
+      message: "Changing a Child's routes needs an owner's approval.",
+      linkId: "lnk_0123456789abcdef",
+      decisionId: "decision-1",
+    } satisfies HubDeviceRoutesResult,
+  });
+  const registry = AtomRegistry.make();
+  await using screen = await render(
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="hub-initiated"
+      />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Routes" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
+  await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  await expect.element(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Remove pen-mini" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Move pen-mini up" })).toBeDisabled();
+  await expect.element(screen.getByRole("textbox", { name: "New route for mini" })).toBeDisabled();
+  await expect
+    .element(screen.getByText(/Other edits wait until it is continued or discarded/))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText(/Discard forgets it here; the decision stays in the inbox/))
+    .toBeVisible();
+  registry.dispose();
+});
+
+it("a continued change that fails without a refusal code settles the waiting change; one with a refusal code keeps it", async () => {
+  state.list.mockReset().mockResolvedValue(listed(["mini"]));
+  state.update
+    .mockReset()
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "needs_human",
+        message: "Changing a Child's routes needs an owner's approval.",
+        linkId: "lnk_0123456789abcdef",
+        decisionId: "decision-1",
+      } satisfies HubDeviceRoutesResult,
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "failed",
+        code: "route_unproven",
+        message: "The Home could not prove the link's pinned host key over that route (hostkey).",
+        linkId: "lnk_0123456789abcdef",
+      } satisfies HubDeviceRoutesResult,
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        deviceAlias: "mini",
+        state: "failed",
+        message:
+          "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
+        linkId: "lnk_0123456789abcdef",
+      } satisfies HubDeviceRoutesResult,
+    });
+  const registry = AtomRegistry.make();
+  await using screen = await render(
+    <RegistryContext value={registry}>
+      <HubDeviceRoutes
+        environmentId={EnvironmentId.make("hub")}
+        alias="mini"
+        direction="hub-initiated"
+      />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Routes" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New route for mini" }), "mini-lan");
+  await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent(
+      "The Home could not prove the link's pinned host key over that route (hostkey).",
+    );
+  await expect.element(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await expect
+    .element(screen.getByRole("alert"))
+    .toHaveTextContent(
+      "ocx stopped before it answered. The Home may still finish the change, so read the routes again before you retry it.",
+    );
+  await expect.element(screen.getByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("textbox", { name: "New route for mini" })).toBeEnabled();
+  registry.dispose();
+});
