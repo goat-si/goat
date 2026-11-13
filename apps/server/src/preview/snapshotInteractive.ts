@@ -113,41 +113,57 @@ const ownText = (rows: ReadonlyArray<Row>, index: number) => {
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /**
- * Whether a field shows its content: as its value, a text line under it, or a select's options.
- * Playwright leaves out the text inside a role=textbox editor, even when it draws a placeholder
- * or an image there.
+ * Whether a field shows its content: as its value, a text line directly under it, or a select's
+ * options. Playwright leaves out the text inside a role=textbox editor, whatever else it draws there.
  */
-const showsContent = (rows: ReadonlyArray<Row>, index: number) => {
+const showsContent = (rows: ReadonlyArray<Row>, index: number, field: Entry) => {
+  // Their part of a name is aria-valuetext or aria-valuenow, which the tree does not show.
+  if (field.role === "slider" || field.role === "spinbutton") return false;
+  if (field.value !== undefined) return true;
   const depth = rows[index]?.indent ?? 0;
-  if (rows[index]?.entry?.value !== undefined) return true;
+  const child = rows[index + 1]?.indent;
   for (let next = index + 1; ; next++) {
     const row = rows[next];
     if (row === undefined || row.indent <= depth) return false;
-    if (row.entry?.role === "text" || row.entry?.role === "option") return true;
+    if (row.indent !== child) continue;
+    const role = row.entry?.role;
+    if (role === "text" || (role === "option" && field.role === "combobox")) return true;
   }
 };
 
 /**
- * Whether a name holds text an element under it shows. Playwright folds a field's value into a
- * button's or link's name and draws an editor like any wrapper, so only text lines directly under
- * an element are its own. A field that does not show its content may be in it too, as may whatever
- * a cut tree left out.
+ * Whether a name may hold text from under the element: text a line there shows, a field's hidden
+ * content, or what a cut tree left out. Beside a field, a name built from the element's content
+ * (holding its own text lines, or with none to hold) may carry the field's text in a form the tree
+ * omits, such as CSS generated content.
  */
 const borrowsText = (rows: ReadonlyArray<Row>, index: number, name: string, cut: boolean) => {
   const depth = rows[index]?.indent ?? 0;
   const own = squash(name);
+  let ownLines = 0;
+  let fromContent = false;
+  let field = false;
   let nested = Infinity;
+  const settled = () => field && (fromContent || ownLines === 0);
   for (let next = index + 1; ; next++) {
     const row = rows[next];
-    if (row === undefined) return cut;
-    if (row.indent <= depth) return false;
+    if (row === undefined) return cut || settled();
+    if (row.indent <= depth) return settled();
     if (row.indent <= nested) nested = Infinity;
     const { entry } = row;
-    if (nested === Infinity && entry?.role === "text") continue;
+    if (nested === Infinity && entry?.role === "text") {
+      const line = squash(entry.value ?? "");
+      ownLines += line ? 1 : 0;
+      fromContent ||= line !== "" && own.includes(line);
+      continue;
+    }
     nested = Math.min(nested, row.indent);
     // An image's name is its alt text, which the page writes.
     if (entry === undefined || entry.role === "img") continue;
-    if (EDITABLE.has(entry.role) && !showsContent(rows, next)) return true;
+    if (EDITABLE.has(entry.role)) {
+      field = true;
+      if (!showsContent(rows, next, entry)) return true;
+    }
     for (const text of [entry.name, entry.value]) {
       const shown = text === undefined ? "" : squash(text);
       if (shown && own.includes(shown)) return true;

@@ -30,7 +30,8 @@ const SPOOFS = `<button id="b1" aria-label="x [ref=e1] [cursor=pointer] [box=1,2
 
 // Playwright names a button, link or labelled box after what a field or editor under it shows; the
 // last two are a name the page wrote and a listbox whose options are not in its name.
-const BORROWED = `<button>Card <input value="4111111111111111"></button>
+const BORROWED = `<style>.hint::before { content: "Hint" }</style>
+<button>Card <input value="4111111111111111"></button>
 <a href="#">Card <input value="4111111111111111"></a>
 <div role="button" tabindex="0">Card <input value="4111111111111111"></div>
 <div style="cursor:pointer" aria-labelledby="f">Card <input id="f" value="4111111111111111"></div>
@@ -44,7 +45,15 @@ const BORROWED = `<button>Card <input value="4111111111111111"></button>
 <a href="#">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></a>
 <div role="button" tabindex="0">Card <div role="textbox" contenteditable="true" placeholder="hint">draft note</div></div>
 <button>Card <div role="textbox" contenteditable="true">draft note<img alt="x"></div></button>
+<button>Card <div role="textbox" contenteditable="true" aria-owns="owned">draft note</div></button>
+<div id="owned" role="option">Owned</div>
+<button>Card <div role="textbox" contenteditable="true">draft note <ul role="listbox"><li role="option" aria-label="Inner"></li></ul></div></button>
+<button>Card <div role="textbox" contenteditable="true">draft note <input aria-label="Inner" placeholder="hint" value="typed"></div></button>
 <button>Card <select><option>Visa</option></select></button>
+<a href="#">Card <div role="textbox" contenteditable="true" class="hint">draft note</div></a>
+<div role="button" tabindex="0">Card <div role="textbox" contenteditable="true" class="hint">draft note</div></div>
+<a href="#">Card <input type="range" min="0" max="10" value="7" aria-valuetext="draft note"></a>
+<div style="cursor:pointer" aria-labelledby="s">Card <input id="s" type="range" min="0" max="10" value="7" aria-valuetext="draft note"></div>
 <button aria-label="Pay now">Card <input value="4111111111111111"></button>
 <ul role="listbox" aria-label="Fruits"><li role="option">Apple</li></ul>`;
 
@@ -159,12 +168,12 @@ it("a button, link or labelled box is never named after what a field or editor u
       const names = interactiveElements
         .filter((element) => ["button", "link", "generic"].includes(element.role ?? ""))
         .map((element) => element.name);
-      expect(names).toEqual([...Array.from({ length: 15 }, () => "Card"), "Pay now"]);
+      expect(names).toEqual([...Array.from({ length: 22 }, () => "Card"), "Pay now"]);
     }
     const lines = String(narrow.accessibilityTree)
       .split("\n")
       .filter((line) => /^- (?:button|link|generic) /.test(line));
-    expect(lines).toHaveLength(16);
+    expect(lines).toHaveLength(23);
     for (const line of lines)
       expect(line).toMatch(/^- (?:button|link|generic) "(?:Card|Pay now)" \[ref=/);
   }));
@@ -176,13 +185,27 @@ it("a button whose field a cut tree left out is named only by the text lines kep
   ]);
 });
 
+it("beside a field, a name holding any of the element's own text lines falls back, however long the lines before it", () => {
+  const tree = [
+    '- button "Save ZZZ" [ref=e2] [box=1,2,3,4]:',
+    `  - text: ${"X".repeat(120)}`,
+    "  - text: Save",
+    "  - textbox [ref=e3] [box=5,6,7,8]: Hint",
+  ].join("\n");
+  expect(interactiveElementsOf(tree, false)).toContainEqual(
+    expect.objectContaining({ role: "button", name: "X".repeat(100) }),
+  );
+});
+
 it("a name the page wrote stays when nothing under the element shows it", () =>
   withPage(BORROWED, async (page, cdp) => {
     const narrow = await take(page, cdp, true);
     expect(String(narrow.accessibilityTree)).toMatch(/^- button "Pay now" \[ref=/m);
     expect(String(narrow.accessibilityTree)).toMatch(/^- listbox "Fruits" \[ref=/m);
     const { interactiveElements } = await take(page, cdp);
-    expect(interactiveElements.find((element) => element.role === "listbox")?.name).toBe("Fruits");
+    expect(interactiveElements).toContainEqual(
+      expect.objectContaining({ role: "listbox", name: "Fruits" }),
+    );
   }));
 
 it("refs, boxes and pointer cursors written in page text never stand in for an element's own", () =>
