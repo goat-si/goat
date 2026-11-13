@@ -99,12 +99,14 @@ export type DisposableSwitch =
  * Whether the switch admits attach work at `nowMs`, and under which grant. The grant covers the
  * grantId and the consent itself, so a change written without a new grantId (a hand edit of the
  * settings file) still ends every grant taken before it. A switch with no grantId is off.
+ * Every write holds the expiry to 30 days ahead, so one farther ahead (a hand edit) reads closed.
  */
 export const disposableSwitch = (hub: HubSettings, nowMs: number): DisposableSwitch => {
   const value = hub.attachDisposableMachines;
   if (!hub.enabled || !value.enabled || value.grantId === null)
     return { open: false, reason: "switch_off" };
-  if (value.expiresAt === null || !(Date.parse(value.expiresAt) > nowMs))
+  const expiresAtMs = value.expiresAt === null ? Number.NaN : Date.parse(value.expiresAt);
+  if (!(expiresAtMs > nowMs) || expiresAtMs > nowMs + DISPOSABLE_SWITCH_DAYS * 86_400_000)
     return { open: false, reason: "switch_expired" };
   const digest = NodeCrypto.createHash("sha256").update(consent(hub)).digest("hex").slice(0, 16);
   return { open: true, grant: `${value.grantId}:${digest}` };

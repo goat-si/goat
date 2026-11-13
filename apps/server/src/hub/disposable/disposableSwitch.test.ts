@@ -333,5 +333,12 @@ it.effect("the switch admits work only while on, unexpired and holding its grant
     };
     const reopened = disposableSwitch(edited, DAY_MS);
     expect(reopened.open && open.open && reopened.grant !== open.grant).toBe(true);
+    // Every write holds the expiry to 30 days ahead, so a farther one came from a hand edit.
+    const far = {
+      ...base,
+      attachDisposableMachines: { ...base.attachDisposableMachines, expiresAt: iso(32) },
+    };
+    expect(disposableSwitch(far, DAY_MS)).toEqual({ open: false, reason: "switch_expired" });
+    expect(disposableSwitch(far, 2 * DAY_MS).open).toBe(true);
   }),
 );
