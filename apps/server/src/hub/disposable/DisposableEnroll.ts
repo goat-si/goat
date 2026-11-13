@@ -364,14 +364,21 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     enroll: Enroll,
     route: StoredRoute,
   ) {
-    if (!declares(yield* home.contracts, [...LINK_CONTRACTS, LINK_IDENTITY_CONTRACT])) {
-      if (enroll.link?.outcome !== "opencodex_unsupported")
+    const contracts = yield* home.contracts;
+    // A Home without explicit routes can be updated; no release takes the key with a route yet.
+    const missing = !declares(contracts, LINK_CONTRACTS)
+      ? "opencodex_unsupported"
+      : !declares(contracts, [LINK_IDENTITY_CONTRACT])
+        ? "identity_unsupported"
+        : undefined;
+    if (missing !== undefined) {
+      if (enroll.link?.outcome !== missing)
         yield* note(row, {
           ...enroll,
           link: {
             attempt: enroll.link?.attempt ?? 0,
             intentAtMs: enroll.link?.intentAtMs ?? 0,
-            outcome: "opencodex_unsupported",
+            outcome: missing,
           },
         });
       return;

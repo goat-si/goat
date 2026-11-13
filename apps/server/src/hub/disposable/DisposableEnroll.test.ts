@@ -138,10 +138,18 @@ it.effect(
         yield* enroll;
         yield* enroll;
         expect(linkAdds(host.control.calls)).toEqual([]);
+        // No OpenCodex release takes a key with the route yet, so an update cannot help.
+        const waiting = yield* listed(attachId);
+        expect(waiting).toMatchObject({ state: "attaching" });
+        expect(waiting?.message).toContain("No OpenCodex release");
+        expect(waiting?.message).not.toContain("update OpenCodex");
+        // A Home older than explicit routes is told to update.
+        home.contracts = new Set(["link.operation/1", "link.recover/1"]);
+        yield* enroll;
         expect(yield* listed(attachId)).toMatchObject({
-          state: "attaching",
           message: expect.stringContaining("update OpenCodex"),
         });
+        expect(linkAdds(host.control.calls)).toEqual([]);
       }),
     ),
 );

@@ -244,7 +244,9 @@ const WAITING: Record<string, string> = {
   unreachable:
     "GOAT cannot reach the machine with the hub's machine key yet; add machineKey to its user's authorized_keys.",
   opencodex_unsupported:
-    "This hub's OpenCodex cannot link a machine with the hub's machine key yet; update OpenCodex.",
+    "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
+  identity_unsupported:
+    "No OpenCodex release can link a machine with the hub's machine key yet, so updating OpenCodex does not help; the machine waits here until one can.",
   journal_unreadable: "OpenCodex's link operation journal could not be read; GOAT asks again.",
   open: "OpenCodex is still running the link operation.",
   not_started: "OpenCodex did not record the link operation; GOAT sends it again on a later pass.",
