@@ -301,7 +301,7 @@ function HubControls({
             />
           }
         />
-        <PenHubNodesSetting />
+        <PenHubNodesSetting environmentId={environmentId} />
         <HubRelayWarningRow
           environmentId={environmentId}
           warning={home?.link.relayWarning ?? null}
