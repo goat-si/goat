@@ -54,8 +54,7 @@ export function HubDeviceRoutes({
     const { [waitingKey]: _previous, ...rest } = registry.get(waitingRoutesAtom);
     registry.set(waitingRoutesAtom, next === null ? rest : { ...rest, [waitingKey]: next });
   };
-  // Back from the decision inbox, a waiting change opens the panel so it can be continued.
-  const [open, setOpen] = useState(waiting !== null);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [routes, setRoutes] = useState<{
     pin: string;
@@ -125,12 +124,11 @@ export function HubDeviceRoutes({
         setWaiting({ change: next, decisionId: value.decisionId });
       else if (!(value.state === "failed" && value.code !== undefined)) setWaiting(null);
     }
-    // A stored change that the Home could not apply yet still lists, so read it back.
-    if (
-      result._tag === "Success" &&
-      result.value.state === "ok" &&
-      result.value.routes === undefined
-    )
+    // A stored change that the Home could not apply yet still lists, so read it back, as does a
+    // change continued from the row before the list was read.
+    const listedNow = result._tag === "Success" && result.value.routes !== undefined;
+    const stored = result._tag === "Success" && result.value.state === "ok";
+    if (!listedNow && (stored || routes === null))
       settle(await list({ environmentId, input: { deviceAlias: alias } }), true);
     setBusy(false);
   };
@@ -143,20 +141,52 @@ export function HubDeviceRoutes({
     void change({ op: "order", routes: order });
   };
 
+  const waitingNotice =
+    waiting === null ? null : (
+      <div className="space-y-1.5 text-xs">
+        <p className="text-muted-foreground">
+          A route change waits for a decision. A person who can change this hub's settings answers
+          it in the decision inbox. Then continue here.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>
+            Open decision
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={busy || !canChange}
+            onClick={() => {
+              setOpen(true);
+              void change(waiting.change, waiting.decisionId);
+            }}
+          >
+            Continue
+          </Button>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={() => setWaiting(null)}>
+            Discard
+          </Button>
+        </div>
+      </div>
+    );
+
   if (direction !== "hub-initiated") return null;
   if (!open)
     return (
-      <Button
-        size="xs"
-        variant="outline"
-        disabled={!canRead}
-        onClick={() => {
-          setOpen(true);
-          void read();
-        }}
-      >
-        Routes
-      </Button>
+      <>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={!canRead}
+          onClick={() => {
+            setOpen(true);
+            void read();
+          }}
+        >
+          Routes
+        </Button>
+        {waitingNotice}
+      </>
     );
   return (
     <section aria-label={`Routes of ${alias}`} className="space-y-2 rounded-md border p-2 text-xs">
@@ -255,27 +285,7 @@ export function HubDeviceRoutes({
           {answer.message}
         </p>
       )}
-      {waiting === null ? null : (
-        <div className="space-y-1.5">
-          <p className="text-muted-foreground">
-            A person who can change this hub's settings answers it in the decision inbox. Then
-            continue here.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="xs" variant="outline" render={<Link to="/settings/decision-inbox" />}>
-              Open decision
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={busy || !canChange}
-              onClick={() => void change(waiting.change, waiting.decisionId)}
-            >
-              Continue
-            </Button>
-          </div>
-        </div>
-      )}
+      {waitingNotice}
     </section>
   );
 }
