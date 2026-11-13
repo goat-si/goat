@@ -504,3 +504,22 @@ it.effect(
       }),
     ),
 );
+
+it.effect("a known_hosts GOAT cannot write waits; it is not read as a changed host key", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.knownHostsUnwritable = true;
+      yield* enroll;
+      expect(yield* listed(attachId)).toMatchObject({
+        state: "admitted",
+        class: "disposable",
+        message: expect.stringContaining("could not write"),
+      });
+      host.control.knownHostsUnwritable = false;
+      yield* enroll;
+      expect(yield* listed(attachId)).toMatchObject({ state: "attaching", step: "reach" });
+    }),
+  ),
+);

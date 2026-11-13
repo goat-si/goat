@@ -241,6 +241,8 @@ const WAITING: Record<string, string> = {
   no_exact_block: "Pen has not written this machine's route yet.",
   no_user: "Pen has not recorded this machine's SSH user yet.",
   no_key: "Pen has not recorded this machine's SSH host key yet.",
+  known_hosts_unwritable:
+    "GOAT could not write the machine's known_hosts file in its state folder; it tries again on the next pass.",
   unreachable: "GOAT cannot reach the machine with this hub's machine key yet.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",

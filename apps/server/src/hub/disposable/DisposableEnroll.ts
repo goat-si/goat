@@ -198,14 +198,21 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     }
     const line = disposableKnownHosts(row.node_id, pen.hostKey);
     if (line === undefined) return yield* conflict(row, enroll, "route_several_keys");
-    const knownHostsFile = yield* host.knownHosts(row.attach_id, line).pipe(Effect.option);
-    if (knownHostsFile._tag === "None") return yield* conflict(row, enroll, "pin_changed");
+    const knownHostsFile = yield* host.knownHosts(row.attach_id, line).pipe(Effect.result);
+    if (knownHostsFile._tag === "Failure") {
+      // Only a different key already pinned is a conflict; a failed write waits for the next pass.
+      if (knownHostsFile.failure.reason === "changed")
+        return yield* conflict(row, enroll, "pin_changed");
+      if (enroll.route?.outcome !== "known_hosts_unwritable")
+        yield* note(row, { ...enroll, route: { outcome: "known_hosts_unwritable", at: now } });
+      return;
+    }
     const route: StoredRoute = {
       proxyCommand: pen.proxyCommand,
       user: pen.user,
       hostKey: pen.hostKey,
       fingerprint: pen.fingerprint,
-      knownHostsFile: knownHostsFile.value,
+      knownHostsFile: knownHostsFile.success,
     };
     const stored = yield* forward(
       row,

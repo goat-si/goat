@@ -91,6 +91,7 @@ export const fakeEnrollHost = () => {
     holdRoute: undefined as Hold | undefined,
     holdReach: undefined as Hold | undefined,
     holdKnownHosts: undefined as Hold | undefined,
+    knownHostsUnwritable: false,
     holdOperations: undefined as Hold | undefined,
     journal,
     links,
@@ -145,6 +146,8 @@ export const fakeEnrollHost = () => {
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
           Effect.suspend(() => {
+            if (control.knownHostsUnwritable)
+              return Effect.fail(new KnownHostsError({ reason: "unwritable" }));
             const known = control.knownHosts.get(attachId);
             if (known !== undefined && known !== line)
               return Effect.fail(new KnownHostsError({ reason: "changed" }));
