@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
-import * as Option from "effect/Option";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
@@ -31,7 +30,9 @@ const at = "2026-11-04T10:00:00.000Z";
 describe("bot thread contracts", () => {
   it.effect("rejects a NUL query at the RPC boundary the same way as an invalid limit", () =>
     Effect.gen(function* () {
-      const rpc = ChannelRpcs.requests.get("channel.searchBotTasks");
+      const rpc = ChannelRpcs.requests.get("channel.searchBotTasks") as
+        | Extract<RpcGroup.Rpcs<typeof ChannelRpcs>, { readonly _tag: "channel.searchBotTasks" }>
+        | undefined;
       if (rpc === undefined) throw new Error("missing search RPC");
       const group = RpcGroup.make(rpc);
       const disconnects = yield* Queue.unbounded<number>();
@@ -44,7 +45,7 @@ describe("bot thread contracts", () => {
         send: (_client, response) => Queue.offer(replies, response).pipe(Effect.asVoid),
         end: () => Effect.void,
         clientIds: Effect.succeed(new Set()),
-        initialMessage: Effect.succeed(Option.none()),
+        initialMessage: Effect.succeedNone,
         supportsAck: false,
         supportsTransferables: false,
         supportsSpanPropagation: false,

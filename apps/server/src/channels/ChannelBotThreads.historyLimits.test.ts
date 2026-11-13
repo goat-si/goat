@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import { searchStatement } from "./channelBotTaskSearch.ts";
 import {
   CHANNEL_BOT_THREADS_HISTORY_EXAMINED,
   quietMessagesStatement,
@@ -25,6 +26,33 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("materializes a bounded indexed search before matching conversations", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        for (let index = 0; index < 510; index++)
+          yield* insertTask(name(index), { status: "completed", createdAt: at(index) });
+        const sql = yield* SqlClient.SqlClient;
+        for (const after of [undefined, { createdAt: at(250), taskId: name(250) }]) {
+          const statement = searchStatement(
+            sql,
+            { ownerId, botId: "main", query: "needle" },
+            after,
+          );
+          const plan = (yield* sql<{
+            readonly detail: string;
+          }>`EXPLAIN QUERY PLAN ${statement}`).map((row) => row.detail);
+          yield* Effect.logInfo(
+            (after === undefined ? "SEARCH FIRST PAGE PLAN\n" : "SEARCH CONTINUATION PLAN\n") +
+              plan.join("\n"),
+          );
+          assert.include(plan.join("\n"), "channel_tasks_owner_bot_created");
+          assert.match(plan.join("\n"), /MATERIALIZE candidates/);
+          assert.match(plan.join("\n"), /SEARCH c USING INDEX/);
+        }
+      }),
+    ),
+  );
   it.effect("reads a page from its index in order, without sorting", () =>
     provide(
       Effect.gen(function* () {

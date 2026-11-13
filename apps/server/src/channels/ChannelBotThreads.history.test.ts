@@ -21,6 +21,7 @@ import * as TaskViews from "./channelTaskViews.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
 import {
   botThreadId,
   goatInput,
@@ -49,6 +50,106 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history", () => {
+  it.effect("rejects a search query longer than 256 UTF-8 bytes", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const error = yield* Effect.flip(
+          service.searchBotTasks({ botId: BotId.make("main"), query: "😀".repeat(65) }, owner),
+        );
+        assert.strictEqual(error.reason, "invalid_input");
+      }),
+    ),
+  );
+  it.effect("bounds lookup task and coding titles without changing the stored task", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("title-lookup", { status: "running", createdAt: at(1) });
+        yield* launch("title-lookup", "long-child", "thread_launch", 1);
+        const sql = yield* SqlClient.SqlClient;
+        const title = "a".repeat(199) + " " + "b".repeat(4800);
+        const codingTitle = "x".repeat(199) + "😀tail";
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${title}) WHERE task_id = 'title-lookup'`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES ('thread:long-child', 'project:repo', ${codingTitle}, 'codex', 'full-access', 'default', ${at(1)}, ${at(1)}, '{}')`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const input = { taskId: ChannelTaskId.make("title-lookup"), botId: BotId.make("main") };
+        const known = yield* service.getBotTask(input, owner);
+        assert.strictEqual(known.task.state, "known");
+        if (known.task.state === "known") {
+          assert.strictEqual(known.task.row.task.title, "a".repeat(199));
+          assert.strictEqual(known.task.row.task.titleTruncated, true);
+        }
+        assert.strictEqual(known.codingRows[0]?.title, "x".repeat(199) + "😀");
+        assert.strictEqual(known.codingRows[0]?.titleTruncated, true);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        assert.strictEqual((yield* ledger.getTask(input.taskId))?.task.title, title);
+        yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${TaskViews.taskViewKey(ownerId, input.taskId)}, '{', ${at(1)})`;
+        const unavailable = yield* service.getBotTask(input, owner);
+        assert.strictEqual(unavailable.task.state, "unavailable");
+        if (unavailable.task.state === "unavailable") {
+          assert.strictEqual(unavailable.task.task.title, "a".repeat(199));
+          assert.strictEqual(unavailable.task.task.titleTruncated, true);
+        }
+      }),
+    ),
+  );
+  it.effect("excludes non-GOAT conversations and turn tasks from search", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("needle-work", { status: "completed", createdAt: at(1) });
+        yield* insertTask("needle-turn", { status: "completed", createdAt: at(2), kind: "turn" });
+        const sql = yield* SqlClient.SqlClient;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const first = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          first.tasks.map((task) => String(task.taskId)),
+          ["needle-work"],
+        );
+        yield* sql`UPDATE channel_conversations SET kind = 'slack' WHERE conversation_id = 'conv:bot'`;
+        const lookup = yield* Effect.flip(
+          service.getBotTask(
+            { taskId: ChannelTaskId.make("needle-work"), botId: BotId.make("main") },
+            owner,
+          ),
+        );
+        assert.strictEqual(lookup.reason, "not_found");
+        const second = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "needle" },
+          owner,
+        );
+        assert.deepStrictEqual(second.tasks, []);
+      }),
+    ),
+  );
+
+  it.effect("matches ASCII without case and keeps non-ASCII case distinct", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("Hello-Ä", { status: "completed", createdAt: at(1) });
+        const service = yield* BotThreads.ChannelBotThreads;
+        const ascii = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "hELLo" },
+          owner,
+        );
+        const nonAscii = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "ä" },
+          owner,
+        );
+        assert.deepStrictEqual(
+          ascii.tasks.map((task) => String(task.taskId)),
+          ["Hello-Ä"],
+        );
+        assert.deepStrictEqual(nonAscii.tasks, []);
+      }),
+    ),
+  );
   it.effect("returns persistence failure when a lookup database read fails", () =>
     provide(
       Effect.gen(function* () {
@@ -86,7 +187,7 @@ describe("ChannelBotThreads history", () => {
         );
         yield* setStatus("match-b", "completed", true);
         const next = yield* service.searchBotTasks(
-          { botId: BotId.make("main"), query: "match", cursor: first.nextCursor },
+          { botId: BotId.make("main"), query: "match", cursor: first.nextCursor ?? "" },
           owner,
         );
         assert.deepStrictEqual(
@@ -134,7 +235,7 @@ describe("ChannelBotThreads history", () => {
         assert.isUndefined(first.partial);
         assert.isString(first.nextCursor);
         const next = yield* service.searchBotTasks(
-          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor },
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
           owner,
         );
         assert.strictEqual(next.partial, true);
@@ -184,7 +285,10 @@ describe("ChannelBotThreads history", () => {
           ["main", "match", owner, "v1.@@@"],
         ] as const) {
           const error = yield* Effect.flip(
-            service.searchBotTasks({ botId: BotId.make(botId), query, cursor }, requestOwner),
+            service.searchBotTasks(
+              { botId: BotId.make(botId), query, cursor: cursor ?? "" },
+              requestOwner,
+            ),
           );
           assert.strictEqual(error.reason, "invalid_input");
         }
@@ -233,7 +337,7 @@ describe("ChannelBotThreads history", () => {
         assert.isUndefined(first.partial);
         assert.isString(first.nextCursor);
         const next = yield* service.searchBotTasks(
-          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor },
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
           owner,
         );
         assert.strictEqual(next.partial, true);
@@ -319,7 +423,7 @@ describe("ChannelBotThreads history", () => {
         assert.deepStrictEqual(first.tasks, []);
         assert.isString(first.nextCursor);
         const second = yield* service.searchBotTasks(
-          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor },
+          { botId: BotId.make("main"), query: "needle", cursor: first.nextCursor ?? "" },
           owner,
         );
         assert.deepStrictEqual(
