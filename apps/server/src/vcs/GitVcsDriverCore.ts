@@ -85,6 +85,7 @@ import {
   worktreeSparseCheckoutPatterns,
 } from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
+import { unsetInheritedRepositoryEnv } from "./VcsProcess.ts";
 import { makeCachedGitConfigReader } from "./gitConfigReadCache.ts";
 import { recordPushedUpstream, runSharedConfigCommand } from "./GitSharedConfig.ts";
 import {
@@ -863,6 +864,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
         const baseEnv = {
           ...process.env,
+          ...unsetInheritedRepositoryEnv(process.env, hostPlatform),
           // Concurrent status polls must not take index.lock to save refreshed indexes.
           GIT_OPTIONAL_LOCKS: "0",
           ...input.env,
@@ -2927,9 +2929,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const pathsToAdd = untrackedPaths.filter(
       (relativePath) => includeStagedDeletions || !stagedDeletions.has(relativePath),
     );
-    if (pathsToAdd.length === 0) return undefined;
     if (maxBytes !== undefined && (yield* untrackedExceedsLimit(cwd, pathsToAdd, maxBytes)))
       return null;
+    if (pathsToAdd.length === 0) return undefined;
 
     const indexPath = path.isAbsolute(indexValue.trim())
       ? indexValue.trim()
@@ -3009,7 +3011,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
     ).pipe(Effect.catchTags({ GitCommandError: failedUntrackedListing }));
     if ("unavailable" in untracked) return untracked;
-    // ls-files lists a nested repository with a trailing slash; its diff path has none.
     const paths = splitNullSeparatedGitStdoutPaths(untracked).filter(
       (candidate) =>
         onlyPath === undefined || candidate === onlyPath || candidate === `${onlyPath}/`,

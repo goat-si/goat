@@ -917,7 +917,6 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const indexId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
     const tempIndexPath = path.join(gitCommonDir, `goat-checkpoint-index-${indexId}`);
     const commitEnv: NodeJS.ProcessEnv = {
-      ...process.env,
       GIT_INDEX_FILE: tempIndexPath,
       GIT_AUTHOR_NAME: "GOAT",
       GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
