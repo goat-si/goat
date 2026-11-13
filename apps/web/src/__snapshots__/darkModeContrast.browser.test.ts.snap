@@ -3,6 +3,7 @@
 exports[`default light theme > keeps every root color token 1`] = `
 "--accent: rgb(243, 243, 243)
 --accent-foreground: rgb(13, 13, 13)
+--accent-opaque: rgb(243, 243, 243)
 --app-chrome-background: rgb(255, 255, 255)
 --app-scrollbar-thumb: rgb(217, 217, 217)
 --app-scrollbar-thumb-hover: rgb(191, 191, 191)
@@ -123,6 +124,7 @@ exports[`default light theme > keeps every root color token 1`] = `
 exports[`default light theme > keeps every sidebar color token 1`] = `
 "--accent: rgb(243, 243, 243)
 --accent-foreground: rgb(13, 13, 13)
+--accent-opaque: rgb(243, 243, 243)
 --app-chrome-background: rgb(255, 255, 255)
 --app-scrollbar-thumb: rgb(217, 217, 217)
 --app-scrollbar-thumb-hover: rgb(191, 191, 191)
