@@ -3,6 +3,7 @@ import {
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   presentTaskStatus,
+  workRowCollapsed,
 } from "@goat/client-runtime/goatBot";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type {
@@ -23,7 +24,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotMainAvatar, GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { GoatBotComputer } from "./GoatBotComputer";
 import { GoatBotEditBotButton } from "./GoatBotEditBotButton";
-import { GoatBotHomeWork, workRowCollapsed } from "./GoatBotHomeWork";
+import { GoatBotHomeWork } from "./GoatBotHomeWork";
 import { GoatBotLibrary } from "./GoatBotLibrary";
 import { GoatBotMemory } from "./GoatBotMemory";
 import { GoatBotNewRoutineButton, GoatBotRoutines } from "./GoatBotRoutines";
