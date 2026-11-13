@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Windows snapshots use a local Pen child.
+import * as NodeChildProcess from "node:child_process";
 import {
   DesktopPenMembersState,
   type DesktopPenMember,
@@ -19,6 +21,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -27,6 +30,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { PEN_MEMBERS_CHANGED_CHANNEL } from "../ipc/channels.ts";
+import { openPenSnapshotChild } from "./penSnapshotChild.ts";
+import { resolvePenBinary } from "./penPipe.ts";
 
 const REINSPECT_AFTER = "2 seconds";
 
@@ -242,11 +247,29 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
   } satisfies DesktopPenMembersShape;
 });
 
+export function selectPenSnapshotWatch(
+  platform: NodeJS.Platform,
+  openChild: typeof openPenSnapshotChild = openPenSnapshotChild,
+): PenMembershipSource["watch"] {
+  if (platform !== "win32") return watchPenSnapshots;
+  return (input) =>
+    watchPenSnapshots({
+      ...input,
+      connect: () =>
+        openChild({
+          stateDir: input.stateDir,
+          resolveBinary: () => resolvePenBinary({ platform, path: process.env.PATH }),
+          spawn: (path, args, options) => NodeChildProcess.spawn(path, [...args], options),
+        }),
+    });
+}
+
 export const layer = Layer.effect(
   DesktopPenMembers,
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const platform = yield* HostProcess.Platform;
     const fs = yield* FileSystem.FileSystem;
     const services = yield* Effect.context<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
@@ -255,7 +278,7 @@ export const layer = Layer.effect(
       stateDir: penStateDir(process.env, environment.homeDirectory),
       stateDirExists: (stateDir) => fs.exists(stateDir).pipe(Effect.orElseSucceed(() => false)),
       leftMesh: (stateDir) => Effect.promise(() => penLeftMesh(stateDir)),
-      watch: watchPenSnapshots,
+      watch: selectPenSnapshotWatch(platform),
       inspect: (alias) =>
         inspectPenExactAlias({ alias, homeDirectory: environment.homeDirectory }).pipe(
           Effect.provide(services),

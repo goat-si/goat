@@ -1,14 +1,21 @@
+// @effect-diagnostics nodeBuiltinImport:off -- A duplex stands in for the snapshot transport.
+import * as NodeStream from "node:stream";
 import { assert, describe, it } from "@effect/vitest";
 import type { DesktopPenMembersState } from "@goat/contracts";
-import type { PenSnapshot, PenWatchStale } from "@goat/pen-protocol/snapshot";
+import {
+  watchPenSnapshots,
+  type PenSnapshot,
+  type PenWatchStale,
+} from "@goat/pen-protocol/snapshot";
 import { PenAliasUnreadable } from "@goat/ssh/penAlias";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 import * as DesktopPenMembers from "./DesktopPenMembers.ts";
+import type { openPenSnapshotChild } from "./penSnapshotChild.ts";
 
 vi.mock("electron", () => ({}));
 
@@ -303,4 +310,25 @@ describe("DesktopPenMembers", () => {
       assert.deepEqual(routes(h.last()), [["box-b", "trusted"]]);
     }).pipe(Effect.scoped),
   );
+});
+
+describe("snapshot watch selection", () => {
+  it("uses the child on Windows and the socket on macOS and Linux", () => {
+    expect(DesktopPenMembers.selectPenSnapshotWatch("darwin")).toBe(watchPenSnapshots);
+    expect(DesktopPenMembers.selectPenSnapshotWatch("linux")).toBe(watchPenSnapshots);
+    const child = new NodeStream.Duplex({
+      read() {},
+      write(_chunk, _encoding, done) {
+        done();
+      },
+    });
+    const open = vi.fn((_input: Parameters<typeof openPenSnapshotChild>[0]) => child);
+    const stop = DesktopPenMembers.selectPenSnapshotWatch(
+      "win32",
+      open,
+    )({ stateDir: "/test", onSnapshot: vi.fn(), onStale: vi.fn() });
+    expect(open).toHaveBeenCalledOnce();
+    expect(open.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ stateDir: "/test" }));
+    stop();
+  });
 });
