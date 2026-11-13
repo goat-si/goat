@@ -7,6 +7,24 @@ import { owner } from "./testkit/ChannelHarness.ts";
 import { at, insertTask, provide, setup } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("bot task search boundaries", () => {
+  it.effect("marks a stored title cut at its first NUL", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("nul-title", { status: "completed", createdAt: at(1) });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.title', ${"abc\0def"}) WHERE task_id = 'nul-title'`;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const result = yield* service.searchBotTasks(
+          { botId: BotId.make("main"), query: "abc" },
+          owner,
+        );
+        assert.lengthOf(result.tasks, 1);
+        assert.strictEqual(result.tasks[0]?.title, "abc");
+        assert.strictEqual(result.tasks[0]?.titleTruncated, true);
+      }),
+    ),
+  );
   it.effect("counts a multibyte record by bytes before parsing", () =>
     provide(
       Effect.gen(function* () {
