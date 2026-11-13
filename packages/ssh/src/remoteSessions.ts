@@ -1,3 +1,4 @@
+import { existingRunnerError } from "./existingOnly.ts";
 import type {
   AuthEnvironmentScope,
   ChildSetupPurpose,
@@ -41,6 +42,7 @@ import type { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
 import { issueWindowsCredential } from "./runtimeWindows.ts";
 
 export interface RemoteMcpClientSessionOptions {
+  readonly installation?: "existing-only";
   /**
    * A Home's bounded Child setup purpose: the issued session carries only orchestration:read
    * and this signed purpose. An issuer that does not echo it back is refused, never retried.
@@ -72,6 +74,7 @@ export interface RemoteMcpClientSession {
 }
 
 export type RemoteClientSessionOptions = {
+  readonly installation?: "existing-only";
   readonly label: string;
   readonly ttl: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
@@ -467,15 +470,17 @@ export function makeRemoteSessions({
         Effect.catchTags({
           SshCommandError: (error) =>
             Effect.fail(
-              memoryScopesUnsupportedError(
-                error.stdout ?? "",
-                target.alias,
-                `Stop it on the remote host when its work is done, then reconnect so ${
-                  selected.requestedVersion
-                    ? `GOAT ${selected.requestedVersion}`
-                    : "this app's GOAT"
-                } replaces it.`,
-              ) ?? error,
+              existingRunnerError(error, selected.runner, target.alias) instanceof SshLaunchError
+                ? existingRunnerError(error, selected.runner, target.alias)
+                : (memoryScopesUnsupportedError(
+                    error.stdout ?? "",
+                    target.alias,
+                    `Stop it on the remote host when its work is done, then reconnect so ${
+                      selected.requestedVersion
+                        ? `GOAT ${selected.requestedVersion}`
+                        : "this app's GOAT"
+                    } replaces it.`,
+                  ) ?? error),
             ),
         }),
       );
@@ -586,19 +591,21 @@ export function makeRemoteSessions({
     }).pipe(
       Effect.catchTags({
         SshCommandError: (error) =>
-          sessionOptions.penMember !== undefined &&
-          /(?:unknown|unrecognized|unexpected) (?:option|argument)[^\n]*--pen-member/iu.test(
-            error.stderr,
-          )
-            ? Effect.fail(
-                new SshPairingError({
-                  reason: "pen-member-unsupported",
-                  message: `GOAT on ${target.alias} cannot issue Pen member sessions.`,
-                  stdout: error.stdout ?? "",
-                  cause: error,
-                }),
-              )
-            : Effect.fail(error),
+          existingRunnerError(error, selected.runner, target.alias) instanceof SshLaunchError
+            ? Effect.fail(existingRunnerError(error, selected.runner, target.alias))
+            : sessionOptions.penMember !== undefined &&
+                /(?:unknown|unrecognized|unexpected) (?:option|argument)[^\n]*--pen-member/iu.test(
+                  error.stderr,
+                )
+              ? Effect.fail(
+                  new SshPairingError({
+                    reason: "pen-member-unsupported",
+                    message: `GOAT on ${target.alias} cannot issue Pen member sessions.`,
+                    stdout: error.stdout ?? "",
+                    cause: error,
+                  }),
+                )
+              : Effect.fail(error),
       }),
     );
     const session = yield* decodeRemoteClientSessionOutput(result.stdout, sessionOptions.scopes);
@@ -708,7 +715,13 @@ export function makeRemoteSessions({
       ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
       ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-    });
+    }).pipe(
+      Effect.mapError((error) =>
+        error._tag === "SshCommandError"
+          ? existingRunnerError(error, selected.runner, target.alias)
+          : error,
+      ),
+    );
     if (!getLastNonEmptyOutputLine(result.stdout)) {
       return yield* new SshPairingError({
         message: "SSH pairing did not return a credential.",
