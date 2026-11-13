@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts";
+import { BotId, ChannelTaskId, type ChannelListBotThreadsResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as BotThreads from "./ChannelBotThreads.ts";
@@ -26,6 +26,18 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history limits", () => {
+  it.effect("rejects a search query longer than 256 UTF-8 bytes", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        const service = yield* BotThreads.ChannelBotThreads;
+        const error = yield* Effect.flip(
+          service.searchBotTasks({ botId: BotId.make("main"), query: "😀".repeat(65) }, owner),
+        );
+        assert.strictEqual(error.reason, "invalid_input");
+      }),
+    ),
+  );
   it.effect("materializes a bounded indexed search before matching conversations", () =>
     provide(
       Effect.gen(function* () {

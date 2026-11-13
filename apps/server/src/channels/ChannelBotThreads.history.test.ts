@@ -10,6 +10,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
@@ -52,18 +53,6 @@ import {
 } from "./testkit/botThreadHistory.fixture.ts";
 
 describe("ChannelBotThreads history", () => {
-  it.effect("rejects a search query longer than 256 UTF-8 bytes", () =>
-    provide(
-      Effect.gen(function* () {
-        yield* setup;
-        const service = yield* BotThreads.ChannelBotThreads;
-        const error = yield* Effect.flip(
-          service.searchBotTasks({ botId: BotId.make("main"), query: "😀".repeat(65) }, owner),
-        );
-        assert.strictEqual(error.reason, "invalid_input");
-      }),
-    ),
-  );
   it.effect("bounds lookup task and coding titles without changing the stored task", () =>
     provide(
       Effect.gen(function* () {
@@ -83,10 +72,16 @@ describe("ChannelBotThreads history", () => {
           assert.strictEqual(known.task.row.task.title, "a".repeat(199));
           assert.strictEqual(known.task.row.task.titleTruncated, true);
         }
-        const rpc = WsChannelRpcGroup.requests.get("channel.getBotTask");
+        const rpc = WsChannelRpcGroup.requests.get("channel.getBotTask") as
+          | Extract<
+              RpcGroup.Rpcs<typeof WsChannelRpcGroup>,
+              { readonly _tag: "channel.getBotTask" }
+            >
+          | undefined;
         if (rpc === undefined) throw new Error("missing lookup RPC");
         const codec = Schema.toCodecJson(rpc.successSchema);
-        const decoded = Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(known));
+        const encoded = yield* Schema.encodeEffect(codec)(known);
+        const decoded = yield* Schema.decodeEffect(codec)(encoded);
         assert.deepStrictEqual(decoded, known);
         assert.strictEqual(known.codingRows[0]?.title, "x".repeat(199) + "😀");
         assert.strictEqual(known.codingRows[0]?.titleTruncated, true);
