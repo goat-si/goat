@@ -761,11 +761,13 @@ export const make = Effect.gen(function* () {
     const requestKey = digest(principal + "\n" + input.clientRequestId);
     const before = yield* reissueGate(input.attachId, caller, requestKey);
     if ("replay" in before) return before.replay;
-    // A closed switch is refused before the probes; the grant is checked again under the lock.
+    // A closed switch or a new grant is refused before the probes, and both again under the lock.
     const current = yield* settingsNow;
     if (current === undefined) return yield* storageFailed();
     const gate = disposableSwitch(current.hub, yield* Clock.currentTimeMillis);
     if (!gate.open) return yield* fail(gate.reason, refusalText[gate.reason]);
+    if (gate.grant !== before.row.grant_id)
+      return yield* fail("switch_off", refusalText.switch_off);
     // Probed before the lock, which a slow ocx spawn would hold.
     yield* requireFeatures;
     return yield* exclusive(

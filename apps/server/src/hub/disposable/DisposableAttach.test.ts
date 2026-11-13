@@ -138,6 +138,18 @@ it.effect(
     ),
 );
 
+it.effect("a consent change that leaves the switch on refuses a reissue before it asks Pen", () =>
+  world((pen) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      yield* switchTo({ cap: 5 });
+      pen.control.featuresAsked = 0;
+      expect(yield* reason(reissue(first.attachId, "re-1"))).toBe("switch_off");
+      expect(pen.control.featuresAsked).toBe(0);
+    }),
+  ),
+);
+
 it.effect("a name Pen would refuse is refused before anything is reserved or minted", () =>
   world((pen) =>
     Effect.gen(function* () {
