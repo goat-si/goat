@@ -39,6 +39,7 @@ export const baseLinkRow = ({
   routes: _rs,
   route: _r,
   ws: _w,
+  direction: _d,
   ...base
 }: LinkStatusRow) => base;
 
@@ -48,6 +49,8 @@ export const baseLinkRow = ({
  * its alias, and does once its tunnel is connected.
  */
 function routeOf(row: LinkStatusRow, penAliases: ReadonlySet<string> | undefined) {
+  // A client-initiated link's SSH starts on the Child; its alias is only the Child's label here.
+  if (row.direction !== "hub-initiated") return undefined;
   const multi = row.routes !== undefined || row.route !== undefined;
   const named = multi ? Option.getOrNull(decodeLinkRowRoute(row.route)) : null;
   const proven =
