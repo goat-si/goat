@@ -593,7 +593,7 @@ it("explains why a pairing without hub access shows no hub devices, and opens th
   expect(container.textContent).not.toContain("These devices do not open on this phone");
 });
 
-it("saves disposable machine consent and describes Pen access", async () => {
+it("saves disposable machine consent, describes Pen access, and names an older hub", async () => {
   const hub = {
     ...second,
     serverConfig: {
@@ -615,7 +615,11 @@ it("saves disposable machine consent and describes Pen access", async () => {
   };
   state.environments = [hub];
   state.selectedTargets = [hub];
-  state.updateSettings.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+  // An older hub drops the switch from the patch and answers with it off.
+  state.updateSettings.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: { hub: { attachDisposableMachines: { enabled: false } } },
+  });
   await render();
   expect(container.textContent).toContain("may admit up to 10 machines to your Pen mesh");
   await act(async () => button("Attach disposable machines").click());
@@ -623,4 +627,5 @@ it("saves disposable machine consent and describes Pen access", async () => {
     environmentId: second.environmentId,
     input: { patch: { hub: { attachDisposableMachines: { enabled: true } } } },
   });
+  expect(container.textContent).toContain("Update GOAT there to turn this on.");
 });
