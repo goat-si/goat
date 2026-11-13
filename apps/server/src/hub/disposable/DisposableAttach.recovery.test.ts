@@ -375,3 +375,24 @@ it.effect("one pass reads Pen's member list once, however many machines it admit
     }),
   ),
 );
+
+// A pass reads Pen's member list once; a machine that joined after that read is missing from it.
+it.effect(
+  "a key missing only from the pass's member view is read again before it counts as removed",
+  () =>
+    world((pen) =>
+      Effect.gen(function* () {
+        const first = yield* attach(1);
+        const second = yield* attach(2);
+        pen.control.join(first.attachId + ".1", true);
+        pen.control.join(second.attachId + ".1", true);
+        yield* reconcile;
+        pen.control.staleMembersOnce = new Set([key(1)]);
+        yield* reconcile;
+        expect(yield* listed(second.attachId)).toMatchObject({
+          state: "admitted",
+          penMember: true,
+        });
+      }),
+    ),
+);

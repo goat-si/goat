@@ -68,6 +68,8 @@ export const fakePen = () => {
     featuresAsked: 0,
     /** How many times GOAT read Pen's member list. */
     membersAsked: 0,
+    /** The next member-list read answers this instead, as a view taken before a join would. */
+    staleMembersOnce: undefined as Set<string> | undefined,
     /** Awaited before the mint touches the book, so a test can hold or interrupt it. */
     mintGate: undefined as Deferred.Deferred<void> | undefined,
     mintStarted: undefined as Deferred.Deferred<void> | undefined,
@@ -112,6 +114,9 @@ export const fakePen = () => {
     }),
     members: Effect.sync(() => {
       control.membersAsked += 1;
+      const stale = control.staleMembersOnce;
+      control.staleMembersOnce = undefined;
+      if (stale !== undefined) return stale;
       return new Set(members);
     }),
     mint: ({ subject, mintId, expiresAtMs }) =>

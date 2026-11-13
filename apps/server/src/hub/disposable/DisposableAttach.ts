@@ -564,8 +564,11 @@ export const make = Effect.gen(function* () {
     let row = start;
     let effects = effectsOf(row);
     if (row.pen_admitted_at !== null && row.pen_removed_at === null) {
-      const view = yield* members;
-      if (view !== undefined && !view.has(row.expected_sign_pub)) {
+      // A pass's view can predate a join that settled since, so a miss there is only a suspicion:
+      // Pen is asked again before the removal is stored.
+      const missing = (view: ReadonlySet<string> | undefined) =>
+        view !== undefined && !view.has(row.expected_sign_pub);
+      if (missing(yield* members) && missing(yield* pen.members)) {
         row = yield* save(row, effects, {
           pen_removed_at: yield* nowIso,
           ...(row.final_at === null ? { state: "failed" } : {}),
