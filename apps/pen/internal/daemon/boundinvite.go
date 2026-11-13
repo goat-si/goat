@@ -74,7 +74,7 @@ func (d *Daemon) controlBound(ctx context.Context, c net.Conn, line []byte, repl
 	}
 	if head.Op != "invite" {
 		var ref inviteRef
-		if strictjson.Unmarshal(line, &ref) != nil || !validRef(ref) {
+		if strictjson.Unmarshal(line, &ref) != nil || !validRef(ref, has) {
 			fail(errBadRequest)
 			return
 		}
@@ -168,12 +168,13 @@ func presentMembers(line []byte) (map[string]bool, error) {
 	return has, nil
 }
 
-// validRef checks that exactly one of the invite id (12 bytes in canonical base64url) and a valid mintId is set.
-func validRef(ref inviteRef) bool {
-	if (ref.InviteID == "") == (ref.MintID == "") {
+// validRef checks that the line carries exactly one of inviteId (12 bytes in canonical base64url) and mintId, and
+// that the one it carries is valid; an empty one is not taken for absent.
+func validRef(ref inviteRef, has map[string]bool) bool {
+	if has["inviteId"] == has["mintId"] {
 		return false
 	}
-	if ref.MintID != "" {
+	if has["mintId"] {
 		return mesh.ValidMintID(ref.MintID)
 	}
 	b, err := ident.B64.DecodeString(ref.InviteID)

@@ -237,3 +237,33 @@ func TestInviteStatusOpFollowsAMintToItsAdmitAndAck(t *testing.T) {
 		}
 	}
 }
+
+// Cancel, status and ack name exactly one member, inviteId or mintId: a line carrying both is refused even when one
+// of them is empty, and nothing is cancelled or fenced.
+func TestInviteRefOpsRefuseALineCarryingBothReferences(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	jid := newIdentity(t)
+	var r InviteReply
+	if err := rawCall(t, a.st, fmt.Sprintf(`{"op":"invite","mintId":"m1","expiresAt":%d,"subject":%s}`, time.Now().Add(time.Minute).UnixMilli(), subjectLine(jid, "j")), &r); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"invite.cancel", "invite.status", "invite.ack"} {
+		for _, refs := range []string{`"inviteId":"` + r.ID + `","mintId":""`, `"mintId":"fresh","inviteId":""`, `"inviteId":""`, `"mintId":""`} {
+			line := `{"op":"` + op + `",` + refs + "}"
+			var out map[string]any
+			if err := rawCall(t, a.st, line, &out); err == nil {
+				t.Fatalf("%s answered %v; want a refusal", line, out)
+			}
+		}
+	}
+	if s := statusOp(t, a.st, `"mintId":"m1"`); s.State != "live" {
+		t.Fatalf("the invite after the refused lines: %+v; want live", s)
+	}
+	if s := statusOp(t, a.st, `"mintId":"fresh"`); s.State != "absent" {
+		t.Fatalf("a refused cancel left a fence: %+v", s)
+	}
+}
