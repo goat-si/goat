@@ -9,6 +9,7 @@ import {
   type EnvironmentScopeRequiredError,
 } from "@goat/contracts";
 import * as HttpObservability from "@goat/shared/httpObservability";
+import { isPenRouteUrl, redactPenRouteUrl } from "@goat/shared/penRouteUrl";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -43,6 +44,7 @@ export class RemoteEnvironmentAuthUndeclaredStatusError extends Data.TaggedError
   readonly requestUrl: string;
 }> {
   constructor(requestUrl: string, status: number) {
+    requestUrl = redactPenRouteUrl(requestUrl);
     super({
       message: `Remote environment endpoint ${requestUrl} returned undeclared status ${status}.`,
       requestUrl,
@@ -59,6 +61,7 @@ export class RemoteEnvironmentAuthTimeoutError extends Data.TaggedError(
   readonly timeoutMs: number;
 }> {
   constructor(requestUrl: string, timeoutMs: number) {
+    requestUrl = redactPenRouteUrl(requestUrl);
     super({
       message: `Remote environment endpoint ${requestUrl} timed out after ${timeoutMs}ms.`,
       requestUrl,
@@ -129,11 +132,13 @@ const failRemoteRequest = (
   if (isEnvironmentHttpCommonError(cause)) {
     return Effect.fail(cause);
   }
+  const safeCause = isPenRouteUrl(requestUrl) ? redactPenRouteUrl(String(cause)) : cause;
+  requestUrl = redactPenRouteUrl(requestUrl);
   if (Schema.isSchemaError(cause)) {
     return Effect.fail(
       new RemoteEnvironmentAuthInvalidJsonError({
         message: `Remote environment endpoint returned an invalid response from ${requestUrl}.`,
-        cause,
+        cause: safeCause,
       }),
     );
   }
@@ -147,14 +152,14 @@ const failRemoteRequest = (
     return Effect.fail(
       new RemoteEnvironmentAuthInvalidJsonError({
         message: `Remote environment endpoint returned an invalid response from ${requestUrl}.`,
-        cause,
+        cause: safeCause,
       }),
     );
   }
   return Effect.fail(
     new RemoteEnvironmentAuthFetchError({
-      message: `Failed to fetch remote environment endpoint ${requestUrl} (${String(cause)}).`,
-      cause,
+      message: `Failed to fetch remote environment endpoint ${requestUrl} (${redactPenRouteUrl(String(cause))}).`,
+      cause: safeCause,
     }),
   );
 };

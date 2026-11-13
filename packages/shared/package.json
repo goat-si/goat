@@ -7,6 +7,10 @@
       "types": "./src/forkInScope.ts",
       "import": "./src/forkInScope.ts"
     },
+    "./penRouteUrl": {
+      "types": "./src/penRouteUrl.ts",
+      "import": "./src/penRouteUrl.ts"
+    },
     "./sshRuntimeProtocolComparison": {
       "types": "./src/sshRuntimeProtocolComparison.ts",
       "import": "./src/sshRuntimeProtocolComparison.ts"

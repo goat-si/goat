@@ -75,6 +75,12 @@ export function resolveEnvironmentLoopbackUrl(
       reason: `${address} is on ${target.label}, which this device reaches over SSH. ${insteadHint}`,
     };
   }
+  if (target._tag === "PenConnectionTarget") {
+    return {
+      _tag: "Unreachable",
+      reason: `${address} is on ${target.label}, which this device reaches through Pen. ${insteadHint}`,
+    };
+  }
   if (target._tag === "HubProxyConnectionTarget" || target._tag === "RelayConnectionTarget") {
     return {
       _tag: "Unreachable",

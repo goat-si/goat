@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
 import { isLoopbackHost } from "@goat/shared/preview";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentPresentations } from "../../state/presentation";
@@ -8,8 +9,9 @@ import { readPreparedConnection } from "../../state/session";
 import { ensureLocalApi } from "../../localApi";
 import { useStableCallback } from "../../hooks/useStableCallback";
 
+// A Pen route's address is loopback too, but it is this desktop's gateway to another machine.
 export const isLoopbackUrl = (url: string | null) =>
-  url !== null && isLoopbackHost(new URL(url).hostname);
+  url !== null && !isPenRouteUrl(url) && isLoopbackHost(new URL(url).hostname);
 
 // A loopback server can receive the provider's callback itself, unless the
 // desktop shell offers to catch it on the client.

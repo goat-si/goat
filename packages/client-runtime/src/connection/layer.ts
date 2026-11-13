@@ -12,6 +12,7 @@ import {
 } from "./hubProxyDiscovery.ts";
 import * as PenMembership from "./penMembership.ts";
 import * as PenDiscovery from "./penDiscovery.ts";
+import * as PenNativeDiscovery from "./penNativeDiscovery.ts";
 import * as HubProxyAuthSource from "./hubProxyAuthSource.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
@@ -105,6 +106,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       yield* watchRemovedHubProxyRoutes().pipe(Effect.forkScoped);
       yield* watchConnectedHubProxyDiscovery.pipe(Effect.forkScoped);
       yield* PenDiscovery.watchPenDiscovery.pipe(Effect.forkScoped);
+      yield* PenNativeDiscovery.watchPenNativeDiscovery.pipe(Effect.forkScoped);
       yield* platformSource.registrations.pipe(
         Stream.runForEach(registry.reconcilePlatform),
         Effect.forkScoped,
