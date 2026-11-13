@@ -48,6 +48,8 @@ export const layer = HttpRouter.add(
     );
     if (decoded._tag === "Failure") return yield* refuse(400, "Invalid runtime session request.");
     const input = decoded.success;
+    if (input.kind === "pen-member-session")
+      return yield* refuse(400, "Invalid runtime session request.");
     if (input.kind === "revoke") {
       // A Home withdrawing a Child setup bearer it delegated; the answer names that session.
       const revoked = yield* (yield* EnvironmentAuth.EnvironmentAuth).revokeSession(

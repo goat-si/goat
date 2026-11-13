@@ -4542,7 +4542,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }),
     );
   });
-
   /**
    * Issues a credential against the target's current attachment. When that is the GOAT app server
    * and it refuses, the target moves to the managed server on the same local port, so the caller's
@@ -4567,7 +4566,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       !closed && !forgotten.has(key) && (generations.get(key) ?? 0) === generation;
     return issue(entry.selectedRuntime).pipe(
       Effect.catchIf(
-        (error): error is E & SshPairingError => error instanceof SshPairingError,
+        (error): error is E & SshPairingError =>
+          error instanceof SshPairingError && error.reason !== "pen-member-unsupported",
         (error) =>
           Effect.gen(function* () {
             yield* Effect.logWarning("ssh.appServer.credential.fallback", {

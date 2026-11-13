@@ -99,6 +99,8 @@ export const requestNativeRuntimeCredential = async (
   secret: string,
   request: RuntimeSessionRequest,
 ): Promise<unknown> => {
+  if (request.kind === "pen-member-session")
+    throw new Error("Pen member sessions are unsupported.");
   const raw = await fetchBounded(origin + GOAT_RUNTIME_SESSION_PATH, {
     method: "POST",
     headers: { [GOAT_RUNTIME_CONTROL_HEADER]: secret, "content-type": "application/json" },

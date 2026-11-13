@@ -71,12 +71,14 @@ export interface RemoteMcpClientSession {
   readonly runtimeModeCeilingApplied: boolean;
 }
 
-export interface RemoteClientSessionOptions {
-  readonly subject: string;
+export type RemoteClientSessionOptions = {
   readonly label: string;
   readonly ttl: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
-}
+} & (
+  | { readonly subject: string; readonly penMember?: never }
+  | { readonly penMember: string; readonly subject?: never }
+);
 
 export interface RemoteClientSession {
   readonly token: string;
@@ -148,7 +150,7 @@ STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.goat"
 @@GOAT_RUNNER_SETUP@@
 recheck_selected_before_use
-"$RUNNER_FILE" auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject @@GOAT_SUBJECT@@ @@GOAT_SCOPES@@ --ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
+"$RUNNER_FILE" auth session issue --base-dir "$DEFAULT_SERVER_HOME" @@GOAT_SUBJECT@@ @@GOAT_SCOPES@@ --ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
 `;
 
 const REMOTE_PAIRING_SCRIPT = `set -eu
@@ -358,7 +360,10 @@ export function makeRemoteSessions({
     }
     return applyScriptPlaceholders(REMOTE_CLIENT_SESSION_SCRIPT, {
       GOAT_STATE_KEY: stateKey,
-      GOAT_SUBJECT: shellSingleQuote(options.subject),
+      GOAT_SUBJECT:
+        options.penMember === undefined
+          ? `--subject ${shellSingleQuote(options.subject)}`
+          : `--pen-member ${shellSingleQuote(options.penMember)}`,
       GOAT_SCOPES: options.scopes.map((scope) => `--scope ${shellSingleQuote(scope)}`).join(" "),
       GOAT_TTL: shellSingleQuote(options.ttl),
       GOAT_LABEL: shellSingleQuote(options.label),
@@ -520,6 +525,7 @@ export function makeRemoteSessions({
     if (prepared?.appServerPort !== undefined) {
       const request = appServerSessionRequest({
         subject: sessionOptions.subject,
+        penMember: sessionOptions.penMember,
         scopes: sessionOptions.scopes,
         ttl: sessionOptions.ttl,
         label: sessionOptions.label,
@@ -551,6 +557,7 @@ export function makeRemoteSessions({
     if (native !== undefined) {
       const request = appServerSessionRequest({
         subject: sessionOptions.subject,
+        penMember: sessionOptions.penMember,
         scopes: sessionOptions.scopes,
         ttl: sessionOptions.ttl,
         label: sessionOptions.label,
@@ -576,7 +583,24 @@ export function makeRemoteSessions({
       ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
       ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
-    });
+    }).pipe(
+      Effect.catchTags({
+        SshCommandError: (error) =>
+          sessionOptions.penMember !== undefined &&
+          /(?:unknown|unrecognized|unexpected) (?:option|argument)[^\n]*--pen-member/iu.test(
+            error.stderr,
+          )
+            ? Effect.fail(
+                new SshPairingError({
+                  reason: "pen-member-unsupported",
+                  message: `GOAT on ${target.alias} cannot issue Pen member sessions.`,
+                  stdout: error.stdout ?? "",
+                  cause: error,
+                }),
+              )
+            : Effect.fail(error),
+      }),
+    );
     const session = yield* decodeRemoteClientSessionOutput(result.stdout, sessionOptions.scopes);
     yield* Effect.logInfo("ssh.remoteServer.clientSession.issued", {
       selectedVersion: selected.version,

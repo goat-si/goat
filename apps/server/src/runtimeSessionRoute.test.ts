@@ -7,6 +7,7 @@ import {
   GOAT_RUNTIME_CONTROL_HEADER,
   GOAT_RUNTIME_SESSION_PATH,
   makeChildSetupPurpose,
+  RuntimeSessionRequest,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -89,8 +90,24 @@ const mcpSession = {
   label: "hub",
   runtimeModeCeiling: "approval-required",
 };
+const decodeSessionRequest = Schema.decodeUnknownEffect(RuntimeSessionRequest);
 
 it.layer(NodeServices.layer)("runtime session route", (it) => {
+  it.effect("recognizes and refuses Pen member issuance without creating a session", () =>
+    Effect.gen(function* () {
+      const body = {
+        kind: "pen-member-session",
+        nodeId: "a".repeat(26),
+        scopes: ["orchestration:read"],
+        ttl: "1h",
+      };
+      yield* decodeSessionRequest(body);
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const send = yield* serve();
+      expect((yield* send({ peer: "127.0.0.1", token: "secret", body })).status).toBe(400);
+      expect(yield* auth.listSessions()).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(layerAuth)),
+  );
   it.effect(
     "issues an SSH client a session this server accepts, with the scopes it asked for",
     () =>

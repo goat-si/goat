@@ -46,6 +46,18 @@ const issued = {
 };
 
 describe("native Windows runtime credentials", () => {
+  it("refuses Pen member issuance before contacting the server", async () => {
+    using posted = vi.spyOn(globalThis, "fetch");
+    await expect(
+      requestNativeRuntimeCredential(origin, secret, {
+        kind: "pen-member-session",
+        nodeId: "a".repeat(26),
+        scopes: ["orchestration:read"],
+        ttl: "1h",
+      }),
+    ).rejects.toThrow("Pen member sessions are unsupported.");
+    expect(posted).not.toHaveBeenCalled();
+  });
   it("returns the issuer session id and bounded purpose to Home with the issued bearer", async () => {
     using _now = vi.spyOn(Date, "now").mockReturnValue(now);
     using posted = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(issued));

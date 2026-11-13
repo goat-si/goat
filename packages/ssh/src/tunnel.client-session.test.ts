@@ -13,6 +13,8 @@ import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 
 import * as SshAuth from "./auth.ts";
 import { SshPairingError } from "./errors.ts";
+import { appServerSessionRequest, issueAppServerCredential } from "./appServer.ts";
+import * as Option from "effect/Option";
 import {
   NODE_SCRIPT,
   commandArgs,
@@ -40,6 +42,70 @@ const expiresAt = "2026-10-21T00:00:00.000Z";
 const session = { token, expiresAt, scopes: options.scopes };
 
 describe("remote client session script", () => {
+  it.effect("treats an older running server's request decode refusal as unsupported", () => {
+    const scripts: string[] = [];
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.gen(function* () {
+        if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
+        const stdin = command.options.stdin;
+        if (
+          stdin === undefined ||
+          typeof stdin !== "object" ||
+          !("stream" in stdin) ||
+          !Stream.isStream(stdin.stream)
+        )
+          return yield* Effect.die("Expected request script");
+        scripts.push(yield* stdin.stream.pipe(Stream.decodeText(), Stream.mkString));
+        return makeSuccessfulProcess(
+          '{"message":"Invalid runtime session request."}\nGOAT_HTTP_STATUS=400\n',
+        );
+      }),
+    );
+    return Effect.gen(function* () {
+      const request = appServerSessionRequest({
+        penMember: "a".repeat(26),
+        scopes: options.scopes,
+        ttl: options.ttl,
+        label: options.label,
+      });
+      expect(Option.isSome(request)).toBe(true);
+      if (Option.isNone(request)) return yield* Effect.die("Expected request");
+      if (request.value.kind !== "pen-member-session")
+        return yield* Effect.die("Expected Pen request");
+      const error = yield* issueAppServerCredential(uploadTarget, 1234, request.value).pipe(
+        Effect.flip,
+      );
+      expect(error).toBeInstanceOf(SshPairingError);
+      expect("reason" in error && error.reason).toBe("pen-member-unsupported");
+      expect(scripts).toHaveLength(1);
+      expect(scripts[0]).toContain('"kind":"pen-member-session"');
+      expect(scripts[0]).not.toContain('"subject"');
+      const invalid = yield* issueAppServerCredential(uploadTarget, 1234, {
+        ...request.value,
+        nodeId: "invalid",
+      }).pipe(Effect.flip);
+      expect(invalid).toBeInstanceOf(SshPairingError);
+      expect("reason" in invalid ? invalid.reason : undefined).toBeUndefined();
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
+  it("requests a Pen member without supplying a subject", () => {
+    const script = buildRemoteClientSessionScript(
+      "client-session-test",
+      {
+        penMember: "a".repeat(26),
+        label: options.label,
+        ttl: options.ttl,
+        scopes: options.scopes,
+      },
+      NODE_SCRIPT,
+    );
+    expect(script).toContain(`--pen-member '${"a".repeat(26)}'`);
+    expect(script).not.toContain("--subject");
+  });
   it("requests only the explicit scopes and client subject", () => {
     const script = buildRemoteClientSessionScript("client-session-test", options, NODE_SCRIPT);
     expect(script).toContain(
