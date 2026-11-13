@@ -12,6 +12,7 @@ import {
 } from "./ChatView.logic";
 import { usePullRequestDraftThread } from "./chat/usePullRequestDraftThread";
 import { useComposerSelection } from "./chat/useComposerSelection";
+import { useComposerFocus } from "./chat/useComposerFocus";
 import { useProjectCloneBanner } from "./chat/useProjectCloneBanner";
 import { useThreadWorkspaceStatus, workspaceUnavailable } from "./chat/useThreadWorkspaceStatus";
 import { ThreadWorkspaceBanner, threadWorkspaceNeedsAttention } from "./chat/ThreadWorkspaceBanner";
@@ -2016,10 +2017,8 @@ export default function ChatView(props: ChatViewProps) {
     sendInFlightRef,
   });
 
-  const focusComposer = () => {
-    composerRef.current?.focusAtEnd();
-  };
-  const focusComposerStable = useStableCallback(focusComposer);
+  const { focusComposer: focusComposerStable, scheduleComposerFocus: scheduleComposerFocusStable } =
+    useComposerFocus(composerRef);
   const canInterruptRunningThread =
     canOperateThread && deriveCanInterruptRunningThread(activeThread !== undefined, activeRuntime);
   const onInterrupt = async () => {
@@ -2042,12 +2041,6 @@ export default function ChatView(props: ChatViewProps) {
   };
   const onInterruptStable = useStableCallback(onInterrupt);
   useEffect(() => subscribeSnapShotComposerFocus(focusComposerStable), [focusComposerStable]);
-  const scheduleComposerFocus = () => {
-    window.requestAnimationFrame(() => {
-      focusComposer();
-    });
-  };
-  const scheduleComposerFocusStable = useStableCallback(scheduleComposerFocus);
   const insertArtifactTemplate = (template: CodexArtifactTemplate) => {
     const composer = composerRef.current;
     if (!composer) return;
@@ -2062,7 +2055,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    scheduleComposerFocus();
+    scheduleComposerFocusStable();
   };
   const insertArtifactTemplateStable = useStableCallback(insertArtifactTemplate);
   const sendAppMessage = async (text: string) => {
@@ -2983,7 +2976,7 @@ export default function ChatView(props: ChatViewProps) {
     canOverrideServerThreadEnvMode,
     setPendingServerThreadEnvModeEntry,
     setPendingServerThreadStartFromOriginByThreadId,
-    scheduleComposerFocus,
+    scheduleComposerFocus: scheduleComposerFocusStable,
   });
   const onSshDestinationChange = (destination: DraftSshDestination) => {
     if (
@@ -3031,7 +3024,7 @@ export default function ChatView(props: ChatViewProps) {
       environmentSelection: "manual",
       loadBalancedEnvironmentId: null,
     });
-    scheduleComposerFocus();
+    scheduleComposerFocusStable();
   };
   const { onResume, isResuming } = useComposerResume({
     environmentId,
