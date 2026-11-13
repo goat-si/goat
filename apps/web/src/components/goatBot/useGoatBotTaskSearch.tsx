@@ -191,9 +191,7 @@ export function useGoatBotTaskSearch(
         : null,
       page.partial ? "Some results could not be checked." : null,
       page.endedEarly ? "Search ended early." : null,
-      page.tasks.length >= RESULT_LIMIT && page.cursor
-        ? "More tasks may exist. Narrow your search."
-        : null,
+      page.tasks.length >= RESULT_LIMIT ? "More tasks may exist. Narrow your search." : null,
     ].filter((message) => message !== null);
     const messages = [
       page.loading ? "Searching tasks…" : null,
