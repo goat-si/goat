@@ -52,7 +52,8 @@ export const extraWaits = (
       (download === undefined || found !== undefined),
     /** Once every condition held: takes the download, so the next wait gets the next one. */
     finish: () => {
-      if (found === undefined) return {};
+      // A wait that already timed out or was stopped can still reach here; it answered, so it takes nothing.
+      if (found === undefined || ended.signal.aborted) return {};
       // A screen-code wait whose tab changed under it fails here, before taking anything.
       downloads?.confirm?.();
       if (downloads?.claims) found.claim();
