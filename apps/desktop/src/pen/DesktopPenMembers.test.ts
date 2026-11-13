@@ -93,6 +93,44 @@ const routes = (state: DesktopPenMembersState | undefined) =>
     : state?.kind;
 
 describe("DesktopPenMembers", () => {
+  it.effect("native member eligibility follows the live pin without inspecting SSH", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const pin = { meshId: MESH, nodeId: id("a"), noisePub: key("a") };
+      assert.equal(yield* h.service.requireMember(pin), "unavailable");
+      const views: string[] = [];
+      const unsubscribe = h.service.subscribeMembership((view) => views.push(view.kind));
+      h.watches[0]?.onSnapshot(snapshot(1, "a"));
+      const inspections = h.state.inspected.length;
+      assert.equal(yield* h.service.requireMember(pin), "member");
+      assert.equal(yield* h.service.requireMember({ ...pin, noisePub: key("b") }), "not-member");
+      assert.equal(
+        yield* h.service.requireMember({ ...pin, nodeId: SELF, noisePub: key("s") }),
+        "not-member",
+      );
+      h.watches[0]?.onStale("connect");
+      assert.equal(yield* h.service.requireMember(pin), "unavailable");
+      assert.deepEqual(views.slice(0, 2), ["ready", "unavailable"]);
+      unsubscribe();
+      assert.equal(h.state.inspected.length, inspections);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("native eligibility refuses ambiguous or revoked member records", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const pin = { meshId: MESH, nodeId: id("a"), noisePub: key("a") };
+      const view = snapshot(1, "a");
+      h.watches[0]?.onSnapshot({ ...view, members: [...view.members, member("a")] });
+      assert.equal(yield* h.service.requireMember(pin), "not-member");
+      h.watches[0]?.onSnapshot({
+        ...view,
+        gen: 2,
+        revoked: [{ nodeId: pin.nodeId, name: "box-a" }],
+      });
+      assert.equal(yield* h.service.requireMember(pin), "not-member");
+    }).pipe(Effect.scoped),
+  );
   it.effect("ready lists only members whose alias pins the key the snapshot names", () =>
     Effect.gen(function* () {
       const h = yield* harness();

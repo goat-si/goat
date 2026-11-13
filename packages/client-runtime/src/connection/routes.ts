@@ -14,7 +14,7 @@ import {
   type ConnectionRoute,
 } from "./catalog.ts";
 import { BearerConnectionTarget, type ConnectionTarget } from "./model.ts";
-import { PEN_VIEWER_ENABLED, type PenViewerPolicy } from "./penViewerGate.ts";
+import { PEN_VIEWER_ENABLED, type PenViewerPolicy } from "@goat/shared/penViewerGate";
 
 export type ConnectionRouteKind =
   | "relay"

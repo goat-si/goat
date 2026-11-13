@@ -24,6 +24,18 @@ describe("ElectronShell", () => {
     writeTextMock.mockReset();
   });
 
+  it.effect("never hands a Pen route URL to another program", () =>
+    Effect.gen(function* () {
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(
+        `http://127.0.0.1:4100/pen-route/${"a".repeat(43)}/api/assets/thread/file`,
+      );
+
+      assert.equal(result, false);
+      assert.deepEqual(openExternalMock.mock.calls, []);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("opens remote SSH editor URLs", () =>
     Effect.gen(function* () {
       openExternalMock.mockResolvedValue(undefined);

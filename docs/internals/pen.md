@@ -234,7 +234,7 @@ Every member's GOAT shows the other members: the desktop adds one managed SSH ro
 (`packages/client-runtime/src/connection/penDiscovery.ts`, admitted in desktop main by
 `apps/desktop/src/pen/DesktopPenMembers.ts`), and a headless server adds one hub registration per
 member (`apps/server/src/hubNodes/PenHubNodes.ts`). Both ride ssh over Pen's exact `pen-<nodeId>`
-alias. The Pen-native path (`apps/server/src/pen`, `PEN_TARGET_ENABLED`) stays closed.
+alias. The Pen-native path stays closed (next section).
 
 - **The member list proposes, it never authorizes.** `watch.snapshot` says who to look at. A route
   is used only when `inspectPenExactAlias` (`packages/ssh/src/penAlias.ts`) finds the alias in
@@ -268,6 +268,68 @@ alias. The Pen-native path (`apps/server/src/pen`, `PEN_TARGET_ENABLED`) stays c
 - **Ownership is the optional `pen` binding, never the alias or `kind`.** A hub row a person added
   for the same alias is never touched, and an older client must still decode the node list, so the
   binding rides as an optional key on `addedBy` (kind stays `import`) and on the route.
+
+## The Pen-native viewer (closed)
+
+The ssh routes above need sshd and a key on every member. The Pen-native route does not: the
+desktop dials the member's `goat` service (`pen pipe --node --noise @goat`) and GOAT on the member answers
+as a Pen target (`apps/server/src/pen`). Both halves are built and both are off: the target behind
+`PEN_TARGET_ENABLED`, the viewer behind `PEN_VIEWER_ENABLED`
+(`packages/shared/src/penViewerGate.ts`). Neither is a setting, and they open
+together, after the review at the end of this section.
+
+- **The renderer gets a loopback URL, not a transport.** Desktop main owns one listener on
+  127.0.0.1 (`apps/desktop/src/pen/PenGateway.ts`) and forwards each request over its own pipe. An
+  earlier design carried fetch and WebSocket over IPC with made-up URLs; it failed review twice
+  because every consumer of an environment URL (assets, media, previews, uploads, streams) then
+  has to know the seam or be proven to fail closed. With a real URL those consumers do ordinary
+  I/O, and what a member may do is decided where it already was: the target's default-deny route
+  table (`penRoutes.ts`) and the `proxied_person` call policy (`auth/proxiedCallPolicy.ts`).
+- **Main is to the renderer what a hub is to a phone.** The renderer authenticates to main with a
+  capability, 32 random bytes in the first path segments (`/pen-route/<43 characters>/`); main holds
+  the member session and adds the bearer. The renderer cannot mint or read one: `/api/pen/session`
+  is not forwarded, a request that brings `Authorization` or `DPoP` is refused, and `Cookie` is dropped
+  because cookies ignore ports, so the local server's cookie would otherwise ride along.
+- **Who the listener keeps out.** Processes of the same OS user are the owner (they can run
+  `pen pipe` themselves). Another OS user needs the capability. A web page also fails the `Host`
+  check (exactly `127.0.0.1:<port>`) and the `Origin` check: every request must carry the app's own
+  origin, except `GET` and `HEAD` under `/api/assets/`, which an `<img>` sends without one. The port is
+  bound once and held until quit, so nobody else can listen on it while a page holds its URL.
+- **The capability must not reach a file.** It lives in main and in the renderer's prepared
+  connection, is never stored (the catalog keeps only mesh id, node id and Noise key) and ends
+  with the route. HTTP client spans are off for these URLs and request errors store the redacted
+  form (`packages/shared/src/penRouteUrl.ts`); main refuses to open a gateway URL in a browser;
+  responses carry `Referrer-Policy: no-referrer`, never `Set-Cookie`, and a redirect from the target is a 502.
+- **Nothing is passed through raw.** Node parses the request; the request is re-serialized and the
+  response parsed by the Pen client's HTTP/1.1 code (`packages/pen-protocol/src/client/http1.ts`), one
+  request per pipe with `Connection: close`. On an upgrade no client byte reaches the member before
+  a validated 101, and no WebSocket extension is offered, because that parser refuses one.
+- **One route per member key, checked at every dial.** `requireMember` needs a live list that names
+  the node with that Noise key; it runs when the route opens, before every dial and again after
+  the ready line. A list without the member, or without this machine, ends the route in main with
+  no help from the renderer. An unreachable daemon keeps the route and refuses new dials.
+- **A Pen route is never this device.** Its URL is loopback like an ssh forward's, so every check
+  that reads "loopback" as "local" excludes it by target (`connection/loopbackHost.ts`).
+- **A stored Pen route is inert while the gate is closed,** on web and mobile too: it lives in its
+  own optional arrays of the connection catalog, so a build that does not know them keeps the rest.
+
+Before both gates open, one review checks at least:
+
+1. Caller and target together over a real mesh: ready line, delivery proof, session issue, HTTP
+   and `/ws` through the gateway. The ready line proves the pinned responder, not delivery.
+2. The listener in a packaged build on macOS, Windows and Linux: another user's connection,
+   `Host` and `Origin`, credentialed CORS and the private-network preflight from the app's origin,
+   limits under load.
+3. Capability containment in diagnostics bundles, crash reports and the clipboard, and whether to
+   bind it to an HttpOnly cookie main sets, so a copied URL alone is useless.
+4. Where `pen` comes from: a PATH lookup is discovery inside the user's boundary, not a trust root.
+5. Session lifetime: a leave, revoke or key rotation closes live sockets on the target and in main.
+6. `proxied_person` parity with the hub proxy on every RPC and HTTP row; nothing grants `hub:proxy`.
+7. The conditions already attached to `PEN_TARGET_ENABLED` (thread origin, dispatch upload,
+   confirmation); `PlacementAdmissionEnabled` is a separate decision.
+8. Relay capacity: one pipe per HTTP request against 8 pending and 32 active sessions per node,
+   and discovery on a mesh of twenty members.
+9. Which route wins when a machine has an ssh, a Pen and a hub route, and that the UI says so.
 
 ## Windows
 

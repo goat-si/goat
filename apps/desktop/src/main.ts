@@ -68,6 +68,7 @@ import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopPenMembers from "./pen/DesktopPenMembers.ts";
+import * as PenGateway from "./pen/PenGateway.ts";
 import { DESKTOP_BUILD_COMMIT_TIME } from "./ssh/buildCommitTime.ts";
 import { resolveDesktopSshCliRunner } from "./ssh/desktopSshCliRunner.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
@@ -229,9 +230,10 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopRendererHistory.layer,
 ).pipe(Layer.provideMerge(ElectronSafeStorage.layer), Layer.provideMerge(layerDesktopEnvironment));
 
-const layerDesktopSsh = Layer.mergeAll(layerDesktopSshEnvironment, DesktopPenMembers.layer).pipe(
-  Layer.provideMerge(DesktopSshPasswordPrompts.layer()),
-);
+const layerDesktopSsh = Layer.mergeAll(
+  layerDesktopSshEnvironment,
+  PenGateway.layer.pipe(Layer.provideMerge(DesktopPenMembers.layer)),
+).pipe(Layer.provideMerge(DesktopSshPasswordPrompts.layer()));
 
 // Shares the one SSH environment the IPC handlers use, so a wake check sees
 // the same open forwards.
