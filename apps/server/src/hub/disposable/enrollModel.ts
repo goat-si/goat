@@ -285,11 +285,10 @@ export const leftPenMessage = (
         name +
         " was removed from Pen while this hub's OpenCodex held link " +
         linkId +
-        " for it; the link and the Child on the machine stay.",
-      nextAction:
-        "Remove the link on the hub with ocx link revoke --link-id " +
+        " for it; the link and the Child on the machine stay. Remove the link on the hub with ocx link revoke --link-id " +
         linkId +
-        " (add --force --yes if the machine is gone). Detaching comes in a later GOAT.",
+        " (add --force --yes if the machine is gone).",
+      nextAction: "Detaching comes in a later GOAT.",
     };
   return {
     message:
@@ -314,8 +313,9 @@ export const enrollMessage = (
   /** The record was paused after its machine joined, not by a join after the withdrawal. */
   pausedAfterJoin = false,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
+  // Both clients show the message, so what a person must do is in it.
   const keyStep =
-    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet. Settings → Hub shows it with the machine on web and desktop.";
+    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet; Settings → Hub shows it with the machine on web and desktop, and goat_hub_machine_list returns it as machineKey.";
   if (enroll.stop !== undefined && (state === "paused" || state === "unknown"))
     return {
       message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),
@@ -333,16 +333,21 @@ export const enrollMessage = (
   switch (state) {
     case "admitted":
       return {
-        message: waitingText(enroll.route?.outcome) ?? name + " joined Pen; checking its route.",
-        nextAction: keyStep,
+        message:
+          (waitingText(enroll.route?.outcome) ?? name + " joined Pen; checking its route.") +
+          " " +
+          keyStep,
+        nextAction: null,
       };
     case "attaching":
       if (enroll.reach?.outcome !== "ok")
         return {
           message:
-            waitingText(enroll.reach?.outcome) ??
-            name + "'s route is recorded; reaching it with the hub's machine key.",
-          nextAction: keyStep,
+            (waitingText(enroll.reach?.outcome) ??
+              name + "'s route is recorded; reaching it with the hub's machine key.") +
+            " " +
+            keyStep,
+          nextAction: null,
         };
       return {
         message:

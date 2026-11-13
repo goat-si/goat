@@ -471,8 +471,7 @@ it.effect(
         expect(yield* listed(attachId)).toMatchObject({
           state: "failed",
           penMember: false,
-          message: expect.stringContaining("lnk_0000000000000001"),
-          nextAction: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
+          message: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
         });
       }),
     ),
@@ -499,7 +498,7 @@ it.effect(
         yield* enroll;
         expect(yield* listed(attachId)).toMatchObject({
           state: "failed",
-          nextAction: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
+          message: expect.stringContaining("ocx link revoke --link-id lnk_0000000000000001"),
         });
       }),
     ),
@@ -532,9 +531,12 @@ it.effect("reach tells a refused key, a changed host key and an unusable key apa
       yield* enroll; // route
       host.control.reachAnswers.set(first.nodeId, "key_refused");
       yield* enroll;
+      // People see the message on web and mobile: it says what to do and where the key is.
       expect(yield* listed(first.attachId)).toMatchObject({
         state: "attaching",
-        message: expect.stringContaining("refused this hub's machine key"),
+        message: expect.stringMatching(
+          /refused this hub's machine key.*authorized_keys.*Settings → Hub/su,
+        ),
       });
       host.control.reachAnswers.set(first.nodeId, "unreachable");
       yield* enroll;
