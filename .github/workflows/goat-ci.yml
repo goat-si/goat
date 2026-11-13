@@ -266,10 +266,15 @@ jobs:
         run: |
           # The relay fixture runs these from PG_BIN or pg_config --bindir (PostgresFixture.ts).
           missing_postgres() {
-            bindir=${PG_BIN:-}
-            if [ -z "$bindir" ]; then
+            if [ "${PG_BIN+x}" = x ]; then
+              [ -n "$PG_BIN" ] || { echo PG_BIN; return; }
+              bindir=$PG_BIN
+            else
               command -v pg_config >/dev/null || { echo pg_config; return; }
-              bindir=$(pg_config --bindir)
+              if ! bindir=$(pg_config --bindir) || [ -z "$bindir" ]; then
+                echo pg_config
+                return
+              fi
             fi
             missing=
             for name in initdb postgres pg_ctl psql; do
