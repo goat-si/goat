@@ -7,7 +7,6 @@ import {
   type HubMachineListInput,
   type HubMachineReissueInput,
   HubMachinesError,
-  type HubMachinesErrorReason,
   type HubMachineStatus,
   isPenNodeName,
   matchesDisposableNameRule,
@@ -15,7 +14,6 @@ import {
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -28,33 +26,47 @@ import * as Settings from "../../serverSettings.ts";
 import {
   type AttachEffect,
   ackable,
-  conflictCount,
   coversDelegation,
   decodeDelegation,
-  decodeEffects,
-  decodeProvisioner,
   type Delegation,
   encodeDelegation,
   encodeEffects,
   encodeProvisioner,
-  mintSteps,
   observe,
   openEffects,
   penNodeId,
   stateFromEffects,
   type StoredProvisioner,
-  stateMessage,
 } from "./attachModel.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { disposableSwitch } from "./disposableSwitch.ts";
 import { HOME_ATTACH_CONTRACTS, HomeContracts, declares } from "./features.ts";
-import {
-  PEN_ATTACH_FEATURES,
-  type PenInviteRef,
-  type PenInviteState,
-  PenInvites,
-} from "./PenInvites.ts";
+import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvites.ts";
 import { makeSharedPasses } from "./sharedPasses.ts";
+import {
+  afterCancel,
+  type Columns,
+  digest,
+  effectsOf,
+  fail,
+  IN_PEN,
+  isCanonicalKey,
+  lockBound,
+  NotNamed,
+  OPEN,
+  OWES_ACK,
+  provisionerOf,
+  refOf,
+  refusalOf,
+  refusalText,
+  type Refusal,
+  replace,
+  type Row,
+  samePolicy,
+  sameProvisioner,
+  status,
+  storageFailed,
+} from "./attachRow.ts";
 
 export type { StoredProvisioner };
 
@@ -78,90 +90,6 @@ const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
 const MAX_INVITES_PER_ATTACH = 32;
-const OPEN = "final_at IS NULL AND state NOT IN ('failed', 'purged', 'destroyed', 'kept')";
-const IN_PEN = "pen_admitted_at IS NOT NULL AND pen_removed_at IS NULL";
-// A final record still owes Pen an ack for a terminal entry GOAT stored.
-const OWES_ACK = `EXISTS (SELECT 1 FROM json_each(effects_json)
-  WHERE json_extract(value, '$.settled') IN ('cancelled', 'expired', 'burned')
-    AND json_extract(value, '$.acked') IS NULL)`;
-
-interface Row {
-  readonly attach_id: string;
-  readonly name: string;
-  readonly node_id: string;
-  readonly expected_sign_pub: string;
-  readonly expected_noise_pub: string;
-  readonly provisioner_json: string;
-  readonly delegation_json: string;
-  readonly grant_id: string;
-  readonly invite_expires_at: string | null;
-  readonly state: string;
-  readonly step: string | null;
-  readonly fence: number;
-  readonly effects_json: string;
-  readonly conflicts_json: string;
-  readonly request_key: string | null;
-  readonly state_since: string;
-  readonly pen_admitted_at: string | null;
-  readonly pen_removed_at: string | null;
-  readonly final_at: string | null;
-}
-type Columns = Record<string, string | number | null>;
-type Refusal =
-  | "conflict"
-  | "switch_off"
-  | "switch_expired"
-  | "provisioner_refused"
-  | "delegation_lost";
-
-const fail = (reason: HubMachinesErrorReason, detail: string) =>
-  Effect.fail(new HubMachinesError({ reason, detail }));
-const storageFailed = () =>
-  new HubMachinesError({
-    reason: "storage_failed",
-    detail: "The hub's disposable machine records are unavailable.",
-  });
-const digest = (value: string) => NodeCrypto.createHash("sha256").update(value).digest("hex");
-const effectsOf = (row: Row) => decodeEffects(row.effects_json);
-const provisionerOf = (row: Row) => decodeProvisioner(row.provisioner_json);
-const sameProvisioner = (a: StoredProvisioner | undefined, b: StoredProvisioner) =>
-  a !== undefined &&
-  (a.kind === "thread" ? b.kind === "thread" && a.threadId === b.threadId : b.kind === "person");
-const isCanonicalKey = (key: string) => {
-  const bytes = Buffer.from(key, "base64url");
-  return bytes.length === 32 && bytes.toString("base64url") === key;
-};
-const replace = (effects: ReadonlyArray<AttachEffect>, next: AttachEffect) =>
-  effects.map((effect) => (effect.id === next.id ? next : effect));
-/** A cancel's answer settles the mint only when it names a terminal state without a burn. */
-const afterCancel = (effect: AttachEffect, answer: string): AttachEffect =>
-  answer === "cancelled" || answer === "expired" ? { ...effect, settled: answer } : effect;
-const refusalText: Record<Refusal, string> = {
-  conflict: "The record changed while the invite was being made.",
-  switch_off: "Attach disposable machines no longer allows this attach.",
-  switch_expired: "Attach disposable machines has expired on this hub.",
-  provisioner_refused: "This thread is not named in Attach disposable machines.",
-  delegation_lost: "The provisioner no longer holds the grant this attach started with.",
-};
-const refusalOf = (reason: Store.ForwardRefusal | "provisioner_refused"): Refusal =>
-  reason === "switch_expired" || reason === "provisioner_refused"
-    ? reason
-    : reason === "fence_moved" || reason === "not_found"
-      ? "conflict"
-      : "switch_off";
-/** The forward commit found the provisioner no longer named; failing the write rolls it back. */
-class NotNamed extends Data.TaggedError("NotNamed")<{}> {}
-/** Pen is asked by invite id once GOAT knows it, so a lost entry never reads as a fresh fence. */
-const refOf = (effect: AttachEffect): PenInviteRef =>
-  effect.inviteId === undefined ? { mintId: effect.id } : { inviteId: effect.inviteId };
-// Every settings writer waits while a transaction holds the lock, so each is bounded as the store's is.
-const lockBound = Effect.timeoutOrElse({
-  duration: "15 seconds",
-  orElse: () => Effect.fail(storageFailed()),
-});
-/** The goatclaw policy a grant was resolved from is the one in force. */
-const samePolicy = (a: ServerSettings, b: ServerSettings) =>
-  JSON.stringify(a.goatclaw) === JSON.stringify(b.goatclaw);
 
 export class DisposableAttach extends Context.Service<
   DisposableAttach,
@@ -246,37 +174,6 @@ export const make = Effect.gen(function* () {
     Effect.catchTags({ SqlError: () => Effect.fail(storageFailed()) }),
   );
 
-  const status = (
-    row: Row,
-    invite?: { readonly token: string; readonly expiresAt: string },
-  ): HubMachineStatus => {
-    const { message, nextAction } = stateMessage(row.state, row.name, row.pen_removed_at !== null);
-    const provisioner = provisionerOf(row);
-    return {
-      attachId: row.attach_id,
-      name: row.name,
-      nodeId: row.node_id,
-      state: row.state,
-      step: row.step,
-      steps: mintSteps(effectsOf(row)),
-      message,
-      nextAction,
-      class:
-        row.final_at !== null
-          ? "kept"
-          : conflictCount(row.conflicts_json) > 0
-            ? "conflict"
-            : "disposable",
-      penMember: row.pen_admitted_at !== null && row.pen_removed_at === null,
-      provisioner:
-        provisioner?.kind === "thread"
-          ? { kind: "thread", threadId: provisioner.threadId as never }
-          : { kind: "person" },
-      stateSince: row.state_since,
-      ...(invite === undefined ? {} : { invite }),
-    };
-  };
-
   /** Both lanes must declare what attach uses before anything is reserved or dispatched. */
   const requireFeatures = Effect.gen(function* () {
     if (!declares(yield* pen.features, PEN_ATTACH_FEATURES))
@@ -301,7 +198,9 @@ export const make = Effect.gen(function* () {
     return (
       provisioner === undefined ||
       (provisioner.kind === "thread" &&
-        !current.hub.attachDisposableMachines.provisioners.includes(provisioner.threadId as never))
+        !current.hub.attachDisposableMachines.provisioners.some(
+          (id) => id === provisioner.threadId,
+        ))
     );
   };
   // Reads goatclaw profiles through the settings service, so it never runs under the settings lock.
@@ -838,7 +737,10 @@ export const make = Effect.gen(function* () {
               "unknown_outcome",
               "An earlier reissue with this request did not finish. Refresh the machine list, then reissue as a new request.",
             );
-          return yield* fail(earlier.outcome as HubMachinesErrorReason, earlier.detail ?? "");
+          return yield* new HubMachinesError({
+            reason: earlier.outcome,
+            detail: earlier.detail ?? "",
+          });
         }
         const open = openEffects(effectsOf(row));
         const latest = open.at(-1);

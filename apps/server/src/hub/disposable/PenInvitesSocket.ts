@@ -52,10 +52,8 @@ const Acked = Schema.Struct({
   mintId: Schema.optional(Schema.String),
   state: Schema.Literals(["acked", "absent"]),
 });
-const decode = <S extends Schema.Top>(schema: S) =>
-  Schema.decodeUnknownOption(Schema.fromJsonString(schema) as never) as (
-    line: string,
-  ) => Option.Option<S["Type"]>;
+const decode = <S extends Schema.Codec<unknown, unknown>>(schema: S) =>
+  Schema.decodeUnknownOption(Schema.fromJsonString(schema));
 const decodeStatus = decode(Status);
 const decodeLs = decode(Ls);
 const decodeMinted = decode(Minted);
