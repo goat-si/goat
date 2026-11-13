@@ -353,6 +353,7 @@ export function MobileBotWork(props: {
   const leavePeek = () => {
     if (
       peekTaskId !== null &&
+      !showAllFinished &&
       environmentId &&
       workRowCollapsed(rows, environmentId, listData?.remoteWork ?? [], peekTaskId)
     ) {
@@ -594,7 +595,9 @@ export function MobileBotWork(props: {
                   })
                 : [];
             },
-            canUpdate,
+            // Offline rows stay listed, but nothing can be opened or changed until it reconnects.
+            canUpdate: canUpdate && enabled,
+            openable: enabled,
             rows,
             chatTasks: props.chatTasks ?? [],
             onPeekTask: (id) => {

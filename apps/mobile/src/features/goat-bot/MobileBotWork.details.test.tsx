@@ -80,7 +80,33 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+// The row menu is native; this stands in for it and hands its choices to the Alert mock.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: {
+    label: string;
+    title: string;
+    actions: ReadonlyArray<{ id: string; title: string }>;
+    onSelect: (id: string) => void;
+  }) => (
+    <button
+      aria-label={props.label}
+      onClick={() =>
+        nativeAlert(
+          props.title,
+          undefined,
+          props.actions.map((action) => ({
+            text: action.title,
+            onPress: () => props.onSelect(action.id),
+          })),
+        )
+      }
+    />
+  ),
+}));
 const state = vi.hoisted(() => ({
+  // Whether the screen is focused and the app active; a task is marked read only then.
+  seen: true,
+  run: vi.fn(async () => ({ _tag: "Success" as string })),
   rows: [] as BotThreadRow[],
   remoteWork: [] as object[],
   groups: [] as object[],
@@ -276,6 +302,17 @@ vi.mock("../../components/ui/Button", () => ({
     <button onClick={props.onPress}>{props.label}</button>
   ),
 }));
+// Read acknowledgements go to state.run so a test sees what the server would receive; every other
+// command runs as before.
+vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
+  const runAtomCommand = ((...args: Parameters<typeof real.runAtomCommand>) =>
+    (args[2] as { input?: { readThrough?: string } } | undefined)?.input?.readThrough !== undefined
+      ? state.run(...(args as unknown as []))
+      : real.runAtomCommand(...args)) as typeof real.runAtomCommand;
+  return { ...real, runAtomCommand };
+});
+import { resetTaskReadAcknowledgementsForTests } from "@goat/client-runtime/goatBot";
 import { MobileBotWork } from "./MobileBotWork";
 
 // The chat's header chip opens the home; this stands in for it.
@@ -344,6 +381,7 @@ async function open(taskId?: string) {
     root?.render(
       <WorkWithChip
         visible
+        seen={state.seen}
         taskId={taskId === undefined ? undefined : ChannelTaskId.make(taskId)}
         onOpenTask={state.openTask}
         onOpenThread={state.openThread}
@@ -423,7 +461,7 @@ it("returns from a hidden finished task by revealing and scrolling to its row", 
   expect(state.scrolled).toContain(JSON.stringify(["task", "t5"]));
 });
 
-it("returns to a task beyond the finished cutoff even when Show more was already open", async () => {
+it("leaves Home where it was on Back when Show more was already open for the row", async () => {
   state.rows = Array.from({ length: 6 }, (_, i) =>
     decode({
       kind: "task",
@@ -438,7 +476,8 @@ it("returns to a task beyond the finished cutoff even when Show more was already
   await press("Show more");
   await press("Task 5");
   await press("Back to home. Task 5");
-  expect(state.scrolled).toContain(JSON.stringify(["task", "t5"]));
+  expect(state.scrolled).toEqual([]);
+  expect(button("Task 5")).toBeDefined();
 });
 
 it("does not scroll when returning from a visible row, including Android back", async () => {
@@ -619,4 +658,127 @@ it("keeps list-derived work visible after disconnect without reading children", 
   expect(state.childKeys).toEqual([]);
   expect(home()?.textContent).toContain("Open work thread on mini");
   expect(home()?.textContent).toContain("Open work thread");
+});
+
+const unreadTask = (taskId: string, title: string) =>
+  decode({
+    kind: "task",
+    task: { taskId, title, status: "running", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: true,
+    mainMessagesSinceQuiet: 0,
+  });
+// The read requests sent to the server, as the input each one carried.
+const reads = () =>
+  state.run.mock.calls
+    .map((call) => (call as unknown as [unknown, unknown, { input: { readThrough?: string } }])[2])
+    .filter((value) => value?.input?.readThrough !== undefined)
+    .map((value) => value.input);
+function setupReads(result: { _tag: string } = { _tag: "Success" }) {
+  resetTaskReadAcknowledgementsForTests();
+  state.run.mockReset();
+  state.run.mockResolvedValue(result);
+  state.seen = true;
+  nativeAlert.mockClear();
+}
+
+it("a peek marks its unread task read once, and again only for newer activity", async () => {
+  setupReads();
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  expect(reads()).toEqual([]);
+  await press("Check the disks");
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+  await open();
+  await press("Back to home. Check the disks");
+  await press("Check the disks");
+  expect(reads()).toHaveLength(1);
+  state.seen = true;
+});
+
+it("a peek on a phone that is not looking (backgrounded or inactive) marks nothing until it is", async () => {
+  setupReads();
+  state.seen = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toEqual([]);
+  state.seen = true;
+  await open();
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+});
+
+it("a failed peek read stays quiet and is sent again only when the task is shown again", async () => {
+  setupReads({ _tag: "Failure" });
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toHaveLength(1);
+  expect(nativeAlert).not.toHaveBeenCalledWith("Could not mark task read", expect.anything());
+  await open();
+  expect(reads()).toHaveLength(1);
+  await press("Back to home. Check the disks");
+  await press("Check the disks");
+  expect(reads()).toHaveLength(2);
+});
+
+it("marks nothing read without permission to update tasks", async () => {
+  setupReads();
+  state.canUpdate = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toEqual([]);
+});
+
+it("the task's own screen marks it read once while seen, and says so when that fails", async () => {
+  setupReads({ _tag: "Failure" });
+  state.seen = false;
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open("t1");
+  expect(reads()).toEqual([]);
+  state.seen = true;
+  await open("t1");
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+  expect(nativeAlert).toHaveBeenCalledWith("Could not mark task read", "Please try again.");
+  await open("t1");
+  expect(reads()).toHaveLength(1);
+});
+
+it("marks a shown task read again when newer activity arrives, on its screen and in a peek", async () => {
+  setupReads();
+  const later = "2026-11-11T03:00:00.000Z";
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  await press("Check the disks");
+  expect(reads()).toEqual([{ taskId: "t1", readThrough: at }]);
+  state.rows = [decode({ ...unreadTask("t1", "Check the disks"), lastActivityAt: later })];
+  await open();
+  expect(reads()).toEqual([
+    { taskId: "t1", readThrough: at },
+    { taskId: "t1", readThrough: later },
+  ]);
+  const evenLater = "2026-11-11T04:00:00.000Z";
+  state.rows = [decode({ ...unreadTask("t1", "Check the disks"), lastActivityAt: evenLater })];
+  await open("t1");
+  expect(reads().at(-1)).toEqual({ taskId: "t1", readThrough: evenLater });
+  expect(reads()).toHaveLength(3);
+});
+
+it("keeps an offline task listed, but it neither opens nor offers task actions", async () => {
+  setupReads();
+  state.rows = [unreadTask("t1", "Check the disks")];
+  await open();
+  // The list was read while connected; the computer then goes offline.
+  state.connected = false;
+  await open();
+  expect(button("Check the disks")?.hasAttribute("disabled")).toBe(true);
+  await press("Actions for Check the disks");
+  expect(
+    ((nativeAlert.mock.calls.at(-1)?.[2] ?? []) as Array<{ text: string }>).map(
+      (item) => item.text,
+    ),
+  ).toEqual(["Show work"]);
+  expect(reads()).toEqual([]);
 });

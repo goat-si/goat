@@ -31,6 +31,29 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+// The row menu is native; this stands in for it and hands its choices to the Alert mock.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: {
+    label: string;
+    title: string;
+    actions: ReadonlyArray<{ id: string; title: string }>;
+    onSelect: (id: string) => void;
+  }) => (
+    <button
+      aria-label={props.label}
+      onClick={() =>
+        alert(
+          props.title,
+          undefined,
+          props.actions.map((action) => ({
+            text: action.title,
+            onPress: () => props.onSelect(action.id),
+          })),
+        )
+      }
+    />
+  ),
+}));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <i>pin</i> }));
 vi.mock("./MobileBotPanelEmpty", () => ({
   MobileBotPanelEmpty: (props: { title: string }) => <p>{props.title}</p>,
@@ -139,20 +162,21 @@ it("lists a task with its status, unread and pinned state, and the actions the b
   const calls = await show({ work: work([listedTask]), rows: [task] });
   const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
   expect(row).not.toBeNull();
-  expect(row?.getAttribute("data-actions")).toBe("Unpin,Mark done,Mark read");
+  // Assistive actions are the menu's own choices.
+  expect(row?.getAttribute("data-actions")).toBe("Show work,Unpin,Mark done,Mark read");
   expect(container.textContent).toContain("Needs your input · Unread");
   await act(async () =>
     row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
   );
   expect(calls.update).toHaveBeenLastCalledWith({ taskId: "task-1", readThrough: at });
-  await act(async () => row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  const actionsButton = container.querySelector('[aria-label="Actions for Review"]');
+  await act(async () => (actionsButton as HTMLButtonElement).click());
   const choices = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
   expect(choices.map((choice) => choice.text)).toEqual([
     "Show work",
     "Unpin",
     "Mark done",
     "Mark read",
-    "Cancel",
   ]);
   await act(async () => {
     choices[1]?.onPress?.();

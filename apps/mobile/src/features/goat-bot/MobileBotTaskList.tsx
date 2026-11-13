@@ -12,11 +12,12 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { ReactNode } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
+import { MobileBotRowMenu } from "./MobileBotRowMenu";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -48,6 +49,8 @@ export function mobileBotTaskListItems(props: {
   readonly onToggleExpanded: (id: ChannelTaskId) => void;
   readonly details: (id: ChannelTaskId) => ReadonlyArray<MobileBotHomeItem>;
   readonly canUpdate: boolean;
+  /** A row opens its peek only while the list can be read; offline rows stay listed but closed. */
+  readonly openable?: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   /** Task cards in the conversation; ones the list lacks show under "Earlier in chat". */
   readonly chatTasks: ReadonlyArray<GoatBotTaskCard>;
@@ -91,21 +94,22 @@ export function mobileBotTaskListItems(props: {
     if (action === "read")
       props.onUpdate({ taskId: row.task.taskId, readThrough: row.lastActivityAt });
   };
-  const menu = (row: TaskRow) =>
-    Alert.alert(row.task.title, undefined, [
-      {
-        text: props.expanded.has(row.task.taskId) ? "Hide work" : "Show work",
-        onPress: () => props.onToggleExpanded(row.task.taskId),
-      },
-      ...(props.canUpdate
-        ? [
-            { text: row.view.pinnedAt ? "Unpin" : "Pin", onPress: () => act(row, "pin") },
-            { text: row.view.doneAt ? "Reopen" : "Mark done", onPress: () => act(row, "done") },
-            ...(row.unread ? [{ text: "Mark read", onPress: () => act(row, "read") }] : []),
-          ]
-        : []),
-      { text: "Cancel", style: "cancel" },
-    ]);
+  // The row menu and the open control's assistive actions offer the same choices.
+  const actions = (row: TaskRow) => [
+    { id: "work", title: props.expanded.has(row.task.taskId) ? "Hide work" : "Show work" },
+    ...(props.canUpdate
+      ? [
+          { id: "pin", title: row.view.pinnedAt ? "Unpin" : "Pin" },
+          { id: "done", title: row.view.doneAt ? "Reopen" : "Mark done" },
+          ...(row.unread ? [{ id: "read", title: "Mark read" }] : []),
+        ]
+      : []),
+  ];
+  const choose = (row: TaskRow, id: string) => {
+    if (id === "work") props.onToggleExpanded(row.task.taskId);
+    else if (props.canUpdate) act(row, id);
+  };
+  const openable = props.openable ?? true;
   const label = (key: string, text: string): MobileBotHomeItem => ({
     key,
     render: () => <Text className="pt-2 font-semibold text-foreground">{text}</Text>,
@@ -129,15 +133,13 @@ export function mobileBotTaskListItems(props: {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={mobileBotTaskLabel(row)}
-              accessibilityActions={[
-                { name: "pin", label: row.view.pinnedAt ? "Unpin" : "Pin" },
-                { name: "done", label: row.view.doneAt ? "Reopen" : "Mark done" },
-                { name: "read", label: "Mark read" },
-              ]}
-              onAccessibilityAction={(event) => {
-                if (props.canUpdate) act(row, event.nativeEvent.actionName);
-              }}
-              onLongPress={() => menu(row)}
+              accessibilityActions={actions(row).map((action) => ({
+                name: action.id,
+                label: action.title,
+              }))}
+              onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
+              accessibilityState={{ disabled: !openable }}
+              disabled={!openable}
               className="min-h-[44px] flex-1 flex-row items-center gap-2"
               onPress={() => props.onPeekTask(row.task.taskId)}
             >
@@ -176,14 +178,12 @@ export function mobileBotTaskListItems(props: {
                 tintColorClassName="accent-foreground-muted"
               />
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Actions for ${row.task.title}`}
-              onPress={() => menu(row)}
-              className="h-11 w-11 items-center justify-center"
-            >
-              <Text className="text-foreground-muted">…</Text>
-            </Pressable>
+            <MobileBotRowMenu
+              label={`Actions for ${row.task.title}`}
+              title={row.task.title}
+              actions={actions(row)}
+              onSelect={(id) => choose(row, id)}
+            />
           </View>
         ),
       });
