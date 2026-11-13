@@ -67,6 +67,29 @@ export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
 }> {}
 
 /**
+ * Writes a machine's one-line known_hosts once, through a temporary file renamed into place, so a
+ * failed write never leaves a partial file; a file holding anything else is "changed".
+ */
+export const writeKnownHostsOnce = Effect.fn("EnrollHost.writeKnownHostsOnce")(
+  function* (directory: string, attachId: string, line: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const file = path.join(directory, attachId);
+    const existing = yield* fs.readFileString(file).pipe(Effect.option);
+    if (existing._tag === "Some")
+      return existing.value === line ? file : yield* new KnownHostsError({ reason: "changed" });
+    yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
+    const temporary = file + ".new";
+    yield* fs.writeFileString(temporary, line, { mode: 0o600 });
+    yield* fs.rename(temporary, file);
+    return file;
+  },
+  Effect.catchTags({
+    PlatformError: () => Effect.fail(new KnownHostsError({ reason: "unwritable" })),
+  }),
+);
+
+/**
  * What enrollment does outside GOAT's own records: read Pen's route for a node, keep the machine's
  * private known_hosts, run ssh under the route contract, and run ocx on this Home. Tests replace it
  * with fakes of those contracts.
@@ -126,22 +149,12 @@ export const layer = Layer.effect(
           })),
         );
       }),
-      knownHosts: Effect.fn("EnrollHost.knownHosts")(
-        function* (attachId, line) {
-          const file = path.join(directory, attachId);
-          const existing = yield* fs.readFileString(file).pipe(Effect.option);
-          if (existing._tag === "Some")
-            return existing.value === line
-              ? file
-              : yield* new KnownHostsError({ reason: "changed" });
-          yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-          yield* fs.writeFileString(file, line, { mode: 0o600 });
-          return file;
-        },
-        Effect.catchTags({
-          PlatformError: () => Effect.fail(new KnownHostsError({ reason: "unwritable" })),
-        }),
-      ),
+      knownHosts: Effect.fn("EnrollHost.knownHosts")(function* (attachId, line) {
+        return yield* writeKnownHostsOnce(directory, attachId, line).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        );
+      }),
       reach: Effect.fn("EnrollHost.reach")(
         function* (route) {
           const options = disposableSshExecOptions(route);

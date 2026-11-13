@@ -848,3 +848,21 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a known_hosts file that no longer holds the pinned line at reach stops with its own text, not as Pen's change",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        yield* enroll; // route
+        host.control.knownHosts.set(attachId, "edited by hand\n");
+        yield* enroll;
+        const machine = yield* listed(attachId);
+        expect(machine).toMatchObject({ state: "paused", class: "disposable" });
+        expect(machine?.message).toContain("known_hosts");
+        expect(machine?.message).not.toContain("Pen now advertises");
+      }),
+    ),
+);

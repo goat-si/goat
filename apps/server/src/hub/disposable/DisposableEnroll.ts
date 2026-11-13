@@ -267,8 +267,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       line === undefined
         ? undefined
         : yield* host.knownHosts(row.attach_id, line).pipe(Effect.result);
+    // Pen still advertises the pin, so a mismatch is GOAT's own file edited or damaged.
     if (pinned?._tag === "Failure" && pinned.failure.reason === "changed")
-      return yield* conflict(row, enroll, "pin_changed");
+      return yield* stop(row, enroll, "known_hosts_edited");
     const key = yield* machineKey.identity.pipe(Effect.option);
     const reached =
       key._tag === "None"

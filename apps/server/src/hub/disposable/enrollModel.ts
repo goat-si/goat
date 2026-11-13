@@ -223,6 +223,8 @@ const STOPS: Record<string, string> = {
   sshd_pin_shared:
     "Another disposable machine presents the same SSH host key, so GOAT cannot tell them apart.",
   pin_changed: "Pen now advertises another SSH host key for this machine than GOAT recorded.",
+  known_hosts_edited:
+    "GOAT's known_hosts file for this machine no longer holds only the host key Pen recorded; it was edited or damaged on the hub.",
   host_key_changed: "The machine presented another SSH host key than the one Pen recorded for it.",
   route_other_pen: "Pen's route for this machine names another Pen than the one confirmed here.",
   route_unsafe_pen_path: "The confirmed Pen's path cannot be passed to ssh unchanged.",

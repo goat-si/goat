@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../../processRunner.ts";
-import { journalServed, reachAnswerOf } from "./EnrollHost.ts";
+import { journalServed, reachAnswerOf, writeKnownHostsOnce } from "./EnrollHost.ts";
 
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
@@ -56,3 +56,21 @@ it("ssh's own whole lines decide how a reach ended; a banner cannot", () => {
     ),
   ).toBe("host_key_unknown");
 });
+
+it.live.skipIf(WINDOWS)("the known_hosts line is published whole and written once", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(yield* fs.makeTempDirectoryScoped(), "known_hosts");
+    const line = "pen-x ssh-ed25519 AAAA\n";
+    const file = yield* writeKnownHostsOnce(dir, "a1", line);
+    expect(yield* fs.readFileString(file)).toBe(line);
+    expect(yield* writeKnownHostsOnce(dir, "a1", line)).toBe(file);
+    // Only the published file is left: the line went through a temporary file and a rename.
+    expect(yield* fs.readDirectory(dir)).toEqual(["a1"]);
+    expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600);
+    yield* fs.writeFileString(file, "");
+    const changed = yield* writeKnownHostsOnce(dir, "a1", line).pipe(Effect.flip);
+    expect(changed.reason).toBe("changed");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
