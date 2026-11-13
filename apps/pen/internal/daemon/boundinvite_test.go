@@ -303,3 +303,27 @@ func TestStatusNamesTheBoundInviteFeatures(t *testing.T) {
 		t.Fatalf("status answered\n%s\nwant\n%s", raw, want)
 	}
 }
+
+// A caller that sends a subject member at all asked for a bound invite: a null or string subject is refused and makes
+// nothing, never an ordinary token any machine could use.
+func TestAnInviteWithANullOrStringSubjectIsRefused(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rs := relaytest.New()
+	defer rs.Close()
+	a := founder(t, ctx, rs, "a", nil)
+	for _, line := range []string{
+		`{"op":"invite","subject":null}`,
+		`{"op":"invite","subject":"x"}`,
+		`{"op":"invite","ttlMs":60000,"subject":""}`,
+	} {
+		var r InviteReply
+		if err := rawCall(t, a.st, line, &r); err == nil {
+			t.Fatalf("%s: answered %+v; want a refusal", line, r)
+		}
+	}
+	var offers []mesh.Invite
+	if _, err := a.st.ReadJSON("offers.json", &offers); err != nil || len(offers) != 0 {
+		t.Fatalf("offers.json holds %d invite(s) (%v); want none", len(offers), err)
+	}
+}

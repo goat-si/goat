@@ -43,8 +43,9 @@ type InviteCancelReply struct {
 }
 
 // boundOp reports whether a control line is a bound-invite op, which handleControl serves before decoding a
-// Request: Request.Subject is a string, so an older node answers an invite with a subject object "bad request" and
-// makes nothing, and it answers the other ops "unknown op".
+// Request: an invite carrying a subject, mintId or expiresAt member, or one of the other ops. Request.Subject is a
+// string, so an older node answers an invite with a subject object "bad request" and makes nothing, and it answers
+// the other ops "unknown op".
 func boundOp(line []byte) bool {
 	var head struct {
 		Op        string          `json:"op"`
@@ -59,7 +60,8 @@ func boundOp(line []byte) bool {
 	case "invite.cancel", "invite.status", "invite.ack":
 		return true
 	case "invite":
-		return len(head.MintID) > 0 || len(head.ExpiresAt) > 0 || len(head.Subject) > 0 && head.Subject[0] == '{'
+		// Any subject member at all, null or a string included, asks for a bound invite and is refused there if malformed.
+		return len(head.MintID) > 0 || len(head.ExpiresAt) > 0 || len(head.Subject) > 0
 	}
 	return false
 }
