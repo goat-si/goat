@@ -42,3 +42,16 @@ it.live.skipIf(WINDOWS)(
       expect(yield* fs.readFileString(a.privateKeyFile)).toBe(privateBytes);
     }).pipe(Effect.scoped, Effect.provide(services)),
 );
+
+it.live.skipIf(WINDOWS)("reading the key before attach makes one creates nothing", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = path.join(yield* fs.makeTempDirectoryScoped(), "disposable");
+    const service = yield* make(directory);
+    expect(yield* service.known).toBeUndefined();
+    expect(yield* fs.exists(directory)).toBe(false);
+    const made = yield* service.identity;
+    expect(yield* service.known).toEqual(made);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);

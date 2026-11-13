@@ -26,7 +26,12 @@ export class MachineKeyError extends Data.TaggedError("MachineKeyError")<{
 /** One ed25519 key per hub, made once and never rewritten; the person's own ssh keys are never used. */
 export class MachineKey extends Context.Service<
   MachineKey,
-  { readonly identity: Effect.Effect<MachineIdentity, MachineKeyError> }
+  {
+    /** The key, made on first use. */
+    readonly identity: Effect.Effect<MachineIdentity, MachineKeyError>;
+    /** The key if it was made; a read never makes one. */
+    readonly known: Effect.Effect<MachineIdentity | undefined>;
+  }
 >()("goat/hub/disposable/machineKey") {}
 
 const COMMENT = "goat-disposable";
@@ -82,7 +87,14 @@ export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
     Effect.catchTags({ PlatformError: failed("GOAT could not store its machine key.") }),
     once,
   );
+  const known = Effect.gen(function* () {
+    if (!(yield* fs.exists(privateKeyFile).pipe(Effect.orElseSucceed(() => false))))
+      return undefined;
+    const publicLine = yield* readPublic;
+    return publicLine === undefined ? undefined : { privateKeyFile, publicLine };
+  });
   return MachineKey.of({
+    known,
     identity: Effect.map(create, (publicLine) => ({ privateKeyFile, publicLine })).pipe(
       Effect.withSpan("MachineKey.identity"),
     ),
