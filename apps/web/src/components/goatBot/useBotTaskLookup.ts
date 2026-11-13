@@ -22,6 +22,12 @@ export function useBotTaskLookup(
   const read = useAtomCommand(channelEnvironment.getBotTask, { reportFailure: false });
   const sequence = useRef(0);
   const [answer, setAnswer] = useState<Lookup | null>(null);
+  const eligible = supported && permitted && needed;
+  const [wasEligible, setWasEligible] = useState(eligible);
+  if (eligible !== wasEligible) {
+    setWasEligible(eligible);
+    if (!eligible) setAnswer(null);
+  }
   const key = JSON.stringify([environmentId, botId, taskId]);
   const run = useStableCallback(
     (

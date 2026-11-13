@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  acknowledgeTaskRead,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
   isRetryableTaskStatus,
@@ -222,21 +223,25 @@ export function GoatBotTaskPane({
             >
               {task.view.doneAt ? "Reopen" : "Mark done"}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!canUpdate || !task.unread}
-              onClick={() => {
-                void update({
-                  environmentId,
-                  input: { taskId, readThrough: task.lastActivityAt },
-                }).then((result) => {
-                  if (result._tag === "Success") refreshTask();
-                });
-              }}
-            >
-              Mark read
-            </Button>
+            {lookup.supported && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canUpdate || !task.unread}
+                onClick={() => {
+                  void acknowledgeTaskRead({
+                    environmentId,
+                    taskId,
+                    readThrough: task.lastActivityAt,
+                    update,
+                  }).then((outcome) => {
+                    if (outcome === "accepted") refreshTask();
+                  });
+                }}
+              >
+                Mark read
+              </Button>
+            )}
           </>
         )}
         {found?.state === "unavailable" && (

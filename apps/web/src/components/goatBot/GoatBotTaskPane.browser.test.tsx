@@ -965,3 +965,95 @@ it("looks up a member's older task under that member", async () => {
     input: { taskId: "task-1", botId: "research" },
   });
 });
+
+it("forgets the old lookup view when the task leaves and re-enters the list", async () => {
+  setup();
+  state.noRows = true;
+  state.lookupSupported = true;
+  const oldRow = decodeBotThreadRow({
+    kind: "task",
+    task: {
+      taskId: "task-1",
+      title: "Older lookup",
+      status: "running",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    },
+    view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T10:00:00.000Z",
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  });
+  let finish!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  state.lookup.mockResolvedValueOnce({
+    _tag: "Success",
+    value: {
+      task: { state: "known", row: oldRow },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    },
+  });
+  state.lookup.mockReturnValueOnce(pending);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Older lookup" })).toBeVisible();
+  state.noRows = false;
+  state.row.unread = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Review work" })).toBeVisible();
+  state.noRows = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  expect(screen.getByRole("button", { name: "Pin", exact: true }).query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Mark done" }).query()).toBeNull();
+  const newRow = decodeBotThreadRow({
+    ...oldRow,
+    task: { ...oldRow.task, title: "New lookup" },
+    view: {
+      ...oldRow.view,
+      pinnedAt: "2026-11-04T10:00:00.000Z",
+      doneAt: "2026-11-04T10:00:00.000Z",
+    },
+  });
+  await act(() =>
+    finish({
+      _tag: "Success",
+      value: {
+        task: { state: "known", row: newRow },
+        codingRows: [],
+        remoteWork: [],
+        launchesTruncated: false,
+        partial: false,
+      },
+    }),
+  );
+  await expect.element(screen.getByRole("heading", { name: "New lookup" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Unpin" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Reopen" })).toBeVisible();
+});
+
+it("deduplicates explicit Mark read while automatic acknowledgement is in flight", async () => {
+  setup();
+  state.lookupSupported = true;
+  state.row.unread = true;
+  let finish!: (value: { _tag: string }) => void;
+  const pending = new Promise<{ _tag: string }>((resolve) => {
+    finish = resolve;
+  });
+  state.update.mockImplementationOnce(() => pending);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+  await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
+  expect(state.update).toHaveBeenCalledTimes(1);
+  await act(() => finish({ _tag: "Success" }));
+});
+
+it("does not add Mark read to a listed task on an older server", async () => {
+  setup();
+  state.row.unread = false;
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByRole("heading", { name: "Review work" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Mark read" }).query()).toBeNull();
+});
