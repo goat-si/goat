@@ -91,6 +91,10 @@ const windowsExactPipe = (command: string) => {
 const unset = (value: string | undefined) =>
   value === undefined || value === "" || value === "none";
 
+// Apple's ssh can skip the host key check for any ProxyCommand route; Pen's key lookup must run.
+const checksHostKey = (settings: ReadonlyMap<string, string>) =>
+  ["no", "false"].includes(settings.get("nohostauthenticationforproxycommand") ?? "no");
+
 // The ProxyCommand `pen ssh-config` writes: the binary, optionally under its own PEN_HOME.
 const QUOTED = "'(?:[^']|'\\\\'')*'";
 const PEN_BINARY = `(?:env PEN_HOME=${QUOTED} )?'(?:[^']|'\\\\'')*/pen' pipe`;
@@ -277,6 +281,7 @@ export const penExactAliasRoute = (
     const match = windowsExactPipe(settings.get("proxycommand") ?? "");
     const file = settings.get("userknownhostsfile");
     return match &&
+      checksHostKey(settings) &&
       unset(settings.get("proxyjump")) &&
       ["true", "yes"].includes(settings.get("stricthostkeychecking") ?? "") &&
       unset(settings.get("knownhostscommand")) &&
@@ -289,6 +294,7 @@ export const penExactAliasRoute = (
   const match = PEN_EXACT_PIPE.exec(settings.get("proxycommand") ?? "");
   const file = settings.get("userknownhostsfile");
   return match !== null &&
+    checksHostKey(settings) &&
     unset(settings.get("proxyjump")) &&
     settings.get("stricthostkeychecking") === "true" &&
     unset(settings.get("knownhostscommand")) &&

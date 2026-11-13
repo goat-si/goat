@@ -48,7 +48,8 @@ for (const [expected, mode] of [
         const proxyNode = mode === "wrong-node" ? "b".repeat(26) : node;
         const proxy = `"${escaped}" pipe --node ${proxyNode} --noise ${noise} 22${mode === "extra" ? " extra" : ""}`;
         const knownHosts = path.join(dir, "known_hosts").replaceAll("\\", "/");
-        const configText = `Host ${alias}\n    ProxyCommand ${proxy}\n    UserKnownHostsFile "${knownHosts}"${mode === "second-file" ? " /other" : ""}\n    StrictHostKeyChecking yes\n${mode === "jump" ? "    ProxyJump jump\n" : ""}`;
+        // ssh keeps the first of ProxyJump and ProxyCommand, so the jump line comes first.
+        const configText = `Host ${alias}\n${mode === "jump" ? "    ProxyJump jump\n" : ""}    ProxyCommand ${proxy}\n    UserKnownHostsFile "${knownHosts}"${mode === "second-file" ? " /other" : ""}\n    StrictHostKeyChecking yes\n`;
         yield* fs.writeFileString(config, configText);
         const output = NodeChildProcess.spawnSync(ssh, ["-F", config, "-G", alias], {
           encoding: "utf8",
