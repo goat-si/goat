@@ -232,6 +232,7 @@ import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import {
   getComposerPromptLengthValidationMessage,
   getComposerSubmissionValidationMessage,
+  isComposerSubmissionBlocked,
   submitComposerDraft,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -992,6 +993,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : (attachmentBlockReason ??
         (multipleModelSelections === null ? providerSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
+  const submissionTarget = activePendingProgress ? "pending-user-input" : "provider-turn";
+  const submissionBlocked = isComposerSubmissionBlocked({
+    submissionTarget,
+    noProviderAvailable,
+    sendDisabledReason,
+    attachmentBlockReason,
+    environmentUnavailable: environmentUnavailable !== null,
+  });
+  const primarySendDisabledReason = activePendingProgress
+    ? attachmentBlockReason
+    : sendDisabledReason;
+  const primaryEnvironmentUnavailable =
+    environmentUnavailable !== null ||
+    (!activePendingProgress && (noProviderAvailable || projectSelectionRequired));
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
   const selectedProviderSkills = useOfferedSkills(selectedProviderStatus, gitCwd, settings, {
@@ -1297,16 +1312,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     hiddenBlockCount: expandedControlsHiddenBlockCount,
     iconOnlyBlockCount: expandedControlsIconOnlyBlockCount,
   } = useRestingComposerControlsLayout(null, true);
+  const pendingAnswerAttachmentsReady =
+    !attachmentBlockReason && !(questionPreparations[attachmentTargetKey] ?? 0);
   const pendingPrimaryAction = activePendingProgress
     ? {
         questionIndex: activePendingProgress.questionIndex,
         isLastQuestion: activePendingProgress.isLastQuestion,
-        canAdvance:
-          activePendingProgress.canAdvance &&
-          !attachmentBlockReason &&
-          !(questionPreparations[attachmentTargetKey] ?? 0),
+        canAdvance: activePendingProgress.canAdvance && pendingAnswerAttachmentsReady,
         isResponding: activePendingIsResponding,
-        isComplete: Boolean(activePendingResolvedAnswers),
+        isComplete: Boolean(activePendingResolvedAnswers) && pendingAnswerAttachmentsReady,
       }
     : null;
   const showResumeAction =
@@ -2078,9 +2092,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!isSoftwareKeyboardOpen) return false;
     if (
       isSendBusy ||
-      isSendDisabled ||
+      submissionBlocked ||
       isConnecting ||
-      noProviderAvailable ||
       environmentUnavailable !== null ||
       phase === "running"
     ) {
@@ -2101,8 +2114,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ) => {
     if (
       voice.blocksSubmission() ||
-      noProviderAvailable ||
-      isSendDisabled ||
+      submissionBlocked ||
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
     ) {
       event?.preventDefault();
@@ -2120,7 +2132,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (sendAfterUploads.intercept(event, fromQueue)) return false;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
-      submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
+      submissionTarget,
       event,
       onSend: (sendEvent) => {
         providerInputRejectedRef.current = false;
@@ -3772,13 +3784,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showPlanFollowUpPrompt={false}
                       promptHasText={false}
                       isSendBusy={isSendBusy}
-                      sendDisabledReason={sendDisabledReason}
+                      sendDisabledReason={primarySendDisabledReason}
                       isConnecting={isConnecting}
-                      isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
-                      }
+                      isEnvironmentUnavailable={primaryEnvironmentUnavailable}
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
@@ -3867,13 +3875,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     promptHasText={prompt.trim().length > 0}
                     isSendBusy={isSendBusy}
-                    sendDisabledReason={sendDisabledReason}
+                    sendDisabledReason={primarySendDisabledReason}
                     isConnecting={isConnecting}
-                    isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
-                    }
+                    isEnvironmentUnavailable={primaryEnvironmentUnavailable}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     canResume={showResumeAction}

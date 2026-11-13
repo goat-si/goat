@@ -152,6 +152,7 @@ import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useSideChatStore } from "../sideChat/sideChatStore";
@@ -636,16 +637,17 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
 
-    const notifyDirectAnnotationAttached = () => {
-      if (!directAnnotation) return;
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Annotation attached to draft",
-          description: "Sending is unavailable right now. Finish the current action, then send.",
-        }),
-      );
-    };
+    const sendCtx = composerRef.current?.getSendContext();
+    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
+      if (directAnnotation) notifyDirectAnnotationAttached(true);
+      else if (
+        activeThread &&
+        !activeEnvironmentUnavailable &&
+        readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+      )
+        onAdvanceActivePendingUserInput();
+      return;
+    }
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
@@ -658,7 +660,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(Boolean(directAnnotation));
       return;
     }
     if (needsLoadBalancing) {
@@ -687,15 +689,6 @@ export function useComposerSend(input: ComposerSendInput) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
-      return;
-    }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
-      if (directAnnotation) {
-        notifyDirectAnnotationAttached();
-        return;
-      }
-      onAdvanceActivePendingUserInput();
       return;
     }
     if (cloudState.composerBlockReason !== null) {
@@ -841,7 +834,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (!sendCtx?.providerAvailable) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(Boolean(directAnnotation));
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
