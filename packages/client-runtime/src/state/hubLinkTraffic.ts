@@ -16,7 +16,7 @@ export interface HubLinkView {
 const UNITS = ["B", "kB", "MB", "GB", "TB"] as const;
 
 /** Decimal units, as the warning thresholds are set: "1.4 GB", "5 GB", "820 MB", "0 B". */
-export function formatLinkBytes(bytes: number): string {
+function formatLinkBytes(bytes: number): string {
   let value = Math.max(0, bytes);
   let unit = 0;
   while (value >= 1000 && unit < UNITS.length - 1) {
@@ -39,7 +39,7 @@ function measuredFor(window: OpenCodexLinkTrafficWindow, fullMs: number): string
  * "relay ↑1.2 GB ↓120 MB last hour · ↑14 GB ↓1.4 GB in 24 h", plus the bytes that went
  * direct when there were any, and how long a short measurement covered.
  */
-export function hubLinkTrafficFacts(traffic: OpenCodexLinkTraffic): ReadonlyArray<string> {
+function hubLinkTrafficFacts(traffic: OpenCodexLinkTraffic): ReadonlyArray<string> {
   const { hour, day } = traffic;
   const directDayTo = day.toHomeBytes - day.relayToHomeBytes;
   const directDayFrom = day.fromHomeBytes - day.relayFromHomeBytes;
@@ -54,7 +54,7 @@ export function hubLinkTrafficFacts(traffic: OpenCodexLinkTraffic): ReadonlyArra
 }
 
 /** "via relay pen-mac", "direct mac-ts", or the name alone when the Home could not tell. */
-export function hubLinkRouteLabel(route: OpenCodexLinkRoute): string {
+function hubLinkRouteLabel(route: OpenCodexLinkRoute): string {
   return route.via === undefined
     ? `route ${route.name}`
     : route.via === "relay"

@@ -8,7 +8,7 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 // One slot more than a day, so the oldest partial slot of a 24-hour window is still held.
 const SLOTS = DAY_MS / SLOT_MS + 1;
-export const MAX_LINKS = 256;
+const MAX_LINKS = 256;
 const FIELDS = 5;
 const [TO_HOME, FROM_HOME, RELAY_TO_HOME, RELAY_FROM_HOME, MEASURED] = [0, 1, 2, 3, 4] as const;
 

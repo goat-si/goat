@@ -16,7 +16,7 @@ const PEN_OPEN_FLAGS = NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NONBLOCK 
 // A file read on the Pen path that has not finished by then counts as failed, never as pending.
 export const PEN_READ_TIMEOUT = "5 seconds";
 
-export class PenConfigReadError extends Data.TaggedError("PenConfigReadError")<{
+class PenConfigReadError extends Data.TaggedError("PenConfigReadError")<{
   readonly failure: "tooLarge" | "notRegular" | "unread";
 }> {}
 
