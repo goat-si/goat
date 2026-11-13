@@ -4,6 +4,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 const Alias = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+/** OpenCodex takes a route alias up to 253 characters; the server checks its form. */
+const RouteAlias = TrimmedNonEmptyString.check(Schema.isMaxLength(253));
 
 /**
  * One edit to a Remote Link Child's SSH routes on the Home, as `ocx link routes` takes it. The
@@ -13,13 +15,13 @@ const Alias = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 export const HubDeviceRoutesChange = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("add"),
-    route: Alias,
+    route: RouteAlias,
     position: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 7 }))),
   }),
-  Schema.Struct({ op: Schema.Literal("remove"), route: Alias }),
+  Schema.Struct({ op: Schema.Literal("remove"), route: RouteAlias }),
   Schema.Struct({
     op: Schema.Literal("order"),
-    routes: Schema.Array(Alias).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+    routes: Schema.Array(RouteAlias).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
   }),
 ]);
 export type HubDeviceRoutesChange = typeof HubDeviceRoutesChange.Type;

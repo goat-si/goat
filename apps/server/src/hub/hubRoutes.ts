@@ -14,11 +14,16 @@ import * as Schema from "effect/Schema";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { linkStatusUnreadable } from "./hubDeviceResult.ts";
 import type { Caller, HubPerson } from "./HubMembership.ts";
-import { type HubOcx, type HubOcxError, type OcxOutput, SAFE_ALIAS } from "./HubOcx.ts";
+import type { HubOcx, HubOcxError, OcxOutput } from "./HubOcx.ts";
 import type { LinkStatus } from "./hubOcxJson.ts";
 
 // An add proves the pinned key over the new route with an SSH probe first.
 const ROUTES_TIMEOUT_MS = 120_000;
+/**
+ * OpenCodex's route alias pattern (src/link/ssh-argv.ts ALIAS_PATTERN): an ssh_config Host or
+ * user@host, never a leading dash or a comma. Routes go to ocx as argv only.
+ */
+const ROUTE_ALIAS = /^[A-Za-z0-9_][A-Za-z0-9._@%+:[\]-]{0,252}$/u;
 const decodeRoutes = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -255,8 +260,8 @@ export const makeRoutes = (deps: RoutesDeps) => {
     person?: HubPerson,
   ) {
     const { deviceAlias: alias, change } = input;
-    if (!changeAliases(change).every((route) => SAFE_ALIAS.test(route)))
-      return yield* invalid("Each route must be a plain SSH alias.");
+    if (!changeAliases(change).every((route) => ROUTE_ALIAS.test(route)))
+      return yield* invalid("Each route must be an SSH alias or user@host, as OpenCodex takes it.");
     const caller = yield* deps.authorize(scope, alias, person);
     // Tool access reads only top-level arguments; the routes sit inside change.
     if (person === undefined)

@@ -214,3 +214,30 @@ it.effect(
       expect((yield* hub.inboxItems).items).toEqual([]);
     }),
 );
+it.effect(
+  "a route in OpenCodex's wider alias form, such as jun@mini, can be removed and reordered; a leading dash or a comma is refused before ocx runs",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ linked: ["mini"], routes: routesHome() });
+      const wide = { deviceAlias: "mini", change: { op: "add" as const, route: "jun@mini" } };
+      expect((yield* hub.membership.updateRoutes(scope, wide)).routes).toEqual([
+        "jun@mini",
+        "mini",
+      ]);
+      const order = { op: "order" as const, routes: ["mini", "jun@mini"] };
+      expect(
+        (yield* hub.membership.updateRoutes(scope, { deviceAlias: "mini", change: order })).routes,
+      ).toEqual(["mini", "jun@mini"]);
+      const remove = { op: "remove" as const, route: "jun@mini" };
+      expect(
+        (yield* hub.membership.updateRoutes(scope, { deviceAlias: "mini", change: remove })).routes,
+      ).toEqual(["mini"]);
+      for (const route of ["-oProxyCommand=x", "a,b"]) {
+        const refused = yield* Effect.flip(
+          hub.membership.updateRoutes(scope, { deviceAlias: "mini", change: { op: "add", route } }),
+        );
+        expect(refused.code).toBe("invalid_request");
+      }
+      expect(routesCalls(hub.calls)).toHaveLength(3);
+    }),
+);
