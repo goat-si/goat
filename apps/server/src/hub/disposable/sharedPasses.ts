@@ -11,26 +11,31 @@ import type * as Scope from "effect/Scope";
 export const makeSharedPasses = (scope: Scope.Scope, limit: number) => {
   const running = new Map<string, Deferred.Deferred<void>>();
   return <E>(key: string, pass: Effect.Effect<void, E>) =>
-    Effect.suspend(() => {
-      const current = running.get(key);
-      if (current !== undefined) return Effect.succeed(current);
-      const done = Deferred.makeUnsafe<void>();
-      if (running.size >= limit) return Effect.as(Deferred.succeed(done, undefined), done);
-      running.set(key, done);
-      return pass.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.void
-            : Effect.logWarning("Disposable machine reconcile failed", Cause.squash(cause)),
-        ),
-        Effect.ensuring(
-          Effect.suspend(() => {
-            running.delete(key);
-            return Deferred.succeed(done, undefined);
-          }),
-        ),
-        Effect.forkIn(scope),
-        Effect.as(done),
-      );
-    });
+    // Storing the key and forking the pass that clears it happen with no interruption between
+    // them; otherwise an interrupted caller would leave the key waiting forever. The pass itself
+    // stays interruptible, so closing the scope still stops it.
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        const current = running.get(key);
+        if (current !== undefined) return Effect.succeed(current);
+        const done = Deferred.makeUnsafe<void>();
+        if (running.size >= limit) return Effect.as(Deferred.succeed(done, undefined), done);
+        running.set(key, done);
+        return restore(pass).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logWarning("Disposable machine reconcile failed", Cause.squash(cause)),
+          ),
+          Effect.ensuring(
+            Effect.suspend(() => {
+              running.delete(key);
+              return Deferred.succeed(done, undefined);
+            }),
+          ),
+          Effect.forkIn(scope),
+          Effect.as(done),
+        );
+      }),
+    );
 };
