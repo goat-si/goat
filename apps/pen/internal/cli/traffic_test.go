@@ -1048,9 +1048,14 @@ func TestTrafficLimitsAreExactOnEitherClock(t *testing.T) {
 			set(start.Add(wall), mono)
 			s.report(context.Background())
 			r := got()
-			sent := len(r) > 0 && r[len(r)-1].In == 100 && (!c.held || len(r) == 2)
-			if sent != c.kept {
-				t.Fatalf("reports %+v; want the 100 bytes kept %v", r, c.kept)
+			refused := 0
+			if c.held {
+				refused = 1
+			}
+			kept := len(r) == refused+1 && r[refused].In == 100 && r[refused].Out == 100
+			dropped := len(r) == refused
+			if !(c.kept && kept) && !(!c.kept && dropped) {
+				t.Fatalf("reports %+v; want the 100 bytes each way kept %v", r, c.kept)
 			}
 		})
 	}
