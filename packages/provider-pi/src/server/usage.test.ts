@@ -71,7 +71,7 @@ it.effect("includes absolute Pi launch session directories without losing the de
     );
     assert.deepEqual(directories, [
       { dir: "/instance/work" },
-      { dir: "/home/test/.pi/agent/sessions" },
+      { dir: "/instance/.pi/agent/sessions" },
     ]);
   }).pipe(
     Effect.provideService(HostProcess.HomeDirectory, "/home/test"),
