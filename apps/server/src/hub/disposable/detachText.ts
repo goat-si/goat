@@ -3,7 +3,7 @@ import type { Detach, Health } from "./detachModel.ts";
 const WHERE = " in Settings → Hub on web or desktop";
 const leave = (inPen: boolean) =>
   inPen
-    ? " It stays a Pen member, with the owner's authority on every member, and keeps its slot until a person removes it with pen revoke."
+    ? " It stays a Pen member with the owner's authority, and keeps its slot, until a person runs pen revoke."
     : " It has left Pen.";
 /** An open record out of Pen still holds its slot, until its cleanup ends or a person forgets it. */
 const held = (inPen: boolean, recovering: boolean) =>
@@ -85,9 +85,7 @@ const STOPS: Record<string, Stop> = {
       outcome === "open"
         ? "OpenCodex still lists the revoke " +
           operationId +
-          " as running. A person fixes what stopped it on this hub (ocx link operations --operation-id " +
-          operationId +
-          " shows it), then detaches again" +
+          " as running. A person fixes what stopped it on this hub (ocx link operations shows it), then detaches again" +
           WHERE +
           ": GOAT repeats the revoke under that id."
         : outcome === "not_found" || outcome === "unreadable"
@@ -182,7 +180,7 @@ const RECOVER_WAITS: Record<string, string> = {
   managed_child_missing:
     "the machine has no planted ocx-child, so only a person can confirm its cleanup.",
   link_retirement_pending:
-    "OpenCodex still holds an unfinished removal of its link and asked for it once more, which GOAT did.",
+    "OpenCodex still holds an unfinished removal of its link; GOAT repeated it once and waits.",
 };
 const waits = (detach: Detach | undefined) =>
   detach?.outcome !== undefined && RECOVER_WAITS[detach.outcome] !== undefined
@@ -391,14 +389,14 @@ export const detachMessage = (
           (detach?.outcome === "forgotten"
             ? " is detached: its OpenCodex link is gone, and a person forgot its cleanup on this hub, so the machine may still hold the lightweight Child."
             : detach?.outcome === "unproven"
-              ? " is detached: OpenCodex lists no link for it, but link operation " +
+              ? " is detached: OpenCodex lists no link of this attach, but link operation " +
                 (detach.operationId ?? "") +
-                " never settled, so the machine may still hold the planted Child; check it there with ~/.cache/opencodex/bin/ocx-child connect status --json." +
+                " never settled, so the machine may still hold the planted Child (check with ocx-child connect status there)." +
                 (detach.foreignLinkId === undefined
                   ? ""
                   : " Link " +
                     detach.foreignLinkId +
-                    " under its alias is not GOAT's and was left as it is.")
+                    " under its alias is not GOAT's; GOAT left it.")
               : detach?.outcome === "elsewhere"
                 ? " is detached: its OpenCodex link was removed outside GOAT, so GOAT cannot tell whether the machine still holds the lightweight Child."
                 : " is detached: its OpenCodex link and lightweight Child are gone.") +
