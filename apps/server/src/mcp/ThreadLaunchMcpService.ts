@@ -112,6 +112,14 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+// A top-level name blocked by a nested branch has no slash-free alternative to offer.
+function branchConflictHint(branch: string) {
+  const sibling = branch.replaceAll("/", "-");
+  return `Use a name that does not nest under or contain an existing branch${
+    sibling === branch ? "" : `, such as "${sibling}"`
+  }.`;
+}
+
 /** The refusal plus the step that gets the caller a folder to launch into. */
 function workspaceMissingMessage(error: ThreadLaunch.ThreadLaunchWorkspaceMissingError) {
   if (error.kind === "worktree")
@@ -498,7 +506,7 @@ const make = Effect.gen(function* () {
                     code: "invalid_request",
                     message:
                       error._tag === "ThreadLaunchBranchConflictError"
-                        ? `${error.message} No thread was created. Use a name that does not nest under or contain an existing branch, such as "${error.branch.replaceAll("/", "-")}".`
+                        ? `${error.message} No thread was created. ${branchConflictHint(error.branch)}`
                         : error._tag === "ThreadLaunchBranchError"
                           ? `${error.message} No thread was created. ${
                               error.worktreePath === null

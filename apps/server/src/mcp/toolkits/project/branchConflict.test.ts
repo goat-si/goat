@@ -48,3 +48,42 @@ it.effect("a launch into a new worktree creates nothing when its branch collides
     expect(launched).toHaveLength(0);
   }),
 );
+
+it.effect("a branch blocked by a nested branch is not told to retry under its own name", () =>
+  Effect.gen(function* () {
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched: [],
+      checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
+        Effect.fail(
+          new ThreadLaunch.ThreadLaunchBranchConflictError({
+            projectId,
+            projectTitle: "Client target",
+            branch: workspaceStrategy.branch ?? "",
+            conflictingBranch: "feature/x",
+          }),
+        ),
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(withLaunchService(dependencies)),
+        ),
+      ),
+    );
+    const refused = (yield* toolkit
+      .handle("goat_thread_launch", {
+        title: "Fix",
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "feature" },
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(withLaunchService(dependencies)))).at(
+      -1,
+    )?.result;
+    expect(refused).toMatchObject({
+      code: "invalid_request",
+      message:
+        'Branch "feature" cannot be created in project "Client target": branch "feature/x" exists. No thread was created. Use a name that does not nest under or contain an existing branch.',
+    });
+  }),
+);
