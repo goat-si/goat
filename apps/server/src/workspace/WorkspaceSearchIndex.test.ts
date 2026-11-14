@@ -219,3 +219,50 @@ it.effect("continues whole-word searches after a filtered grep page", () =>
     }),
   ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect.each([
+  {
+    platform: "linux" as const,
+    ignored: "dir\\one/",
+    hidden: "dir\\one/report.txt",
+    visible: "dir/one/report.txt",
+  },
+  {
+    platform: "win32" as const,
+    ignored: "dir\\one/",
+    hidden: "dir\\one/report.txt",
+    visible: "other/report.txt",
+  },
+])(
+  "matches ignored paths using host separators: $platform",
+  ({ platform, ignored, hidden, visible }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const items = [fileItem(hidden), fileItem(visible)];
+        const finder = {
+          destroy: vi.fn(),
+          waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
+          fileSearch: vi.fn(() => ({
+            ok: true as const,
+            value: { items, scores: [], totalMatched: 2, totalFiles: 2 },
+          })),
+        } as unknown as FileFinder;
+        vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+        const process = VcsProcess.VcsProcess.of({
+          run: () =>
+            Effect.succeed({
+              exitCode: 0 as VcsProcess.VcsProcessOutput["exitCode"],
+              stdout: `${ignored}\0`,
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+        });
+        const index = yield* WorkspaceSearchIndex.make("/workspace/project").pipe(
+          Effect.provideService(VcsProcess.VcsProcess, process),
+        );
+        const result = yield* index.search("report", 50, "file");
+        expect(result.entries).toEqual([{ kind: "file", path: visible }]);
+      }),
+    ).pipe(Effect.provideService(HostProcess.Platform, platform)),
+);
