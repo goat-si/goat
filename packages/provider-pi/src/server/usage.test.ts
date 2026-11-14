@@ -35,14 +35,17 @@ it.live("scans the OmO session directory configured in settings.json", () =>
       environment: { HOME: dir, OMO_CODING_AGENT_DIR: dir },
       config: decodeSettings({}),
     };
-    assert.deepEqual(yield* omoUsageReader.directories(instance), [
+    assert.deepEqual(yield* omoUsageReader.directories(instance, { awaitRefresh: false }), [
       { dir: NodePath.join(dir, "sessions-custom") },
     ]);
     assert.deepEqual(
-      yield* omoUsageReader.directories({
-        ...instance,
-        environment: { ...instance.environment, OMO_CODING_AGENT_SESSION_DIR: "/override" },
-      }),
+      yield* omoUsageReader.directories(
+        {
+          ...instance,
+          environment: { ...instance.environment, OMO_CODING_AGENT_SESSION_DIR: "/override" },
+        },
+        { awaitRefresh: false },
+      ),
       [{ dir: "/override" }],
     );
   }).pipe(
@@ -57,12 +60,15 @@ it.effect("includes absolute Pi launch session directories without losing the de
   Effect.gen(function* () {
     if (piUsageReader.kind !== "transcripts")
       return yield* Effect.die("Expected transcript reader");
-    const directories = yield* piUsageReader.directories({
-      instanceId: ProviderInstanceId.make("pi"),
-      configured: true,
-      environment: { HOME: "/instance" },
-      config: decodeSettings({ launchArgs: "--session-dir ~/work" }),
-    });
+    const directories = yield* piUsageReader.directories(
+      {
+        instanceId: ProviderInstanceId.make("pi"),
+        configured: true,
+        environment: { HOME: "/instance" },
+        config: decodeSettings({ launchArgs: "--session-dir ~/work" }),
+      },
+      { awaitRefresh: false },
+    );
     assert.deepEqual(directories, [
       { dir: "/instance/work" },
       { dir: "/home/test/.pi/agent/sessions" },
@@ -78,12 +84,15 @@ it.effect("attributes OmO usage and scans its configured session directories", (
   Effect.gen(function* () {
     if (omoUsageReader.kind !== "transcripts")
       return yield* Effect.die("Expected transcript reader");
-    const directories = yield* omoUsageReader.directories({
-      instanceId: ProviderInstanceId.make("omo"),
-      configured: true,
-      environment: { HOME: "/instance", OMO_CODING_AGENT_DIR: "/instance/omo" },
-      config: decodeSettings({ binaryPath: "omo", launchArgs: "--session-dir ~/work" }),
-    });
+    const directories = yield* omoUsageReader.directories(
+      {
+        instanceId: ProviderInstanceId.make("omo"),
+        configured: true,
+        environment: { HOME: "/instance", OMO_CODING_AGENT_DIR: "/instance/omo" },
+        config: decodeSettings({ binaryPath: "omo", launchArgs: "--session-dir ~/work" }),
+      },
+      { awaitRefresh: false },
+    );
     assert.deepEqual(directories, [{ dir: "/instance/work" }, { dir: "/instance/omo/sessions" }]);
     const state = omoUsageReader.format.state?.initial();
     if (state === undefined) return yield* Effect.die("Expected scan state");
