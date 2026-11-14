@@ -24,7 +24,7 @@ const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:
 const LINK = "min-w-0 max-w-full truncate underline";
 
 /** A work thread's link text: its own title, so two threads never read the same. */
-const workThreadName = (title: string | undefined) => title || "Open work thread";
+const workThreadName = (title: string | undefined) => title?.trim() || "Open work thread";
 
 /** A thread the bot launched on another machine: a link while this client can open it there. */
 function GoatBotRemoteWork({
@@ -61,7 +61,7 @@ function GoatBotRemoteWork({
       onClick={onHomeNavigate}
       className={LINK}
     >
-      {shell?.title || "Open work thread"} on {target.host}
+      {workThreadName(shell?.title)} on {target.host}
     </Link>
   );
 }
