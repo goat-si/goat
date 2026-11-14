@@ -81,6 +81,8 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   goatBotListedWork: channelEnvironment.listedBotWork,
+  // Where Home governs an environment, Threads leaves out exactly the work Home's current list opens.
+  goatBotHomeWork: channelEnvironment.homeCurrentOpenableWorkByEnvironment,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,

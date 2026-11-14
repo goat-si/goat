@@ -198,6 +198,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     // One list per computer and bot, so a test can count each one's refreshes.
     listBotThreads: (key: { environmentId: string; input: { botId?: string } }) =>
       `task:${key.environmentId}:${key.input.botId ?? "main"}`,

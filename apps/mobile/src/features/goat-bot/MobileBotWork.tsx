@@ -42,6 +42,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
+import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
 import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 import { useMobileHistoryAnnouncements } from "./useMobileHistoryAnnouncements";
@@ -219,6 +220,7 @@ export function MobileBotWork(props: {
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
+  const current = useMobileHomeCurrentWork(environmentId, botId);
   const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
     closeSheet();
     props.onOpenTask(id, title);
@@ -621,6 +623,7 @@ export function MobileBotWork(props: {
                     groupChildren:
                       expandedData?.groups.find((group) => group.taskId === id)?.children.length ??
                       null,
+                    currentLinks: current.linksFor(id),
                     openThread: (thread) => {
                       closeSheet();
                       props.onOpenThread(thread);
@@ -639,6 +642,7 @@ export function MobileBotWork(props: {
                   supported: history.supported,
                   currentTaskIds: history.currentTaskIds,
                   launchesTruncated: history.launchesTruncated,
+                  currentEligible: current.eligible,
                   hasMore: history.hasMore,
                   loading: history.loading,
                   incomplete: history.incomplete,
