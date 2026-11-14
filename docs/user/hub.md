@@ -172,7 +172,7 @@ runs from the new home, run `goat service install --base-dir <new>` and choose
 **Install** again.
 A linked disposable machine's OpenCodex link also keeps the machine key's old
 path and stops working, so do not move the home while a disposable machine is
-linked.
+linked. If you moved it anyway, move it back to bring the link back.
 
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
