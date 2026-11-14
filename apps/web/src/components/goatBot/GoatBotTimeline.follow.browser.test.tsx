@@ -810,6 +810,44 @@ it("announces and cues a filtered new reply only when first exposed", async () =
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
 
+it("announces exposure while following and never revives its cue after scrolling up", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("following-reply");
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("announces replies after a newer send and alternates successive categories", async () => {
+  projection.statuses = { speech: "live" };
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const first = reply("earlier-reply");
+  const send = rows[0]!;
+  await screen.rerender(<SpeechChat shown={[first, send]} source={[first, send]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const update = { ...reply("an-update"), proactive: true, tone: "status" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, send, update]} source={[first, send, update]} />,
+  );
+  expect(status?.textContent).toMatch(/posted an update|New update/);
+  const question = { ...reply("a-question"), proactive: true, tone: "question" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, send, update, question]} source={[first, send, update, question]} />,
+  );
+  expect(status?.textContent).toMatch(/asked a question|New question/);
+});
+
 it("failing-first: the viewed thread, not the current bot, owns the live baseline", async () => {
   projection.reads = [];
   projection.statuses = { old: "empty", current: "live" };
