@@ -109,7 +109,7 @@ describe("composerPullRequestRepository", () => {
   const choose = (listed: ReadonlyArray<{ projectId: string; repository: string }>) =>
     composerPullRequestRepository({
       own: "goat-si/goat",
-      selected: "pingdotgg/t3code",
+      selected: "sample-tools/upstream",
       projectId: "p1",
       listed,
     });
@@ -117,7 +117,9 @@ describe("composerPullRequestRepository", () => {
   it("searches a fork's own repository, or the upstream a server from before forks listed", () => {
     expect(choose([])).toBe("goat-si/goat");
     expect(choose([{ projectId: "p1", repository: "goat-si/goat" }])).toBe("goat-si/goat");
-    expect(choose([{ projectId: "p1", repository: "pingdotgg/t3code" }])).toBe("pingdotgg/t3code");
-    expect(choose([{ projectId: "p2", repository: "pingdotgg/t3code" }])).toBe("goat-si/goat");
+    expect(choose([{ projectId: "p1", repository: "sample-tools/upstream" }])).toBe(
+      "sample-tools/upstream",
+    );
+    expect(choose([{ projectId: "p2", repository: "sample-tools/upstream" }])).toBe("goat-si/goat");
   });
 });

@@ -43,7 +43,7 @@ const answered = (targets: ReturnType<typeof statTargets<ReturnType<typeof liste
 describe("projectRepositories", () => {
   it("lists every fork's own repository before any upstream, a same-path one on another host too", () => {
     const repositories = projectRepositories([
-      checkout("fork", "github.com/pingdotgg/t3code", "github.com/goat-si/goat"),
+      checkout("fork", "github.com/sample-tools/upstream", "github.com/goat-si/goat"),
       checkout("cafe", "github.com/goat-si/goat", "git.cafe/goat-si/goat"),
     ]);
     assert.deepStrictEqual(
@@ -55,7 +55,7 @@ describe("projectRepositories", () => {
       [
         ["fork", "github.com/goat-si/goat", false],
         ["cafe", "git.cafe/goat-si/goat", false],
-        ["fork", "github.com/pingdotgg/t3code", true],
+        ["fork", "github.com/sample-tools/upstream", true],
         ["cafe", "github.com/goat-si/goat", true],
       ],
     );

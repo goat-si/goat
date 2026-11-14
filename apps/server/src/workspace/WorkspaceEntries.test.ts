@@ -674,7 +674,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
 
     it.effect("searches an invalid regex literally without matching case", () =>
       Effect.gen(function* () {
-        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-content-invalid-regex-" });
+        const cwd = yield* makeTempDir({ prefix: "goat-workspace-content-invalid-regex-" });
         yield* writeTextFile(cwd, "src/calls.ts", "call(Foo(bar));\n");
 
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;

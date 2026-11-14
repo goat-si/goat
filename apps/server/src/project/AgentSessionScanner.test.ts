@@ -1402,9 +1402,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
         yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-shared-records-claude-");
-        const codexHomePath = yield* makeTempDir("t3code-shared-records-codex-");
-        const workspace = yield* makeTempDir("t3code-shared-records-workspace-");
+        const claudeHomePath = yield* makeTempDir("goat-shared-records-claude-");
+        const codexHomePath = yield* makeTempDir("goat-shared-records-codex-");
+        const workspace = yield* makeTempDir("goat-shared-records-workspace-");
         // Together these exceed 100,000 records, but each one is individually valid.
         const recordCounts = [20_000, 20_000, 20_000, 58_000];
         for (const [index, recordCount] of recordCounts.entries()) {
@@ -1695,9 +1695,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
         yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-long-conversation-claude-");
-        const codexHomePath = yield* makeTempDir("t3code-long-conversation-codex-");
-        const workspace = yield* makeTempDir("t3code-long-conversation-workspace-");
+        const claudeHomePath = yield* makeTempDir("goat-long-conversation-claude-");
+        const codexHomePath = yield* makeTempDir("goat-long-conversation-codex-");
+        const workspace = yield* makeTempDir("goat-long-conversation-workspace-");
         const record = (fields: Record<string, unknown>) =>
           encodeTranscriptRecord({ sessionId: "claude-long", ...fields });
         const longText = "x".repeat(64 * 1024);
@@ -1742,9 +1742,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
         yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-late-prompt-claude-");
-        const codexHomePath = yield* makeTempDir("t3code-late-prompt-codex-");
-        const workspace = yield* makeTempDir("t3code-late-prompt-workspace-");
+        const claudeHomePath = yield* makeTempDir("goat-late-prompt-claude-");
+        const codexHomePath = yield* makeTempDir("goat-late-prompt-codex-");
+        const workspace = yield* makeTempDir("goat-late-prompt-workspace-");
         const contents = [
           encodeTranscriptRecord({ type: "attachment", sessionId: "late-prompt", cwd: workspace }),
           // The first prompt is still among the latest 200 messages after older replies drop out.
@@ -1906,9 +1906,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const fileSystem = yield* FileSystem.FileSystem;
-          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-          const repo = yield* makeTempDir("t3code-workspace-fifo-config-");
+          const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+          const codexHomePath = yield* makeTempDir("goat-codex-home-");
+          const repo = yield* makeTempDir("goat-workspace-fifo-config-");
           yield* fileSystem.makeDirectory(path.join(repo, ".git"));
           yield* makeOpenGate(path.join(repo, ".git", "config"));
           const transcriptPath = path.join(claudeHomePath, "projects", "-fifo", "a.jsonl");
@@ -1941,9 +1941,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const root = yield* makeTempDir("t3code-workspace-blocked-configs-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const root = yield* makeTempDir("goat-workspace-blocked-configs-");
         const repos = [path.join(root, "repo-a"), path.join(root, "repo-b")];
         for (const repo of repos) {
           yield* fileSystem.makeDirectory(path.join(repo, ".git"), { recursive: true });
@@ -1990,9 +1990,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const root = yield* makeTempDir("t3code-workspace-blocked-pointers-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const root = yield* makeTempDir("goat-workspace-blocked-pointers-");
         const pointerCheckout = path.join(root, "pointer");
         yield* fileSystem.makeDirectory(pointerCheckout);
         yield* makeOpenGate(path.join(pointerCheckout, ".git"));
@@ -2046,9 +2046,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const repo = yield* makeTempDir("t3code-workspace-unblocked-config-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const repo = yield* makeTempDir("goat-workspace-unblocked-config-");
         yield* fileSystem.makeDirectory(path.join(repo, ".git"));
         const configPath = path.join(repo, ".git", "config");
         yield* makeOpenGate(configPath);

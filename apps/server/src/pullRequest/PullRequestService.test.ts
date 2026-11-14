@@ -1309,8 +1309,8 @@ it.effect("ranks references by number, keeping the host's recent-first order", (
     }> = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
-        project({ id: "p2", title: "tree", workspaceRoot: "/b", repository: "pingdotgg/t3code" }),
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "goat-si/goat" }),
+        project({ id: "p2", title: "tree", workspaceRoot: "/b", repository: "goat-si/goat" }),
       ],
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("github"), {
@@ -1353,7 +1353,7 @@ it.effect("ranks references by number, keeping the host's recent-first order", (
 
     assert.deepStrictEqual(
       queries.map(({ repository, query, sigil }) => ({ repository, query, sigil })),
-      [{ repository: "pingdotgg/t3code", query: "12", sigil: "#" }],
+      [{ repository: "goat-si/goat", query: "12", sigil: "#" }],
     );
     assert.deepStrictEqual(
       result.references.map((candidate) => candidate.reference),
