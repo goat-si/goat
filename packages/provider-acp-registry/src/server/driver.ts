@@ -513,10 +513,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       continuationKey: continuationIdentity.continuationKey,
     };
     const effectiveConfig = { ...config, enabled } satisfies AcpRegistrySettings;
-    const processEnvironment = yield* mergeProviderInstanceEnvironment(
-      environment,
-      hostEnvironment,
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
+      Effect.map((env) => ({ ...env })),
     );
+    const processEnvironment = yield* currentEnvironment;
     const orchestrationAdapter = yield* AcpRegistryAdapterV2Driver.create({
       instanceId,
       displayName,
@@ -535,11 +538,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           }),
       ),
     );
-    const readinessInput = {
+    const readinessInput = (environment: NodeJS.ProcessEnv) => ({
       ...identity,
       settings: effectiveConfig,
-      environment: processEnvironment,
-    };
+      environment,
+    });
     const confirmedAuthentication =
       yield* AcpRegistryAuthenticationState.makeAcpRegistryAuthenticationState({
         cacheDir: host.paths.providerStatusCacheDir,
@@ -581,17 +584,23 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             }),
           );
     });
-    const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
+    const checkProvider = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        checkAcpRegistryProviderReadiness(readinessInput(environment)),
+      ),
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap(withLiveRuntimeState),
     );
-    const enrichProvider = checkAcpRegistryProviderStatus(
-      {
-        ...readinessInput,
-        cwd: host.paths.cwd,
-      },
-      probeAcpRegistryConfiguration,
-    ).pipe(
+    const enrichProvider = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        checkAcpRegistryProviderStatus(
+          {
+            ...readinessInput(environment),
+            cwd: host.paths.cwd,
+          },
+          probeAcpRegistryConfiguration,
+        ),
+      ),
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(Crypto.Crypto, crypto),
@@ -783,6 +792,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       settings: effectiveConfig,
       cwd: host.paths.cwd,
       environment: processEnvironment,
+      currentEnvironment,
       onChanged: (authenticated) =>
         confirmedAuthentication
           .set(authenticated)
@@ -825,63 +835,86 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       acpSessionManagement: {
         listSessions: ({ cwd, cursor }) =>
           provideAcpManagementServices(
-            listAcpRegistrySessions({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-              ...(cursor === undefined ? {} : { cursor }),
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                listAcpRegistrySessions({
+                  instanceId,
+                  settings: effectiveConfig,
+                  cwd,
+                  environment,
+                  ...(cursor === undefined ? {} : { cursor }),
+                }),
+              ),
+            ),
           ),
         deleteSession: ({ cwd, sessionId }) =>
           provideAcpManagementServices(
-            deleteAcpRegistrySession({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-              sessionId,
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                deleteAcpRegistrySession({
+                  instanceId,
+                  settings: effectiveConfig,
+                  cwd,
+                  environment,
+                  sessionId,
+                }),
+              ),
+            ),
           ),
         listProviders: (cwd) =>
           provideAcpManagementServices(
-            listAcpRegistryProviders({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                listAcpRegistryProviders({
+                  instanceId,
+                  settings: effectiveConfig,
+                  cwd,
+                  environment,
+                }),
+              ),
+            ),
           ),
         setProvider: ({ cwd, providerId, apiType, baseUrl, headers }) =>
           provideAcpManagementServices(
-            setAcpRegistryProvider({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-              providerId,
-              apiType,
-              baseUrl,
-              ...(headers === undefined ? {} : { headers }),
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                setAcpRegistryProvider({
+                  instanceId,
+                  settings: effectiveConfig,
+                  cwd,
+                  environment,
+                  providerId,
+                  apiType,
+                  baseUrl,
+                  ...(headers === undefined ? {} : { headers }),
+                }),
+              ),
+            ),
           ).pipe(Effect.tap(() => liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache))),
         disableProvider: ({ cwd, providerId }) =>
           provideAcpManagementServices(
-            disableAcpRegistryProvider({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-              providerId,
-            }),
+            currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                disableAcpRegistryProvider({
+                  instanceId,
+                  settings: effectiveConfig,
+                  cwd,
+                  environment,
+                  providerId,
+                }),
+              ),
+            ),
           ).pipe(Effect.tap(() => liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache))),
         logout: (cwd) => {
-          const logout = logoutAcpRegistry({
-            instanceId,
-            settings: effectiveConfig,
-            cwd,
-            environment: processEnvironment,
-          }).pipe(
+          const logout = currentEnvironment.pipe(
+            Effect.flatMap((environment) =>
+              logoutAcpRegistry({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment,
+              }),
+            ),
             Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Effect.provideService(Crypto.Crypto, crypto),

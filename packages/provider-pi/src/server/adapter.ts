@@ -91,6 +91,7 @@ export interface PiAdapterV2Options {
   readonly profile?: PiRuntimeProfile;
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly continuationRequests?: {
     readonly offer: (
       request: ProviderContinuationRequests.ProviderContinuationRequest,
@@ -268,7 +269,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       const launch = buildPiRpcLaunch({
         profile,
         launchArgs: resolvedLaunchArgs.args,
-        environment: options.environment,
+        environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
@@ -3133,7 +3134,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             // CLI --fork sets the destination cwd; RPC switch_session/clone would retain the source cwd.
             const forkLaunch = buildPiRpcLaunch({
               launchArgs: resolvedLaunchArgs.args,
-              environment: options.environment,
+              environment: yield* options.currentEnvironment ?? Effect.succeed(options.environment),
               mcpSession: undefined,
               extensionPath: undefined,
               shortLived: true,
@@ -3424,11 +3425,16 @@ export const makePiAdapterV2Driver = (
     function* (input: ProviderAdapterDriverCreateInput<PiSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+      const home = yield* HostProcess.HomeDirectory;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
       return yield* makePiAdapterV2({
         instanceId: input.instanceId,
         profile,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: yield* currentEnvironment,
+        currentEnvironment,
         continuationRequests,
       });
     },

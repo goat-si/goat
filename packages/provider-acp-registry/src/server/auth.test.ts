@@ -60,6 +60,7 @@ const makeHarness = (
   settings = decodeSettings({ agentId: "test-agent" }),
   providerInstanceId = instanceId,
   authenticateError?: AcpRequestError,
+  currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>,
 ) =>
   Effect.gen(function* () {
     const verify = yield* Deferred.make<void>();
@@ -76,11 +77,14 @@ const makeHarness = (
     let closedBeforeTerminal = false;
     const written: string[] = [];
     const sizes: number[][] = [];
+    const inspectedPaths: (string | undefined)[] = [];
+    const resolvedPaths: (string | undefined)[] = [];
     const controller = yield* makeAcpRegistryAuth({
       instanceId: providerInstanceId,
       settings,
       cwd: "/workspace",
       environment: { PATH: "/tools", OVERRIDE: "base" },
+      ...(currentEnvironment ? { currentEnvironment } : {}),
       onChanged: (value) =>
         Effect.sync(() => {
           changed.push(value);
@@ -146,13 +150,20 @@ const makeHarness = (
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
         ...catalog,
-        inspect: () =>
-          Effect.sync(() => ({
-            status: "ready" as const,
-            agentId: "test-agent",
-            version,
-            distribution: "binary" as const,
-          })),
+        inspect: (_settings, environment) =>
+          Effect.sync(
+            () => (
+              inspectedPaths.push(environment?.PATH),
+              {
+                status: "ready" as const,
+                agentId: "test-agent",
+                version,
+                distribution: "binary" as const,
+              }
+            ),
+          ),
+        resolve: (_settings, _cwd, environment) =>
+          Effect.sync(() => (resolvedPaths.push(environment?.PATH), resolved)),
       }),
       Effect.provideService(PtyAdapter.PtyAdapter, {
         spawn: (input) =>
@@ -208,12 +219,38 @@ const makeHarness = (
       killed: () => killed,
       written,
       sizes,
+      inspectedPaths,
+      resolvedPaths,
       runtimes: () => runtimes,
       setVersion: (value: string) => {
         version = value;
       },
     };
   }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+
+it.effect("regression #3079: ACP authentication discovers and launches with the current PATH", () =>
+  Effect.gen(function* () {
+    const host = { PATH: "/tools", OVERRIDE: "base" };
+    const h = yield* makeHarness(
+      terminalMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+    );
+    host.PATH = "/new";
+    h.setVersion("2.0.0");
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.inspectedPaths.at(-1), "/new");
+    assert.strictEqual(h.resolvedPaths.at(-1), "/new");
+    const flow = yield* h.controller.start("owner", Effect.void, "terminal");
+    yield* h.phase("waiting");
+    assert.strictEqual(h.resolvedPaths.at(-1), "/new");
+    assert.strictEqual(h.terminalSpawn()?.env?.PATH, "/new");
+    yield* h.controller.cancel("owner", flow.flowId!);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("keeps local credentials separate from a matching registry agent ID", () =>
   Effect.gen(function* () {

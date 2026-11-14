@@ -87,10 +87,10 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const processEnv = yield* mergeProviderInstanceEnvironment(
-      environment,
-      yield* HostProcess.Environment,
-    );
+    const hostEnvironment = yield* HostProcess.Environment;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: FX_DRIVER_KIND,
       instanceId,
@@ -111,7 +111,8 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialFxProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkFxProviderStatus(effectiveConfig, processEnv).pipe(
+      checkProvider: currentEnvironment.pipe(
+        Effect.flatMap((env) => checkFxProviderStatus(effectiveConfig, env)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       ),
@@ -157,7 +158,8 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              discoverFxSkills({ cwd, environment: processEnv }).pipe(
+              currentEnvironment.pipe(
+                Effect.flatMap((env) => discoverFxSkills({ cwd, environment: env })),
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
               ),

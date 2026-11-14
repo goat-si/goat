@@ -180,7 +180,15 @@ export const CodexDriver: ProviderDriver<
     const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const baseEnvironment = yield* HostProcess.Environment;
+    const homeDirectory = yield* HostProcess.HomeDirectory;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, baseEnvironment),
+    ).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+      Effect.map((env) => ({ ...env })),
+    );
+    const processEnv = { ...(yield* currentEnvironment) };
     const environmentHome = processEnv.CODEX_HOME;
     const homeLayout = yield* resolveCodexHomeLayout(
       !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
@@ -213,13 +221,13 @@ export const CodexDriver: ProviderDriver<
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
     const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-      resolveProviderMaintenanceCapabilitiesEffect(
-        makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
-        {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        },
-      ).pipe(
+      currentEnvironment.pipe(
+        Effect.flatMap((env) =>
+          resolveProviderMaintenanceCapabilitiesEffect(
+            makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
+            { binaryPath: effectiveConfig.binaryPath, env },
+          ),
+        ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
@@ -269,7 +277,11 @@ export const CodexDriver: ProviderDriver<
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, processEnv).pipe(provideHomeRoute),
+          currentEnvironment.pipe(
+            Effect.flatMap((env) =>
+              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
+            ),
+          ),
           currentCatalog,
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
           { concurrent: true },
@@ -316,13 +328,14 @@ export const CodexDriver: ProviderDriver<
     );
     const textGeneration = yield* makeCodexTextGeneration(
       effectiveConfig,
-      processEnv,
+      undefined,
       snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       undefined,
       {
         providerInstanceId: instanceId,
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
+      currentEnvironment,
     );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
@@ -330,6 +343,7 @@ export const CodexDriver: ProviderDriver<
         : Effect.all([
             snapshot.getSnapshot,
             Effect.gen(function* () {
+              const processEnv = yield* currentEnvironment;
               const route = yield* HomeRoute.resolveCodexRouteContext({
                 settings: effectiveConfig,
                 binaryPath: effectiveConfig.binaryPath,
@@ -374,6 +388,7 @@ export const CodexDriver: ProviderDriver<
       resetCreditCoordinator
         .redeem(accountKey, (idempotencyKey) =>
           Effect.gen(function* () {
+            const processEnv = yield* currentEnvironment;
             const { client } = yield* withCodexAppServerClient({
               binaryPath: effectiveConfig.binaryPath,
               homePath: effectiveConfig.homePath,

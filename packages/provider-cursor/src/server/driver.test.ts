@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { AgentOptions, SDKModel } from "@cursor/sdk";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -68,6 +69,110 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
 );
 
 it.layer(layerTest)("CursorDriver", (it) => {
+  it.effect(
+    "regression #3079: Cursor workspace probes use the current host environment and respect instance overrides",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const oldHome = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-old-" });
+        const newHome = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-new-" });
+        yield* fs.makeDirectory(`${newHome}/.cursor/skills/fresh`, { recursive: true });
+        yield* fs.writeFileString(
+          `${newHome}/.cursor/skills/fresh/SKILL.md`,
+          "---\nname: fresh\ndescription: fresh skill\n---\nhello\n",
+        );
+        const host = { HOME: oldHome, PATH: "/old/bin" };
+        const make = (override: boolean) =>
+          CursorDriver.create({
+            instanceId: ProviderInstanceId.make(`cursor-path-${override}`),
+            displayName: undefined,
+            enabled: true,
+            environment: [
+              { name: "FIXTURE", value: "1", sensitive: false },
+              ...(override ? [{ name: "HOME", value: oldHome, sensitive: false }] : []),
+            ],
+            config: CursorDriver.defaultConfig(),
+          }).pipe(Effect.provideService(HostProcess.Environment, host));
+        const inherited = yield* make(false);
+        const overridden = yield* make(true);
+        host.HOME = newHome;
+        host.PATH = "/new/bin";
+        yield* inherited.snapshot.refresh;
+        expect(
+          (yield* inherited.snapshotForCwd!(oldHome)).skills.map((skill) => skill.name),
+        ).toContain("fresh");
+        expect(
+          (yield* overridden.snapshotForCwd!(oldHome)).skills.map((skill) => skill.name),
+        ).not.toContain("fresh");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "regression #3079: status and a new session use a CURSOR_API_KEY the host gains after the instance started",
+    () =>
+      Effect.gen(function* () {
+        const authorizations: Array<string | undefined> = [];
+        const client = HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                request.url.endsWith("/v1/me")
+                  ? { apiKeyName: "GOAT", createdAt: "2026-01-01T00:00:00.000Z" }
+                  : { items: [{ id: "auto", displayName: "Auto" }] },
+              ),
+            ),
+          );
+        });
+        const openedKeys: Array<string | undefined> = [];
+        const host: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+        const instanceId = ProviderInstanceId.make("cursor-host-key");
+        const instance = yield* CursorDriver.create({
+          instanceId,
+          displayName: undefined,
+          enabled: true,
+          environment: [],
+          config: CursorDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+            assertComplete: Effect.void,
+            open: (request) =>
+              Effect.sync(() => {
+                openedKeys.push(request.options.apiKey);
+                return {
+                  agentId: "host-key-agent",
+                  listMessages: Effect.succeed([]),
+                  send: () => Effect.die("This test only opens a session"),
+                  close: Effect.void,
+                };
+              }),
+          }),
+        );
+        host.CURSOR_API_KEY = "host-key-new";
+        // Labelled by the key the check used, not by what the instance saw when it started.
+        expect((yield* instance.snapshot.refresh).auth).toMatchObject({ type: "api-key" });
+        expect(authorizations).toContain("Bearer host-key-new");
+        const threadId = ThreadId.make("cursor-host-key-thread");
+        const modelSelection = { instanceId, model: "auto" };
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("cursor-host-key-session"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        expect(openedKeys).toEqual(["host-key-new"]);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "persists browser credentials, uses them for chat, and closes the SDK session on logout",
     () =>

@@ -113,6 +113,54 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "regression #3079: status and maintenance read current host PATH while instance PATH wins",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const paths: Array<string | undefined> = [];
+        const observedSpawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) paths.push(command.options.env?.PATH);
+          return spawner.spawn(command);
+        });
+        const root = yield* fs.makeTempDirectoryScoped();
+        const oldBin = NodePath.join(root, "old", "packages", "standalone", "bin");
+        const newBin = NodePath.join(root, "new", "packages", "standalone", "bin");
+        for (const dir of [oldBin, newBin]) {
+          yield* fs.makeDirectory(dir, { recursive: true });
+          yield* fs.writeFileString(NodePath.join(dir, "codex"), "#!/bin/sh\n");
+          yield* fs.chmod(NodePath.join(dir, "codex"), 0o755);
+        }
+        const host = { PATH: oldBin };
+        const create = (override: boolean) =>
+          CodexDriver.create({
+            instanceId: ProviderInstanceId.make(override ? "path-override" : "path-inherit"),
+            displayName: "Codex PATH test",
+            enabled: true,
+            environment: override
+              ? [{ name: "PATH", value: oldBin, sensitive: false }]
+              : [{ name: "TEST_VAR", value: "1", sensitive: false }],
+            config: { ...CodexDriver.defaultConfig(), binaryPath: "codex" },
+          }).pipe(
+            Effect.provideService(HostProcess.Environment, host),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
+          );
+        const inherited = yield* create(false);
+        const overridden = yield* create(true);
+        host.PATH = newBin;
+        yield* inherited.snapshot.refresh;
+        expect(paths.at(-1)).toBe(newBin);
+        yield* overridden.snapshot.refresh;
+        expect(paths.at(-1)).toBe(oldBin);
+        expect((yield* inherited.snapshot.resolveMaintenance()).update?.executable).toBe(
+          NodePath.join(newBin, "codex"),
+        );
+        expect((yield* overridden.snapshot.resolveMaintenance()).update?.executable).toBe(
+          NodePath.join(oldBin, "codex"),
+        );
+      }).pipe(Effect.scoped),
+  );
   it.effect.each(["ready", "initialize-error", "signed-out"] as const)(
     "retains startup diagnostics without changing %s availability or guidance",
     (scenario) =>

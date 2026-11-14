@@ -1,5 +1,6 @@
 import { ProviderDriverKind, ProviderSetupError, type ServerProviderModel } from "@goat/contracts";
 import { CursorSettings } from "../settings.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
@@ -97,7 +98,12 @@ export const CursorDriver: ProviderDriver<
     const httpClient = yield* HttpClient.HttpClient;
     const keychain = yield* CursorKeychain.CursorKeychain;
     const sdkRunner = yield* CursorAgentSdk.CursorAgentSdkRunner;
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const hostEnvironment = yield* HostProcess.Environment;
+    const home = yield* HostProcess.HomeDirectory;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+    const processEnv = yield* currentEnvironment;
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
       instanceId,
@@ -134,6 +140,7 @@ export const CursorDriver: ProviderDriver<
       displayName: displayName ?? "Cursor",
       enabled,
       ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
+      currentApiKey: currentEnvironment.pipe(Effect.map((env) => env.CURSOR_API_KEY)),
       store: credentials.store,
       credentialBinding: credentials.binding,
       onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
@@ -165,7 +172,7 @@ export const CursorDriver: ProviderDriver<
     const orchestrationAdapter = yield* makeCursorAdapterV2({
       instanceId,
       settings: effectiveConfig,
-      environment: processEnv,
+      environment: currentEnvironment,
       getModels: () => catalogModels,
     }).pipe(
       Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
@@ -213,37 +220,43 @@ export const CursorDriver: ProviderDriver<
         providerInstanceId: instanceId,
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
+      currentEnvironment,
     );
 
     const checkProvider = auth.readApiKey.pipe(
       Effect.orElseSucceed(() => undefined),
       Effect.flatMap((apiKey) =>
-        checkCursorProviderStatus(
-          effectiveConfig,
-          {
-            ...processEnv,
-            CURSOR_API_KEY: apiKey,
-          },
-          auth.usesApiKey ? "api-key" : "browser",
-        ).pipe(
-          Effect.filterOrElse(
-            (snapshot) =>
-              !(
-                effectiveConfig.enabled &&
-                snapshot.installed &&
-                snapshot.auth.status === "authenticated"
-              ),
-            (snapshot) =>
-              host.settings.get.pipe(
-                Effect.flatMap((settings) =>
-                  readCursorUsageLimits(
-                    effectiveConfig,
-                    { ...processEnv, CURSOR_API_KEY: apiKey },
-                    settings.cursorKeychainUsageEnabled,
+        currentEnvironment.pipe(
+          Effect.flatMap((processEnv) =>
+            checkCursorProviderStatus(
+              effectiveConfig,
+              {
+                ...processEnv,
+                CURSOR_API_KEY: apiKey,
+              },
+              // readApiKey prefers the environment's key, so it is the key this check uses.
+              processEnv.CURSOR_API_KEY?.trim() ? "api-key" : "browser",
+            ).pipe(
+              Effect.filterOrElse(
+                (snapshot) =>
+                  !(
+                    effectiveConfig.enabled &&
+                    snapshot.installed &&
+                    snapshot.auth.status === "authenticated"
                   ),
-                ),
-                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+                (snapshot) =>
+                  host.settings.get.pipe(
+                    Effect.flatMap((settings) =>
+                      readCursorUsageLimits(
+                        effectiveConfig,
+                        { ...processEnv, CURSOR_API_KEY: apiKey },
+                        settings.cursorKeychainUsageEnabled,
+                      ),
+                    ),
+                    Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+                  ),
               ),
+            ),
           ),
         ),
       ),
@@ -298,7 +311,8 @@ export const CursorDriver: ProviderDriver<
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              probeCursorSkills(cwd, processEnv).pipe(
+              currentEnvironment.pipe(
+                Effect.flatMap((env) => probeCursorSkills(cwd, env)),
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
                 Effect.mapError(

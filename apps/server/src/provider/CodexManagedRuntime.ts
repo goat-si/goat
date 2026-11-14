@@ -124,6 +124,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
   readonly instanceId: ProviderInstanceId;
   readonly enabled: boolean;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly config: CodexSettings;
 }) {
   if (options.config.modelRoute === "opencodex")
@@ -210,7 +211,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
     );
     // Ambient CLI overrides cannot redirect a GOAT-owned token to a different provider.
     const environment: NodeJS.ProcessEnv = {
-      ...options.environment,
+      ...(options.currentEnvironment ? yield* options.currentEnvironment : options.environment),
       CODEX_HOME: homePath,
     };
     delete environment.ACCESS_TOKEN;
