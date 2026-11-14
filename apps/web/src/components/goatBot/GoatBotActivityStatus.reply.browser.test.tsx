@@ -43,6 +43,13 @@ it("keeps a reply across the first activity change and clears it on the second",
 });
 
 it("clears the reply immediately when the person sends a message", async () => {
+  {
+    await using screen = await render(view(true));
+    const status = screen.getByRole("status");
+    await screen.rerender(view(true, true));
+    await screen.rerender(view(true, true, true));
+    await expect.element(status).toHaveTextContent("Reading your message");
+  }
   await using screen = await render(view(true));
   const status = screen.getByRole("status");
   await screen.rerender(view(true, true));
