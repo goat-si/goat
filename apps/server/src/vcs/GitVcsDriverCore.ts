@@ -112,7 +112,7 @@ import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
 import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
-import { commitContextObjects } from "./commitContextObjects.ts";
+import { commitContextObjects, mergeHeadExists } from "./commitContextObjects.ts";
 import { isMissingGitCwdError, isNonRepositoryGitStderr } from "./gitNonRepository.ts";
 import { localTrackingDestination } from "./localTrackingDestination.ts";
 
@@ -2413,7 +2413,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             stagedSummaryArgs,
             { env, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
           ).pipe(Effect.map((stdout) => stdout.trim()));
-          if (stagedSummary.length === 0) {
+          if (
+            stagedSummary.length === 0 &&
+            !(yield* mergeHeadExists(cwd, fileSystem, path, runGitStdout))
+          ) {
             return null;
           }
 

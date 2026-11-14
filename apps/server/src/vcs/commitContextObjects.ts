@@ -3,6 +3,25 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+export const mergeHeadExists = Effect.fn("GitVcsDriver.mergeHeadExists")(function* (
+  cwd: string,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  runGitStdout: (
+    operation: string,
+    cwd: string,
+    args: readonly string[],
+  ) => Effect.Effect<string, GitCommandError>,
+) {
+  const physicalCwd = yield* fileSystem.realPath(cwd);
+  const mergeHead = yield* runGitStdout("GitVcsDriver.prepareCommitContext.mergeHead", cwd, [
+    "rev-parse",
+    "--git-path",
+    "MERGE_HEAD",
+  ]);
+  return yield* fileSystem.exists(path.resolve(physicalCwd, mergeHead.trim()));
+});
+
 export const commitContextObjects = Effect.fn("GitVcsDriver.commitContextObjects")(function* (
   cwd: string,
   directory: string,
