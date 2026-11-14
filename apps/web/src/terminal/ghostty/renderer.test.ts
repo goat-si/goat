@@ -129,4 +129,51 @@ describe("Ghostty background rendering", () => {
       { kind: "fill", color: "rgba(72, 122, 191, 0.35)", rect: [4, 14, 10, 10] },
     ]);
   });
+
+  it.each([
+    ["transparent", true, "clear"],
+    ["opaque", false, "fill"],
+  ] as const)(
+    "repaints the cursor row across the canvas width on a %s background after the cursor leaves its edge cell",
+    (_name, transparentBackground, backgroundPaint) => {
+      const { context, paints } = recordingContext();
+      const options = {
+        context,
+        metrics: { width: 10, height: 10, baseline: 8 },
+        fontSize: 12,
+        fontFamily: "monospace",
+        padding: 4,
+        transparentBackground,
+      };
+      renderGhosttySnapshot({
+        ...options,
+        snapshot: { ...snapshot(new Set()), cursorX: 1, cursorY: 0, cursorVisible: true },
+        forceFull: true,
+        cursorOn: true,
+      });
+
+      paints.length = 0;
+      renderGhosttySnapshot({
+        ...options,
+        snapshot: snapshot(new Set()),
+        forceFull: false,
+        cursorOn: false,
+        previousCursorY: 0,
+      });
+
+      const rowBackground = paints.filter(
+        (paint) =>
+          paint.kind === backgroundPaint &&
+          (backgroundPaint === "clear" || paint.color === "rgb(0, 0, 0)"),
+      );
+      const unpaintedColumns = Array.from({ length: 100 }, (_, x) => x).filter(
+        (x) =>
+          !rowBackground.some(
+            ({ rect: [left = 0, top = 0, width = 0, height = 0] }) =>
+              left <= x && x + 1 <= left + width && top <= 4 && 14 <= top + height,
+          ),
+      );
+      expect(unpaintedColumns).toEqual([]);
+    },
+  );
 });
