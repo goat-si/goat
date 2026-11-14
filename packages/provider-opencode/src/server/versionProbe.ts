@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import { parseSemver } from "@goat/shared/semver";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
@@ -180,40 +182,41 @@ export const makeOpenCodeRuntimeProbe = <E>(
   executableIdentity: (environment: NodeJS.ProcessEnv) => Effect.Effect<unknown> = () =>
     Effect.succeed(null),
 ) => {
-  const key = environment.pipe(
-    Effect.flatMap((env) =>
-      executableIdentity(env).pipe(
-        Effect.map((executable) =>
-          JSON.stringify({
-            environment: Object.fromEntries(
-              Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
-            ),
-            executable,
-          }),
-        ),
+  const identityFor = (env: NodeJS.ProcessEnv) =>
+    executableIdentity(env).pipe(
+      Effect.map((executable) =>
+        NodeCrypto.createHash("sha256")
+          .update(
+            JSON.stringify({
+              environment: Object.fromEntries(
+                Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
+              ),
+              executable,
+            }),
+          )
+          .digest("hex"),
       ),
-    ),
-  );
+    );
+  const key = Effect.flatMap(environment, identityFor);
   return Effect.map(
-    Cache.makeWith(
-      (identity: string) =>
-        probe.pipe(
-          Effect.provideService(
-            LaunchEnvironment,
-            (JSON.parse(identity) as { environment: NodeJS.ProcessEnv }).environment,
-          ),
-        ),
-      {
-        capacity: 1,
-        timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
-      },
-    ),
+    Cache.makeWith((_identity: string) => probe, {
+      capacity: 1,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+    }),
     (cache) => ({
       identity: key,
       lastSuccessAt: (identity: string) => Cache.getSuccess(cache, identity),
       recordAt: (identity: string, probed: ProbedOpenCode) => Cache.set(cache, identity, probed),
-      get: Effect.flatMap(key, (identity) => Cache.get(cache, identity)),
-      refresh: Effect.flatMap(key, (identity) => Cache.refresh(cache, identity)),
+      get: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.get(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
+      refresh: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.refresh(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
       lastSuccess: Effect.flatMap(key, (identity) => Cache.getSuccess(cache, identity)),
       record: (probed: ProbedOpenCode) =>
         Effect.flatMap(key, (identity) => Cache.set(cache, identity, probed)),

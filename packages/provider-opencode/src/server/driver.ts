@@ -449,22 +449,23 @@ export const OpenCodeDriver: ProviderDriver<
       maintenanceFor(runtimeProbe.get),
       {
         key: runtimeProbe.identity,
-        resolve: (key) =>
-          maintenanceFor(
-            runtimeProbe.get,
-            Effect.succeed((JSON.parse(key) as { environment: NodeJS.ProcessEnv }).environment),
-          ),
+        resolve: () => maintenanceFor(runtimeProbe.get),
       },
     );
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
       !effectiveConfig.enabled
         ? Effect.succeed(noUpdate)
-        : options?.fresh === true
-          ? runtimeProbe.refresh.pipe(
-              Effect.ignore,
-              Effect.andThen(cachedMaintenance({ fresh: true })),
-            )
-          : cachedMaintenance();
+        : currentEnvironment.pipe(
+            Effect.flatMap((env) =>
+              (options?.fresh === true
+                ? runtimeProbe.refresh.pipe(
+                    Effect.ignore,
+                    Effect.andThen(cachedMaintenance({ fresh: true })),
+                  )
+                : cachedMaintenance()
+              ).pipe(Effect.provideService(LaunchEnvironment, env)),
+            ),
+          );
     const openCodeV1Adapter = yield* OpenCodeAdapterV2.OpenCodeAdapterV2Driver.create({
       instanceId,
       displayName,
