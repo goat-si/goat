@@ -138,6 +138,8 @@ export class EnrollHost extends Context.Service<
     readonly route: (node: PenNode) => Effect.Effect<PenExactRoute | undefined>;
     /** Writes the machine's one-line known_hosts once; a different line later fails. */
     readonly knownHosts: (attachId: string, line: string) => Effect.Effect<string, KnownHostsError>;
+    /** Removes the machine's known_hosts once its link is gone; a missing file is already gone. */
+    readonly forgetKnownHosts: (attachId: string) => Effect.Effect<boolean>;
     /** Runs `true` on the machine over the route contract within 30 s. */
     readonly reach: (route: DisposableRoute) => Effect.Effect<ReachAnswer>;
     /** Whether this Home's OpenCodex serves its link operation journal. */
@@ -187,6 +189,15 @@ export const layer = Layer.effect(
           Effect.provideService(Path.Path, path),
         );
       }),
+      forgetKnownHosts: Effect.fn("EnrollHost.forgetKnownHosts")(
+        function* (attachId) {
+          yield* fs
+            .remove(path.join(directory, attachId))
+            .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.void));
+          return true;
+        },
+        Effect.orElseSucceed(() => false),
+      ),
       reach: Effect.fn("EnrollHost.reach")(
         function* (route) {
           const options = disposableSshExecOptions(route);

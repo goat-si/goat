@@ -94,6 +94,26 @@ type AppThread = OrchestrationV2ThreadProjection["thread"];
 const structureTurnItems = new WeakMap<TurnItem, ThreadStructureTurnItem>();
 const structureVisibleTurnItems = new WeakMap<VisibleTurnItem, ThreadStructureVisibleTurnItem>();
 
+// Queued text, attachments and attribution all come from the message, so its identity covers them.
+function queueWorkflowStatesEqual(
+  left: ThreadQueueWorkflowState,
+  right: ThreadQueueWorkflowState,
+): boolean {
+  return (
+    left.activeRun === right.activeRun &&
+    left.isHeld === right.isHeld &&
+    left.canSendNow === right.canSendNow &&
+    left.canPromoteToSteer === right.canPromoteToSteer &&
+    left.canReorder === right.canReorder &&
+    left.queuedRuns.length === right.queuedRuns.length &&
+    left.queuedRuns.every(
+      (queued, index) =>
+        queued.run === right.queuedRuns[index]!.run &&
+        queued.message === right.queuedRuns[index]!.message,
+    )
+  );
+}
+
 function toThreadStructureTurnItem(item: TurnItem): ThreadStructureTurnItem {
   if (item.type !== "assistant_message" && item.type !== "reasoning") return item;
   let structure = structureTurnItems.get(item);
@@ -175,7 +195,11 @@ function sameProjectionArray<T>(
   if (previous === next) return true;
   if (previous.length !== next.length) return false;
   const replacedIndex = getProjectionArrayReplacementIndex(previous, next);
-  if (replacedIndex !== undefined) return same(previous[replacedIndex]!, next[replacedIndex]!);
+  if (replacedIndex !== undefined) {
+    const before = previous[replacedIndex];
+    const after = next[replacedIndex];
+    return before !== undefined && after !== undefined && same(before, after);
+  }
   return previous.every((item, index) => same(item, next[index]!));
 }
 
@@ -401,7 +425,8 @@ export function createEnvironmentThreadDetailAtoms<E>(
         projection.providerSessions !== previous.providerSessions ||
         projection.providerTurns !== previous.providerTurns
       ) {
-        value = deriveThreadQueueWorkflowState(projection);
+        const next = deriveThreadQueueWorkflowState(projection);
+        if (value === null || !queueWorkflowStatesEqual(value, next)) value = next;
         const { thread, runs, messages, providerThreads, providerSessions, providerTurns } =
           projection;
         previous = { thread, runs, messages, providerThreads, providerSessions, providerTurns };
@@ -503,8 +528,16 @@ export function createEnvironmentThreadDetailAtoms<E>(
         projection.messages !== previous?.messages
       ) {
         const { checkpoints, messages } = projection;
+        const next = deriveThreadCheckpointSummaries({ checkpoints, messages });
+        // The same checkpoints give the same summaries; messages only pick each assistant message.
+        if (
+          checkpoints !== previous?.checkpoints ||
+          next.some(
+            (summary, index) => summary.assistantMessageId !== value[index]?.assistantMessageId,
+          )
+        )
+          value = next;
         previous = { checkpoints, messages };
-        value = deriveThreadCheckpointSummaries(previous);
       }
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-checkpoint-summaries:${key}`));

@@ -35,6 +35,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   selectionNeedsRestart = false,
   threadOverride?: ThreadId,
   canSteer = true,
+  turnCapabilities: Partial<typeof CodexProviderCapabilitiesV2.turns> = {},
   nativeGoals?: boolean,
 ) {
   const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
@@ -50,6 +51,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
       ...(nativeGoals === undefined ? {} : { supportsNativeGoals: nativeGoals }),
       supportsActiveSteering: canSteer,
       supportsSteeringByInterruptRestart: canRestart,
+      ...turnCapabilities,
     },
   };
   const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
@@ -211,6 +213,7 @@ export const goalHarness = Effect.fn("goalHarness")(function* (
     false,
     undefined,
     true,
+    {},
     nativeGoals,
   );
   const send = Effect.fn("SteeringHarness.sendGoalMessage")(function* (

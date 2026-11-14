@@ -135,7 +135,7 @@ export function createWorkspaceFocusController(doc: Document) {
     // panel focuses it when the panel has no default of its own; F6 visits that area on its own.
     const candidates = Array.from(
       area.querySelectorAll<HTMLElement>(
-        '[data-workspace-focus-default], [data-sidebar-row][aria-current="page"], [data-settings-section][tabindex="0"], .xterm-helper-textarea, [contenteditable="true"]',
+        '[data-workspace-focus-default], [data-sidebar-row][aria-current="page"], [data-settings-section][aria-current="page"], .xterm-helper-textarea, [contenteditable="true"]',
       ),
     );
     const preferred = candidates.find(belongs) ?? (nested ? candidates.find(usable) : undefined);

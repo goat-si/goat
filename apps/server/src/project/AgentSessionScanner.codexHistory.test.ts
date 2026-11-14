@@ -83,9 +83,9 @@ it.layer(NodeServices.layer)("Codex inherited history", (it) => {
       const path = yield* Path.Path;
       const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
       yield* TestClock.setTime(nowMs);
-      const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-      const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-      const workspace = yield* makeTempDir("t3code-workspace-");
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const workspace = yield* makeTempDir("goat-workspace-");
       const threadId = "019a0000-0000-7000-8000-000000000001";
       const rolloutId = "019a0000-0000-7000-8000-000000000002";
       const sessionsDir = path.join(codexHomePath, "sessions", "2026", "08", "24");

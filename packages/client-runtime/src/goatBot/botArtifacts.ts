@@ -321,19 +321,21 @@ interface BotComputerTask {
   readonly worker?: { readonly host?: string | undefined } | undefined;
 }
 
-export interface BotComputer {
+export interface BotComputer<Task extends BotComputerTask = BotComputerTask> {
   /** Null for GOAT Bot's own machine. */
   readonly host: string | null;
-  readonly tasks: ReadonlyArray<BotComputerTask>;
+  readonly tasks: ReadonlyArray<Task>;
 }
 
 /**
  * The machines GOAT Bot's running work uses. A task with a worker is where its worker is (no host
  * means GOAT Bot's own machine); a task still waiting for one is where it was asked to run.
  */
-export function botComputers(tasks: ReadonlyArray<BotComputerTask>): ReadonlyArray<BotComputer> {
+export function botComputers<Task extends BotComputerTask>(
+  tasks: ReadonlyArray<Task>,
+): ReadonlyArray<BotComputer<Task>> {
   const running = new Set<string>(BOT_RUNNING_TASK_STATUSES);
-  const groups = new Map<string | null, BotComputerTask[]>();
+  const groups = new Map<string | null, Task[]>();
   for (const task of tasks) {
     if (!running.has(task.status)) continue;
     const host = (task.worker === undefined ? task.host : task.worker.host) ?? null;

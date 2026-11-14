@@ -155,6 +155,11 @@ export function createEnvironmentThreadShellAtoms(input: {
     readonly byBot: ReadonlyArray<{ readonly eligible: boolean }>;
     readonly links: ReadonlyArray<HomeCurrentOpenableLink>;
   }>;
+  /**
+   * The computer whose bot Home this client opens. When given, only its Home links govern
+   * Threads; every other computer keeps the listed-work rule and reads no Home work at all.
+   */
+  readonly goatBotHomeEnvironmentId?: Atom.Atom<EnvironmentId | null>;
   readonly goatBotListedWork?: (source: {
     readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
     readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
@@ -464,11 +469,15 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotEnvironmentIdsAtom = Atom.make((get) => [
     ...enabledEnvironmentIds(get(input.catalogValueAtom)),
   ]).pipe(Atom.withLabel("environment-goat-bot-environment-ids"));
+  const governedHomeLinks = (get: Atom.AtomContext, id: EnvironmentId) => {
+    if (input.goatBotHomeWork === undefined) return null;
+    if (input.goatBotHomeEnvironmentId !== undefined && get(input.goatBotHomeEnvironmentId) !== id)
+      return null;
+    const work = get(input.goatBotHomeWork(id));
+    return homeWorkGoverns(work) ? work.links : null;
+  };
   const legacyBotEnvironmentIdsAtom = Atom.make((get) =>
-    get(goatBotEnvironmentIdsAtom).filter((id) => {
-      if (input.goatBotHomeWork === undefined) return true;
-      return !homeWorkGoverns(get(input.goatBotHomeWork(id)));
-    }),
+    get(goatBotEnvironmentIdsAtom).filter((id) => governedHomeLinks(get, id) === null),
   );
   const goatBotListedWorkAtom = input.goatBotListedWork?.({
     environmentIdsAtom: legacyBotEnvironmentIdsAtom,
@@ -480,15 +489,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotObservationThreadKeysAtom = Atom.make((get) => {
     const next = goatBotObservationThreadKeys({
       threads: get(quietThreadShellsAtom),
-      homeWork:
-        input.goatBotHomeWork === undefined
-          ? []
-          : get(goatBotEnvironmentIdsAtom).flatMap((id) => {
-              const homeWork = input.goatBotHomeWork;
-              if (homeWork === undefined) return [];
-              const work = get(homeWork(id));
-              return homeWorkGoverns(work) ? work.links : [];
-            }),
+      homeWork: get(goatBotEnvironmentIdsAtom).flatMap((id) => governedHomeLinks(get, id) ?? []),
       ...(goatBotListedWorkAtom === undefined ? {} : { listedWork: get(goatBotListedWorkAtom) }),
     });
     if (

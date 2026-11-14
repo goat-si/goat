@@ -9,6 +9,7 @@ import type {
   HubMachineAttachInput,
   HubMachineListInput,
   HubMachineReissueInput,
+  HubMachineDetachInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
@@ -164,6 +165,23 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
     Effect.flatMap(DisposableAttach.DisposableAttach, (machines) =>
       machines.list(input).pipe(Effect.mapError(machineFailure)),
     ),
+  ),
+  // Force is a person's step; the service refuses it for a thread.
+  goat_hub_machine_detach: McpToolAccess.writesAsCaller((input: HubMachineDetachInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const threadId = yield* threadOf(scope);
+      const machines = yield* DisposableAttach.DisposableAttach;
+      const nodeId = yield* machines.nodeOf(input.attachId).pipe(Effect.mapError(machineFailure));
+      if (nodeId !== undefined)
+        yield* (yield* Profiles.PermissionProfiles).require(scope, "hub.manage", {
+          host: "pen-" + nodeId,
+        });
+      const caller = { provisioner: { kind: "thread" as const, threadId: threadId } };
+      return yield* machines
+        .detach(caller, "thread:" + threadId, input)
+        .pipe(Effect.mapError(machineFailure));
+    }),
   ),
   goat_hub_device_verify: McpToolAccess.readsOrReachesHost(
     () => true,

@@ -333,6 +333,20 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       ranges: [{ start: 0, end: 7 }],
     });
     expect(scoreThreadSearch("trim", subject, NOW)?.explain?.()).toBeUndefined();
+    for (const prefix of ["goat", "t3"]) {
+      // goat-rename: legacy
+      const flat = thread("Add search", { branch: `${prefix}-abcd1234` });
+      expect(scoreThreadSearch(prefix, flat, NOW)).toBeNull();
+      expect(scoreThreadSearch(`${prefix} connect`, flat, NOW)).toBeNull();
+      expect(scoreThreadSearch("abcd1234", flat, NOW)).not.toBeNull();
+      for (const query of [
+        `${prefix}-abcd`,
+        `${prefix}-abcd1234 connect`,
+        `connect ${prefix}-abcd1234`,
+      ]) {
+        expect(scoreThreadSearch(query, { ...flat, projectTitle: "connect" }, NOW)).not.toBeNull();
+      }
+    }
   });
 
   it("reads letters and numbers typed together, without forgiving typos in numbers", () => {

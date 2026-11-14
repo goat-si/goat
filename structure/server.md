@@ -170,7 +170,24 @@ After each pass of the 30 s loop (never a list) GOAT starts an enrollment pass (
 that moves admitted machines on without holding the loop: Pen's exact route and host key, `ssh true` with the hub's own machine key (`machineKey.ts`,
 `routeContract.ts`), and `ocx link add` as an exclusive ephemeral Child under an operation id that is
 stored first and read back from OpenCodex's journal before anything is sent again. Records project
-onto hub nodes as the machine's class, and an unreadable table reads as kept. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are thin transports over it.
+onto hub nodes as the machine's class, and an unreadable table reads as kept. A detach pass
+(`DisposableDetach`) runs after it: detach fences the record and removes the link with a journalled
+`ocx link revoke --purge`, clean only with the Child's purged receipt; a machine silent for 24 hours
+(48 handshakes or purges 30 minutes apart, counted only while this hub's Pen answers its member
+list, read once per pass, so a network cut with Pen's daemon still answering counts), or a person's
+force, gets `ocx link revoke --force` and a tombstone that
+`ocx link recover` settles once the machine answers. A silent machine's purge GOAT gives up on is
+resolved in OpenCodex's journal before the next purge, or after the force that replaces it commits;
+any other unsettled purge is repeated once, which resumes a removal it claimed before failing, then
+waits for a person and must read resolved before a new one goes, so a machine leaves at most one
+unsettled purge there. A new id refused `link_retirement_owned` repeats GOAT's own earlier revoke
+of the link, stored with the new id, before it stops for a person (`DetachForce.ts`). A purge left unknown while GOAT's own handshake
+reaches the machine stops for a person. A force at settle takes only the link the operation reserved,
+or an exclusive ephemeral Child on the record's route. OpenCodex's refusals are states with their
+own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, or was never admitted,
+and that name no link are pruned 30 days after they ended and left Pen; a released record only once
+Pen's member list shows its key absent. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are
+thin transports over it.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the

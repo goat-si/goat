@@ -2,6 +2,8 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type ThreadId,
   type OrchestrationGetTurnDiffResult,
+  type OrchestrationV2GetTurnItemInput,
+  type EnvironmentId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -10,7 +12,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { HttpClient } from "effect/http";
 import { Atom } from "effect/reactivity";
 
-import { applyCommandOutputFrame, EMPTY_COMMAND_OUTPUT } from "./commandOutput.ts";
+import {
+  applyCommandOutputFrame,
+  EMPTY_COMMAND_OUTPUT,
+  type CommandOutputView,
+} from "./commandOutput.ts";
 
 import {
   createEnvironmentRpcCommand,
@@ -40,6 +46,18 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     options.onCheckpointDiffAnswer === undefined
       ? {}
       : { onAnswer: options.onCheckpointDiffAnswer };
+  const liveTurnItem = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:orchestration:turn-item",
+    tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+    staleTimeMs: 60_000,
+    idleTtlMs: 60_000,
+  });
+  const settledTurnItem = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:orchestration:turn-item",
+    tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+    staleTimeMs: Number.POSITIVE_INFINITY,
+    idleTtlMs: 5 * 60_000,
+  });
   return {
     threadTranscript: createEnvironmentCommand(runtime, {
       label: "environment-data:orchestration:thread-transcript",
@@ -84,12 +102,12 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         tag: ORCHESTRATION_V2_WS_METHODS.subscribeThread,
         idleTtlMs: 0,
       }),
-      // One expanded command row's output. Mounted only while the row is open,
-      // and released as soon as it closes, so hidden rows receive nothing.
       commandOutput: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
         label: "environment-data:orchestration-v2:command-output",
         tag: ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput,
         idleTtlMs: 0,
+        completeWhen: (view: CommandOutputView) => !view.running,
+        completedTtlMs: 5 * 60_000,
         // `scan` emits its seed first; skipping it keeps the row "loading" until the first frame.
         transform: (frames) =>
           frames.pipe(
@@ -128,12 +146,13 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       label: "environment-data:orchestration:stop-held-turn",
       tag: ORCHESTRATION_V2_WS_METHODS.stopHeldTurn,
     }),
-    turnItem: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:orchestration:turn-item",
-      tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
-      staleTimeMs: 60_000,
-      idleTtlMs: 60_000,
-    }),
+    turnItem: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: OrchestrationV2GetTurnItemInput;
+    }) =>
+      target.input.revision === undefined || target.input.revision === "live"
+        ? liveTurnItem(target)
+        : settledTurnItem(target),
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",
       tag: ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,

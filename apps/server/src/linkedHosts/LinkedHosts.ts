@@ -8,6 +8,7 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -22,6 +23,7 @@ import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -234,9 +236,26 @@ const make = Effect.gen(function* () {
           cache: "no-store",
         }),
         Effect.timeout(LINK_TIMEOUT),
-        Effect.mapError(() =>
-          fail("host_unavailable", `${new URL(request.url).origin} did not answer.`),
-        ),
+        Effect.mapError((error) => {
+          const origin = new URL(request.url).origin;
+          if (Cause.isTimeoutError(error)) return fail("host_unavailable", `${origin} timed out.`);
+          const cause =
+            HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError"
+              ? error.reason.cause
+              : undefined;
+          const nested =
+            typeof cause === "object" && cause !== null && "cause" in cause
+              ? cause.cause
+              : undefined;
+          const code = [cause, nested]
+            .map((value) =>
+              typeof value === "object" && value !== null && "code" in value
+                ? value.code
+                : undefined,
+            )
+            .find((value) => typeof value === "string" && /^[A-Z0-9_]{1,64}$/.test(value));
+          return fail("host_unavailable", `${origin} did not answer${code ? ` (${code})` : ""}.`);
+        }),
       );
   });
   const decoded =

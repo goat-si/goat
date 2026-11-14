@@ -1,3 +1,4 @@
+import { processResourceHistoryOptions } from "./serverResourceHistory.ts";
 import {
   type EnvironmentId,
   type ProviderInstanceId,
@@ -1397,10 +1398,10 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostStatus>) =>
         request(WS_METHODS.serverGetHostStatus, input).pipe(Effect.timeout("30 seconds")),
     }),
-    processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:process-resource-history",
-      tag: WS_METHODS.serverGetProcessResourceHistory,
-    }),
+    processResourceHistory: createEnvironmentRpcQueryAtomFamily(
+      runtime,
+      processResourceHistoryOptions,
+    ),
     remoteLaunches,
     /** Stops following a launch whose host no longer answers; the list then shows it dismissed. */
     dismissRemoteLaunch: createEnvironmentRpcCommand(runtime, {
@@ -1554,8 +1555,6 @@ export function createServerEnvironmentAtoms<R, E>(
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
     }),
     updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {

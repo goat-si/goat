@@ -169,8 +169,33 @@ const decodeOlderResult = Schema.decodeUnknownSync(
     matches: Schema.Array(OrchestratorMcpThreadSearchMatch.mapFields(Struct.omit(["link"]))),
   })),
 );
+const decodeCurrentResult = Schema.decodeUnknownSync(OrchestratorMcpThreadSearchResult);
 
 describe("ThreadSearchMcpService", () => {
+  it.effect("identifies the caller and accepts older host search replies", () =>
+    Effect.gen(function* () {
+      const { result } = yield* runSearch(
+        { hosts: ["old"], hostCall: pagingHost([remoteMatch("r1", 20)]) },
+        { query: "modelflare", host: "old" },
+      );
+      expect(result._tag === "Success" && result.success.currentThreadId).toBe(callerId);
+      const outside = yield* runSearch(
+        {},
+        { query: "modelflare" },
+        { ...scope, thread: undefined },
+      );
+      expect(
+        outside.result._tag === "Success" && outside.result.success.currentThreadId,
+      ).toBeNull();
+      expect(
+        decodeCurrentResult({
+          matches: [],
+          nextCursor: null,
+          truncated: false,
+        }),
+      ).toMatchObject({ matches: [] });
+    }),
+  );
   it.effect.each(["allHosts", "hosts"] as const)(
     "returns fast hosts at the %s fan-out deadline without interrupting a slow launch",
     (selection) =>

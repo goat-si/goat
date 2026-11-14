@@ -17,7 +17,8 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
-import { ScheduledRelativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
+import { scheduleLabel } from "@goat/client-runtime/scheduledTasks";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,10 +40,10 @@ const STATUS_DOT_CLASS = {
   warning: "bg-warning",
 };
 
-function taskScheduleLine(task: ScheduledTask) {
+function taskScheduleLine(task: ScheduledTask, timeZone: string | undefined) {
   return (
     <>
-      {scheduleLabel(task.schedule)}
+      {scheduleLabel(task.schedule, timeZone, task.nextRunAt)}
       {task.enabled && task.nextRunAt !== null ? (
         <>
           {" · next "}
@@ -186,13 +187,15 @@ export function ThreadAutomationsPanel(props: {
                   {task.title}
                 </span>
                 <p className="truncate text-2xs text-muted-foreground">
-                  {taskScheduleLine(task)} · {scheduledTaskRunPresentation(task).label}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone)} ·{" "}
+                  {scheduledTaskRunPresentation(task).label}
                 </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
                 <p className="text-muted-foreground">
-                  {taskScheduleLine(task)} · {scheduledTaskRunPresentation(task).label}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone)} ·{" "}
+                  {scheduledTaskRunPresentation(task).label}
                 </p>
               </TooltipPopup>
             </Tooltip>

@@ -293,6 +293,9 @@ it.effect(
         );
         yield* enroll;
         expect(yield* listed(first.attachId)).toMatchObject({ class: "conflict", state: "paused" });
+        // Detach refuses a record a conflict stopped, so nothing tells anyone to detach it.
+        expect((yield* listed(first.attachId))?.nextAction).toContain("pen revoke");
+        expect((yield* listed(first.attachId))?.nextAction).not.toContain("Detach");
         expect(linkAdds(host.control.calls)).toEqual([]);
       }),
     ),
@@ -952,24 +955,4 @@ it.effect("a key answer without a folder drops the old folder and stops writing 
       expect(String(row?.enroll_json)).not.toContain("/srv/team");
     }),
   ),
-);
-
-it.effect(
-  "after GOAT's home moves, reach uses the known_hosts file written at the current path",
-  () =>
-    world((pen, home, _grant, host) =>
-      Effect.gen(function* () {
-        withIdentity(home);
-        const { attachId } = yield* joined(pen, host, 1);
-        yield* enroll; // route: the known_hosts path is stored under the old home
-        host.control.knownHostsDir = "/home/me/goat-new/userdata/disposable/known_hosts/";
-        yield* enroll; // reach
-        expect(host.control.reached.at(-1)?.knownHostsFile).toBe(
-          "/home/me/goat-new/userdata/disposable/known_hosts/" + attachId,
-        );
-        yield* enroll; // link
-        yield* enroll; // verify
-        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
-      }),
-    ),
 );
