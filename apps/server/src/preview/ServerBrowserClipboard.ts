@@ -82,7 +82,7 @@ const takeSessionCopies = async (cdp: CDPSession, since: number, until: number) 
   );
 };
 
-export const takeCopiedText = async (tab: ClipboardTab, since: number, until: number) => {
+const takeCopiedText = async (tab: ClipboardTab, since: number, until: number) => {
   const copies = await Promise.all(
     [tab.cdp, ...tab.frameSessions.values()].map((cdp) => takeSessionCopies(cdp, since, until)),
   );
