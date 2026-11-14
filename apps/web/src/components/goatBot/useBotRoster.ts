@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { botRoster, botRosterGroups, goatBotTurnsWaiting } from "@goat/client-runtime/goatBot";
+import {
+  botRoster,
+  botRosterGroups,
+  goatBotNewestTaskChips,
+  goatBotTurnsWaiting,
+} from "@goat/client-runtime/goatBot";
 import type { BotId, BotRemoteWork, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadVisibleTurnItems } from "~/state/entities";
@@ -73,6 +78,8 @@ export function useBotThreads(
     failure: threads.failure,
     /** The bot's own turns asking a question in its chat, which the rows never list. */
     turnsWaiting: goatBotTurnsWaiting(items),
+    /** Each task's newest chip in the conversation: what its worker asks, which rows leave out. */
+    chips: goatBotNewestTaskChips(items),
     refresh: threads.refresh,
   };
 }

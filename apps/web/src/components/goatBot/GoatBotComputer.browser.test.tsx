@@ -130,10 +130,10 @@ it("says a running task waits for your approval when its worker asks for one", a
   await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
   await expect
     .element(screen.getByRole("listitem").filter({ hasText: "Deploy the site" }))
-    .toHaveTextContent("Waiting for your approval");
+    .toMatchTextContent(/Waiting for your approval/);
   await expect
     .element(screen.getByRole("listitem").filter({ hasText: "Tidy the notes" }))
-    .toHaveTextContent("Working");
+    .toMatchTextContent(/Working/);
 });
 
 it("says when nothing is running", async () => {

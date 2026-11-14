@@ -697,9 +697,9 @@ it("says a running task waits for your answer when its worker asks you something
   await using screen = await render(view(rows, { chips }));
   await expect
     .element(screen.getByRole("button", { name: /^Pick a name/ }))
-    .toHaveTextContent("Waiting for your answer");
+    .toMatchTextContent(/Waiting for your answer/);
   await expect
     .element(screen.getByRole("button", { name: /^Keep going/ }))
-    .toHaveTextContent("Working");
+    .toMatchTextContent(/Working/);
   expect(titles(screen, ["Keep going", "Pick a name"])).toEqual(["Keep going", "Pick a name"]);
 });

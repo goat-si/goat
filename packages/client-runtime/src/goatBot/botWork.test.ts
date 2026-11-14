@@ -214,4 +214,30 @@ describe("botHomeWork", () => {
     // A finished task's stale question and a task the person marked done wait on nothing.
     expect(ids(home.finished)).toEqual(["done", "marked"]);
   });
+
+  it("keeps finished work whose approval is still open with work waiting, as the face does", () => {
+    const home = botHomeWork(
+      [statusRow("approval-left", "completed", "2026-11-04T01:00:00.000Z")],
+      [],
+      EnvironmentId.make("env"),
+      [],
+      new Map([
+        [
+          ChannelTaskId.make("approval-left"),
+          {
+            taskId: "approval-left",
+            taskVersion: 3,
+            status: "completed",
+            openQuestionCount: 0,
+            observed: {
+              pullRequests: [],
+              needsYou: [{ kind: "approval", since: "2026-11-04T00:30:00.000Z" }],
+            },
+          } as unknown as ChannelTaskChip,
+        ],
+      ]),
+    );
+    expect(home.waiting.map((task) => task.row.task.taskId)).toEqual(["approval-left"]);
+    expect(home.finished).toEqual([]);
+  });
 });
