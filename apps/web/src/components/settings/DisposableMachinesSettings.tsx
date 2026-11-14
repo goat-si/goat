@@ -472,6 +472,8 @@ const actionsOf = (machine: HubMachineStatus): ReadonlyArray<MachineAction> => {
   if (machine.class !== "disposable") return [];
   // Detach again clears a stop; force removes the link without the machine.
   if (machine.state === "detaching") return ["detach", "force"];
+  // A retired record's pending removal is repeated by a detach, in Pen or out of it.
+  if (machine.state === "retired") return ["detach"];
   if (machine.penMember && DETACHABLE.has(machine.state)) return ["detach"];
   if (!machine.penMember && machine.state === "unknown") return ["release"];
   return [];
