@@ -4,9 +4,11 @@ import * as Option from "effect/Option";
 import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -424,6 +426,16 @@ export const CodexDriver: ProviderDriver<
           ),
         );
 
+    if (effectiveConfig.enabled) {
+      yield* fileSystem.watch(accountKey).pipe(
+        Stream.filter((event) => pathService.basename(event.path) === "auth.json"),
+        Stream.debounce(Duration.millis(250)),
+        Stream.runForEach(() => snapshot.refresh),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.void),
+        Effect.tapError((error) => Effect.logWarning("Codex auth watch failed", { error })),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+    }
     return {
       instanceId,
       driverKind: DRIVER_KIND,
