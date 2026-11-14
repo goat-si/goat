@@ -20,3 +20,18 @@ it("keeps C1 Unicode characters as text, including beside escape sequences", () 
   expect(result.pendingControlSequence).toBe("");
   expect(sanitizeTerminalHistoryChunk("", "trailing \u009d").visibleText).toBe("trailing \u009d");
 });
+
+it.each([
+  { name: "NUL in DA", data: "A\u001b[0\u0000cB", history: "AB" },
+  { name: "DEL in DA", data: "A\u001b[0\u007fcB", history: "AB" },
+  { name: "NUL in DECRQM", data: "A\u001b[?2026\u0000$pB", history: "AB" },
+  { name: "CR in DSR", data: "AB\u001b[5\rnC", history: "AB\rC" },
+  { name: "DLE in DSR", data: "AB\u001b[5\u0010nC", history: "ABC" },
+])(
+  "strips a query with an embedded control but keeps what the terminal ran ($name)",
+  ({ data, history }) => {
+    expect(sanitizeTerminalHistoryChunk("", data).visibleText.replaceAll("\u0000", "")).toBe(
+      history,
+    );
+  },
+);
