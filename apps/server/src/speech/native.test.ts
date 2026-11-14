@@ -180,7 +180,7 @@ it("kills a hung streaming feed without waiting for native cleanup", async () =>
 });
 
 it("skips process exit teardown when the backend dies during native inference", async () => {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-speech-orphan-"));
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-speech-orphan-"));
   const marker = NodePath.join(directory, "exit-teardown");
   // The exit hook stands in for native atexit teardown; the interval for the threadpool call.
   const model = await loadNativeSpeechModel(
