@@ -120,6 +120,7 @@ export const renderCliShim = (input: {
     '  (cd "$work" && "$app" --appimage-extract >/dev/null) || { echo "Could not open $app." >&2; exit 1; }',
     '  mount="$work/squashfs-root"',
     "fi",
+    'export APPIMAGE="$app"',
     run("$mount"),
     "",
   ].join("\n");
