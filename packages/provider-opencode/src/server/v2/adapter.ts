@@ -12,7 +12,7 @@ import { turnPromptId, steerPromptId } from "./promptIds.ts";
 import { modelRef, malformedModel, sameModel, type ModelRef } from "./modelRef.ts";
 import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
-import { NativeGoal, decodeGoal } from "./nativeGoal.ts";
+import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import {
   agentFor,
   skillMentions,
@@ -3492,11 +3492,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (state.active !== turn || turn.interrupted) return;
           yield* prepareMemory(sessionId, state, turnInput);
           if (!sending()) return;
-          yield* client.session.command({ sessionID, ...command });
           if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
-            yield* finishControl;
+            yield* client.session
+              .command({ sessionID, ...command })
+              .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
+            return yield* finishControl;
           }
-          return;
+          return yield* client.session.command({ sessionID, ...command }).pipe(Effect.asVoid);
         }
       }
       const mentions = skillMentions(text);

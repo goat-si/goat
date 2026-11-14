@@ -4715,6 +4715,29 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       assert.lengthOf(offers, 1);
     }).pipe(Effect.scoped, Effect.provide(IdAllocator.layer)),
   );
+  it.effect("completes /goal clear when OpenCode has no goal to clear", () =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed(
+        [
+          out("command.list", "<any>"),
+          reply("command.list", { location: { directory: WORK }, data: [{ name: "goal" }] }),
+          out("message.list", { sessionID: SESSION, order: "desc", limit: "1" }),
+          reply("message.list", { data: [], cursor: {} }),
+          out("session.command", { sessionID: SESSION, name: "goal", text: "clear" }),
+          reply("session.command", {
+            status: 500,
+            body: { _tag: "CommandExecutionError", command: "goal", message: "No goal is set." },
+          }),
+        ],
+        { version: "2.2.5" },
+      );
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const input = turnInput(thread);
+      yield* runtime.startTurn({ ...input, message: { ...input.message, text: "/goal clear" } });
+      assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("settles a background subagent that fails, so no work is left pending", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

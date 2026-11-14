@@ -9,3 +9,11 @@ export const NativeGoal = Schema.NullOr(
   }),
 );
 export const decodeGoal = Schema.decodeUnknownEffect(NativeGoal);
+
+export const isMissingGoal = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "_tag" in error &&
+  error._tag === "CommandExecutionError" &&
+  "message" in error &&
+  error.message === "No goal is set.";
