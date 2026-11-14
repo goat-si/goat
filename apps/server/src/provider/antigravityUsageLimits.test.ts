@@ -476,7 +476,7 @@ describe("Antigravity subscription limits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("labels Argon's weekly quota apart from the default Gemini weekly quota", () =>
+  it.effect("labels Argon and Carbon quotas apart from the default Gemini quota", () =>
     Effect.gen(function* () {
       const { probe } = yield* fixture({
         summary: {
