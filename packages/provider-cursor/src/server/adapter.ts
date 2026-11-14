@@ -215,6 +215,7 @@ function makeProviderThread(input: {
   readonly appThreadId: OrchestrationV2ProviderThread["appThreadId"];
   readonly providerSessionId: OrchestrationV2ProviderThread["providerSessionId"];
   readonly nativeThreadId: string;
+  readonly storeCwd: string;
   readonly ownerNodeId?: OrchestrationV2ProviderThread["ownerNodeId"];
   readonly forkedFrom?: OrchestrationV2ProviderThread["forkedFrom"];
   readonly now: DateTime.Utc;
@@ -235,6 +236,7 @@ function makeProviderThread(input: {
       strength: "strong",
     },
     nativeConversationHeadRef: null,
+    nativeMetadata: { cursorStoreCwd: input.storeCwd },
     status: "idle",
     firstRunOrdinal: null,
     lastRunOrdinal: null,
@@ -353,6 +355,7 @@ interface CursorLiveAgent {
   readonly cuaDriverKey: string;
   readonly subagentsDisabled: boolean;
   readonly nativeThreadId: string;
+  readonly storeCwd: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
 
@@ -1637,9 +1640,19 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           readonly modelSelection: ModelSelection;
           readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
           readonly agentId?: string;
+          readonly storeCwd?: string | undefined;
         }) {
           const existing = yield* Ref.get(liveAgent);
           const mcpSession = yield* mcpSessions.read(openInput.threadId);
+          const cwd = openInput.runtimePolicy.cwd ?? process.cwd();
+          const storeCwd =
+            openInput.storeCwd ??
+            (openInput.operation === "resume"
+              ? existing !== null && existing.nativeThreadId === openInput.agentId
+                ? existing.storeCwd
+                : input.resumeFromSession?.cwd
+              : undefined) ??
+            cwd;
           if (
             existing !== null &&
             openInput.operation === "resume" &&
@@ -1681,6 +1694,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .open({
               operation: openInput.operation,
               ...(openInput.agentId === undefined ? {} : { agentId: openInput.agentId }),
+              storeCwd,
               options,
               threadId: openInput.threadId,
               providerSessionId: input.providerSessionId,
@@ -1690,6 +1704,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           const next = {
             cwd: openInput.runtimePolicy.cwd,
             nativeThreadId: sdkSession.agentId,
+            storeCwd,
             session: sdkSession,
             mcpAuthorization: mcpSession?.authorizationHeader,
             mcpEndpoint: mcpSession?.endpoint,
@@ -1827,6 +1842,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const agent = yield* openAgent({
               operation: "resume",
               agentId,
+              storeCwd: turnInput.providerThread.nativeMetadata?.cursorStoreCwd,
               threadId: turnInput.threadId,
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
@@ -2094,6 +2110,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 appThreadId: threadInput.threadId,
                 providerSessionId: input.providerSessionId,
                 nativeThreadId: opened.nativeThreadId,
+                storeCwd: opened.storeCwd,
                 now,
               });
             },
@@ -2112,9 +2129,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           resumeThread: Effect.fn("CursorAdapterV2.resumeThread")(
             function* (threadInput: { readonly providerThread: OrchestrationV2ProviderThread }) {
               const agentId = nativeThreadId(threadInput.providerThread);
-              yield* openAgent({
+              const opened = yield* openAgent({
                 operation: "resume",
                 agentId,
+                storeCwd: threadInput.providerThread.nativeMetadata?.cursorStoreCwd,
                 threadId: threadInput.providerThread.appThreadId ?? input.threadId,
                 modelSelection: input.modelSelection,
                 runtimePolicy: input.runtimePolicy,
@@ -2122,6 +2140,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               const now = yield* DateTime.now;
               return {
                 ...threadInput.providerThread,
+                nativeMetadata: {
+                  ...threadInput.providerThread.nativeMetadata,
+                  cursorStoreCwd: opened.storeCwd,
+                },
                 providerSessionId: input.providerSessionId,
                 status: "idle" as const,
                 updatedAt: now,
@@ -2208,6 +2230,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               const agent = yield* openAgent({
                 operation: "resume",
                 agentId: requestedAgentId,
+                storeCwd: snapshotInput.providerThread.nativeMetadata?.cursorStoreCwd,
                 threadId: snapshotInput.providerThread.appThreadId ?? input.threadId,
                 modelSelection: input.modelSelection,
                 runtimePolicy: input.runtimePolicy,
