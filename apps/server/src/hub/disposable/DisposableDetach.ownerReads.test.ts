@@ -51,7 +51,7 @@ it.effect(
         yield* detach(PERSON, attachId, "d-3");
         yield* passes(5);
         const stopped = yield* listed(attachId);
-        expect(stopped?.message).toContain("gave no readable answer");
+        expect(stopped?.message).toContain("could not read its earlier revoke");
         expect(stopped?.message).toContain("link_not_found");
         expect(stopped?.message).not.toContain("resolve");
       }),
@@ -75,7 +75,8 @@ it.effect(
         yield* detach(PERSON, attachId, "d-2");
         yield* passes(5);
         const stopped = yield* listed(attachId);
-        expect(stopped?.message).toContain("gave no readable answer");
+        expect(stopped?.message).toContain("could not read its earlier revoke");
+        expect(stopped?.message).toContain("link_not_found");
         expect(stopped?.message).not.toContain("resolve");
       }),
     ),
@@ -152,7 +153,7 @@ it.effect(
 );
 
 it.effect.each(["failed_clean", "not_found"] as const)(
-  "a Force whose stored id OpenCodex settled refused or never recorded (%s) keeps the owner that still holds the removal, and GOAT repeats that owner",
+  "a Force whose stored id OpenCodex settled refused or never recorded (%s) keeps GOAT's owner: it repeats an owner holding the receipt, and resolves one that holds none once the force commits",
   (stored) =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -166,7 +167,9 @@ it.effect.each(["failed_clean", "not_found"] as const)(
           force: true,
           state: "unknown",
           code: "key_revoke_failed",
-          ownsReceipt: true,
+          // OpenCodex refuses any new id while an owner holds the receipt, so a later failed_clean id
+          // means this owner holds none.
+          ...(stored === "not_found" ? { ownsReceipt: true as const } : {}),
         });
         // v2.100.3 settles a force failed_clean when its tombstone cannot be written, before any intent.
         if (stored === "failed_clean")
@@ -193,14 +196,15 @@ it.effect.each(["failed_clean", "not_found"] as const)(
         );
         yield* detach(PERSON, attachId, "d-1", true);
         yield* detachPass;
-        expect(ocx.sent).toContain(owner);
+        if (stored === "not_found") expect(ocx.sent).toContain(owner);
+        else expect(ocx.resolved).toContain(owner);
         expect(ocx.tombstones.size).toBe(1);
       }),
     ),
 );
 
 it.effect(
-  "a linked machine with a stopped retirement and a new host key is checked once per 30 minutes, with one conflict audit row (#3264)",
+  "a linked machine with a stopped retirement and a new host key gets one handshake and one conflict audit row, then is not checked again until a person forces (#3264)",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {

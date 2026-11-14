@@ -1,3 +1,4 @@
+import { BETA_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBetaItems";
 import { CLONE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchCloneItems";
 import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
 import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
@@ -412,17 +413,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
+  ...BETA_SETTINGS_SEARCH_ITEMS,
   {
-    id: "new-design",
-    title: "New design",
-    to: "/settings/beta",
-    searchTerms: ["beta redesign look style sidebar composer black quieter classic"],
-  },
-  {
-    id: "working-shelf",
-    title: "Working section",
-    to: "/settings/beta",
-    searchTerms: ["beta hide fold running monitoring threads inbox sidebar shelf"],
+    id: "screen-reader-announcements",
+    title: "Screen reader announcements",
+    to: "/settings/general",
+    searchTerms: [
+      "accessibility a11y screen reader nvda jaws voiceover orca narrator speech announce read aloud messages activity steps",
+    ],
   },
   {
     id: "guest-links",
