@@ -73,6 +73,8 @@ export const fakePen = () => {
     membersAsked: 0,
     /** The next member-list read answers this instead, as a view taken before a join would. */
     staleMembersOnce: undefined as Set<string> | undefined,
+    /** Pen's member list cannot be read. */
+    membersUnreadable: false,
     /** Awaited before the mint touches the book, so a test can hold or interrupt it. */
     mintGate: undefined as Deferred.Deferred<void> | undefined,
     mintStarted: undefined as Deferred.Deferred<void> | undefined,
@@ -117,6 +119,7 @@ export const fakePen = () => {
     }),
     members: Effect.sync(() => {
       control.membersAsked += 1;
+      if (control.membersUnreadable) return undefined;
       const stale = control.staleMembersOnce;
       control.staleMembersOnce = undefined;
       if (stale !== undefined) return stale;
@@ -216,6 +219,7 @@ export type World =
   | SqlClient.SqlClient
   | EnrollHost
   | MachineKey
+  | PenInvites
   | Attach.Provisioners;
 
 /** The provisioner's grant as the fake reports it; the call numbered gateOnCall waits on gate. */

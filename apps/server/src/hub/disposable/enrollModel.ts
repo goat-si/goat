@@ -279,6 +279,8 @@ const STOPS: Record<string, string> = {
   link_mismatch:
     "The Home's link for this machine is not the exclusive lightweight Child on the recorded route.",
   link_gone: "The Home no longer lists the link this attach made.",
+  joined_without_admit:
+    "Pen admitted it without an admit GOAT saved; its key is among Pen's members, so it holds its slot.",
   unreadable: "GOAT cannot read this attach's progress.",
 };
 const stopText = (stop: string) => STOPS[stop] ?? "The attach stopped and needs a person.";

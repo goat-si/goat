@@ -650,3 +650,50 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "release asks Pen first: a key that joined is recorded as in Pen and refused, an unreadable list is refused",
+  () =>
+    world((pen, _home, _grant, _host) =>
+      Effect.gen(function* () {
+        const first = yield* attach(1);
+        pen.control.join(first.attachId + ".1", false);
+        yield* reconcile;
+        yield* TestClock.adjust(11 * 60 * 1000);
+        pen.control.membersUnreadable = true;
+        const unreadable = yield* release(PERSON, first.attachId, "r-1").pipe(Effect.flip);
+        expect(unreadable.reason).toBe("storage_failed");
+        pen.control.membersUnreadable = false;
+        pen.members.add(key(1));
+        const joinedAnyway = yield* release(PERSON, first.attachId, "r-2").pipe(Effect.flip);
+        expect(joinedAnyway.reason).toBe("conflict");
+        expect(joinedAnyway.detail).toContain("joined Pen");
+        const machine = yield* listed(first.attachId);
+        expect(machine).toMatchObject({ penMember: true });
+        expect(machine?.message).toContain("pen revoke");
+        // It holds its slot again: the cap of 2 counts it.
+        yield* attach(2);
+        expect((yield* attach(3).pipe(Effect.flip)).reason).toBe("cap_reached");
+      }),
+    ),
+);
+
+it.effect("a released record is kept past 30 days while Pen's list cannot show its key gone", () =>
+  world((pen, _home, _grant, _host) =>
+    Effect.gen(function* () {
+      const first = yield* attach(1);
+      pen.control.join(first.attachId + ".1", false);
+      yield* reconcile;
+      yield* TestClock.adjust(11 * 60 * 1000);
+      yield* release(PERSON, first.attachId, "r-1");
+      // The machine joins after all, and the record ages past the retention.
+      pen.members.add(key(1));
+      yield* TestClock.adjust(31 * 24 * HOUR);
+      yield* detachPass;
+      expect(yield* listed(first.attachId)).toBeDefined();
+      pen.members.delete(key(1));
+      yield* detachPass;
+      expect(yield* listed(first.attachId)).toBeUndefined();
+    }),
+  ),
+);

@@ -2,7 +2,6 @@ import {
   type HubMachineDetachInput,
   type HubMachineReleaseInput,
   HubMachinesError,
-  type HubMachineStatus,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -53,6 +52,7 @@ import {
   STALE_OPEN_MS,
 } from "./enrollModel.ts";
 import { MachineKey } from "./machineKey.ts";
+import { PenInvites } from "./PenInvites.ts";
 import { disposableKnownHosts } from "./routeContract.ts";
 
 // A revoke reaches the Child over ssh like an enrollment; the margin lets ocx report first.
@@ -105,6 +105,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   const sql = yield* SqlClient.SqlClient;
   const host = yield* EnrollHost;
   const machineKey = yield* MachineKey;
+  const pen = yield* PenInvites;
   const { unnamed } = yield* makeAuthority;
   const settings = yield* Settings.ServerSettingsService;
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -613,23 +614,41 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const cutoff = DateTime.formatIso(
       DateTime.subtract(yield* DateTime.now, { days: RETENTION_DAYS }),
     );
+    // The 30 days run from the later of ending and leaving Pen.
     const ended = yield* sql<{
       readonly attach_id: string;
-    }>`SELECT attach_id FROM disposable_machines
-      WHERE final_at IS NOT NULL AND final_at < ${cutoff}
+      readonly step: string | null;
+      readonly expected_sign_pub: string;
+    }>`SELECT attach_id, step, expected_sign_pub FROM disposable_machines
+      WHERE final_at IS NOT NULL AND max(final_at, coalesce(pen_removed_at, final_at)) < ${cutoff}
         AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL)
         AND link_id IS NULL AND link_operation_id IS NULL AND NOT ${sql.unsafe(OWES_ACK)}
       ORDER BY final_at LIMIT ${PRUNE_LIMIT}`;
     if (ended.length === 0) return;
+    // A released record never had an admit: it goes only once Pen's view shows its key absent.
+    const view = yield* Effect.cached(pen.members);
+    const gone: Array<string> = [];
+    for (const row of ended) {
+      if (row.step === "released") {
+        const members = yield* view;
+        if (members === undefined || members.has(row.expected_sign_pub)) continue;
+      }
+      gone.push(row.attach_id);
+    }
     yield* exclusive(
       sql.withTransaction(
         Effect.forEach(
-          ended,
-          ({ attach_id }) =>
-            Effect.andThen(
-              sql`DELETE FROM disposable_machine_requests WHERE attach_id = ${attach_id}`,
-              sql`DELETE FROM disposable_machines WHERE attach_id = ${attach_id} AND final_at IS NOT NULL`,
-            ),
+          gone,
+          (attachId) =>
+            Effect.gen(function* () {
+              const deleted =
+                yield* sql`DELETE FROM disposable_machines WHERE attach_id = ${attachId}
+                AND final_at IS NOT NULL AND link_id IS NULL AND link_operation_id IS NULL
+                AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL) RETURNING attach_id`;
+              if (deleted.length === 0) return;
+              yield* sql`DELETE FROM disposable_machine_requests WHERE attach_id = ${attachId}`;
+              yield* audit(attachId, "hub.machine_prune", "deleted");
+            }),
           { discard: true },
         ),
       ),
@@ -838,6 +857,34 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             "Its invite can still be used; release it once the invite has expired.",
           );
         const enroll = decodeEnroll(row.enroll_json);
+        // The machine may have joined before its invite expired: Pen's view is read twice, as the
+        // removal settle reads it, and a key found there keeps its slot.
+        const first = yield* pen.members;
+        const second = yield* pen.members;
+        if (first === undefined || second === undefined)
+          return yield* fail(
+            "storage_failed",
+            "Pen's member list could not be read, so nothing was released; try again.",
+          );
+        if (first.has(row.expected_sign_pub) || second.has(row.expected_sign_pub)) {
+          const joinedAt = yield* nowIso;
+          yield* sql`UPDATE disposable_machines SET ${sql.update({
+            pen_admitted_at: joinedAt,
+            pen_removed_at: null,
+            fence: row.fence + 1,
+            enroll_json: encodeEnroll({ ...enroll, stop: "joined_without_admit" }),
+            updated_at: joinedAt,
+          })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence}`.pipe(
+            Effect.mapError(storageFailed),
+          );
+          yield* audit(row.attach_id, "hub.machine_release", "refused:joined").pipe(
+            Effect.mapError(storageFailed),
+          );
+          return yield* fail(
+            "conflict",
+            "The machine joined Pen after all, so it keeps its slot. Detach it, or remove it from Pen with pen revoke.",
+          );
+        }
         const now = yield* nowIso;
         const saved = yield* sql
           .withTransaction(
@@ -876,21 +923,5 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
   });
 
-  return { detach, release, pass, advance } satisfies {
-    readonly detach: (
-      caller: AttachCaller,
-      principal: string,
-      input: HubMachineDetachInput,
-    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
-    readonly release: (
-      caller: AttachCaller,
-      principal: string,
-      input: HubMachineReleaseInput,
-    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
-    readonly pass: Effect.Effect<void, unknown>;
-    readonly advance: (
-      attachId: string,
-      status: Effect.Effect<OcxOutput | undefined>,
-    ) => Effect.Effect<void, unknown>;
-  };
+  return { detach, release, pass, advance };
 });
