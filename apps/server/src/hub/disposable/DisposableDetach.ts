@@ -592,16 +592,18 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const cutoff = DateTime.formatIso(
       DateTime.subtract(yield* DateTime.now, { days: RETENTION_DAYS }),
     );
-    // The 30 days run from the later of ending and leaving Pen.
+    // The 30 days run from the later of ending and leaving Pen. The DELETE asks it all again, as
+    // the record may change while Pen's list is read.
+    const prunable = sql`final_at IS NOT NULL
+      AND max(final_at, coalesce(pen_removed_at, final_at)) < ${cutoff}
+      AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL)
+      AND link_id IS NULL AND link_operation_id IS NULL AND NOT ${sql.unsafe(OWES_ACK)}`;
     const ended = yield* sql<{
       readonly attach_id: string;
       readonly step: string | null;
       readonly expected_sign_pub: string;
     }>`SELECT attach_id, step, expected_sign_pub FROM disposable_machines
-      WHERE final_at IS NOT NULL AND max(final_at, coalesce(pen_removed_at, final_at)) < ${cutoff}
-        AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL)
-        AND link_id IS NULL AND link_operation_id IS NULL AND NOT ${sql.unsafe(OWES_ACK)}
-      ORDER BY final_at LIMIT ${PRUNE_LIMIT}`;
+      WHERE ${prunable} ORDER BY final_at LIMIT ${PRUNE_LIMIT}`;
     if (ended.length === 0) return;
     // A released record never had an admit: it goes only once Pen's view shows its key absent.
     const view = yield* Effect.cached(pen.members);
@@ -621,8 +623,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             Effect.gen(function* () {
               const deleted =
                 yield* sql`DELETE FROM disposable_machines WHERE attach_id = ${attachId}
-                AND final_at IS NOT NULL AND link_id IS NULL AND link_operation_id IS NULL
-                AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL) RETURNING attach_id`;
+                AND ${prunable} RETURNING attach_id`;
               if (deleted.length === 0) return;
               yield* sql`DELETE FROM disposable_machine_requests WHERE attach_id = ${attachId}`;
               yield* audit(attachId, "hub.machine_prune", "deleted");
