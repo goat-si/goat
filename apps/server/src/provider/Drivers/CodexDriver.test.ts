@@ -9,6 +9,7 @@ import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
@@ -120,8 +121,12 @@ it.layer(layerTest)("CodexDriver", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const paths: Array<string | undefined> = [];
+        const homes: Array<string | undefined> = [];
         const observedSpawner = ChildProcessSpawner.make((command) => {
-          if (ChildProcess.isStandardCommand(command)) paths.push(command.options.env?.PATH);
+          if (ChildProcess.isStandardCommand(command)) {
+            paths.push(command.options.env?.PATH);
+            homes.push(command.options.env?.CODEX_HOME);
+          }
           return spawner.spawn(command);
         });
         const root = yield* fs.makeTempDirectoryScoped();
@@ -132,7 +137,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
           yield* fs.writeFileString(NodePath.join(dir, "codex"), "#!/bin/sh\n");
           yield* fs.chmod(NodePath.join(dir, "codex"), 0o755);
         }
-        const host = { PATH: oldBin };
+        const host: NodeJS.ProcessEnv = { PATH: oldBin };
         const create = (override: boolean) =>
           CodexDriver.create({
             instanceId: ProviderInstanceId.make(override ? "path-override" : "path-inherit"),
@@ -144,6 +149,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
             config: { ...CodexDriver.defaultConfig(), binaryPath: "codex" },
           }).pipe(
             Effect.provideService(HostProcess.Environment, host),
+            Effect.provideService(HostProcess.HomeDirectory, root),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
           );
         const inherited = yield* create(false);
@@ -152,11 +158,23 @@ it.layer(layerTest)("CodexDriver", (it) => {
         expect(first.update?.executable).toBe(NodePath.join(oldBin, "codex"));
         expect(yield* inherited.snapshot.resolveMaintenance()).toBe(first);
         host.PATH = newBin;
+        host.CODEX_HOME = NodePath.join(root, "other");
         expect((yield* inherited.snapshot.resolveMaintenance()).update?.executable).toBe(
           NodePath.join(newBin, "codex"),
         );
         yield* inherited.snapshot.refresh;
         expect(paths.at(-1)).toBe(newBin);
+        expect(homes.at(-1)).toBe(NodePath.join(root, ".codex"));
+        const beforeGeneration = homes.length;
+        yield* inherited.textGeneration
+          .generateThreadTitle({
+            cwd: root,
+            message: "test",
+            modelSelection: createModelSelection(inherited.instanceId, "gpt-test"),
+          })
+          .pipe(Effect.exit);
+        expect(homes.length).toBeGreaterThan(beforeGeneration);
+        expect(homes.at(-1)).toBe(NodePath.join(root, ".codex"));
         yield* overridden.snapshot.refresh;
         expect(paths.at(-1)).toBe(oldBin);
         expect((yield* inherited.snapshot.resolveMaintenance()).update?.executable).toBe(

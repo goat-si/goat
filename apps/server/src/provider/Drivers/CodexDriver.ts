@@ -182,18 +182,22 @@ export const CodexDriver: ProviderDriver<
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const baseEnvironment = yield* HostProcess.Environment;
     const homeDirectory = yield* HostProcess.HomeDirectory;
-    const currentEnvironment = Effect.suspend(() =>
+    const mergedEnvironment = Effect.suspend(() =>
       mergeProviderInstanceEnvironment(environment, baseEnvironment),
     ).pipe(
       Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
       Effect.map((env) => ({ ...env })),
     );
-    const processEnv = { ...(yield* currentEnvironment) };
+    const processEnv = { ...(yield* mergedEnvironment) };
     const environmentHome = processEnv.CODEX_HOME;
     const homeLayout = yield* resolveCodexHomeLayout(
       !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
         : config,
+    );
+    const pinnedHome = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+    const currentEnvironment = mergedEnvironment.pipe(
+      Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
     );
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     const stampIdentity = withInstanceIdentity({
@@ -218,7 +222,7 @@ export const CodexDriver: ProviderDriver<
       ...config,
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
-      homePath: homeLayout.effectiveHomePath ?? "",
+      homePath: pinnedHome,
     } satisfies CodexSettings;
     const maintenanceForEnvironment = (env: NodeJS.ProcessEnv) =>
       resolveProviderMaintenanceCapabilitiesEffect(
@@ -272,7 +276,7 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        config: { ...config, homePath: homeLayout.sharedHomePath },
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
