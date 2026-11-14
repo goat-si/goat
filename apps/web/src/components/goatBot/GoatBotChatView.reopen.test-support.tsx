@@ -112,7 +112,9 @@ export async function verifySidebarReopen({
       turnItem(threadRef.threadId, "catch-up", "assistant", "Catch-up reply", 4),
       3,
     );
-    expect(status.textContent).toMatch(/Research replied\.|New reply from Research\./);
+    expect(status.textContent?.match(/Research replied\.|New reply from Research\./g)).toHaveLength(
+      1,
+    );
     expect(changes).toHaveLength(1);
     await expect
       .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
@@ -134,7 +136,9 @@ export async function verifySidebarReopen({
       turnItem(threadRef.threadId, "new-reply", "assistant", "New reply", 5),
       4,
     );
-    expect(status.textContent).toMatch(/Research replied\.|New reply from Research\./);
+    expect(status.textContent?.match(/Research replied\.|New reply from Research\./g)).toHaveLength(
+      1,
+    );
     expect(status.textContent).not.toBe(catchUpClause);
     expect(changes).toHaveLength(2);
     await expect
