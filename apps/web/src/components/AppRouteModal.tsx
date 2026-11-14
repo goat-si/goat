@@ -41,7 +41,7 @@ export function AppRouteModal({ label, children }: { label: string; children: Re
       <DialogPrimitive.Portal>
         <DialogBackdrop />
         <DialogPrimitive.Viewport
-          className="fixed inset-0 z-modal flex items-center justify-center sm:p-6 lg:p-10"
+          className="fixed inset-0 z-modal flex items-center justify-center [-webkit-app-region:no-drag] sm:p-6 lg:p-10"
           onPointerDown={(event) => {
             backdropPressRef.current = event.target === event.currentTarget;
           }}

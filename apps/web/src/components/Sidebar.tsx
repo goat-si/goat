@@ -1,9 +1,9 @@
+import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
-import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { threadContextDragListProps, useThreadContextDrag } from "./sidebar/useThreadContextDrag";
 import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
@@ -223,6 +223,7 @@ import {
 import { SIDEBAR_DRAG_DISTANCE, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { sameHolds, sameKeys } from "./Sidebar.equality";
+import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
 import {
   pickSnoozePreset,
   resolveSnoozePresets,
@@ -874,11 +875,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? scopedThreadKey(renamingThreadRef)
       : null;
   const [renamingTitle, setRenamingTitle] = useState("");
+  const renamingOriginalTitleRef = useRef("");
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
+  const shiftGuardRef = useRef<ReturnType<typeof createSidebarShiftGuard> | null>(null);
   const [dragState, setDragState] = useState<{
     readonly activeKey: string;
     readonly activeSection: SidebarSection;
@@ -1275,9 +1278,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (!readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)) return;
     setRenamingThreadRef(threadRef);
     setRenamingTitle(title);
+    renamingOriginalTitleRef.current = title;
   };
   const cancelThreadRename = () => setRenamingThreadRef(null);
-  const commitThreadRename = (threadRef: ScopedThreadRef, title: string, originalTitle: string) => {
+  const commitThreadRename = (threadRef: ScopedThreadRef, title: string) => {
+    const originalTitle = renamingOriginalTitleRef.current;
     void (async () => {
       if (!readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)) return;
       const trimmed = title.trim();
@@ -1438,13 +1443,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const motion = createSidebarListMotion(node);
     listMotionRef.current = motion;
     motion.update(false);
+    const shiftGuard = createSidebarShiftGuard(node);
+    shiftGuardRef.current = shiftGuard;
     return () => {
       // Search replaces this list while the Sidebar stays mounted, and a drag
       // whose rows are gone can never drop. The compiler memoizes this callback
       // with no deps (it reads only refs), so the cleanup runs only on unmount.
       dragSensorRef.current?.cancel();
       motion.dispose();
+      shiftGuard.dispose();
       if (listMotionRef.current === motion) listMotionRef.current = null;
+      if (shiftGuardRef.current === shiftGuard) shiftGuardRef.current = null;
       if (threadListRef.current === node) threadListRef.current = null;
     };
   };
@@ -1709,6 +1718,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Cache on both fields so layout-key changes trigger the effect even when animate is unchanged.
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
   useLayoutEffect(() => {
+    shiftGuardRef.current?.update();
     listMotionRef.current?.update(listMotionPass.animate);
   }, [listMotionPass]);
   const handleThreadDragOver = (event: DragOverEvent) => {
@@ -2791,7 +2801,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
-      <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         hidden={botSelected}
@@ -2932,6 +2941,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 </p>
               </>
             )
+          ) : null}
+          {!isSearchingThreads &&
+          visibleDraftSessionCount === 0 &&
+          pinnedThreads.length +
+            activeThreads.length +
+            priorityThreads.length +
+            workingThreads.length +
+            snoozedThreads.length ===
+            0 &&
+          (settledCount === 0 || scopedProjectGroups.length > 0) ? (
+            <SidebarEmptyState
+              hasProjects={projects.length > 0}
+              scopeCount={scopedProjectGroups.length}
+              scopeName={scopedProjectGroup?.displayName}
+              hasSettled={settledCount > 0}
+              onAddProject={openAddProjectCommandPalette}
+              onShowAll={() => setProjectScopeKeys([])}
+            />
           ) : null}
           {!isSearchingThreads ? (
             <TooltipProvider
@@ -3303,12 +3330,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           type="button"
                           data-sidebar-row="settled:more"
                           data-sidebar-parent="shelf:settled"
-                          disabled={olderSettledShelf.loading}
+                          aria-disabled={olderSettledShelf.loading}
                           onClick={() => {
+                            if (olderSettledShelf.loading) return;
                             olderSettledShelf.retry();
                             showMoreSettled();
                           }}
-                          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground disabled:cursor-default redesign:text-sidebar-muted-foreground"
+                          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground aria-disabled:cursor-default redesign:text-sidebar-muted-foreground"
                         >
                           {/* The New design keeps plus for "add" and uses a chevron to reveal more. */}
                           <PlusIcon aria-hidden className="size-4 shrink-0 redesign:hidden" />
@@ -3328,36 +3356,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 </SortableContext>
               </DndContext>
             </TooltipProvider>
-          ) : null}
-          {!isSearchingThreads &&
-          visibleDraftSessionCount === 0 &&
-          pinnedThreads.length +
-            activeThreads.length +
-            priorityThreads.length +
-            snoozedThreads.length +
-            settledCount ===
-            0 ? (
-            <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {projects.length === 0 ? (
-                <>
-                  <span>No projects yet</span>
-                  <button
-                    type="button"
-                    onClick={openAddProjectCommandPalette}
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-                  >
-                    <PlusIcon className="-mx-0.5 size-3" />
-                    Add project
-                  </button>
-                </>
-              ) : scopedProjectGroups.length > 1 ? (
-                "No threads in these projects yet"
-              ) : scopedProjectGroup ? (
-                `No threads in ${scopedProjectGroup.displayName} yet`
-              ) : (
-                "No threads yet"
-              )}
-            </div>
           ) : null}
         </SidebarGroup>
       </SidebarContent>
