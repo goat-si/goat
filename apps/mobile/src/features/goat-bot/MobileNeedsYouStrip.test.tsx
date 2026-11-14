@@ -645,6 +645,7 @@ it("offline, a deleted bot's Restore stays in view, disabled with the reason; ba
   expect(restore()?.getAttribute("aria-description")).toBe(
     "Unavailable while Studio Mac is offline",
   );
+  expect(container.textContent).toContain("Restore: unavailable while Studio Mac is offline");
   await showPhoneList({ connected: true, mayManage: true, deleted: [gone] });
   expect(restore()?.disabled).toBe(false);
 });

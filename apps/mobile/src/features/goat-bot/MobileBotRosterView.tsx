@@ -263,6 +263,15 @@ export function MobileBotRosterView(props: {
           <Text accessibilityRole="header" className="px-4 pt-3 text-foreground-muted">
             Deleted bots
           </Text>
+          {props.members.canRestore && props.members.unavailable !== undefined ? (
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              className="px-4 text-sm text-foreground-muted"
+            >
+              Restore: {props.members.unavailable.replace(/^Unavailable/, "unavailable")}
+            </Text>
+          ) : null}
           {props.members.deleted.map((profile) => (
             <View key={profile.botId} className="flex-row items-center pr-4">
               <Pressable
@@ -307,16 +316,28 @@ export function MobileBotRosterView(props: {
       ) : null}
       <View className="px-4 py-3">
         {props.members ? (
-          <Button
-            label="New bot"
-            icon="plus"
-            disabled={!props.members.canCreate}
-            fullWidth
-            {...(props.members.unavailable === undefined
-              ? {}
-              : { accessibilityHint: props.members.unavailable })}
-            onPress={props.members.onNewBot}
-          />
+          <>
+            <Button
+              label="New bot"
+              icon="plus"
+              disabled={!props.members.canCreate}
+              fullWidth
+              {...(props.members.unavailable === undefined
+                ? {}
+                : { accessibilityHint: props.members.unavailable })}
+              onPress={props.members.onNewBot}
+            />
+            {props.members.unavailable === undefined ? null : (
+              // The hint says it to a screen reader; this says it on screen.
+              <Text
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                className="pt-2 text-center text-sm text-foreground-muted"
+              >
+                {props.members.unavailable}
+              </Text>
+            )}
+          </>
         ) : (
           <Button
             label="New bot · Coming soon"

@@ -658,4 +658,6 @@ it("while the computer is offline, New bot stays New bot, unavailable, and says 
   expect(add?.textContent).toBe("New bot");
   expect(add?.disabled).toBe(true);
   expect(add?.getAttribute("aria-description")).toBe("Unavailable while Studio Mac is offline");
+  // A sighted person reads the reason too, under the button and in the deleted bots' section.
+  expect(container.textContent).toContain("Unavailable while Studio Mac is offline");
 });
