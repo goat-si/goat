@@ -2121,3 +2121,19 @@ it.live("keeps another app's bound worktree even when its database becomes unrea
     }),
   ),
 );
+
+it.live("skips a stored worktree path whose parent is a regular file", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const fixture = yield* cleanupFixture();
+      const legacyRoot = `${fixture.config.worktreesDir}/legacy-root`;
+      yield* fixture.fs.writeFileString(legacyRoot, "");
+      fixture.setThreads([
+        shell({ branch: "feature", worktreePath: `${legacyRoot}/stored-workspace` }),
+      ]);
+      const report = yield* fixture.service.runNow;
+      expect(report.entries).toEqual([]);
+      expect(report.counts).toEqual({ removed: 0, kept: 0, failed: 0 });
+    }),
+  ),
+);
