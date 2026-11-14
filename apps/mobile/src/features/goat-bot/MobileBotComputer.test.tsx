@@ -17,7 +17,8 @@ const state = vi.hoisted(() => ({
   requested: vi.fn(),
   /** When set, the server answers by the bot each read asks for, as channel.listTasks does. */
   tasksByBot: null as Record<string, unknown[]> | null,
-  members: undefined as boolean | undefined,
+  /** Each computer's goatBotMembers capability; a computer missing here has no config yet. */
+  members: {} as Record<string, boolean>,
 }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
@@ -28,10 +29,10 @@ vi.mock("../../state/channels", () => ({
   },
 }));
 vi.mock("../../state/entities", () => ({
-  useEnvironmentServerConfig: () =>
-    state.members === undefined
+  useEnvironmentServerConfig: (environmentId: string | null) =>
+    environmentId === null || state.members[environmentId] === undefined
       ? null
-      : { environment: { capabilities: { goatBotMembers: state.members } } },
+      : { environment: { capabilities: { goatBotMembers: state.members[environmentId] } } },
 }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: { input?: { botId?: string } } | null) => ({
@@ -75,7 +76,7 @@ function setup(data: unknown, cause: unknown = null) {
   state.data = data;
   state.cause = cause;
   state.tasksByBot = null;
-  state.members = undefined;
+  state.members = {};
   state.refresh.mockReset();
   state.requested.mockReset();
 }
@@ -157,7 +158,7 @@ it("a member's tab lists only that bot's work", async () => {
 
 it("the main bot's card lists only the main bot's work on a server with member bots", async () => {
   setup(null);
-  state.members = true;
+  state.members = { env: true };
   state.tasksByBot = {
     main: [task("a", "Move the build to Node 24", {})],
     scout: [task("b", "Pick the release branch", {})],
@@ -169,7 +170,7 @@ it("the main bot's card lists only the main bot's work on a server with member b
 
 it("an older server without member bots is asked as before, without a bot", async () => {
   setup(null);
-  state.members = false;
+  state.members = { env: false };
   state.tasksByBot = { main: [task("a", "Move the build to Node 24", {})] };
   await render();
   expect(container.textContent).toContain("Move the build to Node 24");
@@ -182,20 +183,27 @@ it("an older server without member bots is asked as before, without a bot", asyn
 it("follows the computer shown: main is named only where that computer has member bots", async () => {
   setup(null);
   state.tasksByBot = { main: [], scout: [] };
-  state.members = true;
+  const older = EnvironmentId.make("older");
+  state.members = { env: true, older: false };
   await render();
-  expect(state.requested).toHaveBeenLastCalledWith(
-    expect.objectContaining({ input: expect.objectContaining({ botId: "main" }) }),
-  );
-  state.members = false;
-  await render({ environmentId: EnvironmentId.make("older") });
   expect(state.requested).toHaveBeenLastCalledWith({
-    environmentId: EnvironmentId.make("older"),
+    environmentId,
+    input: expect.objectContaining({ botId: "main" }),
+  });
+  await render({ environmentId: older });
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId: older,
     input: expect.not.objectContaining({ botId: expect.anything() }),
+  });
+  await render({ environmentId });
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId,
+    input: expect.objectContaining({ botId: "main" }),
   });
 });
 
 it("reads the machines again when the bot's work changes while Home is open", async () => {
+  setup({ tasks: [] });
   await render({ workKey: "t1:running" });
   expect(state.refresh).toHaveBeenCalledTimes(1);
   await render({ workKey: "t1:running" });
