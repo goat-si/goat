@@ -1,4 +1,7 @@
-import { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
+import {
+  CodexProviderCapabilitiesV2,
+  normalizeCodexThreadLoadModelSelection,
+} from "./CodexCapabilities.ts";
 export { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
 import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
@@ -6615,7 +6618,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               completedAt: yield* DateTime.now,
               stalledRetry: state,
               stalledRateLimited: rateLimited,
-              failureErrorInfo: errorInfo ?? undefined,
+              ...(errorInfo == null ? {} : { failureErrorInfo: errorInfo }),
             });
             if (!finalized) return;
             const nativeThreadId = yield* getNativeThreadId(context.providerThread);
@@ -7268,6 +7271,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
+          normalizeThreadLoadModelSelection: normalizeCodexThreadLoadModelSelection,
           reopenAfterClose: true,
           ...(modelStatus === undefined ? {} : { modelStatus }),
           ...makeCodexLiveWork({

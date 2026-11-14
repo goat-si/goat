@@ -1,4 +1,4 @@
-import type { OrchestrationV2ProviderCapabilities } from "@goat/contracts";
+import type { ModelSelection, OrchestrationV2ProviderCapabilities } from "@goat/contracts";
 
 export const CodexProviderCapabilitiesV2 = {
   sessions: {
@@ -94,3 +94,9 @@ export const CodexProviderCapabilitiesV2 = {
     enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
+
+export function normalizeCodexThreadLoadModelSelection(selection: ModelSelection): ModelSelection {
+  const { options, ...rest } = selection;
+  const loadOptions = options?.filter((option) => option.id !== "reasoningEffort");
+  return { ...rest, ...(loadOptions?.length ? { options: loadOptions } : {}) };
+}
