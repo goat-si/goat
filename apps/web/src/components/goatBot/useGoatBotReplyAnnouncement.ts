@@ -37,19 +37,18 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
       speech.consumed.add(row.id);
       newest = row;
     }
-    if (source.baselineIds === null) {
-      if (newest !== null) {
-        const previous = speech.pending.get("reply");
-        let latest = previous ?? newest;
-        for (const id of source.sourceIds) {
-          if (previous && id === previous.id) latest = previous;
-          if (id === newest.id) latest = newest;
-        }
-        speech.pending.set("reply", latest);
+    const previous = speech.pending.get("reply");
+    let row = previous ?? newest;
+    if (previous && newest) {
+      for (const id of source.sourceIds) {
+        if (id === previous.id) row = previous;
+        if (id === newest.id) row = newest;
       }
+    }
+    if (source.baselineIds === null) {
+      if (row !== null) speech.pending.set("reply", row);
       return;
     }
-    const row = newest ?? speech.pending.get("reply") ?? null;
     speech.pending.clear();
     if (row !== null) announce(row);
   });
