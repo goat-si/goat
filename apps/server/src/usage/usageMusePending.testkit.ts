@@ -21,7 +21,7 @@ export function registerMusePendingTest(
   layerService: typeof Main.layerService,
   claudeLine: typeof Main.claudeLine,
 ) {
-  it.live("returns other providers' usage while Muse home discovery is still pending", () =>
+  it.effect("returns other providers' usage while Muse home discovery is still pending", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
