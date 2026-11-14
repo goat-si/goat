@@ -232,7 +232,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     if (
       next.limits.resetCredits &&
       (!previousCredit ||
-        Date.parse(next.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt))
+        (next.redeem !== null && previousCredit.redeem === null) ||
+        (Boolean(next.redeem) === Boolean(previousCredit.redeem) &&
+          Date.parse(next.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt)))
     ) {
       creditSources.set(key, next);
     }

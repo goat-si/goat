@@ -114,3 +114,47 @@ it("redeems through the source of the fresher native credit report", () => {
     creditId: "hub-credit",
   });
 });
+
+it("uses the redeemable report's credits when a fresher routed login cannot redeem", () => {
+  const direct = provider({
+    instanceId: ProviderInstanceId.make("direct"),
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt,
+      windows: [window],
+      resetCredits: {
+        availableCount: 1,
+        options: [
+          { creditId: "direct-grant", label: "Direct", description: "Direct", availableCount: 1 },
+        ],
+      },
+    },
+  });
+  const routed = provider({
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt: "2026-09-03T11:30:00.000Z",
+      windows: [],
+      quotaPoolRoute: { provider: "openai" },
+      localAccount: {
+        checkedAt: "2026-09-03T11:30:00.000Z",
+        windows: [window],
+        resetCredits: { availableCount: 2, nextCreditId: "routed-grant" },
+        redeemable: false,
+      },
+    },
+  });
+  for (const providers of [
+    [direct, routed],
+    [routed, direct],
+  ]) {
+    const [account] = collectLimitAccounts(
+      new Map([[EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers } }]]),
+    );
+    expect(account?.limits.resetCredits).toEqual(direct.usageLimits?.resetCredits);
+    expect(account?.redeem?.input).toEqual({ instanceId: "direct" });
+    expect(
+      resetCreditChoices(account!.limits.resetCredits!, account!.redeem!.input, now)[0]?.input,
+    ).toEqual({ instanceId: "direct", creditId: "direct-grant" });
+  }
+});
