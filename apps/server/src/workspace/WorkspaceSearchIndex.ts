@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - normalize paths without adding services to the search index layer.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
-import * as NodeFSP from "node:fs/promises";
 
 import type {
   DirItem,
@@ -15,7 +14,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -321,35 +319,17 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
       maxOutputBytes: 16 * 1024 * 1024,
     })
     .pipe(
-      Effect.catchIf(
-        (cause) =>
-          cause._tag === "VcsProcessSpawnError" &&
-          cause.cause instanceof PlatformError.PlatformError &&
-          cause.cause.reason._tag === "NotFound",
-        (cause) =>
-          Effect.tryPromise(() => NodeFSP.stat(cwd)).pipe(
-            Effect.map((stat) => (stat.isDirectory() ? null : cause)),
-            Effect.orElseSucceed(() => cause),
-            Effect.flatMap((error) => (error === null ? Effect.succeed(null) : Effect.fail(error))),
-          ),
-      ),
-      Effect.mapError(
-        (cause) =>
-          new WorkspaceSearchIndexCreateFailed({
-            cwd,
-            reason: "Could not list Git ignored paths.",
-            cause,
-          }),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not list Git ignored paths; continuing without them.", cause).pipe(
+          Effect.as(null),
+        ),
       ),
     );
   if (result === null) return new Set<string>();
-  if (result.exitCode !== 0 && /not a git repository/i.test(result.stderr))
+  if (result.exitCode !== 0 || result.stdoutTruncated || result.stderrTruncated) {
+    yield* Effect.logWarning("Could not list Git ignored paths; continuing without them.");
     return new Set<string>();
-  if (result.exitCode !== 0 || result.stdoutTruncated)
-    return yield* new WorkspaceSearchIndexCreateFailed({
-      cwd,
-      reason: "Could not list Git ignored paths.",
-    });
+  }
   return new Set(
     result.stdout
       .split("\0")
