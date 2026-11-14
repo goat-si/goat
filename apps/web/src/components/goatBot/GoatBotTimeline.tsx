@@ -13,6 +13,7 @@ import { Link } from "@tanstack/react-router";
 import { flushSync } from "react-dom";
 import {
   ArrowUpLeftIcon,
+  CheckIcon,
   ChevronDownIcon,
   CopyIcon,
   CircleAlertIcon,
@@ -567,7 +568,12 @@ export function GoatBotTimeline({
                       />
                     }
                   >
-                    <CopyIcon className="size-4" />
+                    {/* The tooltip closes on the click, so the icon is what shows the copy worked. */}
+                    {isCopied && copiedRow === row.id ? (
+                      <CheckIcon className="size-4" />
+                    ) : (
+                      <CopyIcon className="size-4" />
+                    )}
                   </TooltipTrigger>
                   <TooltipPopup>
                     {isCopied && copiedRow === row.id ? "Copied" : "Copy"}
