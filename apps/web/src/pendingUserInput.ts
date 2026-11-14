@@ -5,6 +5,9 @@ import {
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
 import type {
+  PreviewAnnotationContextRecord,
+  PreviewAnnotationPayload,
+  ReviewCommentContextRecord,
   ThreadContextRecord,
   UserInputQuestion as ProviderUserInputQuestion,
 } from "@goat/contracts";
@@ -23,19 +26,51 @@ export {
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 
 import { collectInlineContextIds } from "./lib/composerContextReferences";
+import {
+  previewAnnotationContextRecord,
+  reviewCommentContextRecord,
+} from "./lib/composerContextRecords";
+import type { ReviewCommentContext } from "./reviewCommentContext";
 
 type UserInputQuestion = ProviderUserInputQuestion & { readonly required?: boolean | undefined };
+
+type AnswerContextRecord =
+  | ThreadContextRecord
+  | ReviewCommentContextRecord
+  | PreviewAnnotationContextRecord;
+
+// Diff comments and preview annotations land in the thread draft even when their chip is in an answer.
+export function answerContextRecords(
+  questionDraft: { threadContexts: ReadonlyArray<ThreadContextRecord> } | null | undefined,
+  threadDraft:
+    | {
+        reviewComments: ReadonlyArray<ReviewCommentContext>;
+        previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
+      }
+    | null
+    | undefined,
+): AnswerContextRecord[] {
+  return [
+    ...(questionDraft?.threadContexts ?? []),
+    ...(threadDraft?.reviewComments ?? []).map(reviewCommentContextRecord),
+    ...(threadDraft?.previewAnnotations ?? []).map((annotation) =>
+      previewAnnotationContextRecord(annotation),
+    ),
+  ];
+}
 
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
   answer: unknown,
-  threadContexts: ReadonlyArray<ThreadContextRecord>,
+  records: ReadonlyArray<AnswerContextRecord>,
 ) {
-  if (typeof answer !== "string" || threadContexts.length === 0) return answer;
-  const recordsById = new Map(threadContexts.map((record) => [record.contextId, record]));
+  if (typeof answer !== "string" || records.length === 0) return answer;
+  const recordsById = new Map(records.map((record) => [record.contextId, record]));
   return replaceComposerContextReferences(answer, (reference) => {
-    const record = reference.kind === "thread" ? recordsById.get(reference.contextId) : undefined;
-    if (!record) return reference.source;
+    const record = recordsById.get(reference.contextId);
+    if (record?.kind !== reference.kind) return reference.source;
+    if (record.kind !== "thread")
+      return projectComposerContextForProvider({ text: reference.source, records: [record] });
     // Remote thread tools need the SSH alias as well as the ID; a local-only link loses it.
     return record.host === undefined
       ? formatThreadLink(record.threadId, reference.label)

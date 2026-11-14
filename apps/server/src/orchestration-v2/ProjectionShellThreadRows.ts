@@ -32,6 +32,7 @@ export type ShellThreadRow = {
   readonly latest_run_completion_notification: string | null;
   readonly blocking_run_completion_notification: string | null;
   readonly latest_run_stop_requested: number;
+  readonly latest_run_background_wake: number;
   readonly latest_run_start_held: number;
   readonly active_run_id: string | null;
   readonly active_run_status: string | null;
@@ -44,6 +45,7 @@ export type ShellThreadRow = {
   readonly blocking_run_started_at: string | null;
   readonly blocking_run_completed_at: string | null;
   readonly blocking_run_stop_requested: number;
+  readonly blocking_run_background_wake: number;
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly pending_secret_request_payload_json: string | null;
@@ -93,6 +95,25 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
   const isSilentShellRun = (alias: string) =>
     sql`(${sql.literal(alias)}.status <> 'failed' AND ${isIdleCompactionRun(alias)})`;
 
+  // Mirrors isBackgroundWakeRunForShell. Stored sources keep the legacy encoding, where a
+  // command is background_command and a subagent is background_task with work "subagent".
+  const isBackgroundWakeShellRun = (alias: string) => {
+    const run = sql.literal(alias);
+    return sql`EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_messages wake
+      WHERE wake.message_id = json_extract(${run}.payload_json, '$.userMessageId')
+        AND json_extract(wake.payload_json, '$.notification.source.kind')
+          IN ('background_task', 'background_command', 'command', 'monitor')
+        AND json_extract(wake.payload_json, '$.notification.source.work') IS NULL
+        AND json_extract(wake.payload_json, '$.notification.outcome') = 'updated'
+        AND json_extract(wake.payload_json, '$.delegatedCompletion') IS NULL
+    ) AND NOT EXISTS (
+      SELECT 1 FROM orchestration_v2_projection_messages steer
+      WHERE steer.run_id = ${run}.run_id
+        AND json_extract(steer.payload_json, '$.createdBy') = 'user'
+    )`;
+  };
+
   const selectShellThreadRows = (
     threadId?: ThreadId,
     {
@@ -135,6 +156,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 WHERE stop_request.thread_id = t.thread_id AND stop_request.run_id = presented.run_id
                   AND stop_request.type = 'run_interrupt_request'
               ) AS latest_run_stop_requested,
+              ${isBackgroundWakeShellRun("presented")} AS latest_run_background_wake,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -192,6 +214,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 WHERE stop_request.thread_id = t.thread_id AND stop_request.run_id = blocked.run_id
                   AND stop_request.type = 'run_interrupt_request'
               ) AS blocking_run_stop_requested,
+              ${isBackgroundWakeShellRun("blocked")} AS blocking_run_background_wake,
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item

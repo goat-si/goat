@@ -21,7 +21,10 @@ vi.mock("../../composerDraftStore", () => ({
   useComposerDraftStore: () => undefined,
 }));
 vi.mock("../../state/entities", () => ({
+  useProject: () => null,
+  useServerConfigs: () => new Map(),
   useThreadShell: () => null,
+  useQuietThreadShell: () => null,
   useThreadProjection: () => null,
 }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { providersValueAtom: () => null } }));
@@ -34,6 +37,10 @@ vi.mock("../ProjectScriptsControl", () => ({ default: () => null }));
 vi.mock("./OpenInPicker", () => ({ OpenInPicker: () => null }));
 vi.mock("./ThreadAutomationsPanel", () => ({ ThreadAutomationsPanel: () => null }));
 vi.mock("./ThreadRelationshipsControl", () => ({ ThreadRelationshipsPanel: () => null }));
+vi.mock("./ThreadDetailsThreadPrRows", () => ({
+  ThreadDetailsThreadPrRows: () => null,
+  threadShellHasPullRequest: () => false,
+}));
 vi.mock("./ThreadDetailsCard", () => ({
   ThreadDetailsCard: ({ children }: { children: (density: "full") => ReactNode }) => (
     <div>{children("full")}</div>

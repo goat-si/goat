@@ -29,6 +29,8 @@ import { act, render } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "../../lib/terminalContext";
 
+import { formatInlineContextReference } from "../../lib/composerContextReferences";
+import { threadContextRecord, threadContextReference } from "../../lib/composerContextRecords";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { useQueuedRunEdit } from "./useQueuedRunEdit";
@@ -241,8 +243,8 @@ const RUN = RunId.make("run-1");
 
 type HookResult = ReturnType<typeof useQueuedRunEdit>;
 
-function projection(runs: ReadonlyArray<RunStatus>) {
-  return { runs, messages: [] } as unknown as ThreadStructure;
+function projection(runs: ReadonlyArray<RunStatus>, messages: ReadonlyArray<unknown>) {
+  return { runs, messages } as unknown as ThreadStructure;
 }
 
 function setRuns(ref: ScopedThreadRef, status: string) {
@@ -254,6 +256,7 @@ function Harness(props: {
   readonly threadDetailRef: ScopedThreadRef | null;
   readonly runStatus: string;
   readonly hookRef: RefObject<HookResult | null>;
+  readonly messages: ReadonlyArray<unknown>;
 }) {
   const result = useQueuedRunEdit({
     environmentId: ENV,
@@ -262,7 +265,9 @@ function Harness(props: {
     threadDraftTarget: props.threadRef,
     activeThreadId: props.threadRef.threadId,
     serverProjection:
-      props.threadDetailRef === null ? null : projection([{ id: RUN, status: props.runStatus }]),
+      props.threadDetailRef === null
+        ? null
+        : projection([{ id: RUN, status: props.runStatus }], props.messages),
     promptRef: { current: "" },
     composerRef: { current: null },
   });
@@ -295,6 +300,7 @@ function view(
   runStatus: string,
   hook: { current: HookResult | null },
   threadDetailRef: ScopedThreadRef | null = threadRef,
+  messages: ReadonlyArray<unknown> = [],
 ) {
   return (
     <AppAtomRegistryProvider>
@@ -303,6 +309,7 @@ function view(
         threadDetailRef={threadDetailRef}
         runStatus={runStatus}
         hookRef={hook}
+        messages={messages}
       />
       {threadDetailRef === null ? null : <ThreadReader threadRef={threadDetailRef} />}
     </AppAtomRegistryProvider>
@@ -468,6 +475,54 @@ describe("useQueuedRunEdit", () => {
     expect(
       useComposerDraftStore.getState().getComposerDraft(target)?.terminalContexts,
     ).toHaveLength(1);
+  });
+
+  it("opens an edit with only thread records its text still mentions", async () => {
+    const { hook } = setup();
+    const thread = threadContextRecord(THREAD_B, "Support Any File Uploads");
+    const unreferenced = threadContextRecord(THREAD_A, "Removed earlier");
+    const messageId = MessageId.make("message-1");
+    const text = `wait for ${formatInlineContextReference(threadContextReference(thread))}`;
+    const messages = [
+      { id: messageId, text, context: { version: 1, records: [thread, unreferenced] } },
+    ];
+    await using _screen = await render(view(THREAD_A, "queued", hook, THREAD_A, messages));
+
+    await act(() => requireHook(hook).beginEdit({ runId: RUN, messageId, text, attachments: [] }));
+
+    const draft = useComposerDraftStore.getState().getComposerDraft(requireHook(hook).draftTarget);
+    expect(draft?.prompt).toBe(text);
+    expect(draft?.threadContexts).toEqual([thread]);
+  });
+
+  it("saves only the thread mentions still in the edited message", async () => {
+    const { hook } = setup();
+    mocks.editQueuedRun.mockResolvedValue({ _tag: "Success" });
+    const kept = threadContextRecord(THREAD_B, "Kept");
+    const removed = threadContextRecord(THREAD_A, "Removed");
+    const messageId = MessageId.make("message-1");
+    const text = [kept, removed]
+      .map((record) => formatInlineContextReference(threadContextReference(record)))
+      .join(" and ");
+    const messages = [{ id: messageId, text, context: { version: 1, records: [kept, removed] } }];
+    await using _screen = await render(view(THREAD_A, "queued", hook, THREAD_A, messages));
+    await act(() => requireHook(hook).beginEdit({ runId: RUN, messageId, text, attachments: [] }));
+    const target = requireHook(hook).draftTarget;
+    await act(() => useComposerDraftStore.getState().setThreadContexts(target, [kept]));
+
+    const draft = useComposerDraftStore.getState().getComposerDraft(target);
+    await requireHook(hook).saveEdit(
+      { ...savedContent(draft?.prompt ?? ""), threadContexts: draft?.threadContexts ?? [] },
+      () => {},
+    );
+
+    expect(mocks.editQueuedRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          edit: expect.objectContaining({ context: { version: 1, records: [kept] } }),
+        }),
+      }),
+    );
   });
 
   it("keeps an open edit when the user leaves the thread and comes back", async () => {
