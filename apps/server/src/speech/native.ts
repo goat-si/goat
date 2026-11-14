@@ -117,7 +117,7 @@ process.on("message", async (message) => {
     });
   }
 });
-process.on("disconnect", () => process.exit(0));
+process.on("disconnect", () => process.kill(process.pid, "SIGKILL"));
 `;
 
 type Reply = {
