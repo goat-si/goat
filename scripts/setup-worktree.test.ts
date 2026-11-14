@@ -13,6 +13,7 @@ import {
   isCorepackLauncherMissing,
   pinnedNodeRunners,
   worktreeInstallCandidates,
+  vpSupportsVerifiedNodeDownload,
 } from "./setup-worktree.ts";
 
 describe("worktreeInstallCandidates", () => {
@@ -139,6 +140,62 @@ function setupFixture(
     cleanup: () => NodeFS.rmSync(root, { recursive: true, force: true }),
   };
 }
+
+it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "kills a timed-out probe and its descendant holding stdout open",
+  async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-probe-"));
+    const executable = NodePath.join(root, "vp");
+    const parentFile = NodePath.join(root, "parent");
+    const childFile = NodePath.join(root, "child");
+    const fifo = NodePath.join(root, "exit-pipe");
+    NodeChildProcess.execFileSync("mkfifo", [fifo]);
+    const reader = NodeChildProcess.spawn("cat", [fifo], { stdio: "ignore" });
+    const readerExited = new Promise<number | null>((resolve) => reader.on("exit", resolve));
+    let writer: number | undefined = NodeFS.openSync(fifo, "w");
+    NodeFS.writeFileSync(
+      executable,
+      `#!${process.execPath}
+const fs = require("node:fs");
+const cp = require("node:child_process");
+if (process.argv[2] === "child") {
+  fs.writeFileSync(${JSON.stringify(childFile)}, String(process.pid));
+  process.on("SIGTERM", () => {});
+  setTimeout(() => process.exit(0), 1600);
+} else {
+  fs.writeFileSync(${JSON.stringify(parentFile)}, String(process.pid));
+  process.on("SIGTERM", () => {});
+  const exitPipe = fs.openSync(${JSON.stringify(fifo)}, "w");
+  cp.spawn(process.execPath, [__filename, "child"], { stdio: ["ignore", "inherit", "inherit", exitPipe] });
+  process.stdout.write("vp v0.2.2\\n");
+  setTimeout(() => process.exit(0), 1600);
+}
+`,
+      { mode: 0o755 },
+    );
+    const pids: number[] = [];
+    try {
+      const result = vpSupportsVerifiedNodeDownload(400, executable);
+      for (const file of [parentFile, childFile])
+        pids.push(Number(NodeFS.readFileSync(file, "utf8")));
+      NodeFS.closeSync(writer);
+      writer = undefined;
+      assert.equal(await readerExited, 0);
+      assert.isFalse(result.supported);
+      assert.isTrue(result.timedOut);
+      for (const pid of pids)
+        assert.throws(() => process.kill(pid, 0), undefined, undefined, `process ${pid} survived`);
+    } finally {
+      if (writer !== undefined) NodeFS.closeSync(writer);
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 describe("worktree setup contract", () => {
   it("#2178 refuses an unsupported Node it cannot replace, before running any installer", () => {
@@ -434,10 +491,11 @@ describe("worktree setup contract", () => {
         preload,
         `const cp = require("node:child_process");
 const original = cp.spawnSync;
-cp.spawnSync = function (command, options) {
-  if (command === "vp --version") {
+cp.spawnSync = function (command, args, options) {
+  if (command === "vp" && args[0] === "--version") {
     require("node:fs").writeFileSync(process.env.SETUP_TEST_LOG + ".timeout", String(options.timeout));
-    return { status: null, stdout: "", error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
+    require("node:fs").writeSync(options.stdio[1], "vp v0.2.2\\n");
+    return { status: 0, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
   }
   return original.apply(this, arguments);
 };

@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
@@ -45,22 +46,47 @@ export function worktreeInstallCandidates(tools: {
 }
 
 // The 0.2.2 floor adds signed checksums; see docs/operations/development.md#worktrees.
-function vpSupportsVerifiedNodeDownload(): { supported: boolean; timedOut: boolean } {
-  const result = NodeChildProcess.spawnSync("vp --version", {
-    shell: true,
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(result.stdout?.split(/\r?\n/, 1)[0] ?? "");
-  const timedOut =
-    result.error !== undefined && "code" in result.error && result.error.code === "ETIMEDOUT";
-  if (result.status !== 0 || !match) return { supported: false, timedOut };
-  const [, major = "0", minor = "0", patch = "0"] = match;
-  return {
-    supported:
-      Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2),
-    timedOut,
-  };
+export function vpSupportsVerifiedNodeDownload(
+  timeout = 5_000,
+  command = "vp",
+): { supported: boolean; timedOut: boolean } {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-version-"));
+  const output = NodePath.join(directory, "stdout");
+  const fd = NodeFS.openSync(output, "w+");
+  try {
+    // Windows needs a shell for command shims; POSIX uses a group to clean up descendants.
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
+    const windows = process.platform === "win32";
+    const options: NodeChildProcess.SpawnSyncOptions & { detached: boolean } = {
+      shell: windows,
+      detached: !windows,
+      stdio: ["ignore", fd, "ignore"],
+      timeout,
+      killSignal: "SIGKILL",
+    };
+    const result = NodeChildProcess.spawnSync(command, ["--version"], options);
+    const timedOut =
+      result.error !== undefined && "code" in result.error && result.error.code === "ETIMEDOUT";
+    if (timedOut && !windows && result.pid) {
+      try {
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The process group has already exited.
+      }
+    }
+    const stdout = NodeFS.readFileSync(output, "utf8");
+    const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(stdout.split(/\r?\n/, 1)[0] ?? "");
+    if (result.error || result.status !== 0 || !match) return { supported: false, timedOut };
+    const [, major = "0", minor = "0", patch = "0"] = match;
+    return {
+      supported:
+        Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2),
+      timedOut,
+    };
+  } finally {
+    NodeFS.closeSync(fd);
+    NodeFS.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /** The pnpm release root package.json names, for the message when no installer can run. */
