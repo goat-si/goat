@@ -2,7 +2,7 @@ import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.test
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
-import * as NodeVM from "node:vm";
+import { makeEncoderPage } from "./RecordingEncoder.testkit.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -71,7 +71,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     pinStore = async (_profileId: string, store: string) => store;
     withProfile = <A>(_profileId: string, run: () => Promise<A>) => run();
     async scratchPage() {
-      return makeEncoderPage() as unknown as Page;
+      return makeEncoderPage(makeContext().page, encoderStreams) as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext(undefined, desktopPageUrl);
@@ -186,47 +186,6 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
     }),
   };
   return context;
-}
-
-function makeEncoderPage() {
-  const canvas = {
-    width: 0,
-    height: 0,
-    getContext: () => ({ drawImage() {}, fillRect() {} }),
-    captureStream: (frameRate?: number) => ({ frameRate, getTracks: () => [] }),
-  };
-  class FakeMediaRecorder {
-    static isTypeSupported = (type: string) => type === "video/webm";
-    onstart: (() => void) | null = null;
-    constructor(stream: { frameRate?: number }, options: { videoBitsPerSecond: number }) {
-      encoderStreams.push({
-        frameRate: stream.frameRate,
-        bitsPerSecond: options.videoBitsPerSecond,
-      });
-    }
-    start() {
-      this.onstart?.();
-    }
-  }
-  const sandbox: Record<string, unknown> = {
-    document: { createElement: () => canvas },
-    Path2D: function Path2D() {},
-    MediaRecorder: FakeMediaRecorder,
-    createImageBitmap: async () => ({ width: 1280, height: 800, close() {} }),
-    atob,
-    Blob,
-    performance,
-  };
-  sandbox.window = sandbox;
-  const context = NodeVM.createContext(sandbox);
-  return {
-    ...makeContext().page,
-    evaluate: vi.fn(async (script: string | ((arg: unknown) => unknown), arg?: unknown) =>
-      typeof script === "string"
-        ? NodeVM.runInContext(script, context)
-        : NodeVM.runInContext(`(${script.toString()})`, context)(arg),
-    ),
-  };
 }
 
 const contexts: ReturnType<typeof makeContext>[] = [];
@@ -2675,4 +2634,41 @@ it.live("failed session and browser launches release capacity, as does closing a
       expect(status.tabs).toHaveLength(8);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.live.each([
+  { refreshFails: false, expected: "final frame" },
+  { refreshFails: true, expected: null },
+])(
+  "saves the last page state when stopping a recording ($refreshFails)",
+  ({ refreshFails, expected }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        const fs = yield* FileSystem.FileSystem;
+        yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
+        const cdp = contexts[0]!.sessions[0]!;
+        const send = cdp.send.getMockImplementation()!;
+        cdp.send.mockImplementation((method, input) => {
+          if (method !== "Page.captureScreenshot") return send(method, input);
+          return refreshFails
+            ? Promise.reject(new Error("Page cannot capture a frame"))
+            : Promise.resolve({ data: Buffer.from("final frame").toString("base64") });
+        });
+        const stop = broker.invoke<{ path: string }>({
+          scope,
+          tabId,
+          operation: "recordingStop",
+          input: {},
+        });
+        if (expected === null) {
+          expect(yield* stop.pipe(Effect.flip)).toMatchObject({
+            _tag: "PreviewAutomationExecutionError",
+          });
+        } else {
+          const artifact = yield* stop;
+          expect(yield* fs.readFileString(artifact.path)).toBe(expected);
+        }
+      }),
+    ).pipe(Effect.provide(layer)),
 );
