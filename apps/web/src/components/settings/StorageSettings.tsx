@@ -453,12 +453,15 @@ export function StorageSettingsPanel() {
     )
       ? "Mixed across selected machines"
       : undefined;
-  const update = (patch: Partial<StorageCleanupSettings>) =>
-    updateSettings({ storageCleanup: patch });
-  const updateWorktree = (patch: Partial<WorktreeCleanupRules>) =>
+  const update = (patch: Partial<StorageCleanupSettings>, options?: { onFailed?: () => void }) =>
+    updateSettings({ storageCleanup: patch }, options);
+  const updateWorktree = (
+    patch: Partial<WorktreeCleanupRules>,
+    options?: { onFailed?: () => void },
+  ) =>
     isProjectScope
-      ? updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } })
-      : update(patch);
+      ? updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } }, options)
+      : update(patch, options);
 
   if (
     isProjectScope &&
@@ -582,7 +585,9 @@ export function StorageSettingsPanel() {
                 <RetentionControl
                   label="Clean up worktrees unused for"
                   value={settings.worktreeAfterDays}
-                  onChange={(worktreeAfterDays) => updateWorktree({ worktreeAfterDays })}
+                  onChange={(worktreeAfterDays, onFailed) =>
+                    updateWorktree({ worktreeAfterDays }, { onFailed })
+                  }
                 />
               }
             />
@@ -609,8 +614,8 @@ export function StorageSettingsPanel() {
                       label="Delete settled worktrees"
                       value={settings.worktreeSettledAfterDays}
                       minimum={0}
-                      onChange={(worktreeSettledAfterDays) =>
-                        updateWorktree({ worktreeSettledAfterDays })
+                      onChange={(worktreeSettledAfterDays, onFailed) =>
+                        updateWorktree({ worktreeSettledAfterDays }, { onFailed })
                       }
                     />
                   }
@@ -700,7 +705,9 @@ export function StorageSettingsPanel() {
               <RetentionControl
                 label="Delete old browser artifacts"
                 value={settings.browserArtifactsAfterDays}
-                onChange={(browserArtifactsAfterDays) => update({ browserArtifactsAfterDays })}
+                onChange={(browserArtifactsAfterDays, onFailed) =>
+                  update({ browserArtifactsAfterDays }, { onFailed })
+                }
               />
             }
           />
@@ -713,7 +720,7 @@ export function StorageSettingsPanel() {
               <RetentionControl
                 label="Delete old rotated logs"
                 value={settings.logsAfterDays}
-                onChange={(logsAfterDays) => update({ logsAfterDays })}
+                onChange={(logsAfterDays, onFailed) => update({ logsAfterDays }, { onFailed })}
               />
             }
           />

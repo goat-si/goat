@@ -140,8 +140,8 @@ export function ProjectActionsSettings() {
       ) : null}
       {mixed ? (
         <SettingsRow
-          title="Different actions across environments"
-          description="Choose one environment to edit its list. Adding an action here adds it on every selected environment."
+          title="Different actions across checkouts"
+          description="Narrow the selection above to one checkout to edit its list. Adding an action here adds it to every selected checkout."
         />
       ) : showRepository ? (
         <ProjectFileActions

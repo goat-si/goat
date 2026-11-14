@@ -1032,7 +1032,10 @@ export const layer = Layer.effect(
       listRows().pipe(
         Effect.flatMap((tasks) =>
           readMemoryPolicy.pipe(
-            Effect.map((policy) => ({ tasks: tasks.map((task) => projectTask(task, policy)) })),
+            Effect.map((policy) => ({
+              tasks: tasks.map((task) => projectTask(task, policy)),
+              timeZone: DateTime.zoneToString(DateTime.zoneMakeLocal()),
+            })),
           ),
         ),
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),

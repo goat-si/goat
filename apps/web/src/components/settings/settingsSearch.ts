@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import { AUTOMATION_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAutomationItems";
 import { AGENT_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAgentItems";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
 import { COMPUTER_USE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchComputerUseItems";
@@ -865,13 +866,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   ...COMPUTER_USE_SETTINGS_SEARCH_ITEMS,
-  {
-    id: "goat-bot-home",
-    title: "Runs on",
-    to: "/settings/goat-bot",
-    targetId: "goat-bot",
-    searchTerms: ["goat bot home computer environment cluster"],
-  },
+  ...AUTOMATION_SETTINGS_SEARCH_ITEMS,
   ...GOAT_BOT_ROUTING_SEARCH_ITEMS,
   {
     id: "goat-bot-model",
