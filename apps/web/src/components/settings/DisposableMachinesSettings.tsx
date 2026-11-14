@@ -349,8 +349,8 @@ export function DisposableMachinesSettings({
           <ul aria-label="Disposable machines" className="space-y-1 pb-2 text-xs">
             {list.data?.machines.map((machine) => (
               <li key={machine.attachId} className="flex items-center gap-2">
-                <span className="font-medium">{machine.name}</span>
-                <span className="text-muted-foreground">
+                <span className="shrink-0 font-medium">{machine.name}</span>
+                <span className="flex-1 text-muted-foreground">
                   {machine.message} ·{" "}
                   {machine.provisioner.kind === "person"
                     ? "a person"
