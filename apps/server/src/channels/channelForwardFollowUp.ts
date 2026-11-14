@@ -1,4 +1,5 @@
 import { ProjectId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -16,6 +17,15 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import { toolSteerIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import { refuseSenderFollowUp, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+
+/** How long a follow-up may wait for the thread to show its run once its authority changed. */
+export const ACCEPTED_RUN_WAIT_MS = 10 * 60_000;
+
+const unconfirmedFollowUp = (sender: string | undefined) =>
+  (sender === undefined
+    ? "The requester’s permission changed, and GOAT could not confirm your follow-up"
+    : sender + "'s access changed, and GOAT could not confirm their follow-up") +
+  " started in the thread. Open the thread in GOAT to check it.";
 
 export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
@@ -88,16 +98,45 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     const requester = authority._tag === "allowed" ? authority.requester : undefined;
     let acceptedRun = undefined;
     if (requester === undefined) {
-      const projection = yield* threads
-        .getThreadRecords(worker.threadId, ["messages", "runs"])
-        .pipe(Effect.option);
-      if (Option.isNone(projection)) return;
-      const message = projection.value.messages.find((candidate) => own.includes(candidate.id));
-      acceptedRun = projection.value.runs.find(
-        (run) =>
-          own.includes(run.userMessageId) || (message !== undefined && run.id === message.runId),
+      // The follow-up was recorded by this server's clock; a time that is unreadable or ahead
+      // ends the wait rather than extending it.
+      const age = DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(event.occurredAt);
+      const waiting = age >= 0 && age < ACCEPTED_RUN_WAIT_MS;
+      const readRecords = Effect.suspend(() =>
+        threads.getThreadRecords(worker.threadId, ["messages", "runs"]),
+      ).pipe(
+        Effect.map((records) => {
+          const message = records.messages.find((candidate) => own.includes(candidate.id));
+          const run = records.runs.find(
+            (candidate) =>
+              own.includes(candidate.userMessageId) ||
+              (message !== undefined && candidate.id === message.runId),
+          );
+          return { message, run };
+        }),
       );
-      if (message !== undefined && acceptedRun === undefined) return;
+      const readAccepted = readRecords.pipe(Effect.option);
+      // Read again under the refusal's write lock: only a read that shows the run still absent
+      // refuses. A run that appeared, or a read that failed, keeps the follow-up for the next pass.
+      const giveUp = refuseForward(
+        ledger,
+        stored,
+        unconfirmedFollowUp(authority._tag === "sender_changed" ? authority.name : undefined),
+        owner,
+        pending.sequence,
+        own,
+        () =>
+          readRecords.pipe(
+            Effect.map((again) => again.run === undefined),
+            Effect.orElseSucceed(() => false),
+          ),
+      );
+      const projection = yield* readAccepted;
+      if (Option.isNone(projection)) return waiting ? undefined : yield* giveUp;
+      const message = projection.value.message;
+      acceptedRun = projection.value.run;
+      if (message !== undefined && acceptedRun === undefined)
+        return waiting ? undefined : yield* giveUp;
       if (acceptedRun === undefined && authority._tag === "sender_changed") {
         yield* refuseSenderFollowUp(ledger, stored, {
           eventId: event.eventId,

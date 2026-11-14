@@ -23,6 +23,52 @@ import {
 } from "./goatBotScreenTestHarness";
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
 import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
+vi.mock("../../lib/appState", () => ({
+  useAppActive: () => true,
+  useReduceMotionEnabled: () => false,
+}));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => screenSession.faceShell }));
+vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () => [] }));
+vi.mock("./useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ botRef: null }),
+}));
+
+it("shows the bot's waiting state in the Home hero", async () => {
+  screenSession.activity = {
+    state: "working",
+    text: "Waiting for you",
+    attention: "waiting",
+    wait: "you",
+  };
+  screenSession.faceShell = {
+    source: { pendingRuntimeRequest: { kind: "approval", blocking: true } },
+  };
+  const view = await render(<GoatBotScreen visible />);
+  expect(
+    view.container.querySelector('[aria-label="Task header"] [data-avatar="waiting"]'),
+  ).not.toBeNull();
+  await view.unmount();
+  screenSession.activity = null;
+  screenSession.faceShell = null;
+});
+
+it("shows a member's initial and accent in the Home hero", async () => {
+  const scout = {
+    botId: "scout",
+    name: "Scout",
+    role: "member",
+    color: "#2F6FED",
+    avatar: null,
+    environmentId: "env",
+    sessionThreadId: "scout-thread",
+    state: "active",
+  } as unknown as import("@goat/contracts").BotProfile;
+  const view = await render(<GoatBotScreen visible member={scout} />);
+  const hero = view.container.querySelector('[aria-label="Task header"] [data-avatar]');
+  expect(hero?.getAttribute("data-avatar-emoji")).toBe("S");
+  expect(hero?.getAttribute("data-avatar-accent")).toBe("#2F6FED");
+  await view.unmount();
+});
 
 it("releases a picker result that arrives after the GOAT Bot screen unmounts", async () => {
   picker.release.mockClear();
@@ -480,7 +526,7 @@ it("shows in the main chat the work cards the shared rows keep there", async () 
   }
 });
 
-it("shows a task chip in the task header only when one exists", async () => {
+it("shows a task chip in the task header only when one exists, without the status it states", async () => {
   const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
   screenSession.supportsTaskThreads = true;
   screenSession.rows = [
@@ -508,6 +554,10 @@ it("shows a task chip in the task header only when one exists", async () => {
   const view = await render(<GoatBotScreen visible taskId={task} />);
   expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).toContain(
     "Disk summary",
+  );
+  // The task's status comes from the current list; the chat card's own may be stale.
+  expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).not.toContain(
+    "Running",
   );
   expect(list.props?.data).toEqual([]);
   await view.unmount();

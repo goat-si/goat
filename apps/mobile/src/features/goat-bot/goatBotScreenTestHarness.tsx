@@ -11,6 +11,7 @@ const appearance = vi.hoisted(() => ({
 }));
 const screenSession = vi.hoisted(() => ({
   activity: null as GoatBotActivity | null,
+  faceShell: null as unknown,
   rows: [] as GoatBotRow[],
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
@@ -150,6 +151,7 @@ vi.mock("./MobileBotWork", () => ({
   MobileBotWork: (props: {
     taskId?: string;
     taskCard?: ReactNode;
+    heroFace?: ReactNode;
     chatTasks?: ReadonlyArray<{ readonly key: string }>;
     open?: boolean;
     onDraft?: (text: string) => boolean;
@@ -162,7 +164,12 @@ vi.mock("./MobileBotWork", () => ({
     screenSession.draft = props.onDraft ?? null;
     screenSession.editBot = props.onEditBot ?? null;
     screenSession.homeGone = props.onDismissed ?? null;
-    return <section aria-label="Task header">{props.taskCard}</section>;
+    return (
+      <section aria-label="Task header">
+        {props.heroFace}
+        {props.taskCard}
+      </section>
+    );
   },
 }));
 const list = vi.hoisted(() => ({
@@ -181,7 +188,17 @@ vi.mock("./GoatBotFace", () => ({
   GoatBotProgressFace: (props: { state: string; inView: boolean }) => (
     <i data-face={`${props.state}:${props.inView}`} />
   ),
-  GoatBotFaceAvatar: (props: { state: string }) => <i data-avatar={props.state} />,
+  GoatBotFaceAvatar: (props: {
+    state: string;
+    emoji?: string | null;
+    accent?: { background: string } | null;
+  }) => (
+    <i
+      data-avatar={props.state}
+      data-avatar-emoji={props.emoji}
+      data-avatar-accent={props.accent?.background}
+    />
+  ),
 }));
 vi.mock("./GoatBotShimmerText", () => ({
   GoatBotShimmerText: (props: { label: string; animate: boolean; style?: unknown }) => (
@@ -221,6 +238,7 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   }),
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { hairlineWidth: 1 },
   View: ({
     children,
     style,

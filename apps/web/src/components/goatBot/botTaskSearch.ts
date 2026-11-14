@@ -8,9 +8,13 @@ const isBotId = Schema.is(BotId);
 export function validateBotTaskSearch(search: Record<string, unknown>): {
   task?: ChannelTaskId;
   bot?: BotId;
+  taskTitle?: string;
 } {
   return {
     ...(isChannelTaskId(search.task) ? { task: search.task } : {}),
     ...(isBotId(search.bot) ? { bot: search.bot } : {}),
+    ...(typeof search.taskTitle === "string" && search.taskTitle.length > 0
+      ? { taskTitle: search.taskTitle }
+      : {}),
   };
 }

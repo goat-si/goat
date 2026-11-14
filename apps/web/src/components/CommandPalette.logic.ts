@@ -203,6 +203,7 @@ export interface CommandPaletteSubmenuItem extends CommandPaletteItem {
 export interface CommandPaletteGroup {
   readonly value: string;
   readonly label: string;
+  readonly note?: string;
   readonly items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
 }
 
@@ -260,6 +261,7 @@ export type CommandPaletteRow =
       readonly kind: "label";
       readonly key: string;
       readonly label: string;
+      readonly note?: string;
       readonly first: boolean;
     }
   | {
@@ -279,6 +281,7 @@ export function buildCommandPaletteRows(groups: ReadonlyArray<CommandPaletteGrou
         kind: "label",
         key: `group:${group.value}`,
         label: group.label,
+        ...(group.note ? { note: group.note } : {}),
         first: rows.length === 0,
       });
     }

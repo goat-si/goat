@@ -1,11 +1,18 @@
 import { useAtomValue } from "@effect/atom-react";
 import { groupBotWork, resolveRemoteBotWork } from "@goat/client-runtime/goatBot";
-import type { BotRemoteWork, BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
+import type {
+  BotRemoteWork,
+  BotThreadRow,
+  BotWorkResult,
+  ChannelTaskId,
+  EnvironmentId,
+} from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
+import { Button } from "../ui/button";
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
 
@@ -77,7 +84,38 @@ export function GoatBotWorkDetails({
         <GoatBotRemoteWork key={item.childWorkId} item={item} />
       ))}
       {task.truncated && <span>More work is available.</span>}
-      {query.error && <span>Couldn't load subagents.</span>}
+      {query.error && (
+        <>
+          <span>Couldn't load subagents.</span>
+          <Button variant="outline" size="xs" onClick={query.refresh}>
+            Try again
+          </Button>
+        </>
+      )}
     </div>
+  );
+}
+
+/** Work from a lookup whose task view could not be read. */
+export function GoatBotUnavailableWork({ work }: { work: BotWorkResult }) {
+  return (
+    <details className="px-3 text-xs text-muted-foreground">
+      <summary>Show work</summary>
+      <div className="flex flex-wrap items-center gap-2">
+        {work.codingRows.map((row) => (
+          <Link
+            key={`${row.environmentId}:${row.threadId}`}
+            to="/$environmentId/$threadId"
+            params={row}
+            className="underline"
+          >
+            {row.title ?? "Open work thread"}
+          </Link>
+        ))}
+        {work.remoteWork.map((item) => (
+          <GoatBotRemoteWork key={item.childWorkId} item={item} />
+        ))}
+      </div>
+    </details>
   );
 }

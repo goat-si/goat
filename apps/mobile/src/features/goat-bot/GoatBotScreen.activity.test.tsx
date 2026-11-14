@@ -19,7 +19,7 @@ import {
 import { AtomRegistry } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import { act, type ReactNode } from "react";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 import { chatFiles, list, render, screenSession, threadReads } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
@@ -430,3 +430,5 @@ it("shows a member bot's lines from its own session", async () => {
     await view.unmount();
   }
 });
+
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));

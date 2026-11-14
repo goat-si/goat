@@ -279,6 +279,7 @@ import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
+import { layerDisposableAttach } from "./hub/disposable/layer.ts";
 import * as PenServer from "./pen/PenServerLayers.ts";
 import * as PenMembership from "./pen/PenMembershipLayers.ts";
 
@@ -1032,7 +1033,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer), Layer.provide(layerDisposableAttach)),
     PenServer.layer,
     PenMembership.layer,
   ),

@@ -133,6 +133,7 @@ import {
   MemoryImportRpcs,
 } from "./memoryRpc.ts";
 import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
+import { HUB_MACHINES_WS_METHODS, HubMachinesRpcs } from "./hubMachinesRpc.ts";
 import { AgentTerminalBinding, EnvironmentAuthorizationError } from "./auth.ts";
 import {
   BackgroundPolicySnapshot,
@@ -734,6 +735,7 @@ export const WS_METHODS = {
   cloudMachinesDismissUnconfirmed: "cloudMachines.dismissUnconfirmed",
   cloudMachinesEnsureReady: "cloudMachines.ensureReady",
   ...HUB_NODES_WS_METHODS,
+  ...HUB_MACHINES_WS_METHODS,
   hubProxyPrepareNode: "hubProxy.prepareNode",
   hubProxyEnrollNode: "hubProxy.enrollNode",
   hubProxyUnenrollNode: "hubProxy.unenrollNode",
@@ -2803,4 +2805,6 @@ export const WsMemoryRpcGroup = WsMemoryCoreRpcGroup.merge(WsMemoryImportRpcGrou
 );
 
 /** The hub's node list. A group of its own so servers and clients install it together. */
-export const WsHubNodesRpcGroup = HubNodesRpcs.middleware(RpcScopeAuthorization);
+export const WsHubNodesRpcGroup = HubNodesRpcs.middleware(RpcScopeAuthorization).merge(
+  HubMachinesRpcs.middleware(RpcScopeAuthorization),
+);

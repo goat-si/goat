@@ -1,4 +1,4 @@
-import { cloneElement, type ReactElement, type ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode, type Ref } from "react";
 
 import { GroupedCard } from "../ui/grouped-card";
 import { cn } from "~/lib/utils";
@@ -24,7 +24,9 @@ export function GoatBotSectionCard({
   return (
     <section aria-label={title} className={cn("flex flex-col gap-2", className)}>
       <div className="flex min-h-6 items-center justify-between gap-2 px-1">
-        <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+        <h3 tabIndex={-1} className="text-xs font-medium text-muted-foreground">
+          {title}
+        </h3>
         {action === null ? null : <div className="flex items-center">{action}</div>}
       </div>
       <GroupedCard radius="lg" className="overflow-hidden">
@@ -115,19 +117,27 @@ export function GoatBotCardRow({
 export function GoatBotShowMoreRow({
   expanded,
   onToggle,
+  label,
+  buttonRef,
+  onBlur,
 }: {
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  readonly label?: string | undefined;
+  readonly buttonRef?: Ref<HTMLButtonElement>;
+  readonly onBlur?: () => void;
 }) {
   return (
     <div className="flex justify-center py-1">
       <button
         type="button"
+        ref={buttonRef}
+        onBlur={onBlur}
         aria-expanded={expanded}
         onClick={onToggle}
         className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
-        {expanded ? "Show less" : "Show more"}
+        {label ?? (expanded ? "Show less" : "Show more")}
       </button>
     </div>
   );

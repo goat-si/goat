@@ -12,6 +12,7 @@ export * from "./homeSync.ts";
 export * from "./model.ts";
 export * from "./taskVisibility.ts";
 export * from "./botThreadHistory.ts";
+export * from "./botWorkHistory.ts";
 export * from "./botRoster.ts";
 export * from "./botWork.ts";
 export * from "./taskReadAcknowledgement.ts";

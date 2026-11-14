@@ -51,7 +51,7 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
-  const { task, bot: botId } = Route.useSearch();
+  const { task, taskTitle, bot: botId } = Route.useSearch();
   const roster = useBotRoster();
   // A bot this client just created opens from the create's answer, even when the list read after
   // it failed.
@@ -96,7 +96,12 @@ function GoatBotRouteSession() {
     return (
       <GoatBotMainProfileContext value={main}>
         <GoatBotMemberContext value={member}>
-          <GoatBotTaskRoute environmentId={bot.environmentId} session={session} taskId={task} />
+          <GoatBotTaskRoute
+            environmentId={bot.environmentId}
+            session={session}
+            taskId={task}
+            taskTitle={taskTitle}
+          />
         </GoatBotMemberContext>
       </GoatBotMainProfileContext>
     );
@@ -159,10 +164,12 @@ export function GoatBotTaskRoute({
   environmentId,
   session,
   taskId,
+  taskTitle,
 }: {
   environmentId: EnvironmentId;
   session: ReturnType<typeof useGoatBotSession>;
   taskId: ChannelTaskId;
+  taskTitle?: string | undefined;
 }) {
   const narrowViewport = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const taskFocus = getTaskPaneFocus();
@@ -197,6 +204,7 @@ export function GoatBotTaskRoute({
           environmentId={environmentId}
           session={session}
           taskId={taskId}
+          taskTitle={taskTitle}
           onClose={() => {
             requestTaskFocusReturn(taskFocus);
             void navigate({ to: "/bot", search: goatBotSearch(member) });

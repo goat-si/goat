@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as CommandReceipts from "./CommandReceiptStore.ts";
@@ -276,6 +277,58 @@ it.effect("onSubscribed runs after acquisition and retains replay/live overlap",
       [...replay, ...live].map((e) => e.sequence),
     );
   }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect(
+  "invariant #2552: the bounded event sink preserves commit order during catch-up and delivers strictly increasing sequences",
+  () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const created = (name: string) => {
+        const thread = idleThreadProjection(liveThreadShell(ThreadId.make(name))).thread;
+        return {
+          id: EventId.make(`order:${name}`),
+          type: "thread.created" as const,
+          threadId: thread.id,
+          occurredAt: now,
+          payload: thread,
+        };
+      };
+      const replay = yield* sink.write({ events: [created("thread:order:a")] });
+      const readStarted = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      // Commits made while the high-water read is held reach the subscriber through the live buffer.
+      const holdHighWater: Statement.Transformer = (statement) =>
+        statement.compile()[0].includes("MAX(sequence)")
+          ? Deferred.succeed(readStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseRead)),
+              Effect.as(statement),
+            )
+          : Effect.succeed(statement);
+      const reader = yield* sink
+        .stream({ bounded: true })
+        .pipe(
+          Stream.provideService(Statement.CurrentTransformer, holdHighWater),
+          Stream.take(4),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+      yield* Deferred.await(readStarted);
+      const held = yield* sink.write({
+        events: [created("thread:order:b"), created("thread:order:c")],
+      });
+      yield* Deferred.succeed(releaseRead, undefined);
+      const later = yield* sink.write({ events: [created("thread:order:d")] });
+      const received = Array.from(yield* Fiber.join(reader)).map((stored) => stored.sequence);
+      assert.deepEqual(
+        received,
+        [...replay, ...held, ...later].map((e) => e.sequence),
+      );
+      assert.isTrue(
+        received.every((sequence, index) => index === 0 || sequence > received[index - 1]!),
+      );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
 it.effect.each(["stage", "setter", "append", "receipt", "outbox"] as const)(

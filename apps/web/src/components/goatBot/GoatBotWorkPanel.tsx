@@ -40,8 +40,10 @@ import {
   useGoatBotName,
 } from "./goatBotMemberContext";
 import { useBotThreads } from "./useBotRoster";
+import { useBotWorkHistory } from "./useBotWorkHistory";
 import { useGoatBotMemberWaitingCount } from "./useGoatBotMemberStatus";
 import type { GoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
+import type { GoatBotSourceIds } from "./useGoatBotSource";
 
 // Home is one scroll of what the bot runs and does; Library holds what it keeps.
 const tabs = ["Home", "Library"] as const;
@@ -55,6 +57,7 @@ export function GoatBotWorkPanel({
   onShowChat,
   onClose,
   peekRows,
+  peekSource,
   onRetryInput,
   openFile = null,
   onOpenFile,
@@ -71,6 +74,8 @@ export function GoatBotWorkPanel({
   notesRefreshKey?: string | undefined;
   /** A task's conversation, for reading it here without leaving the bot's chat. */
   peekRows?: ((taskId: ChannelTaskId) => ReadonlyArray<GoatBotRow>) | undefined;
+  /** The chat's displayed-thread source that peekRows come from. */
+  peekSource?: GoatBotSourceIds | undefined;
   onRetryInput?: ((clientKey: string) => void) | undefined;
   /** The Library file open in the chat, if any. */
   openFile?: string | null | undefined;
@@ -132,9 +137,24 @@ export function GoatBotWorkPanel({
   const botName = useGoatBotName();
   const picture = useGoatBotPicture();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
-  const { rows, remoteWork, supported, loaded, failed, failure, turnsWaiting, refresh } =
-    useBotThreads(environmentId, memberThreadsKey(member));
-  const offline = useEnvironment(environmentId)?.connection.phase === "offline";
+  const current = useBotThreads(environmentId, memberThreadsKey(member));
+  const { supported, loaded, failed, failure, turnsWaiting, refresh } = current;
+  const environment = useEnvironment(environmentId);
+  const history = useBotWorkHistory(
+    environmentId,
+    member?.botId ?? null,
+    environment?.connection.phase === "connected"
+      ? environment.serverConfig?.environment.capabilities
+      : undefined,
+    {
+      rows: current.rows,
+      remoteWork: current.remoteWork,
+      mainMessageCount: current.mainMessageCount ?? 0,
+    },
+    loaded && !failed,
+  );
+  const { rows, remoteWork } = history;
+  const offline = environment?.connection.phase === "offline";
   const routines = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
@@ -205,9 +225,13 @@ export function GoatBotWorkPanel({
               : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
           }
           rows={peekRows(peek.taskId)}
+          source={peekSource}
           environmentId={environmentId}
           unreadThrough={peeked?.unread === true ? peeked.lastActivityAt : null}
-          onAcknowledged={refresh}
+          onAcknowledged={(taskId, through) => {
+            history.markRead(taskId, through);
+            refresh();
+          }}
           onRetry={onRetryInput}
           onBack={() => {
             // Work that finished meanwhile may have pushed this row behind Show more.
@@ -313,6 +337,7 @@ export function GoatBotWorkPanel({
                 supported={supported}
                 offline={offline}
                 onRetry={refresh}
+                history={history}
                 peekable={peekRows !== undefined}
                 showAll={showAllWork}
                 onShowAllChange={setShowAllWork}

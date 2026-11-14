@@ -8,6 +8,7 @@ import {
   discoverRuns,
   endReported,
   finishedWake,
+  LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
   newLaunchWatch,
@@ -200,6 +201,71 @@ const finish = (watch = makeWatch(), runId = RunId.make("run-1")) =>
     worktreePath: null,
     excerpt: null,
   });
+
+it("stamps local bot session and worker completion and early failure wakes with the launching run", () => {
+  const launchingRun = RunId.make("launching-run");
+  for (const id of ["goat-bot-session:one", "channel-worker:one"]) {
+    const watch = {
+      ...makeWatch(null),
+      launcherThreadId: ThreadId.make(id),
+      launcherRunId: launchingRun,
+    };
+    expect(finish(watch).notification.aboutRunId).toBe(launchingRun);
+    const failed = finishedWake({
+      watch,
+      runId: RunId.make("child"),
+      status: "failed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      failure: {
+        runId: RunId.make("child"),
+        stage: "before_first_message",
+        errorClass: "unknown",
+        retryable: null,
+        message: "failed",
+        log: null,
+        canRetry: false,
+      },
+    });
+    expect(failed.notification.aboutRunId).toBe(launchingRun);
+  }
+});
+
+it("leaves ordinary, remote, and runless launch wakes unstamped", () => {
+  const run = RunId.make("launching-run");
+  for (const watch of [
+    { ...makeWatch(null), launcherRunId: run },
+    {
+      ...makeWatch("box"),
+      launcherThreadId: ThreadId.make("channel-worker:one"),
+      launcherRunId: run,
+    },
+    { ...makeWatch(null), launcherThreadId: ThreadId.make("channel-worker:one") },
+  ])
+    expect(finish(watch).notification).not.toHaveProperty("aboutRunId");
+});
+
+it("decodes old documents and leaves a watch rewritten by an old server unstamped", () => {
+  const json = Schema.fromJsonString(LaunchWatchDocument);
+  const oldWatch = { ...makeWatch(null), launcherThreadId: ThreadId.make("channel-worker:one") };
+  const oldJson = Schema.encodeSync(json)({ version: 1, watches: [oldWatch] });
+  expect(Schema.decodeUnknownSync(json)(oldJson).watches).toHaveLength(1);
+  const newerJson = JSON.stringify({
+    version: 1,
+    watches: [{ ...oldWatch, launcherRunId: "launching-run" }],
+  });
+  const { launcherRunId: _removed, ...oldFields } = LaunchWatch.fields;
+  const oldDocument = Schema.fromJsonString(
+    Schema.Struct({ version: Schema.Literal(1), watches: Schema.Array(Schema.Struct(oldFields)) }),
+  );
+  const rewritten = Schema.encodeSync(oldDocument)(
+    Schema.decodeUnknownSync(oldDocument)(newerJson),
+  );
+  const decoded = Schema.decodeUnknownSync(json)(rewritten);
+  expect(finish(decoded.watches[0]!).notification).not.toHaveProperty("aboutRunId");
+});
 
 it.effect("completion messages identify the environment and preserve rolled-back status", () =>
   Effect.sync(() => {

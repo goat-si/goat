@@ -1244,7 +1244,8 @@ const make = Effect.gen(function* () {
         WHERE t.status IN ('completed', 'failed', 'cancelled')
           AND json_extract(t.task_json, '$.worker.host') IS NULL
           AND ((c.status != 'not_run' AND c.status IS NOT json_extract(t.task_json, '$.observed.result.observedCheck.status'))
-            OR (c.status = 'not_run' AND json_extract(t.task_json, '$.observed.result.observedCheckPending') IS NOT 0))
+            OR (c.status = 'not_run' AND (json_extract(t.task_json, '$.observed.result.observedCheckPending') IS NOT 0
+              OR json_extract(t.task_json, '$.observed.result.observedCheck.status') = 'running')))
         ORDER BY t.updated_at LIMIT 20
       `.pipe(
         Effect.map((rows) => rows.map(storedTask)),

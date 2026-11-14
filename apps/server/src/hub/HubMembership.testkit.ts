@@ -147,6 +147,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   let failuresLeft = fixture.addFailures ?? 0;
   let revoked = false;
   let direct = fixture.direct ?? true;
+  // Breaks later link-status reads, after a decision was filed against a working one.
+  let statusBroken: "unstartable" | "missing" | "unreachable" | "failed" | "child" | undefined;
   const json = (value: unknown): OcxOutput => ({ code: 0, stdout: JSON.stringify(value) });
   const home = (args: ReadonlyArray<string>): Effect.Effect<OcxOutput, HubOcxError> => {
     calls.push(`home ${args.join(" ")}`);
@@ -156,6 +158,22 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
         new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       );
     if (group === "link" && command === "status") {
+      if (statusBroken === "unstartable" || statusBroken === "missing")
+        return Effect.fail(
+          new HubOcxError({
+            reason: statusBroken === "missing" ? "ocx_missing" : "ocx_unstartable",
+            message:
+              statusBroken === "missing"
+                ? "OpenCodex is not installed on this hub."
+                : "ocx could not be started on this hub.",
+          }),
+        );
+      if (statusBroken === "unreachable")
+        return Effect.fail(
+          new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+        );
+      if (statusBroken === "failed") return Effect.succeed({ code: 1, stdout: "" });
+      if (statusBroken === "child") return Effect.succeed(json({ role: "child", links: [] }));
       if (fixture.linkStatus !== undefined)
         return Effect.succeed({
           code: 1,
@@ -476,6 +494,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     /** Someone removes a link on the Home by hand. */
     unlink: (alias: string) => {
       links.delete(alias);
+    },
+    /** Later link-status reads fail (to spawn, no ocx, after running), are unreadable, or say Child. */
+    breakLinkStatus: (kind: "unstartable" | "missing" | "unreachable" | "failed" | "child") => {
+      statusBroken = kind;
     },
     /** Someone links the alias again by hand, under a new link id. */
     replaceLink: (alias: string, id: string) => {

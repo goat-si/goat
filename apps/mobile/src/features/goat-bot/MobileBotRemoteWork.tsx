@@ -15,6 +15,8 @@ export function MobileBotRemoteWork(props: {
     readonly environmentId: EnvironmentId;
     readonly id: ThreadId;
   }) => void;
+  /** Listed but closed, as when the bot's computer is offline. */
+  readonly disabled?: boolean;
 }) {
   const { item } = props;
   const openable = useAtomValue(
@@ -32,6 +34,8 @@ export function MobileBotRemoteWork(props: {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled: props.disabled === true }}
+      disabled={props.disabled === true}
       className="min-h-[44px] justify-center"
       onPress={() => props.onOpenThread({ environmentId: ref.environmentId, id: ref.threadId })}
     >

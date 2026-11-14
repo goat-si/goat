@@ -11,6 +11,7 @@ import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
+import type { GoatBotSourceIds } from "./useGoatBotSource";
 
 const NO_RETRY = () => {};
 // Focus moves to Back when the peek opens, as the row that opened it is gone.
@@ -27,6 +28,7 @@ export function GoatBotWorkPeek({
   rows,
   environmentId,
   unreadThrough = null,
+  source,
   onAcknowledged,
   onRetry,
   onBack,
@@ -38,8 +40,10 @@ export function GoatBotWorkPeek({
   readonly environmentId: EnvironmentId;
   /** The activity this task has not been read up to; null when nothing is unread. */
   readonly unreadThrough?: string | null | undefined;
+  /** The chat's displayed-thread source, so history exposed later is not cued as new. */
+  readonly source?: GoatBotSourceIds | undefined;
   /** Called once the acknowledgment lands, so the list stops showing its mark. */
-  readonly onAcknowledged?: (() => void) | undefined;
+  readonly onAcknowledged?: ((taskId: ChannelTaskId, readThrough: string) => void) | undefined;
   readonly onRetry?: ((clientKey: string) => void) | undefined;
   readonly onBack: () => void;
 }) {
@@ -79,8 +83,11 @@ export function GoatBotWorkPeek({
           <GoatBotTaskTargetHidden value>
             {rows.length > 0 ? (
               <GoatBotTimeline
+                key={`${source?.identity ?? ""}:${taskId}`}
                 taskDetails
                 rows={rows}
+                baselineIds={source?.baselineIds}
+                sourceIds={source?.sourceIds}
                 environmentId={environmentId}
                 onRetry={onRetry ?? NO_RETRY}
               />
@@ -95,7 +102,9 @@ export function GoatBotWorkPeek({
       <div className="p-3">
         <Button
           className="w-full"
-          render={<Link to="/bot" search={{ task: taskId, ...goatBotSearch(member) }} />}
+          render={
+            <Link to="/bot" search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }} />
+          }
         >
           Go to thread
         </Button>

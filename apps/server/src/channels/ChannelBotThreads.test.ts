@@ -56,6 +56,59 @@ const insertTask = (id: string, taskOwner: string, status: string, updatedAt: st
 
 describe("ChannelBotThreads", () => {
   it.effect(
+    "keeps an old pinned task within the cap and restores the newest tasks on unpin",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(1791763200000);
+        yield* setupBot;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_conversations (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at) VALUES ('conv:bot', ${ownerId}, 'goat', 'goat', ${botThreadId}, ${time})`;
+        for (let index = 0; index < 101; index++) {
+          const updated = `2026-10-12T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`;
+          yield* insertTask(`task:${String(index).padStart(3, "0")}`, ownerId, "running", updated);
+        }
+        yield* insertTask("task:pinned", ownerId, "completed", old);
+        const views = yield* TaskViews.ChannelTaskViews;
+        yield* views.update({ taskId: ChannelTaskId.make("task:pinned"), pinned: true }, owner);
+        const service = yield* BotThreads.ChannelBotThreads;
+        const ids = (result: Awaited<Effect.Success<ReturnType<typeof service.list>>>) =>
+          result.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : []));
+        const pinned = ids(yield* service.list(owner));
+        assert.lengthOf(pinned, 100);
+        assert.deepStrictEqual(pinned, [
+          ...Array.from(
+            { length: 99 },
+            (_, index) => `task:${String(100 - index).padStart(3, "0")}`,
+          ),
+          "task:pinned",
+        ]);
+        yield* views.update({ taskId: ChannelTaskId.make("task:pinned"), pinned: false }, owner);
+        assert.deepStrictEqual(
+          ids(yield* service.list(owner)),
+          Array.from({ length: 100 }, (_, index) => `task:${String(100 - index).padStart(3, "0")}`),
+        );
+        for (let index = 0; index < 101; index++) {
+          yield* views.update(
+            { taskId: ChannelTaskId.make(`task:${String(index).padStart(3, "0")}`), pinned: true },
+            owner,
+          );
+        }
+        assert.deepStrictEqual(
+          ids(yield* service.list(owner)),
+          Array.from({ length: 100 }, (_, index) => `task:${String(100 - index).padStart(3, "0")}`),
+        );
+      }).pipe(
+        Effect.provide(
+          BotThreads.layer.pipe(
+            Layer.provideMerge(TaskViews.layer),
+            Layer.provideMerge(harness.layer),
+          ),
+        ),
+      );
+    },
+  );
+  it.effect(
     "scopes tasks, retains pinned old work, and deduplicates resolvable coding rows",
     () => {
       const harness = makeHarness();

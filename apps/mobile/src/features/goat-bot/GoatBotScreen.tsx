@@ -57,6 +57,7 @@ import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotChipFace, GoatBotHeaderFace } from "./GoatBotFace";
+import { GoatBotHeroFace } from "./GoatBotHeroFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import {
@@ -102,22 +103,10 @@ import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
 import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
+import { availabilityCopy } from "./goatBotAvailabilityCopy";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (item: GoatBotChatItem) => item.id;
-function availabilityCopy(mainName: string, openName: string) {
-  return {
-    ready: "Answers here, works in its own threads",
-    connecting: `Connecting to ${mainName}…`,
-    home_offline: `${mainName}’s computer is offline.`,
-    offline: `${mainName}'s computer is offline. Messages will be available when it reconnects.`,
-    unsupported: "Update the server to use GOAT Bot here.",
-    permission: "This connection does not have permission to message GOAT Bot.",
-    legacy_active: "Your global agent is still working. Check again when it finishes.",
-    error: `Couldn't reach ${openName}`,
-  };
-}
-
 type TaskRow = Extract<GoatBotRow, { kind: "task" }>;
 type ListMetrics = Parameters<typeof goatBotFooterInView>[0];
 
@@ -317,7 +306,11 @@ export function GoatBotScreen(props: {
   readonly visible: boolean;
   /** False while the app is in the background, where GOAT Bot's steps are not read. */
   readonly foreground?: boolean;
+  /** Focused and the app active: what the screen shows has been seen. */
+  readonly seen?: boolean;
   readonly taskId?: ChannelTaskId;
+  /** The title the screen that opened this task carried, for a task the list no longer holds. */
+  readonly taskTitle?: string | undefined;
   /** A member bot whose conversation this is; the main bot's when absent. */
   readonly member?: BotProfile | null;
   /** Where the person had read the main chat up to when this visit began. */
@@ -331,6 +324,9 @@ export function GoatBotScreen(props: {
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
   const member = props.member ?? null;
+  const conversation = member
+    ? { environmentId: member.environmentId, threadId: member.sessionThreadId }
+    : undefined;
   const mainName = goatBotName(props.main ?? null);
   const session = useMobileGoatBotSession(props.visible, props.taskId ?? null, member);
   const title = goatBotName(member ?? props.main ?? null);
@@ -365,9 +361,13 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const onSelectTask = useCallback(
-    (taskId: ChannelTaskId) =>
+    (taskId: ChannelTaskId, taskTitle?: string) =>
       navigation.dispatch(
-        StackActions.push("GoatBot", member ? { taskId, botId: member.botId } : { taskId }),
+        StackActions.push("GoatBot", {
+          taskId,
+          ...(member ? { botId: member.botId } : {}),
+          ...(taskTitle ? { taskTitle } : {}),
+        }),
       ),
     [navigation, member],
   );
@@ -664,14 +664,7 @@ export function GoatBotScreen(props: {
             emoji={botEmoji}
             accent={accent}
             onPress={taskId ? undefined : openHome}
-            {...(member
-              ? {
-                  conversation: {
-                    environmentId: member.environmentId,
-                    threadId: member.sessionThreadId,
-                  },
-                }
-              : {})}
+            conversation={conversation}
           />
         ) : null}
         <View style={{ paddingTop: topInset }}>
@@ -682,24 +675,26 @@ export function GoatBotScreen(props: {
             focus={homeFocus}
             // iOS reports the sheet's dismissal; Android is handled once the closed sheet commits.
             onDismissed={sheetGone}
+            heroFace={
+              <GoatBotHeroFace
+                activity={session.activity ?? null}
+                emoji={botEmoji}
+                accent={accent}
+                conversation={conversation}
+              />
+            }
             chipFace={
               Platform.OS === "android" ? (
                 <GoatBotChipFace
                   activity={session.activity ?? null}
                   emoji={botEmoji}
                   accent={accent}
-                  {...(member
-                    ? {
-                        conversation: {
-                          environmentId: member.environmentId,
-                          threadId: member.sessionThreadId,
-                        },
-                      }
-                    : {})}
+                  conversation={conversation}
                 />
               ) : null
             }
             visible={props.visible}
+            seen={props.seen ?? props.visible}
             onOpenTask={onSelectTask}
             onOpenThread={onSelectThread}
             member={
@@ -731,9 +726,10 @@ export function GoatBotScreen(props: {
             workRevision={session.workRevision}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
+            taskTitle={props.taskTitle}
             taskCard={
               taskCard ? (
-                <GoatBotTaskRow card={taskCard.card} onSelectThread={onSelectThread} />
+                <GoatBotTaskRow card={taskCard.card} statusHidden onSelectThread={onSelectThread} />
               ) : null
             }
           />

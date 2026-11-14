@@ -45,9 +45,15 @@ const layer = Layer.mergeAll(
 
 const supervisor = ThreadId.make("thread:supervisor");
 
-const runEnd = (lane: string, host: string | null) => {
+const runEnd = (
+  lane: string,
+  host: string | null,
+  launcherThreadId = supervisor,
+  launcherRunId?: RunId,
+) => {
   const watch = newLaunchWatch({
-    launcherThreadId: supervisor,
+    launcherThreadId,
+    ...(launcherRunId === undefined ? {} : { launcherRunId }),
     host,
     threadId: ThreadId.make(`thread:${lane}`),
     projectId: null,
@@ -303,4 +309,105 @@ it.effect("a stored command notice belongs to the task whose run started the com
     const owner = yield* resolveSessionRun(sql, supervisor, projection, noticeRun.id);
     expect(owner?.task_id).toBe("task:logistics");
   }).pipe(Effect.provide(Layer.merge(layer, databaseLayer))),
+);
+
+/** A supervisor thread whose first turn runs, so every later message queues behind it. */
+const heldSupervisor = Effect.gen(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make("create-stamped"),
+    threadId: supervisor,
+    projectId: ProjectId.make("project:notice-digest"),
+    title: "Supervisor",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  yield* orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make("work-stamped"),
+    threadId: supervisor,
+    messageId: MessageId.make("message:work-stamped"),
+    text: "Work",
+    attachments: [],
+    modelSelection,
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  });
+  return orchestrator;
+});
+
+const queuedIds = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const projection = yield* store.getThreadProjection(supervisor);
+  return queuedRunsInDeliveryOrder(projection).map((run) =>
+    projection.messages.find((message) => message.id === run.userMessageId)!,
+  );
+});
+
+const stampedLauncher = ThreadId.make("goat-bot-session:test");
+
+it.effect(
+  "regression: a launching run's later wake queues behind a user message queued after its earlier wake",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* heldSupervisor;
+      const first = runEnd("stamped-a1", null, stampedLauncher, RunId.make("run:owner-a"));
+      const later = runEnd("stamped-a2", null, stampedLauncher, RunId.make("run:owner-a"));
+      yield* orchestrator.dispatch(notice(first));
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("between"),
+        threadId: supervisor,
+        messageId: MessageId.make("message:between"),
+        text: "Stop that work.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch(notice(later));
+      const queued = yield* queuedIds;
+      expect(queued.map((message) => message.id)).toEqual([
+        first.messageId,
+        "message:between",
+        later.messageId,
+      ]);
+      expect(queued[0]!.text).not.toContain(later.messageId);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "contract: another notice kind queued between two wakes of one launching run is no barrier to folding",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* heldSupervisor;
+      const first = runEnd("stamped-a1", null, stampedLauncher, RunId.make("run:owner-a"));
+      const later = runEnd("stamped-a2", null, stampedLauncher, RunId.make("run:owner-a"));
+      const pressure = HOST_PRESSURE_MESSAGE_PREFIX + "box-a:wake:elevated";
+      yield* orchestrator.dispatch(notice(first));
+      yield* orchestrator.dispatch(
+        notice({
+          commandId: "server:pressure:between",
+          messageId: pressure,
+          text: "Resource pressure: box-a is elevated.",
+          notification: {
+            source: { kind: "monitor" },
+            outcome: "updated",
+            summary: "box-a is under elevated resource pressure",
+          },
+        }),
+      );
+      yield* orchestrator.dispatch(notice(later));
+      const queued = yield* queuedIds;
+      expect(queued.map((message) => message.id)).toEqual([first.messageId, pressure]);
+      expect(queued[0]!.text).toContain(later.messageId);
+    }).pipe(Effect.provide(layer)),
 );

@@ -205,6 +205,8 @@ export type GoatBotRow =
       readonly choices?: ReadonlyArray<string>;
       /** What the person sent back to a question, picked from its answers or typed. */
       readonly answer?: string;
+      /** The input represented by a choice folded into this question. */
+      readonly answerInputRowId?: string;
       /** Which of `choices` the answer is, when the person picked one. */
       readonly answerIndex?: number;
       /** The picked answer is still on its way; the question shows that in place of the pick's own message. */
@@ -799,6 +801,7 @@ export function buildGoatBotTimeline(input: {
             options: NO_OPTIONS,
             answer,
             answerIndex,
+            answerInputRowId: candidate.id,
             answeredAt: candidate.createdAt,
             ...(candidate.delivery.state === "queued" || candidate.delivery.state === "sending"
               ? { answerSending: true }
@@ -839,7 +842,9 @@ export function buildGoatBotTimeline(input: {
           ...row,
           options: NO_OPTIONS,
           answer,
-          ...(picked ? { answerIndex, answeredAt: answered.createdAt } : {}),
+          ...(picked
+            ? { answerIndex, answeredAt: answered.createdAt, answerInputRowId: answered.id }
+            : {}),
           ...(sending ? { answerSending: true } : {}),
         };
       } else if (!decidedByCard && send !== undefined) {

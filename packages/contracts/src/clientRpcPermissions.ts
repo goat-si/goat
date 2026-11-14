@@ -172,6 +172,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
   // What the bots wait on is task state, the same read their waiting badges need.
   [CHANNEL_GATEWAY_WS_METHODS.listOpenAsks]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.getBotTask]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.searchBotTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.subscribeTaskChanges]: AuthOrchestrationReadScope,
   // A standing name and purpose are what ingest already allows: telling the bot what to do.
   [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
@@ -211,6 +213,10 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.hubNodesRemove]: AuthSettingsWriteScope,
   [WS_METHODS.hubNodesImport]: AuthSettingsWriteScope,
   [WS_METHODS.hubNodesDismissNotice]: AuthSettingsWriteScope,
+  // Attaching admits a machine to the owner's Pen mesh; the service also requires a person.
+  [WS_METHODS.hubMachinesAttach]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesReissue]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesList]: AuthOrchestrationReadScope,
   // Preparing may install GOAT on a node; enrolling lets the hub act there for every proxied client.
   [WS_METHODS.hubProxyPrepareNode]: AuthSettingsWriteScope,
   [WS_METHODS.hubProxyEnrollNode]: AuthSettingsWriteScope,

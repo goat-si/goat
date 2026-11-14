@@ -101,7 +101,7 @@ describe("MuseAdapterV2", () => {
       const adapter = yield* makeMuseAdapterV2({
         instanceId: INSTANCE_ID,
         settings: museSettings,
-        environment: { PATH: "/fake/bin" },
+        environment: Effect.succeed({ PATH: "/fake/bin" }),
         createHost: async () => fake.host,
       });
       const runtime = yield* adapter.openSession({
@@ -279,7 +279,7 @@ describe("MuseAdapterV2", () => {
         const adapter = yield* makeMuseAdapterV2({
           instanceId: INSTANCE_ID,
           settings: museSettings,
-          environment: { PATH: "/fake/bin" },
+          environment: Effect.succeed({ PATH: "/fake/bin" }),
           createHost: async () => fake.host,
         });
         const runtime = yield* adapter.openSession({

@@ -4,9 +4,12 @@ import {
   ChannelQuestionId,
   ChannelTaskId,
   type EnvironmentId,
+  type OrchestrationV2ProjectedTurnItem,
+  type ScopedThreadRef,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useContext, useRef, useState, type ReactNode } from "react";
+import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "~/rightPanelLayout";
@@ -46,6 +49,8 @@ import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
+import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -62,7 +67,12 @@ const EXAMPLES = [
 ] as const;
 
 export interface GoatBotChatViewProps {
+  readonly source?: ReturnType<typeof useGoatBotSource> | undefined;
+  readonly projectionRef?: ScopedThreadRef | null | undefined;
+  readonly visibleTurnItems?: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
   readonly unreadSince?: string | null | undefined;
+  /** History state naming a Home to open, with its entry's key; each entry opens Home once. */
+  readonly openHome?: { readonly key: string; readonly entry: string } | null | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -81,7 +91,7 @@ export interface GoatBotChatViewProps {
   readonly onSend: (
     text: string,
     attachments?: ReadonlyArray<GoatBotDraftAttachment>,
-  ) => boolean | void;
+  ) => boolean | string | void;
   /** Sends an answer to the task whose question offered it. */
   readonly onSendToTask?:
     | ((
@@ -89,7 +99,7 @@ export interface GoatBotChatViewProps {
         text: string,
         attachments?: ReadonlyArray<never>,
         questionId?: ChannelQuestionId,
-      ) => boolean | void)
+      ) => boolean | string | void)
     | undefined;
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
@@ -114,7 +124,27 @@ export interface GoatBotChatViewProps {
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
-export function GoatBotChatView({
+export function GoatBotChatView(props: GoatBotChatViewProps) {
+  return props.source === undefined ? (
+    <GoatBotChatViewWithSource {...props} />
+  ) : (
+    <GoatBotChatViewContent {...props} source={props.source} />
+  );
+}
+
+function GoatBotChatViewWithSource(props: GoatBotChatViewProps) {
+  const member = useGoatBotMember();
+  const source = useGoatBotSource(
+    props.projectionRef,
+    member?.botId ?? "main",
+    props.visibleTurnItems ?? [],
+  );
+  return <GoatBotChatViewContent {...props} source={source} />;
+}
+
+function GoatBotChatViewContent({
+  source,
+  projectionRef,
   unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
@@ -138,9 +168,10 @@ export function GoatBotChatView({
   onUnarchive,
   onRestore,
   onCheckAgain,
-}: GoatBotChatViewProps) {
-  const [panelOpen, setPanelOpen] = useState(false);
+  openHome = null,
+}: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
+  const [panelOpen, setPanelOpen] = useState(false);
   const accentStyle = useGoatBotAccentStyle();
   const memberWaiting = useGoatBotMemberWaitingCount(member);
   const title = useGoatBotName();
@@ -168,6 +199,61 @@ export function GoatBotChatView({
     return field;
   };
   const botIdentity = `${environmentId ?? ""}:${member?.sessionThreadId ?? bot?.threadId ?? ""}`;
+  // A bot or environment switch remounts Home, so its history walk starts over.
+  const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
+  const [openedHomeEntry, setOpenedHomeEntry] = useState<string | null>(null);
+  if (bot && openHome?.key === homeKey && openHome.entry !== openedHomeEntry) {
+    setOpenedHomeEntry(openHome.entry);
+    setPanelOpen(true);
+  }
+  const sourceBotId = member?.botId ?? "main";
+  const [lastSource, setLastSource] = useState<{
+    identity: string;
+    botId: string;
+    environmentId: EnvironmentId;
+  } | null>(() =>
+    source.identity !== null && projectionRef != null
+      ? {
+          identity: source.identity,
+          botId: sourceBotId,
+          environmentId: projectionRef.environmentId,
+        }
+      : null,
+  );
+  if (source.identity !== null && projectionRef != null && source.identity !== lastSource?.identity)
+    setLastSource({
+      identity: source.identity,
+      botId: sourceBotId,
+      environmentId: projectionRef.environmentId,
+    });
+  const timelineIdentity =
+    source.identity ??
+    (projectionRef === null &&
+    rows.length > 0 &&
+    lastSource?.botId === sourceBotId &&
+    (environmentId === null || lastSource.environmentId === environmentId)
+      ? lastSource.identity
+      : null) ??
+    botIdentity;
+  const [local, setLocal] = useState<{
+    identity: string;
+    submissions: ReadonlyArray<GoatBotLocalSubmission>;
+  }>({ identity: timelineIdentity, submissions: [] });
+  if (local.identity !== timelineIdentity)
+    setLocal({ identity: timelineIdentity, submissions: [] });
+  const recordSubmission = (result: boolean | string | void) => {
+    if (typeof result === "string") {
+      const submission = { key: result };
+      setLocal((previous) => ({
+        identity: timelineIdentity,
+        submissions: [
+          ...(previous.identity === timelineIdentity ? previous.submissions : []),
+          submission,
+        ],
+      }));
+    }
+    return result !== false;
+  };
   const [replyState, setReplyState] = useState<{ botIdentity: string; text: string } | null>(null);
   if (replyState !== null && replyState.botIdentity !== botIdentity) setReplyState(null);
   const replyTo = replyState?.botIdentity === botIdentity ? replyState.text : null;
@@ -368,7 +454,7 @@ export function GoatBotChatView({
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
             {/* Mounted before the first message, so the chat's first status is heard. */}
             <GoatBotActivityStatus
-              key={botIdentity}
+              key={timelineIdentity}
               replyingSince={removed ? null : replyingSince}
             />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
@@ -377,7 +463,12 @@ export function GoatBotChatView({
                 {rows.length > 0 ? (
                   // History stays readable while the bot is unavailable; only sending stops.
                   <GoatBotTimeline
+                    key={timelineIdentity}
                     rows={rows}
+                    baselineIds={source.baselineIds}
+                    sourceIds={source.sourceIds}
+                    committedSends={source.committedSends}
+                    submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}
                     onReply={
                       canSend
@@ -396,17 +487,20 @@ export function GoatBotChatView({
                     onDiscard={onDiscardInput}
                     onPick={
                       canSend
-                        ? (answer, taskId, questionId) =>
-                            taskId !== undefined && onSendToTask !== undefined
-                              ? onSendToTask(
-                                  ChannelTaskId.make(taskId),
-                                  answer,
-                                  [],
-                                  questionId === undefined
-                                    ? undefined
-                                    : ChannelQuestionId.make(questionId),
-                                )
-                              : onSend(answer)
+                        ? (answer, taskId, questionId) => {
+                            const result =
+                              taskId !== undefined && onSendToTask !== undefined
+                                ? onSendToTask(
+                                    ChannelTaskId.make(taskId),
+                                    answer,
+                                    [],
+                                    questionId === undefined
+                                      ? undefined
+                                      : ChannelQuestionId.make(questionId),
+                                  )
+                                : onSend(answer);
+                            recordSubmission(result);
+                          }
                         : undefined
                     }
                   />
@@ -467,7 +561,7 @@ export function GoatBotChatView({
                 attachments,
               );
               if (result !== false) setReplyState(null);
-              return result;
+              return recordSubmission(result);
             }}
           />
         </div>
@@ -475,6 +569,7 @@ export function GoatBotChatView({
       {bot && panelOpen && !narrow && (
         <aside aria-label={`${title} work`} className="flex w-88 shrink-0 border-l border-border">
           <GoatBotWorkPanel
+            key={homeKey}
             environmentId={bot.environmentId}
             threadId={bot.threadId}
             onDraft={onDraft}
@@ -485,6 +580,7 @@ export function GoatBotChatView({
               homeRef.current?.focus();
             }}
             peekRows={rowsForTask}
+            peekSource={source}
             onRetryInput={onRetryInput}
             openFile={shownFile?.file.relativePath ?? null}
             onOpenFile={openFile}
@@ -502,12 +598,14 @@ export function GoatBotChatView({
           >
             <SheetTitle className="sr-only">{title} work</SheetTitle>
             <GoatBotWorkPanel
+              key={homeKey}
               environmentId={bot.environmentId}
               threadId={bot.threadId}
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
               onShowChat={() => setPanelOpen(false)}
               peekRows={rowsForTask}
+              peekSource={source}
               onRetryInput={onRetryInput}
               openFile={shownFile?.file.relativePath ?? null}
               onOpenFile={openFile}

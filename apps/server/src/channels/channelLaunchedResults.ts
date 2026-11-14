@@ -17,7 +17,8 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import { sessionTaskRuns } from "./channelBotSessionRuns.ts";
+import { parseNotices } from "../orchestration-v2/TurnDigest.ts";
+import { launchWakeParentRun, sessionTaskRuns } from "./channelBotSessionRuns.ts";
 import { parseLaunchWake } from "./channelLaunchWake.ts";
 import { noticeMessageIds, resultRunsOf } from "./channelNoticeAnswers.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
@@ -56,16 +57,33 @@ export class ChannelLaunchWakes extends Context.Service<
   }
 >()("goat/channels/channelLaunchedResults/ChannelLaunchWakes") {}
 
-const wakesFor = (end: LaunchedEnd, runs: ReadonlyArray<OrchestrationV2Run>) =>
+/** The launcher's messages, so a folded digest's every wake is read, and the wakes recovery settled. */
+export interface WakeReading {
+  readonly messages?: ReadonlyArray<{ readonly id: string; readonly text: string }>;
+  readonly settled?: ReadonlySet<string>;
+}
+
+const wakesFor = (
+  end: LaunchedEnd,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  reading: WakeReading,
+) =>
   runs.flatMap((run) => {
-    const wake = parseLaunchWake(run.userMessageId);
-    return wake !== undefined &&
-      wake.launcher === end.launcherThreadId &&
-      wake.host === "" &&
-      wake.thread === end.childThreadId &&
-      wake.runId === end.runId
-      ? [wake]
-      : [];
+    const message = reading.messages?.find((candidate) => candidate.id === run.userMessageId);
+    const ids =
+      message === undefined
+        ? [run.userMessageId]
+        : parseNotices(message.id, message.text).map((notice) => notice.id);
+    return ids.flatMap((id) => {
+      const wake = parseLaunchWake(id);
+      return wake !== undefined &&
+        wake.launcher === end.launcherThreadId &&
+        wake.host === "" &&
+        wake.thread === end.childThreadId &&
+        wake.runId === end.runId
+        ? [{ ...wake, id }]
+        : [];
+    });
   });
 
 /**
@@ -86,15 +104,17 @@ const covers = (end: LaunchedEnd, wake: { readonly end: string | null }) => {
 /**
  * True while the result is owed. `ownRuns` are the launcher's runs that serve the task; a wake
  * elsewhere in `allRuns` that is not one of them cannot be the task's result, so it keeps the
- * result owed whatever the watch says.
+ * result owed whatever the watch says, unless recovery settled it for this task.
  */
 export function launchedResultOwed(
   end: LaunchedEnd,
   ownRuns: ReadonlyArray<OrchestrationV2Run>,
   allRuns: ReadonlyArray<OrchestrationV2Run> = ownRuns,
+  reading: WakeReading = {},
 ): boolean {
-  if (wakesFor(end, ownRuns).some((wake) => covers(end, wake))) return false;
-  if (wakesFor(end, allRuns).some((wake) => covers(end, wake))) return true;
+  if (wakesFor(end, ownRuns, reading).some((wake) => covers(end, wake))) return false;
+  const elsewhere = wakesFor(end, allRuns, reading).filter((wake) => covers(end, wake));
+  if (elsewhere.length > 0) return !elsewhere.some((wake) => reading.settled?.has(wake.id));
   const watch = end.watch;
   if (watch === "unreadable") return true;
   if (watch === null || watch.detached || watch.skippedRuns.includes(end.runId)) return false;
@@ -165,7 +185,38 @@ export const anyLaunchedResultOwed = (
   ends: ReadonlyArray<LaunchedEnd | "unreadable">,
   ownRuns: ReadonlyArray<OrchestrationV2Run>,
   allRuns: ReadonlyArray<OrchestrationV2Run>,
-) => ends.some((end) => end === "unreadable" || launchedResultOwed(end, ownRuns, allRuns));
+  reading: WakeReading = {},
+) => ends.some((end) => end === "unreadable" || launchedResultOwed(end, ownRuns, allRuns, reading));
+
+/**
+ * Wakes for these ends that a digest outside the task's runs holds, but that its own run
+ * launched: a digest folded before wakes named their launching run. Only a completed turn shows
+ * the provider took that input; any other status leaves the end owed, as do unresolved ones.
+ */
+export const settledLaunchWakes = Effect.fn("ChannelBotSession.settledLaunchWakes")(function* (
+  sql: SqlClient.SqlClient,
+  launcherThreadId: ThreadId,
+  ends: ReadonlyArray<LaunchedEnd | "unreadable">,
+  ownRuns: ReadonlyArray<OrchestrationV2Run>,
+  allRuns: ReadonlyArray<OrchestrationV2Run>,
+  messages: NonNullable<WakeReading["messages"]>,
+) {
+  const own = new Set<string>(ownRuns.map((run) => run.id));
+  const others = allRuns.filter((run) => !own.has(run.id) && run.status === "completed");
+  const ids = new Set(
+    ends.flatMap((end) =>
+      end === "unreadable" ? [] : wakesFor(end, others, { messages }).map((wake) => wake.id),
+    ),
+  );
+  const settled = new Set<string>();
+  for (const id of ids) {
+    const parent = yield* launchWakeParentRun(sql, launcherThreadId, id).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (parent !== undefined && own.has(parent)) settled.add(id);
+  }
+  return settled;
+});
 
 /**
  * Whether a task on this GOAT Bot session still owes a launched thread's result there. The
@@ -186,5 +237,7 @@ export const owesLaunched = Effect.fn("ChannelBotSession.owesLaunched")(function
   // A wake that arrived since the caller's own read is a live run the session must not lose.
   if (records.value.runs.some((run) => !ENDED.has(run.status))) return true;
   const own = yield* sessionTaskRuns(deps.sql, sessionThreadId, records.value, task);
-  return anyLaunchedResultOwed(ends, own, records.value.runs);
+  const { runs, messages } = records.value;
+  const settled = yield* settledLaunchWakes(deps.sql, sessionThreadId, ends, own, runs, messages);
+  return anyLaunchedResultOwed(ends, own, runs, { messages, settled });
 });

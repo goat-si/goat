@@ -32,6 +32,10 @@ export function GoatBotTaskRow(props: {
   readonly card: GoatBotTaskCard;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onOpenTask?: (() => void) | undefined;
+  /** Listed but closed, as when the bot's computer is offline. */
+  readonly disabled?: boolean;
+  /** Leaves the status out, for older work whose status is on the bot's Home. */
+  readonly statusHidden?: boolean;
 }) {
   const { card } = props;
   const titleText = useScaledTextRole("body");
@@ -60,11 +64,14 @@ export function GoatBotTaskRow(props: {
     .filter(Boolean)
     .join(" · ");
   const detailed = !props.onOpenTask;
+  const closed = props.disabled === true || (!props.onOpenTask && !opensThread);
+  const spokenStatus = props.statusHidden ? "" : ` ${status}.`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${card.title}. ${status}.${detailed && card.continuationLabel ? ` ${card.continuationLabel}.` : ""}${detailed ? ` ${(card.evidenceLabels ?? []).join(". ")}` : ""} ${action}`}
-      disabled={!props.onOpenTask && !opensThread}
+      accessibilityLabel={`${card.title}.${spokenStatus}${detailed && card.continuationLabel ? ` ${card.continuationLabel}.` : ""}${detailed ? ` ${(card.evidenceLabels ?? []).join(". ")}` : ""} ${action}`}
+      accessibilityState={{ disabled: closed }}
+      disabled={closed}
       onPress={() => {
         if (props.onOpenTask) return props.onOpenTask();
         if (target.kind === "thread" && unreachableHost === null)
@@ -72,15 +79,17 @@ export function GoatBotTaskRow(props: {
       }}
       className="min-h-[44px] gap-1 rounded-xl border border-border bg-card px-3 py-2.5"
     >
-      <View className="flex-row items-center gap-2">
-        <View className={`h-2 w-2 rounded-full ${STATUS_DOT[card.tone]}`} />
-        <Text
-          className={card.tone === "danger" ? "text-danger-foreground" : "text-foreground-muted"}
-          style={metaText}
-        >
-          {status}
-        </Text>
-      </View>
+      {props.statusHidden ? null : (
+        <View className="flex-row items-center gap-2">
+          <View className={`h-2 w-2 rounded-full ${STATUS_DOT[card.tone]}`} />
+          <Text
+            className={card.tone === "danger" ? "text-danger-foreground" : "text-foreground-muted"}
+            style={metaText}
+          >
+            {status}
+          </Text>
+        </View>
+      )}
       <Text className="font-semibold text-foreground" style={titleText}>
         {card.title}
       </Text>
@@ -111,12 +120,10 @@ export function GoatBotTaskRow(props: {
           ))
         : null}
       <Text
-        className={
-          props.onOpenTask || opensThread ? "font-medium text-foreground" : "text-foreground-muted"
-        }
+        className={closed ? "text-foreground-muted" : "font-medium text-foreground"}
         style={metaText}
       >
-        {props.onOpenTask || opensThread ? `${action} ›` : action}
+        {closed ? action : `${action} ›`}
       </Text>
     </Pressable>
   );

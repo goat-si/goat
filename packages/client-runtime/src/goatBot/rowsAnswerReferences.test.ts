@@ -164,7 +164,12 @@ describe("a task question's answer comes from what the server recorded", () => {
       person("u1", 2, "Clear", { taskId: "task-1", answersQuestionId: "q1" }),
     ]);
     expect(ids(picked)).toEqual(["b1"]);
-    expect(bot(picked, "b1")).toMatchObject({ options: [], answer: "Clear", answerIndex: 1 });
+    expect(bot(picked, "b1")).toMatchObject({
+      options: [],
+      answer: "Clear",
+      answerIndex: 1,
+      answerInputRowId: "u1",
+    });
 
     const typed = chat([
       card("task-1", 2, [], [{ questionId: "q1", inputId: "in-u1" }]),
@@ -182,7 +187,12 @@ describe("a task question's answer comes from what the server recorded", () => {
       [sending("k", 2, "Keep", "q1")],
     );
     expect(ids(on)).toEqual(["b1"]);
-    expect(bot(on, "b1")).toMatchObject({ answer: "Keep", answerIndex: 0, answerSending: true });
+    expect(bot(on, "b1")).toMatchObject({
+      answer: "Keep",
+      answerIndex: 0,
+      answerSending: true,
+      answerInputRowId: "pending:k",
+    });
 
     const failed = chat(
       [card("task-1", 1, ["q1"]), question("b1", 1, "task-1", "q1")],

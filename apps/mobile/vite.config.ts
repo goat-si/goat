@@ -57,8 +57,20 @@ const reactTests = [
   "src/features/goat-bot/GoatBotShimmerText.test.tsx",
   "src/features/goat-bot/useMobileGoatBotFace.motion.test.tsx",
   "src/features/goat-bot/MobileBotWork.test.tsx",
+  "src/features/goat-bot/MobileBotWork.lookup.test.tsx",
+  "src/features/goat-bot/MobileBotWork.taskScreen.test.tsx",
   "src/features/goat-bot/MobileBotTaskList.test.tsx",
+  "src/features/goat-bot/useMobileBotWorkHistory.test.tsx",
+  "src/features/goat-bot/useMobileBotTaskLookup.test.tsx",
+  "src/features/goat-bot/MobileTaskHeader.test.tsx",
+  "src/features/goat-bot/MobileBotTaskSearch.test.tsx",
+  "src/features/goat-bot/useMobileHistoryAnnouncements.test.tsx",
+  "src/features/goat-bot/GoatBotTaskRow.test.tsx",
   "src/features/goat-bot/MobileBotWork.home.test.tsx",
+  "src/features/goat-bot/MobileBotWork.details.test.tsx",
+  "src/features/goat-bot/MobileBotWork.offline.test.tsx",
+  "src/features/goat-bot/MobileBotWork.history.test.tsx",
+  "src/features/goat-bot/MobileBotRowMenu.test.tsx",
   "src/features/goat-bot/MobileBotMemory.test.tsx",
   "src/features/goat-bot/MobileBotLibrary.test.tsx",
   "src/features/goat-bot/MobileBotComputer.test.tsx",
@@ -145,6 +157,7 @@ const devCompiledSources = [
   "/features/goat-bot/GoatBotModelPill.tsx",
   "/features/goat-bot/GoatBotScreen.tsx",
   "/features/goat-bot/MobileBotWork.tsx",
+  "/features/goat-bot/MobileBotRowMenu.tsx",
 ];
 const require = NodeModule.createRequire(import.meta.url);
 const babel: {

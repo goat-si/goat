@@ -137,6 +137,7 @@ vi.mock("./settingsLayout", () => ({
   ),
 }));
 
+vi.mock("./DisposableMachinesSettings", () => ({ DisposableMachinesSettings: () => null }));
 import { HubSettings } from "./HubSettings";
 
 const environmentId = EnvironmentId.make("hub-environment");

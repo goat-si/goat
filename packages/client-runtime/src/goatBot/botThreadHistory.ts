@@ -86,3 +86,44 @@ export type BotThreadHistoryMerge =
       /** The last page's cursor; the walk is finished only when it is absent. */
       readonly nextCursor?: string;
     };
+/** Requests one "Show more" may make; the person presses again to read further. */
+export const BOT_THREAD_HISTORY_REQUESTS_PER_PRESS = 4;
+
+/** One history answer with the cursor that asked for it, so it can be asked again. */
+export interface BotThreadHistoryPage {
+  readonly cursor: string | undefined;
+  readonly result: ChannelListBotThreadsResult;
+}
+
+/**
+ * Reads history pages from `from` until `wanted` rows not already listed came back, the walk
+ * ends (no nextCursor), or this press used its requests. A short or empty page with a cursor is
+ * not the end. An answer without the history marker stops the walk as unsupported.
+ */
+export async function readBotThreadHistory(input: {
+  readonly read: (cursor: string | undefined) => Promise<ChannelListBotThreadsResult>;
+  readonly from: string | undefined;
+  readonly listed: ReadonlySet<string>;
+  readonly wanted: number;
+  readonly maxRequests?: number;
+}): Promise<{ readonly pages: ReadonlyArray<BotThreadHistoryPage>; readonly supported: boolean }> {
+  const pages: BotThreadHistoryPage[] = [];
+  const seen = new Set(input.listed);
+  let found = 0;
+  let cursor = input.from;
+  for (let request = 0; request < (input.maxRequests ?? BOT_THREAD_HISTORY_REQUESTS_PER_PRESS);) {
+    request += 1;
+    const result = await input.read(cursor);
+    if (result.history === undefined) return { pages, supported: false };
+    pages.push({ cursor, result });
+    for (const row of result.rows) {
+      const key = botThreadKey(row);
+      if (row.kind === "task" && !seen.has(key)) found += 1;
+      seen.add(key);
+    }
+    const next = result.history.nextCursor;
+    if (next === undefined || next === cursor || found >= input.wanted) break;
+    cursor = next;
+  }
+  return { pages, supported: true };
+}

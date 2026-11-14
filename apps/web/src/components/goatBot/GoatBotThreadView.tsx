@@ -1,6 +1,7 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { BotProfile, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLocation, useRouter } from "@tanstack/react-router";
 
 import {
   refreshArchivedThreadsForEnvironment,
@@ -83,6 +84,21 @@ function GoatBotThreadSession({
   readonly member: BotProfile | null;
 }) {
   const taskFocus = getTaskPaneFocus();
+  // An older task's Open Home names this bot's Home in the history entry it navigates to. The
+  // request is taken once and removed from that entry, so Back, Forward or a remount find none.
+  const openHomeKey = useLocation({ select: (location) => location.state.goatBotOpenHome ?? null });
+  const openHomeEntry = useLocation({ select: (location) => location.state.__TSR_key ?? "" });
+  const [openHome, setOpenHome] = useState<{ key: string; entry: string } | null>(null);
+  if (openHomeKey !== null && openHome?.entry !== openHomeEntry)
+    setOpenHome({ key: openHomeKey, entry: openHomeEntry });
+  const router = useRouter();
+  // oxlint-disable-next-line goat/react-effect-budget -- Removes the one-shot Open Home request from the browser history entry.
+  useEffect(() => {
+    const location = (router as typeof router | null)?.state.location;
+    if (openHomeKey === null || location?.state.goatBotOpenHome === undefined) return;
+    const { goatBotOpenHome: _taken, ...state } = location.state;
+    router.history.replace(location.href, state);
+  }, [openHomeKey, router]);
   // oxlint-disable-next-line goat/react-effect-budget -- Restore focus after the bot thread remounts.
   useLayoutEffect(() => {
     restoreTaskOpener(taskFocus);
@@ -104,7 +120,7 @@ function GoatBotThreadSession({
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(visibleTurnItems, null, member);
+  const session = useGoatBotSession(visibleTurnItems, null, member, threadRef);
   const manage = useBotManage(environmentId);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -175,8 +191,10 @@ function GoatBotThreadSession({
       >
         <GoatBotChatView
           {...session}
+          projectionRef={threadRef}
           environmentId={environmentId}
           unreadSince={unreadSince}
+          openHome={openHome}
           homeMove={
             moveTarget
               ? {

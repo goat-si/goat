@@ -20,10 +20,7 @@ import {
   mergeClaudeProcessEnvironment,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
-import {
-  isWindowsClaudeLauncherShimPath,
-  resolveClaudeSdkExecutablePath,
-} from "./ClaudeExecutable.ts";
+import { isWindowsClaudeLauncherShimPath, resolveClaudeSdkExecutable } from "./ClaudeExecutable.ts";
 
 const decodeSiblingSettings = Schema.decodeUnknownEffect(ClaudeSettings);
 const isCloudError = Schema.is(ClaudeCloudError);
@@ -63,6 +60,15 @@ export const forbiddenClaudeCloudVariables = (input: NodeJS.ProcessEnv): string[
 const fail = (detail: string, fields: Partial<ConstructorParameters<typeof ClaudeCloudError>[0]>) =>
   Effect.fail(new ClaudeCloudError({ detail, outcome: "rejected", ...fields }));
 
+const searchedPath = (environment: NodeJS.ProcessEnv): string => {
+  const key = Object.keys(environment).find((name) => name.toUpperCase() === "PATH");
+  const entries = (key === undefined ? "" : (environment[key] ?? ""))
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.length === 0 ? "PATH is empty" : `GOAT looked in PATH: ${entries.join("; ")}`;
+};
+
 const mapResolutionError = Effect.mapError((cause: unknown) =>
   isCloudError(cause)
     ? cause
@@ -74,10 +80,9 @@ const mapResolutionError = Effect.mapError((cause: unknown) =>
 );
 
 /**
- * The sibling's login without the refusals that only depend on its result:
- * `forbidden` names routing variables set in `login.environment`, and
- * `nativeBinary` is false for a launcher shim or script. Diagnosis uses it to
- * report every blocker at once; launches use {@link resolveClaudeCloudLogin}.
+ * The sibling's login without the refusals that depend on its result (`forbidden`,
+ * `nativeBinary` false for a shim or script, `binaryFound` false for a Windows miss).
+ * Diagnosis uses it to report every blocker at once; launches use {@link resolveClaudeCloudLogin}.
  */
 export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(function* (
   sourceInstanceId: ProviderInstanceId,
@@ -102,10 +107,11 @@ export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(
     processEnvironment,
   );
   const environment = prepareClaudeCloudEnvironment(yield* makeClaudeEnvironment(sibling, merged));
-  const binary = yield* resolveClaudeSdkExecutablePath(
+  const executable = yield* resolveClaudeSdkExecutable(
     expandHomePath(sibling.binaryPath, homeDirectory),
     environment,
   );
+  const binary = executable.path;
   const home = yield* resolveClaudeHomePath(sibling, environment);
   return {
     login: {
@@ -115,6 +121,7 @@ export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(
     } satisfies ClaudeCloudLogin,
     forbidden: forbiddenClaudeCloudVariables(environment),
     nativeBinary: !isWindowsClaudeLauncherShimPath(binary) && !/\.(?:js|mjs|cjs)$/i.test(binary),
+    binaryFound: executable.found,
   };
 }, mapResolutionError);
 
@@ -122,7 +129,14 @@ export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(
 export const resolveClaudeCloudLogin = Effect.fn("resolveClaudeCloudLogin")(function* (
   sourceInstanceId: ProviderInstanceId,
 ) {
-  const { login, forbidden, nativeBinary } = yield* resolveClaudeCloudSibling(sourceInstanceId);
+  const { login, forbidden, nativeBinary, binaryFound } =
+    yield* resolveClaudeCloudSibling(sourceInstanceId);
+  // ConPTY would get the bare name and fail with a generic PTY error.
+  if (!binaryFound)
+    return yield* fail(
+      `Claude CLI not found: ${login.binary} did not resolve to a native Claude executable on this machine. ${searchedPath(login.environment)}. Install Claude Code, or set the binary path of Claude instance ${sourceInstanceId}.`,
+      { reason: "executable_unsupported" },
+    );
   if (forbidden.length > 0)
     return yield* fail(
       "The sibling has bundle, Git routing or third-party/API-key routing variables. Use a Claude instance configured for claude.ai cloud login.",

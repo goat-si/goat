@@ -401,3 +401,43 @@ it.effect(
       expect(yield* hub.consumed).toEqual([]);
     }),
 );
+it.effect(
+  "every failure before ocx starts answers with a code, so a waiting change stays continuable, and keeps the approval",
+  () =>
+    Effect.gen(function* () {
+      const cases = [
+        { kind: "unstartable" as const, code: "ocx_unstartable" },
+        { kind: "missing" as const, code: "ocx_missing" },
+        { kind: "unreachable" as const, code: "link_status_unreadable" },
+        { kind: "failed" as const, code: "link_status_unreadable" },
+        { kind: "child" as const, code: "this_machine_is_child" },
+        { kind: "unlinked" as const, code: "link_not_found" },
+      ];
+      for (const { kind, code } of cases) {
+        const { hub, decisionId } = yield* approvedChange(routesHome());
+        if (kind === "unlinked") hub.unlink("mini");
+        else hub.breakLinkStatus(kind);
+        const failed = yield* hub.membership.updateRoutes(scope, { ...add, decisionId });
+        expect(failed, kind).toMatchObject({ state: "failed", code });
+        expect(yield* hub.consumed, kind).toEqual([]);
+        expect(routesCalls(hub.calls), kind).toEqual([]);
+      }
+    }),
+);
+it.effect(
+  "a routes read that fails after the link status was read does not blame the status read",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        linked: ["mini"],
+        routesRun: () =>
+          Effect.fail(
+            new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
+          ),
+      });
+      const listed = yield* hub.membership.routes(scope, { deviceAlias: "mini" });
+      expect(listed.state).toBe("failed");
+      expect(listed.code).toBeUndefined();
+      expect(listed.message).toBe("ocx could not be run here.");
+    }),
+);

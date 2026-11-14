@@ -6,6 +6,9 @@ import type {
   HubDeviceOperationInput,
   HubDeviceRoutesInput,
   HubDeviceRoutesUpdateInput,
+  HubMachineAttachInput,
+  HubMachineListInput,
+  HubMachineReissueInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
@@ -22,6 +25,9 @@ import * as HubMembership from "../../../hub/HubMembership.ts";
 import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
 import * as ChildReady from "../../../opencodex/OpenCodexChildReady.ts";
 import * as ChildBootstrap from "../../../opencodex/OpenCodexChildBootstrap.ts";
+import * as DisposableAttach from "../../../hub/disposable/DisposableAttach.ts";
+import { penNodeId } from "../../../hub/disposable/attachModel.ts";
+import { machineFailure, threadOf } from "./machineFailure.ts";
 
 /** Fan-out and a named host use this machine's SSH keys. local:true does not. */
 const reachesAnotherHost = (input: GoatHostStatusInput) => input.local !== true;
@@ -116,6 +122,48 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       return yield* (yield* HubMembership.HubMembership).updateRoutes(scope, input);
     }),
+  ),
+  // The switch, the named thread and the grant are the service's checks; goatclaw narrows agents.
+  goat_hub_machine_attach: McpToolAccess.writesAsCaller((input: HubMachineAttachInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const threadId = yield* threadOf(scope);
+      const nodeId = penNodeId(input.signPub) ?? "invalid";
+      yield* (yield* Profiles.PermissionProfiles).require(scope, "hub.manage", {
+        host: "pen-" + nodeId,
+      });
+      const caller = {
+        provisioner: {
+          kind: "thread" as const,
+          threadId: threadId,
+          ...(input.cloudRunId === undefined ? {} : { cloudRunId: input.cloudRunId }),
+        },
+      };
+      return yield* (yield* DisposableAttach.DisposableAttach)
+        .attach(caller, "thread:" + threadId, input)
+        .pipe(Effect.mapError(machineFailure));
+    }),
+  ),
+  goat_hub_machine_reissue: McpToolAccess.writesAsCaller((input: HubMachineReissueInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const threadId = yield* threadOf(scope);
+      const machines = yield* DisposableAttach.DisposableAttach;
+      const nodeId = yield* machines.nodeOf(input.attachId).pipe(Effect.mapError(machineFailure));
+      if (nodeId !== undefined)
+        yield* (yield* Profiles.PermissionProfiles).require(scope, "hub.manage", {
+          host: "pen-" + nodeId,
+        });
+      const caller = { provisioner: { kind: "thread" as const, threadId: threadId } };
+      return yield* machines
+        .reissue(caller, "thread:" + threadId, input)
+        .pipe(Effect.mapError(machineFailure));
+    }),
+  ),
+  goat_hub_machine_list: McpToolAccess.reads((input: HubMachineListInput) =>
+    Effect.flatMap(DisposableAttach.DisposableAttach, (machines) =>
+      machines.list(input).pipe(Effect.mapError(machineFailure)),
+    ),
   ),
   goat_hub_device_verify: McpToolAccess.readsOrReachesHost(
     () => true,

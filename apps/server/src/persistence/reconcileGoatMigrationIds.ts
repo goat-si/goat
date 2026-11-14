@@ -73,6 +73,8 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "RemoteDispatchHostOutage",
   "ChannelBotTaskHistory",
   "DisposableMachines",
+  "DisposableMachineRequests",
+  "DisposableMachineEnrollment",
   "AuthSessionPenMember",
 ]);
 

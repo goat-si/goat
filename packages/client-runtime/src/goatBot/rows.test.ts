@@ -718,6 +718,44 @@ describe("buildGoatBotTimeline", () => {
     ).toEqual([[]]);
     expect(options([], [user("u2", "2026-10-12T12:00:03Z", "Release")])).toEqual([[]]);
   });
+
+  it("identifies the folded input as it changes from pending to committed", () => {
+    const presentation = {
+      tone: "question",
+      readAt: null,
+      requestKey: null,
+      options: ["Keep", "Change"],
+    } as const;
+    const question = bot("q", "2026-10-12T12:00:00Z", "Which option?");
+    const pending = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([question]),
+        pendingInputs: [
+          {
+            clientKey: "local",
+            text: "Keep",
+            createdAt: "2026-10-12T12:00:01Z",
+            state: "sending",
+            requestKey: null,
+          },
+        ],
+        readers: readers({ q: presentation }),
+      }),
+    );
+    expect(pending).toMatchObject([
+      { kind: "bot", answer: "Keep", answerInputRowId: "pending:local" },
+    ]);
+    const committed = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([question, user("committed", "2026-10-12T12:00:01Z", "Keep")]),
+        pendingInputs: [],
+        readers: readers({ q: presentation }),
+      }),
+    );
+    expect(committed).toMatchObject([
+      { kind: "bot", answer: "Keep", answerInputRowId: "committed" },
+    ]);
+  });
 });
 
 describe("goatBotReplyingSince", () => {

@@ -1,6 +1,7 @@
 import * as DecisionService from "../goatclaw/DecisionService.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import * as DisposableAttach from "../hub/disposable/DisposableAttach.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshSetup from "../sshRemote/SshHostSetup.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -833,6 +834,7 @@ it.effect.each([
       repair: hub("repair"),
       move: hub("move"),
     }),
+    Layer.mock(DisposableAttach.DisposableAttach)({}),
     Layer.mock(LinkedHosts.LinkedHosts)({
       link: (input) =>
         record(input).pipe(

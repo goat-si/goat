@@ -122,6 +122,43 @@ before you retry. Agents use `goat_hub_device_routes_update`, and a profile
 other than owner asks you first. Routes need an OpenCodex release with link
 routes on the hub; an older one says so.
 
+## Disposable machines
+
+A disposable machine is one you build for a short job, such as a cloud VM, and
+admit to your Pen mesh with a one-time invite. Turn on **Attach disposable
+machines** in **Settings → Hub** (the hub must be on), then name the threads that
+may attach machines by their thread ID (**Copy → Thread ID** in a thread's menu).
+Only a person can change this consent, and it lasts 30 days: when it ends,
+**Renew for 30 days** opens it again. Changing the threads, the cap or the name
+rule cancels invites that were not used yet.
+
+To attach a machine yourself, choose **Attach a machine**, paste the line
+`pen identity --json` prints on that machine, and name it. GOAT shows the invite
+token once, with this hub's machine key. Add the key to `authorized_keys` of the
+machine's SSH user, then run `pen join` with the token on that machine within
+10 minutes. While it
+waits, **Reissue** cancels that invite and makes a new one for the same keys;
+once it has expired, attach the machine again. A provisioner
+thread does the same with `goat_hub_machine_attach`; its invite token appears in
+that thread's tool output and history, so treat the thread as holding a secret
+until the invite is used or expires.
+
+Once the machine joins, the hub checks the route Pen recorded for it, reaches
+it with the machine key alone, and links it to OpenCodex as a lightweight Child
+on that route only. The machine list says where each machine is and what to do
+next. On web and desktop, a machine GOAT cannot reach yet shows the machine key
+with **Copy machine key**; on mobile its text says where to find the key. The link
+needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
+release can yet; until one can, the machine waits at the link step. A machine with a full OpenCodex install, or one that shares its
+SSH host key with another disposable machine, stops for you to decide.
+
+Each machine is a full Pen member and can reach services on your machines'
+loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
+it with [`pen revoke`](pen.md#remove-a-machine). Removing a linked machine from Pen leaves its
+link on the hub; the machine list names the link and the `ocx link revoke`
+command that removes it. An older GOAT on the
+hub shows **Update GOAT on this hub** instead of these settings.
+
 ## Sync OpenCodex models
 
 **Sync OpenCodex** loads OpenCodex's current models into Codex, on the hub first

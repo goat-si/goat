@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import {
   DISPOSABLE_NAME_RULE_DEFAULT,
   DisposableNameRule,
+  HubMachinesError,
+  HubMachineStatus,
   matchesDisposableNameRule,
 } from "./disposableMachines.ts";
 
@@ -32,4 +34,32 @@ describe("the disposable name rule", () => {
     expect(matchesDisposableNameRule("a*a*a*a*a*a*a*a*a*a*b", name)).toBe(false);
     expect(matchesDisposableNameRule("(a|a)*b", name)).toBe(false);
   });
+});
+
+const decodeStatus = Schema.decodeSync(HubMachineStatus);
+const decodeError = Schema.decodeSync(HubMachinesError);
+
+// A newer hub may add a class or a refusal; an older client still reads the rest of the answer.
+it("decodes a machine class and a refusal reason this client does not know", () => {
+  const status = decodeStatus({
+    attachId: "a-1",
+    name: "cc-1",
+    nodeId: "node",
+    state: "retiring",
+    step: null,
+    steps: [],
+    message: "cc-1 is retiring.",
+    nextAction: null,
+    class: "returned",
+    penMember: false,
+    provisioner: { kind: "person" },
+    stateSince: "2026-11-13T00:00:00.000Z",
+  });
+  expect(status.class).toBe("returned");
+  const error = decodeError({
+    _tag: "HubMachinesError",
+    reason: "machine_busy",
+    detail: "Busy.",
+  });
+  expect(error.reason).toBe("machine_busy");
 });

@@ -52,6 +52,7 @@ const prefixFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ":";
 const afterFor = (taskId: ChannelTaskId) => "child-work:" + taskId + ";";
 const isDelegateSurface = (surface: ChannelChildWork["surface"]) =>
   surface === "delegate_local" || surface === "delegate_remote";
+const SETTLED_STATES: ReadonlyArray<ChannelChildWorkState> = ["completed", "failed", "cancelled"];
 
 export type ChannelChildWorkAdmitResult =
   | { readonly _tag: "admitted" }
@@ -113,6 +114,35 @@ export class ChannelChildWorkStore extends Context.Service<
       readonly threadIdIfMissing?: ThreadId | undefined;
       readonly now: string;
     }) => Effect.Effect<ChannelChildWork | undefined, ChannelChildWorkStoreError>;
+    /**
+     * Up to `limit` child-work rows after this key, in key order: the last key read, how many
+     * rows were read, and among them the settled remote thread launches with no thread whose
+     * dispatch holds the thread its host acknowledged.
+     */
+    readonly pageSettledLaunches: (
+      after: string,
+      limit: number,
+    ) => Effect.Effect<
+      {
+        readonly lastKey: string | undefined;
+        readonly inspected: number;
+        readonly candidates: ReadonlyArray<{
+          readonly record: ChannelChildWork;
+          readonly remoteThreadId: string;
+        }>;
+      },
+      ChannelChildWorkStoreError
+    >;
+    /**
+     * Fills a settled remote launch's missing thread when the record still names this
+     * correlation and has none; true only when this call filled it. Timestamps stay as settled.
+     */
+    readonly fillSettledLaunchThread: (input: {
+      readonly taskId: ChannelTaskId;
+      readonly childWorkId: ChannelChildWorkId;
+      readonly correlationId: string;
+      readonly threadId: ThreadId;
+    }) => Effect.Effect<boolean, ChannelChildWorkStoreError>;
   }
 >()("goat/channels/channelChildWorkStore") {}
 
@@ -261,6 +291,71 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(toStoreError("transition")));
   });
 
+  // The inner LIMIT bounds the rows read, whether or not any of them match.
+  const pageSettledLaunches = (after: string, limit: number) =>
+    sql<{
+      readonly key: string;
+      readonly value_json: string;
+      readonly remote_thread_id: string | null;
+    }>`
+      SELECT c.key, c.value_json, d.remote_thread_id FROM (
+        SELECT key, value_json FROM channel_runtime_state
+        WHERE key > ${after} AND key >= ${"child-work:"} AND key < ${"child-work;"}
+        ORDER BY key LIMIT ${limit}
+      ) c
+      LEFT JOIN remote_dispatches d
+        ON json_extract(c.value_json, '$.surface') = 'ssh_thread_launch'
+        AND json_extract(c.value_json, '$.state') IN ${sql.in(SETTLED_STATES)}
+        AND json_extract(c.value_json, '$.destination.threadId') IS NULL
+        AND d.correlation_id = json_extract(c.value_json, '$.destination.correlationId')
+        AND d.kind = 'thread' AND d.host = json_extract(c.value_json, '$.destination.host')
+      ORDER BY c.key
+    `.pipe(
+      Effect.map((rows) => ({
+        lastKey: rows.at(-1)?.key,
+        inspected: rows.length,
+        candidates: rows.flatMap((row) =>
+          row.remote_thread_id === null
+            ? []
+            : [{ record: decode(row.value_json), remoteThreadId: row.remote_thread_id }],
+        ),
+      })),
+      Effect.mapError(toStoreError("pageSettledLaunches")),
+    );
+
+  const fillSettledLaunchThread = Effect.fn("ChannelChildWorkStore.fillSettledLaunchThread")(
+    function* (input: {
+      readonly taskId: ChannelTaskId;
+      readonly childWorkId: ChannelChildWorkId;
+      readonly correlationId: string;
+      readonly threadId: ThreadId;
+    }) {
+      const key = keyFor(input.taskId, input.childWorkId);
+      return yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<{ readonly value_json: string }>`
+              SELECT value_json FROM channel_runtime_state WHERE key = ${key}
+            `;
+            if (rows[0] === undefined) return false;
+            const current = decode(rows[0].value_json);
+            const destination = current.destination;
+            if (
+              current.surface !== "ssh_thread_launch" ||
+              !SETTLED_STATES.includes(current.state) ||
+              destination?.correlationId !== input.correlationId ||
+              destination.threadId !== undefined
+            )
+              return false;
+            const next = { ...current, destination: { ...destination, threadId: input.threadId } };
+            yield* sql`UPDATE channel_runtime_state SET value_json = ${encode(next)} WHERE key = ${key}`;
+            return true;
+          }),
+        )
+        .pipe(Effect.mapError(toStoreError("fillSettledLaunchThread")));
+    },
+  );
+
   return ChannelChildWorkStore.of({
     get,
     listForTask,
@@ -269,6 +364,8 @@ const make = Effect.gen(function* () {
     findByDestinationThread,
     admitReserved,
     transition,
+    pageSettledLaunches,
+    fillSettledLaunchThread,
   });
 });
 

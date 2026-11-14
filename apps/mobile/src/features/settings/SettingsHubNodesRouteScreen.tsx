@@ -3,6 +3,8 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   cloudAutoJoinSaveError,
   connectHubProxySaveError,
+  disposableConsentEnded,
+  disposableSwitchSaveError,
   hubDeviceList,
 } from "@goat/client-runtime/hub-devices";
 import {
@@ -12,6 +14,7 @@ import {
   hubNodeRemovalInput,
   hubNodeRouteLabel,
   hubNodeStatusLabel,
+  isHubMachinesUnsupportedError,
   isHubNodesUnsupportedError,
 } from "@goat/client-runtime/hub-nodes";
 import {
@@ -129,6 +132,19 @@ function HubNodesSelection({
 const SETUP_REFRESH_MS = 15_000;
 const STATUS_REFRESH_MS = 60_000;
 
+/** When the consent ends, or that it ended; a phone renews it by turning the switch off and on. */
+function consentText(
+  value: { readonly enabled: boolean; readonly expiresAt: string | null },
+  nowMs: number,
+): string {
+  if (!value.enabled) return "";
+  if (disposableConsentEnded(value, nowMs))
+    return " Consent has ended: turn the switch off and on to renew it for 30 days.";
+  return value.expiresAt === null
+    ? ""
+    : ` Consent ends ${new Date(value.expiresAt).toLocaleString()}.`;
+}
+
 /** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
 function HubDevicesList({
   environmentId,
@@ -139,12 +155,16 @@ function HubDevicesList({
 }) {
   const listed = useEnvironmentQuery(serverEnvironment.hubNodesLive({ environmentId, input: {} }));
   const status = useEnvironmentQuery(serverEnvironment.hostStatus({ environmentId, input: {} }));
+  const machines = useEnvironmentQuery(
+    serverEnvironment.hubMachinesList({ environmentId, input: {} }),
+  );
   const { environments } = useEnvironments();
   const hubSettings =
     environments.find((entry) => entry.environmentId === environmentId)?.serverConfig?.settings
       .hub ?? null;
   const hosts = status.data?.hosts ?? [];
   const unsupported = isHubNodesUnsupportedError(listed.cause);
+  const machinesUnsupported = isHubMachinesUnsupportedError(machines.cause);
   const snapshot = hubSnapshot(
     hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
   );
@@ -237,6 +257,60 @@ function HubDevicesList({
             disabled={!canConfigure || !hubSettings.enabled || busy !== null}
             onValueChange={saveCloudAutoJoin}
           />
+        </View>
+      )}
+      {hubSettings !== null && machinesUnsupported && (
+        <View className="gap-1 rounded-xl bg-grouped-card p-4">
+          <Text className="text-foreground">Attach disposable machines</Text>
+          <Text className="text-sm text-foreground-muted">
+            Update GOAT on this hub to attach disposable machines.
+          </Text>
+        </View>
+      )}
+      {hubSettings?.attachDisposableMachines && !machinesUnsupported && (
+        <View className="gap-3 rounded-xl bg-grouped-card p-4">
+          <View className="flex-row items-center gap-3">
+            <View className="flex-1 gap-1">
+              <Text className="text-foreground">Attach disposable machines</Text>
+              <Text className="text-sm text-foreground-muted">{`Threads you name in Settings on desktop or web, and you there, may admit up to ${hubSettings.attachDisposableMachines.cap} machines to your Pen mesh. Each one is a full Pen member and can reach every service on your machines' loopback until you remove it from Pen.${consentText(hubSettings.attachDisposableMachines, now)}`}</Text>
+            </View>
+            <ThemedSwitch
+              accessibilityLabel="Attach disposable machines"
+              value={hubSettings.attachDisposableMachines.enabled}
+              disabled={!canConfigure || !hubSettings.enabled || busy !== null}
+              onValueChange={(enabled) =>
+                void run("disposable-machines", async () => {
+                  const result = await updateSettings({
+                    environmentId,
+                    input: { patch: { hub: { attachDisposableMachines: { enabled } } } },
+                  });
+                  if (result._tag === "Success")
+                    setError(
+                      disposableSwitchSaveError(
+                        enabled,
+                        result.value.hub.attachDisposableMachines.enabled,
+                      ),
+                    );
+                  return result;
+                })
+              }
+            />
+          </View>
+          {machines.error && <Text>{machines.error}</Text>}
+          {machines.data?.machines.map((machine) => (
+            <View key={machine.attachId}>
+              <Text>
+                {machine.name} · {machine.message}
+              </Text>
+              <Text>
+                {machine.provisioner.kind === "person"
+                  ? "Person"
+                  : `Thread ${machine.provisioner.threadId}`}
+                {machine.penMember ? " · Still in Pen" : ""}
+              </Text>
+            </View>
+          ))}
+          <Button label="Refresh machines" onPress={machines.refresh} />
         </View>
       )}
       {isGoatConnectEnabled() && hubSettings !== null && (

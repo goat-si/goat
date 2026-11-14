@@ -74,6 +74,61 @@ export const hubEntries = {
       "One setup runs per machine and a concurrent call joins it; a valid proof is reused, and each new attempt starts from the Child's recorded progress.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.machine_attach": entry({
+    resource: "hub",
+    verb: "machine_attach",
+    name: "goat_hub_machine_attach",
+    toolkit: "hostStatus",
+    summary: "Admit a machine you built to this hub's Pen mesh with a bound invite.",
+    description:
+      "Start one attach for a cloud machine this thread provisioned: GOAT mints a Pen invite bound to its keys and name and returns the token once, with the hub's machineKey. Add machineKey to the machine user's authorized_keys and run pen join; GOAT then checks the route, reaches the machine with that key and links it as a lightweight OpenCodex Child. Read goat_hub_machine_list for its state.",
+    guide:
+      "Needs the hub setting Attach disposable machines on, unexpired, with this thread named as a provisioner (a person decides in Settings), hub.manage for pen-<nodeId> when goatclaw is on, and a full-access thread in default mode. Pass the keys pen identity --json printed on the machine. The token is a bearer secret bound to these keys: hand it only to that machine and do not write it anywhere else. The attach service keeps no copy and a repeat with the same clientRequestId answers without it, but this tool result, token included, stays in this thread's history and your provider's transcript. The invite lives 10 minutes. The attach holds one cap slot from the start. An invite that expires, or one cancelled without a replacement (a consent change), frees it. A reissue keeps the slot, and a machine that joins keeps it until it is removed from Pen. Names follow Pen's rule (1 to 32 of a-z, 0-9, - _ ., starting with a letter or digit) and the switch's name rule. Refusals: invalid_request, switch_off, switch_expired, provisioner_refused, delegation_lost, cap_reached, name_rule, key_in_use, conflict, pen_unsupported, opencodex_unsupported, unknown_outcome (it may have started: read goat_hub_machine_list), storage_failed. machineKey is this hub's public SSH key, the only identity GOAT and the hub's OpenCodex offer the machine; add it before or after pen join. After admission the attach moves on by itself in 30-second passes (route, reach, link); it waits while the machine refuses the key or this hub's OpenCodex cannot link with it, and stops for a person on a full OpenCodex install, an SSH host key another disposable machine shares, or one Pen changed. A Pen member admitted this way holds the owner's authority on every member until a person removes it from Pen.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service keys each attach by its caller and clientRequestId and answers a repeat from the stored record, without the token; the generic receipt would store the token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_reissue": entry({
+    resource: "hub",
+    verb: "machine_reissue",
+    name: "goat_hub_machine_reissue",
+    toolkit: "hostStatus",
+    summary: "Cancel an attach's open Pen invite and mint a new one for the same keys.",
+    description:
+      "Cancel the open invite of an attach that nobody joined yet and mint a new token bound to the same keys. If the old invite was already used, no token is minted and the attach shows what Pen recorded.",
+    guide:
+      "Only the thread that started the attach, or a person, may reissue it, under the same switch and grant checks as goat_hub_machine_attach. Use a new clientRequestId for each reissue; a repeat of one answers without a token. A lost answer needs another reissue with a new key, which cancels the token that answer carried. An attach takes at most 32 invites. Refusals: not_found, provisioner_refused, invalid_request (a clientRequestId used for another attach), conflict (no open invite; the record changed while the invite was being made; or all 32 used: the last invite holds the keys until GOAT records its expiry, on the next 30-second pass or list, later if Pen cannot be reached), switch_off, switch_expired, delegation_lost, pen_unsupported, opencodex_unsupported, unknown_outcome (read goat_hub_machine_list), storage_failed.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service records each reissue's request key on its mint and answers a repeat without minting or returning a token.",
+    annotations: { idempotentHint: false, openWorldHint: true },
+  }),
+  "hub.machine_list": entry({
+    resource: "hub",
+    verb: "machine_list",
+    name: "goat_hub_machine_list",
+    toolkit: "hostStatus",
+    summary: "List this hub's disposable machines with their attach state.",
+    description:
+      "List disposable machine records, or one by attachId, with state, step, class and whether the key is still a Pen member. Reading asks Pen to settle open invites and waits up to 3 seconds; a slower answer shows on a later read.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "hub.device_verify": entry({
     resource: "hub",
     verb: "device_verify",
@@ -203,7 +258,7 @@ export const hubEntries = {
     description:
       "Change the SSH routes this machine's OpenCodex Home tries for a Remote Link Child: add one (optionally at a position), remove one, or set their order. Reuse clientRequestId for an identical retry. When approval requires calling again with decisionId, use a new key for that continuation. Read goat_hub_device_routes to check the result.",
     guide:
-      "Runs ocx link routes add|remove|order on this Home for the link whose alias is deviceAlias. A route is an ssh_config alias or user@host. OpenCodex stores an added route only after it proved the link's pinned host key over that route, and refuses removing the pinned alias; such refusals come back as state failed with OpenCodex's fixed code (route_unproven with its cause, route_exists, route_limit, route_is_pin, route_order_mismatch, route_not_found, link_not_found, invalid_link_id, link_changed, pin_changed, pin_mismatch, trust_file_unexpected, link_operation_in_progress, link_exclusive, link_not_home_initiated, invalid_body, routes_stored_reload_failed). link_exclusive means the link's one route was fixed at enrollment and cannot be edited; link_not_home_initiated means the Child opened the link itself, so the Home has no routes for it; invalid_body includes a position past the end of the list. ocx_unstartable means ocx could not be started on this hub, so nothing changed. routes_stored_reload_failed means the change was stored and applies after an OpenCodex restart. When ocx does not answer within 2 minutes the Home may still finish the change: read goat_hub_device_routes before retrying. A Home whose OpenCodex has no ocx link routes answers state unsupported. Needs hub.manage for deviceAlias and for every route the change names. An owner-profile caller changes routes directly; any other profile needs a person's approval bound to the link and this exact change. An outcome before ocx starts (ocx missing or not startable, no link, an unreadable link status, an interruption before the start) and a fixed refusal leave that approval unspent; any other outcome after ocx starts spends it. In a thread, approvals carry a handoff whose ID equals decisionId; otherwise they use the decision inbox.",
+      "Runs ocx link routes add|remove|order on this Home for the link whose alias is deviceAlias. A route is an ssh_config alias or user@host. OpenCodex stores an added route only after it proved the link's pinned host key over that route, and refuses removing the pinned alias; such refusals come back as state failed with OpenCodex's fixed code (route_unproven with its cause, route_exists, route_limit, route_is_pin, route_order_mismatch, route_not_found, link_not_found, invalid_link_id, link_changed, pin_changed, pin_mismatch, trust_file_unexpected, link_operation_in_progress, link_exclusive, link_not_home_initiated, invalid_body, routes_stored_reload_failed). link_exclusive means the link's one route was fixed at enrollment and cannot be edited; link_not_home_initiated means the Child opened the link itself, so the Home has no routes for it; invalid_body includes a position past the end of the list. A failure before ocx starts also carries a code and changed nothing: ocx_missing, ocx_unstartable (ocx could not be started), link_status_unreadable, this_machine_is_child, link_not_found. routes_stored_reload_failed means the change was stored and applies after an OpenCodex restart. When ocx does not answer within 2 minutes the Home may still finish the change: read goat_hub_device_routes before retrying. A Home whose OpenCodex has no ocx link routes answers state unsupported. Needs hub.manage for deviceAlias and for every route the change names. An owner-profile caller changes routes directly; any other profile needs a person's approval bound to the link and this exact change. An outcome before ocx starts (ocx missing or not startable, no link, an unreadable link status, an interruption before the start) and a fixed refusal leave that approval unspent; any other outcome after ocx starts spends it. In a thread, approvals carry a handoff whose ID equals decisionId; otherwise they use the decision inbox.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,

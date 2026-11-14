@@ -73,6 +73,17 @@ const storeCheck = (threadId: string, runId: string, status = check.status) =>
     ON CONFLICT(thread_id, run_id) DO UPDATE SET status=excluded.status, exit_code=excluded.exit_code, duration_ms=excluded.duration_ms, output_tail=excluded.output_tail`;
   });
 
+const PENDING = "GOAT's own check is pending";
+const NOT_RUN = "GOAT's own check did not run";
+
+/** The GOAT Bot chat messages that say this. */
+const chatSaying = (phrase: string) =>
+  Effect.map(botMessages, (records) => records.messages.filter((m) => m.text.includes(phrase)));
+
+const storeNotRun = (sql: SqlClient.SqlClient, threadId: string, runId: string) =>
+  sql`INSERT INTO thread_run_observed_checks (thread_id, run_id, status, command, started_at)
+    VALUES (${threadId}, ${runId}, 'not_run', '', ${check.at})`;
+
 describe("channel check evidence", () => {
   it.effect(
     "retains a failing observed check beside reported success without changing completion",
@@ -265,6 +276,84 @@ describe("channel check evidence", () => {
       const version = task.version;
       yield* runtime.drain;
       assert.strictEqual((yield* onlyTask).version, version);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+  it.effect(
+    "regression: tells a GOAT Bot chat once that its pending check ended without running",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { runtime, threadId, runId, sql } = yield* start(harness, "goat");
+        harness.world.setStatus(threadId, 1, "completed", "Done.");
+        yield* runtime.drain;
+        assert.lengthOf(yield* chatSaying(PENDING), 1);
+        yield* storeNotRun(sql, threadId, runId);
+        yield* runtime.drain;
+        yield* runtime.drain;
+        const told = yield* chatSaying(NOT_RUN);
+        assert.deepStrictEqual(
+          told.map((m) => m.channel?.kind),
+          ["result"],
+        );
+        assert.isTrue(told[0]!.text.startsWith("Verification for "));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "concurrency: a check resolved before the outcome is narrated is told once, never as pending",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { runtime, threadId, runId, sql } = yield* start(harness, "goat");
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        harness.world.setStatus(threadId, 1, "completed", "Done.");
+        yield* reports.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).observed?.result?.observedCheckPending, true);
+        yield* storeNotRun(sql, threadId, runId);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.lengthOf(yield* chatSaying(PENDING), 0);
+        assert.lengthOf(yield* chatSaying(NOT_RUN), 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect("regression: tells Slack once that a running check ended without running", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, threadId, runId, sql } = yield* start(harness);
+      yield* storeCheck(threadId, runId, "running");
+      harness.world.setStatus(threadId, 1, "completed", "Done.");
+      yield* runtime.drain;
+      yield* sql`UPDATE thread_run_observed_checks SET status = 'not_run' WHERE thread_id = ${threadId} AND run_id = ${runId}`;
+      yield* runtime.drain;
+      yield* runtime.drain;
+      const told = harness.slackSent.filter((delivery) => delivery.message.text.includes(NOT_RUN));
+      assert.deepStrictEqual(
+        told.map((delivery) => delivery.message.kind),
+        ["receipt"],
+      );
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect("adds no correction for a task whose check never ran or waited", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { runtime, threadId, runId, sql } = yield* start(harness, "goat");
+      yield* storeNotRun(sql, threadId, runId);
+      harness.world.setStatus(threadId, 1, "completed", "Done.");
+      yield* runtime.drain;
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).observed?.result?.observedCheckPending, false);
+      assert.lengthOf(
+        (yield* botMessages).messages.filter((m) => m.text.startsWith("Verification for ")),
+        0,
+      );
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 });

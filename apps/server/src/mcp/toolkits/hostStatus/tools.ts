@@ -38,6 +38,14 @@ import * as HubMembership from "../../../hub/HubMembership.ts";
 import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
 import * as ChildReady from "../../../opencodex/OpenCodexChildReady.ts";
 import * as ChildBootstrap from "../../../opencodex/OpenCodexChildBootstrap.ts";
+import * as DisposableAttach from "../../../hub/disposable/DisposableAttach.ts";
+import {
+  HubMachineAttachInput,
+  HubMachineList,
+  HubMachineListInput,
+  HubMachineReissueInput,
+  HubMachineStatus,
+} from "@goat/contracts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -193,6 +201,47 @@ const ResourceHistoryTool = Tool.make(agentSurfaceRegistry["host.resource_histor
   dependencies: [McpInvocationContext.McpInvocationContext, Telemetry.ResourceTelemetry],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["host.resource_history"]));
 
+const MachineAttachTool = Tool.make(agentSurfaceRegistry["hub.machine_attach"].name, {
+  description: agentSurfaceRegistry["hub.machine_attach"].description,
+  parameters: HubMachineAttachInput,
+  success: HubMachineStatus,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    ThreadManagementService.ThreadManagementService,
+    DisposableAttach.DisposableAttach,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.machine_attach"]));
+
+const MachineReissueTool = Tool.make(agentSurfaceRegistry["hub.machine_reissue"].name, {
+  description: agentSurfaceRegistry["hub.machine_reissue"].description,
+  parameters: HubMachineReissueInput,
+  success: HubMachineStatus,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    ThreadManagementService.ThreadManagementService,
+    DisposableAttach.DisposableAttach,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.machine_reissue"]));
+
+const MachineListTool = Tool.make(agentSurfaceRegistry["hub.machine_list"].name, {
+  description: agentSurfaceRegistry["hub.machine_list"].description,
+  parameters: HubMachineListInput,
+  success: HubMachineList,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    DisposableAttach.DisposableAttach,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.machine_list"]));
+
 export const HostStatusToolkit = Toolkit.make(
   ProcessHistoryTool,
   ResourceHistoryTool,
@@ -209,4 +258,7 @@ export const HostStatusToolkit = Toolkit.make(
   ChildStatusTool,
   DeviceSetupTool,
   OpenCodexSyncTool,
+  MachineAttachTool,
+  MachineReissueTool,
+  MachineListTool,
 );

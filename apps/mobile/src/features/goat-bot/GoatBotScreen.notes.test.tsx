@@ -18,6 +18,7 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
+vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 const session = vi.hoisted(() => ({
   rows: [] as GoatBotRow[],
@@ -70,6 +71,7 @@ vi.mock("../../lib/composerAttachmentFiles", () => ({
   retainComposerAttachmentFile: () => () => {},
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { hairlineWidth: 1 },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   FlatList: (
@@ -149,6 +151,15 @@ vi.mock("react-native", () => ({
   },
   Platform: box.platform,
   useWindowDimensions: () => ({ width: 393, height: 852 }),
+}));
+// The row menu is native; these tests do not open it.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: { label: string; row?: ReactNode }) => (
+    <>
+      {props.row}
+      <button aria-label={props.label} />
+    </>
+  ),
 }));
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -239,7 +250,7 @@ vi.mock("../../state/channels", () => ({
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",
-    updateTaskView: {},
+    updateTaskView: { permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/server", () => ({

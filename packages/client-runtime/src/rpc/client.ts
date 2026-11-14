@@ -32,7 +32,7 @@ import { resolveThreadTextAppends } from "../state/threadTextAppends.ts";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { isHubNodesUnsupportedError } from "../hubNodes.ts";
+import { isHubMachinesUnsupportedError, isHubNodesUnsupportedError } from "../hubNodes.ts";
 import type { RpcSession } from "../rpc/session.ts";
 
 export class EnvironmentRpcUnavailableError extends Schema.TaggedError<EnvironmentRpcUnavailableError>()(
@@ -332,7 +332,9 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
   return yield* method(dispatchInput).pipe(
     // Older hubs encode a missing RPC as a defect rather than a typed failure.
     Effect.catchCauseIf(
-      (cause) => tag.startsWith("hub.nodes.") && isHubNodesUnsupportedError(cause),
+      (cause) =>
+        (tag.startsWith("hub.nodes.") && isHubNodesUnsupportedError(cause)) ||
+        (tag.startsWith("hub.machines.") && isHubMachinesUnsupportedError(cause)),
       () =>
         Effect.fail(
           new EnvironmentRpcUnavailableError({

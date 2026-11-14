@@ -503,6 +503,78 @@ export const BotRemoteWork = Schema.Struct({
 });
 export type BotRemoteWork = typeof BotRemoteWork.Type;
 /** A history page's tasks, and the launched threads it lists per task, newest first. */
+export const BotTaskSummary = Schema.Struct({
+  taskId: ChannelTaskId,
+  title: TrimmedNonEmptyString,
+  titleTruncated: Schema.optionalKey(Schema.Boolean),
+  status: ChannelTaskStatus,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.optional(IsoDateTime),
+  generation: Schema.optional(PositiveInt),
+});
+export const BotTaskRow = Schema.Struct({
+  kind: Schema.Literal("task"),
+  task: BotTaskSummary,
+  view: ChannelTaskView,
+  lastActivityAt: IsoDateTime,
+  unread: Schema.Boolean,
+  mainMessagesSinceQuiet: NonNegativeInt,
+  worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
+});
+export const BotCodingRow = Schema.Struct({
+  kind: Schema.Literal("coding"),
+  taskId: ChannelTaskId,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  title: Schema.optional(Schema.String),
+  titleTruncated: Schema.optionalKey(Schema.Boolean),
+  state: ChannelChildWorkState,
+  lastActivityAt: IsoDateTime,
+  workKind: Schema.optional(GoatBotWorkKind),
+});
+export const BotWorkResult = Schema.Struct({
+  task: Schema.Union([
+    Schema.Struct({ state: Schema.Literal("known"), row: BotTaskRow }),
+    Schema.Struct({
+      state: Schema.Literal("unavailable"),
+      task: BotTaskSummary,
+      worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
+    }),
+  ]),
+  codingRows: Schema.Array(BotCodingRow),
+  remoteWork: Schema.Array(BotRemoteWork),
+  launchesTruncated: Schema.Boolean,
+  partial: Schema.Boolean,
+});
+export type BotWorkResult = typeof BotWorkResult.Type;
+export const ChannelGetBotTaskInput = Schema.Struct({ taskId: ChannelTaskId, botId: BotId });
+export type ChannelGetBotTaskInput = typeof ChannelGetBotTaskInput.Type;
+export const ChannelSearchBotTasksInput = Schema.Struct({
+  botId: BotId,
+  query: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(256),
+    Schema.makeFilter((value) => !value.includes("\0"), {
+      expected: "a search query without NUL characters",
+    }),
+  ),
+  cursor: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
+  limit: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
+});
+export type ChannelSearchBotTasksInput = typeof ChannelSearchBotTasksInput.Type;
+export const ChannelSearchBotTasksResult = Schema.Struct({
+  tasks: Schema.Array(
+    Schema.Struct({
+      taskId: ChannelTaskId,
+      title: TrimmedNonEmptyString,
+      titleTruncated: Schema.optionalKey(Schema.Boolean),
+      createdAt: IsoDateTime,
+    }),
+  ).check(Schema.isMaxLength(50)),
+  nextCursor: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
+  partial: Schema.optionalKey(Schema.Boolean),
+  endedEarly: Schema.optionalKey(Schema.Boolean),
+});
+export type ChannelSearchBotTasksResult = typeof ChannelSearchBotTasksResult.Type;
 export const CHANNEL_BOT_THREADS_HISTORY_LIMIT = 50;
 export const CHANNEL_BOT_THREADS_HISTORY_LAUNCHES = 20;
 export const CHANNEL_BOT_THREADS_CURSOR_MAX_LENGTH = 512;
@@ -689,6 +761,8 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   retryTask: "channel.retryTask",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
+  getBotTask: "channel.getBotTask",
+  searchBotTasks: "channel.searchBotTasks",
   listTasks: "channel.listTasks",
   getInput: "channel.getInput",
   createIdentityLink: "channel.createIdentityLink",

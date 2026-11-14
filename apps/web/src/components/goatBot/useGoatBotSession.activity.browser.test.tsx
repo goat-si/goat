@@ -47,11 +47,14 @@ vi.mock("~/state/threads", async (importOriginal) => {
     return [];
   });
   const history = Atom.make({ hasMoreHistory: false });
+  const timelineItems = Atom.make<ReadonlyArray<never>>([]);
   return {
     ...(await importOriginal<typeof import("~/state/threads")>()),
     environmentThreadDetails: {
+      statusAtom: () => Atom.make("live"),
       threadAtom: () => detail,
       quietVisibleTurnItemsAtom: () => quietItems,
+      timelineVisibleTurnItemsAtom: () => timelineItems,
       historyAtom: () => history,
     },
   };

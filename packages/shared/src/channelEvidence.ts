@@ -99,6 +99,18 @@ export function channelEvidenceSentence(
   title?: string,
 ): string | null {
   if (!channelEvidenceIsMeaningful(result)) return null;
+  return sentence(result, title);
+}
+
+/**
+ * The sentence that corrects a check a person was told is pending: it is told even when nothing
+ * else about verification is meaningful, since the earlier sentence was.
+ */
+export function channelEvidenceCorrection(result: ChannelWorkerResult, title: string): string {
+  return sentence(result, title);
+}
+
+function sentence(result: ChannelWorkerResult | undefined, title?: string): string {
   const clauses = channelEvidenceLabels(result).map((label) => {
     const phrase = SENTENCE_PHRASES.find(([prefix]) => label.startsWith(prefix));
     return phrase === undefined ? label : phrase[1] + label.slice(phrase[0].length);

@@ -17,9 +17,13 @@ vi.mock("react-native", () => ({
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
     onPress?: () => void;
     onLongPress?: () => void;
+    disabled?: boolean;
+    accessibilityState?: { disabled?: boolean };
   }) => (
     <button
       aria-label={props.accessibilityLabel}
+      disabled={props.disabled}
+      aria-disabled={props.accessibilityState?.disabled}
       data-actions={props.accessibilityActions?.map((action) => action.label).join(",")}
       onClick={props.onPress}
       onContextMenu={props.onLongPress}
@@ -31,13 +35,48 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+// The row menu is native; this stands in for it and hands its choices to the Alert mock.
+vi.mock("./MobileBotRowMenu", () => ({
+  MobileBotRowMenu: (props: {
+    label: string;
+    title: string;
+    actions: ReadonlyArray<{ id: string; title: string }>;
+    onSelect: (id: string) => void;
+    row?: ReactNode;
+  }) => {
+    const open = () =>
+      alert(
+        props.title,
+        undefined,
+        props.actions.map((action) => ({
+          text: action.title,
+          onPress: () => props.onSelect(action.id),
+        })),
+      );
+    // A long press of the row opens the same menu; a context menu stands for that press.
+    return (
+      <>
+        <div onContextMenu={open}>{props.row}</div>
+        <button aria-label={props.label} onClick={open} />
+      </>
+    );
+  },
+}));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <i>pin</i> }));
 vi.mock("./MobileBotPanelEmpty", () => ({
   MobileBotPanelEmpty: (props: { title: string }) => <p>{props.title}</p>,
 }));
 vi.mock("./GoatBotTaskRow", () => ({
-  GoatBotTaskRow: (props: { card: GoatBotTaskCard; onOpenTask?: () => void }) => (
-    <button aria-label={`card:${props.card.title}`} onClick={props.onOpenTask}>
+  GoatBotTaskRow: (props: {
+    card: GoatBotTaskCard;
+    onOpenTask?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button
+      aria-label={`card:${props.card.title}`}
+      disabled={props.disabled}
+      onClick={props.onOpenTask}
+    >
       {props.card.attentionLabel}
     </button>
   ),
@@ -81,7 +120,7 @@ const listedTask: BotWorkTask = {
   remote: [],
   truncated: false,
 };
-const work = (tasks: ReadonlyArray<BotWorkTask>) => ({ inProgress: tasks, done: [] });
+const work = (tasks: ReadonlyArray<BotWorkTask>) => ({ running: [], waiting: tasks, finished: [] });
 const omitted = {
   key: "task-old",
   revision: 3,
@@ -115,6 +154,12 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
     root?.render(
       <TaskList
         botName="GOAT Bot"
+        canUpdate
+        expanded={new Set()}
+        details={() => []}
+        onToggleExpanded={() => {}}
+        showAllFinished={false}
+        onToggleFinished={() => {}}
         work={work([])}
         rows={[]}
         chatTasks={[]}
@@ -133,23 +178,25 @@ it("lists a task with its status, unread and pinned state, and the actions the b
   const calls = await show({ work: work([listedTask]), rows: [task] });
   const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
   expect(row).not.toBeNull();
-  expect(row?.getAttribute("data-actions")).toBe("Unpin,Mark done,Mark read");
+  // Assistive actions are the menu's own choices.
+  expect(row?.getAttribute("data-actions")).toBe("Show work,Unpin,Mark done,Mark read");
   expect(container.textContent).toContain("Needs your input · Unread");
   await act(async () =>
     row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
   );
   expect(calls.update).toHaveBeenLastCalledWith({ taskId: "task-1", readThrough: at });
-  await act(async () => row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  const actionsButton = container.querySelector('[aria-label="Actions for Review"]');
+  await act(async () => (actionsButton as HTMLButtonElement).click());
   const choices = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
   expect(choices.map((choice) => choice.text)).toEqual([
+    "Show work",
     "Unpin",
     "Mark done",
     "Mark read",
-    "Cancel",
   ]);
   await act(async () => {
-    choices[0]?.onPress?.();
     choices[1]?.onPress?.();
+    choices[2]?.onPress?.();
   });
   expect(calls.update.mock.calls.slice(-2)).toEqual([
     [{ taskId: "task-1", pinned: false }],
@@ -161,10 +208,28 @@ it("lists a task with its status, unread and pinned state, and the actions the b
   expect(calls.open).not.toHaveBeenCalled();
 });
 
+it("opens the same row actions on a long press of the task, as the bot list did", async () => {
+  const calls = await show({ work: work([listedTask]), rows: [task] });
+  const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
+  await act(async () =>
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
+  );
+  const choices = alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+  expect(choices.map((choice) => choice.text)).toEqual([
+    "Show work",
+    "Unpin",
+    "Mark done",
+    "Mark read",
+  ]);
+  await act(async () => choices[3]?.onPress?.());
+  expect(calls.update).toHaveBeenLastCalledWith({ taskId: "task-1", readThrough: at });
+  expect(calls.peek).not.toHaveBeenCalled();
+});
+
 it("lists coding threads no task owns under Other threads, even when there are no tasks", async () => {
   const calls = await show({ rows: [coding] });
   expect(container.textContent).toContain("Other threads");
-  expect(container.textContent).not.toContain("No tasks yet");
+  expect(container.textContent).not.toContain("No recent tasks");
   await act(async () =>
     (
       container.querySelector('[aria-label="GOAT thread: Fix the build"]') as HTMLButtonElement
@@ -197,34 +262,28 @@ it("lists a conversation card only once when the server still lists its task", a
 
 it("says there is no work yet only when nothing at all is listed", async () => {
   await show();
-  expect(container.textContent).toContain("No tasks yet");
+  expect(container.textContent).toContain("No recent tasks");
 });
-it("lists each of a task's threads as its own entry, with keys that stay apart for ids holding colons", async () => {
-  // Two threads whose ids, joined with ":", would read the same.
+it("does not list a task's work threads in the card", async () => {
   const threads = [
-    { environmentId: "env:a", threadId: "b" },
-    { environmentId: "env", threadId: "a:b" },
     { environmentId: "env", threadId: "thread-3" },
   ] as unknown as BotWorkTask["threads"];
-  const props = {
-    botName: "GOAT Bot",
-    work: work([{ ...listedTask, threads }]),
-    rows: [task],
-    chatTasks: [],
-    onOpenTask: vi.fn(),
-    onPeekTask: vi.fn(),
-    onOpenThread: vi.fn(),
-    onUpdate: vi.fn(),
-  };
-  const keys = mobileBotTaskListItems(props).map((item) => item.key);
-  expect(new Set(keys).size).toBe(keys.length);
-  const calls = await show({ work: props.work, rows: props.rows });
-  const threadRows = [...container.querySelectorAll('[aria-label="Work thread: Review"]')];
-  expect(threadRows).toHaveLength(3);
-  for (const row of threadRows) await act(async () => (row as HTMLButtonElement).click());
-  expect(calls.thread.mock.calls.map(([target]) => target)).toEqual([
-    { environmentId: "env:a", id: "b" },
-    { environmentId: "env", id: "a:b" },
-    { environmentId: "env", id: "thread-3" },
-  ]);
+  await show({ work: work([{ ...listedTask, threads }]), rows: [task] });
+  expect(container.querySelector('[aria-label="Work thread: Review"]')).toBeNull();
+  expect(container.querySelectorAll('[aria-label="Actions for Review"]')).toHaveLength(1);
+});
+
+it("offline, keeps other threads and earlier chat tasks listed but closed, as task rows are", async () => {
+  const calls = await show({ rows: [coding], chatTasks: [omitted], openable: false });
+  const thread = container.querySelector('[aria-label="GOAT thread: Fix the build"]');
+  const card = container.querySelector('[aria-label="card:Summarize the README"]');
+  expect(thread?.hasAttribute("disabled")).toBe(true);
+  expect(thread?.getAttribute("aria-disabled")).toBe("true");
+  expect(card?.hasAttribute("disabled")).toBe(true);
+  await act(async () => {
+    (thread as HTMLButtonElement).click();
+    (card as HTMLButtonElement).click();
+  });
+  expect(calls.thread).not.toHaveBeenCalled();
+  expect(calls.open).not.toHaveBeenCalled();
 });

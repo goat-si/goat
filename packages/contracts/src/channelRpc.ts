@@ -33,6 +33,10 @@ import {
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
+  ChannelGetBotTaskInput,
+  ChannelSearchBotTasksInput,
+  ChannelSearchBotTasksResult,
+  BotWorkResult,
   ChannelIdentityLinkCreateInput,
   ChannelIdentityLinkCreateResult,
   ChannelIdentityUnlinkInput,
@@ -179,6 +183,17 @@ const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
   error: ChannelRpcError,
 });
 
+const ChannelGetBotTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotTask, {
+  payload: ChannelGetBotTaskInput,
+  success: BotWorkResult,
+  error: ChannelRpcError,
+});
+const ChannelSearchBotTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.searchBotTasks, {
+  payload: ChannelSearchBotTasksInput,
+  success: ChannelSearchBotTasksResult,
+  error: ChannelRpcError,
+});
+
 const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
   payload: ChannelListTasksRpcInput,
   success: ChannelListTasksResult,
@@ -251,6 +266,8 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelRetryTaskRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
+  ChannelGetBotTaskRpc,
+  ChannelSearchBotTasksRpc,
   ChannelListTasksRpc,
   ChannelGetInputRpc,
   ChannelCreateIdentityLinkRpc,

@@ -45,6 +45,7 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
+import { createHubMachinesAtoms } from "./hubMachines.ts";
 import { createHubDeviceCommands } from "./hubDeviceCommands.ts";
 import {
   isRpcClientError,
@@ -1425,6 +1426,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-task:webhook-delivery",
       tag: WS_METHODS.scheduledTasksGetWebhookDelivery,
     }),
+    ...createHubMachinesAtoms(runtime),
     hubNodesLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:hub-nodes:live",
       tag: WS_METHODS.hubNodesSubscribe,

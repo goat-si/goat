@@ -12,7 +12,9 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as RpcTest from "effect/rpc/RpcTest";
+import type { AuthenticatedSession } from "../auth/EnvironmentAuth.ts";
 import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
+import * as DisposableAttach from "../hub/disposable/DisposableAttach.ts";
 import {
   RpcInstrumentation,
   rpcInstrumentationLayer as instrumentationLayer,
@@ -21,6 +23,14 @@ import { makeHubNodesHandlers } from "./HubNodes.rpc.ts";
 import * as HubNodes from "./HubNodes.ts";
 
 const group = WsHubNodesRpcGroup.middleware(RpcInstrumentation);
+const session = (principalKind: AuthenticatedSession["principalKind"]) =>
+  ({
+    sessionId: "session-1",
+    subject: principalKind === "person" ? "owner" : "mcp-client",
+    method: "browser-session-cookie",
+    scopes: ["orchestration:read", "settings:write"],
+    principalKind,
+  }) as unknown as AuthenticatedSession;
 
 const input = {
   kind: "ssh" as const,
@@ -77,8 +87,8 @@ it.effect("two RPC clients share hub changes while a read-only session cannot ad
         }),
     });
     const handlers = WsHubNodesRpcGroup.middleware(RpcInstrumentation)
-      .toLayer(makeHubNodesHandlers)
-      .pipe(Layer.provide(hub));
+      .toLayer(makeHubNodesHandlers(session("person")))
+      .pipe(Layer.provide(hub), Layer.provide(Layer.mock(DisposableAttach.DisposableAttach)({})));
     const readerLayers = Layer.mergeAll(
       handlers,
       instrumentationLayer,
@@ -121,5 +131,45 @@ it.effect("two RPC clients share hub changes while a read-only session cannot ad
     const added = yield* clientB[WS_METHODS.hubNodesAdd](input);
     expect((yield* Deferred.await(received)).nodes).toEqual([added.node]);
     expect((yield* clientA[WS_METHODS.hubNodesList]({})).nodes).toEqual([added.node]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("only a person's session attaches a machine over RPC", () =>
+  Effect.gen(function* () {
+    const attached: Array<string> = [];
+    const machines = Layer.mock(DisposableAttach.DisposableAttach)({
+      attach: (caller) =>
+        Effect.sync(() => {
+          attached.push(caller.provisioner.kind);
+          return {} as never;
+        }),
+    });
+    const clientFor = (kind: AuthenticatedSession["principalKind"]) =>
+      RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group
+              .toLayer(makeHubNodesHandlers(session(kind)))
+              .pipe(Layer.provide(Layer.mock(HubNodes.HubNodes)({})), Layer.provide(machines)),
+            instrumentationLayer,
+            RpcAuthorization.layer(["orchestration:read", "settings:write"]),
+          ),
+        ),
+      );
+    const request = {
+      name: "cc-1",
+      signPub: Buffer.alloc(32, 1).toString("base64url"),
+      noisePub: Buffer.alloc(32, 2).toString("base64url"),
+      clientRequestId: "r-1",
+    };
+    const outside = yield* clientFor("outside_client");
+    expect(yield* outside[WS_METHODS.hubMachinesAttach](request).pipe(Effect.flip)).toMatchObject({
+      _tag: "HubMachinesError",
+      reason: "provisioner_refused",
+    });
+    expect(attached).toEqual([]);
+    const person = yield* clientFor("person");
+    yield* person[WS_METHODS.hubMachinesAttach](request).pipe(Effect.ignore);
+    expect(attached).toEqual(["person"]);
   }).pipe(Effect.scoped),
 );
