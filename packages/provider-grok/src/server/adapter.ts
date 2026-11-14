@@ -353,12 +353,17 @@ export function makeGrokAcpAdapterFlavor(
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,
     extractSubagentEndNotice: extractXAiAcpSubagentEndNotice,
     normalizeToolCall: normalizeXAiAcpToolCallState,
-    extractProposedPlanMarkdown: (toolCall) =>
-      extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
+    extractProposedPlanMarkdown: (toolCall, session) => {
+      const environment = session === undefined ? options.environment : (session.environment ?? {});
+      return extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
         platform: options.hostPlatform,
-        environment: options.environment,
-        homeDirectory,
-      }),
+        environment,
+        homeDirectory:
+          session === undefined
+            ? homeDirectory
+            : (environment.HOME ?? environment.USERPROFILE ?? ""),
+      });
+    },
     extractBackgroundTaskId: extractXAiMonitorTaskId,
     isBackgroundCommandTool: (toolCall) => xAiBackgroundShellTaskId(toolCall) !== undefined,
     extractBackgroundToolMutation: extractXAiAcpBackgroundToolMutation,

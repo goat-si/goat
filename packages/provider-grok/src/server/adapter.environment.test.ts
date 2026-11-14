@@ -16,7 +16,9 @@ import * as TestProviderHost from "../../../provider-testing/src/TestProviderHos
 import * as DocumentText from "../../../../apps/server/src/provider/DocumentText.ts";
 import { makeTurnInput } from "../../../../apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
 import { makeMockRuntime } from "../../../../apps/server/src/orchestration-v2/Adapters/AcpMockRuntime.testkit.ts";
-import { makeGrokAdapterV2 } from "./adapter.ts";
+import { makeGrokAdapterV2, makeGrokAcpAdapterFlavor } from "./adapter.ts";
+import { makeAcpAdapterV2 } from "@goat/provider-acp/server/adapter";
+import * as Deferred from "effect/Deferred";
 import { GrokSettings } from "../settings.ts";
 import * as Schema from "effect/Schema";
 
@@ -156,4 +158,90 @@ it.live(
       );
       assert.notStrictEqual(launches[0]?.env, host);
     }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("extracts plans using the environment captured when the session opened", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const host = { HOME: "/tmp/grok-open-home", PATH: "/tmp/grok-open-bin" };
+    const instanceId = ProviderInstanceId.make("grok-plan-environment");
+    const makeRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* path.fromFileUrl(
+        new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+      ),
+      environment: {
+        GOAT_ACP_EMIT_POST_SETTLE_MONITOR_FLOW: "1",
+      },
+    });
+    const seen = yield* Deferred.make<string | undefined>();
+    const selfInvocation = yield* resolveSelfInvocation();
+    const flavor = makeGrokAcpAdapterFlavor(
+      {
+        instanceId,
+        settings: yield* decodeGrokSettings({}),
+        environment: { HOME: "/tmp/grok-adapter-home", PATH: "/tmp/grok-adapter-bin" },
+        hostPlatform: "darwin",
+        selfInvocation,
+        makeRuntime,
+      },
+      "/tmp/grok-adapter-home",
+    );
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      selfInvocation,
+      currentEnvironment: Effect.sync(() => host),
+      continuationRequests: { offer: () => Effect.void },
+      flavor: {
+        ...flavor,
+        extractProposedPlanMarkdown: (toolCall, session) => {
+          const result = flavor.extractProposedPlanMarkdown?.(
+            {
+              ...toolCall,
+              data: {
+                rawInput: {
+                  file_path: "/tmp/grok-open-home/.grok/sessions/a/plan.md",
+                  content: "# Mock plan",
+                },
+              },
+            },
+            session,
+          );
+          Deferred.doneUnsafe(seen, Effect.succeed(result));
+          return result;
+        },
+      },
+    });
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const modelSelection = { instanceId, model: "default" } as const;
+    const threadId = ThreadId.make("grok-plan-thread");
+    const session = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("plan"),
+      modelSelection,
+      runtimePolicy,
+    });
+    host.HOME = "/tmp/grok-later-home";
+    host.PATH = "/tmp/grok-later-bin";
+    const providerThread = yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+    yield* session.startTurn(
+      makeTurnInput({
+        threadId,
+        providerThread,
+        instanceId,
+        runtimePolicy,
+        now: yield* DateTime.now,
+        ordinal: 1,
+      }),
+    );
+    yield* session.events.pipe(
+      Stream.takeUntil((event) => event.type === "turn.terminal"),
+      Stream.runCollect,
+    );
+    assert.strictEqual(yield* Deferred.await(seen), "# Mock plan");
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
