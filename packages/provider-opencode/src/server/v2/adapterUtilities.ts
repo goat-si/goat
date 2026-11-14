@@ -113,7 +113,7 @@ export const isContinuation = (turnInput: ProviderAdapter.ProviderAdapterV2TurnI
 
 export const wakeTurnId = (sessionId: string, attemptId: string) =>
   `${sessionId}:wake:${attemptId}`;
-export const isWakeTurn = (turn: OrchestrationV2ProviderTurn) =>
+const isWakeTurn = (turn: OrchestrationV2ProviderTurn) =>
   turn.nativeTurnRef?.nativeId?.includes(":wake:") === true;
 
 // OpenCode's claude-agent reports a spent Claude plan as provider.unknown with Claude's own text.

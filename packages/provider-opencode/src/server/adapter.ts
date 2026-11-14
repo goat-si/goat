@@ -104,6 +104,12 @@ import {
   openCodeToolTurnItem,
 } from "./toolItems.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
+import {
+  accumulateOpenCodeStepUsage,
+  makeOpenCodeTurnTokenUsageAccumulator,
+  type OpenCodeStepUsage,
+  type OpenCodeTurnTokenUsageAccumulator,
+} from "./turnUsage.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
@@ -230,54 +236,6 @@ type TerminalTurnStatus = Extract<
   OrchestrationV2ProviderTurn["status"],
   "completed" | "interrupted" | "failed" | "cancelled"
 >;
-
-type OpenCodeStepUsage = Pick<
-  Extract<OpenCodePart, { readonly type: "step-finish" }>,
-  "id" | "tokens"
->;
-
-interface OpenCodeTurnTokenUsageAccumulator {
-  readonly partIds: Set<string>;
-  readonly promptMessageIds: Set<string>;
-  readonly assistantOwnershipByMessageId: Map<string, "owned" | "other" | "unknown">;
-  readonly unresolvedStepsByMessageId: Map<string, Map<string, OpenCodeStepUsage>>;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheCreationTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  hasSubagents: boolean;
-  complete: boolean;
-}
-
-function makeOpenCodeTurnTokenUsageAccumulator(): OpenCodeTurnTokenUsageAccumulator {
-  return {
-    partIds: new Set(),
-    promptMessageIds: new Set(),
-    assistantOwnershipByMessageId: new Map(),
-    unresolvedStepsByMessageId: new Map(),
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    cacheCreationTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    hasSubagents: false,
-    complete: true,
-  };
-}
-
-function accumulateOpenCodeStepUsage(
-  accumulator: OpenCodeTurnTokenUsageAccumulator,
-  part: OpenCodeStepUsage,
-): void {
-  if (accumulator.partIds.has(part.id)) return;
-  accumulator.partIds.add(part.id);
-  accumulator.inputTokens += part.tokens.input + part.tokens.cache.read + part.tokens.cache.write;
-  accumulator.cachedInputTokens += part.tokens.cache.read;
-  accumulator.cacheCreationTokens += part.tokens.cache.write;
-  accumulator.outputTokens += part.tokens.output + part.tokens.reasoning;
-  accumulator.reasoningTokens += part.tokens.reasoning;
-}
 
 interface ActiveOpenCodeTurn {
   promptOptions?: { readonly agent?: string; readonly variant?: string; readonly system: string };
