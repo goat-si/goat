@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   BotId,
   BotThreadRow,
-  ChannelTaskChip,
+  type ChannelTaskChip,
   ChannelTaskId,
   EnvironmentId,
   ThreadId,
@@ -317,6 +317,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+import { taskChip } from "./mobileTaskChipFixture";
 
 // The chat's header chip opens the home; this stands in for it.
 function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
@@ -872,38 +873,28 @@ it("orders running, waiting, and finished work and collapses finished rows", asy
 });
 
 // The conversation's newest chip says what a task's worker asks; Home reads it as the face does.
-const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
-const chip = (taskId: string, needs: Partial<ChannelTaskChip>) =>
-  decodeChip({
-    taskId,
-    conversationId: "conversation",
-    taskVersion: 2,
-    title: taskId,
-    status: "running",
-    originKind: "goat",
-    requesterLabel: "You",
-    createdAt: at,
-    updatedAt: at,
-    openQuestionCount: 0,
-    ...needs,
-  });
 const asking = (kind: "approval" | "sign_in") => ({
   observed: { pullRequests: [], needsYou: [{ kind, since: at }] },
 });
 const statusOf = (title: string) => button(title)?.getAttribute("aria-label");
 
 it("lists running work whose worker asks under waiting, in the wait's words on the row and its label", async () => {
+  // Asks is the newest, so it would lead the running group if it were still running.
+  const newest = { ...task("asks", "Asks"), lastActivityAt: "2026-11-11T03:00:00.000Z" };
+  const ended = task("ended", "Ended") as Extract<BotThreadRow, { kind: "task" }>;
+  const finished = { ...ended, task: { ...ended.task, status: "completed" } } as BotThreadRow;
   state.rows = [
-    task("asks", "Asks"),
+    newest,
     task("approves", "Approves"),
     task("signs", "Signs"),
     task("plain", "Plain"),
+    finished,
   ];
   state.chips = new Map([
-    [ChannelTaskId.make("asks"), chip("asks", { openQuestionCount: 1 })],
-    [ChannelTaskId.make("approves"), chip("approves", asking("approval"))],
-    [ChannelTaskId.make("signs"), chip("signs", asking("sign_in"))],
-    [ChannelTaskId.make("plain"), chip("plain", {})],
+    [ChannelTaskId.make("asks"), taskChip("asks", { openQuestionCount: 1 })],
+    [ChannelTaskId.make("approves"), taskChip("approves", asking("approval"))],
+    [ChannelTaskId.make("signs"), taskChip("signs", asking("sign_in"))],
+    [ChannelTaskId.make("plain"), taskChip("plain", {})],
   ]);
   await open();
   expect(statusOf("Asks")).toBe("Asks, Waiting for your answer");
@@ -912,22 +903,19 @@ it("lists running work whose worker asks under waiting, in the wait's words on t
   expect(statusOf("Plain")).toBe("Plain, Working");
   const content = home()?.textContent ?? "";
   expect(content).toContain("Waiting for your answer");
-  // Running work comes first, then what waits on the person.
+  // Running work, then what waits on the person, then finished work.
   expect(content.indexOf("Plain")).toBeLessThan(content.indexOf("Asks"));
+  expect(content.indexOf("Asks")).toBeLessThan(content.indexOf("Ended"));
 });
 
-it("shows the wait in a peek's header and on the task screen's header", async () => {
+it("shows the wait in a peek's header", async () => {
   state.rows = [task("asks", "Asks")];
-  state.chips = new Map([[ChannelTaskId.make("asks"), chip("asks", { openQuestionCount: 1 })]]);
+  state.chips = new Map([[ChannelTaskId.make("asks"), taskChip("asks", { openQuestionCount: 1 })]]);
   await open();
   await press("Asks");
   const peek = (container.textContent ?? "").replace(home()?.textContent ?? "", "");
   expect(peek).toContain("Waiting for your answer");
-  await act(async () => root?.unmount());
-  root = undefined;
-  await open("asks");
-  expect(container.textContent).toContain("Waiting for your answer");
-  expect(container.textContent).not.toContain("Working");
+  expect(peek).not.toContain("Working");
 });
 
 it("offers an action button for each task and keeps expansion bounded to 50", async () => {

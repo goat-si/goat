@@ -23,6 +23,7 @@ vi.mock("./MobileBotRemoteWork", () => ({
 }));
 
 import { MobileTaskHeader } from "./MobileTaskHeader";
+import { taskChip } from "./mobileTaskChipFixture";
 import type { MobileTaskLookup } from "./useMobileBotTaskLookup";
 
 const at = "2026-11-01T00:00:00.000Z";
@@ -59,14 +60,19 @@ const knownTask = {
 const container = document.createElement("div");
 const retry = vi.fn();
 const openHome = vi.fn();
-async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = null) {
+async function render(
+  lookup: MobileTaskLookup,
+  enabled = true,
+  card: unknown = null,
+  chips: ReadonlyMap<string, unknown> = new Map(),
+) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(container);
   await act(async () =>
     root.render(
       <MobileTaskHeader
         task={undefined}
-        chips={new Map()}
+        chips={chips as never}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
         botName="GOAT Bot"
@@ -124,6 +130,42 @@ it("an unavailable task shows its status and work but nothing that needs its rea
   expect(button("Open work thread")).toBeDefined();
   expect(text()).toContain("More of this task's work isn't shown here.");
   expect(text()).toContain("Some task details could not be checked.");
+  await act(async () => root.unmount());
+});
+
+it("a task's header says what its worker asks, from the conversation's chip, as Home does", async () => {
+  const running = { ...row, task: { ...row.task, status: "running" } };
+  const root = await render(
+    {
+      state: "known",
+      task: { ...knownTask, row: running },
+      result: result({ state: "known", row: running } as never),
+    } as never,
+    true,
+    null,
+    new Map([["t1", taskChip("t1", { openQuestionCount: 1 })]]),
+  );
+  expect(text()).toContain("Waiting for your answer");
+  expect(text()).not.toContain("Working");
+  await act(async () => root.unmount());
+});
+
+it("an unavailable task says what its worker asks, from the conversation's chip, as Home does", async () => {
+  const root = await render(
+    {
+      state: "unavailable",
+      task: {
+        state: "unavailable",
+        task: { taskId: "t1", title: "Old report", status: "running", updatedAt: at },
+      },
+      result: result({ state: "unavailable" } as never),
+    } as never,
+    true,
+    null,
+    new Map([["t1", taskChip("t1", { openQuestionCount: 1 })]]),
+  );
+  expect(text()).toContain("Waiting for your answer");
+  expect(text()).not.toContain("Working");
   await act(async () => root.unmount());
 });
 

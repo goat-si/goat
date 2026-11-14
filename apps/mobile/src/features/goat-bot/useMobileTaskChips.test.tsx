@@ -1,27 +1,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vite-plus/test";
-import { ChannelTaskChip, type OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
-import * as Schema from "effect/Schema";
+import type { ChannelTaskChip, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 
 import type { MobileTaskChips } from "./mobileBotTaskStatus";
+import { taskChip } from "./mobileTaskChipFixture";
 import { useMobileTaskChips } from "./useMobileTaskChips";
 
-const at = "2026-11-15T02:00:00.000Z";
-const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
 const chip = (taskVersion: number, openQuestionCount: number) =>
-  decodeChip({
-    taskId: "task",
-    conversationId: "conversation",
-    taskVersion,
-    title: "Task",
-    status: "running",
-    originKind: "goat",
-    requesterLabel: "You",
-    createdAt: at,
-    updatedAt: at,
-    openQuestionCount,
-  });
+  taskChip("task", { taskVersion, openQuestionCount, title: "Task" });
 // Only the fields the chips read; the rest of a projected item does not matter here.
 const items = (ledgerTask: ChannelTaskChip, reply: string) =>
   [

@@ -1,11 +1,6 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  BotThreadRow,
-  ChannelTaskChip,
-  ChannelTaskId,
-  type ChannelUpdateTaskViewInput,
-} from "@goat/contracts";
+import { BotThreadRow, ChannelTaskId, type ChannelUpdateTaskViewInput } from "@goat/contracts";
 import type { BotWorkTask, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import * as Schema from "effect/Schema";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -87,6 +82,7 @@ vi.mock("./GoatBotTaskRow", () => ({
   ),
 }));
 import { mobileBotTaskListItems } from "./MobileBotTaskList";
+import { taskChip } from "./mobileTaskChipFixture";
 
 function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
   return (
@@ -100,7 +96,6 @@ function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
 
 const at = "2026-11-11T02:00:00.000Z";
 const decode = Schema.decodeUnknownSync(BotThreadRow);
-const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
 const task = decode({
   kind: "task",
   task: { taskId: "task-1", title: "Review", status: "waiting_input", updatedAt: at },
@@ -190,18 +185,7 @@ it("a task marked done reads Done, whatever its worker still asks", async () => 
     unread: false,
     mainMessagesSinceQuiet: 0,
   }) as Extract<BotThreadRow, { kind: "task" }>;
-  const asks = decodeChip({
-    taskId: "task-done",
-    conversationId: "conversation",
-    taskVersion: 2,
-    title: "Ship",
-    status: "running",
-    originKind: "goat",
-    requesterLabel: "You",
-    createdAt: at,
-    updatedAt: at,
-    openQuestionCount: 1,
-  });
+  const asks = taskChip("task-done", { openQuestionCount: 1 });
   await show({
     work: { running: [], waiting: [], finished: [{ ...listedTask, row: done }] },
     rows: [done],

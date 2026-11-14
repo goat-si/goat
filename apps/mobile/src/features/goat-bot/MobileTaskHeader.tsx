@@ -1,4 +1,5 @@
 import {
+  goatBotTaskWait,
   presentTaskStatus,
   taskAttemptLabel,
   type BotWorkTask,
@@ -91,7 +92,11 @@ export function MobileTaskHeader(props: {
   const status = task
     ? mobileBotTaskStatus(task.row, props.chips)
     : unavailable
-      ? presentTaskStatus(unavailable.task.task.status).label
+      ? (goatBotTaskWait({
+          status: unavailable.task.task.status,
+          openQuestionCount: props.chips.get(unavailable.task.task.taskId)?.openQuestionCount ?? 0,
+          observed: props.chips.get(unavailable.task.task.taskId)?.observed,
+        }) ?? presentTaskStatus(unavailable.task.task.status).label)
       : null;
   const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
   return (
