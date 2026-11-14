@@ -18,6 +18,7 @@ import {
   isManagedSshProjectRoot,
   resolveSshFetchBackContext,
   buildMenuItems,
+  hasUsableGitMenuContent,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveChangesTotals,
@@ -91,6 +92,45 @@ describe("when: ref is clean, up to date, and has no open PR", () => {
       buildMenuItems(dirtyFeature, false).find((item) => item.id === "pr")?.disabled,
       false,
     );
+  });
+
+  it("disables the actions menu only when it would show nothing usable or explained", () => {
+    const hasContent = (
+      gitStatus: VcsStatusResult | null,
+      overrides: Partial<Parameters<typeof hasUsableGitMenuContent>[0]> = {},
+    ) =>
+      hasUsableGitMenuContent({
+        menuItems: buildMenuItems(gitStatus, false, gitStatus?.hasPrimaryRemote ?? true),
+        gitStatus,
+        isBusy: false,
+        hasPrimaryRemote: gitStatus?.hasPrimaryRemote ?? true,
+        canWriteSourceControl: true,
+        canPublishRepository: false,
+        hasNotice: false,
+        fetchBackVisible: false,
+        ...overrides,
+      });
+    const commitWithoutReason = {
+      id: "commit" as const,
+      label: "Commit",
+      disabled: false,
+      icon: "commit" as const,
+      kind: "open_dialog" as const,
+    };
+
+    assert.isFalse(hasContent(null));
+    assert.isFalse(
+      hasContent(status({ hasWorkingTreeChanges: true }), {
+        menuItems: [commitWithoutReason],
+        canWriteSourceControl: false,
+      }),
+    );
+    // Every item is disabled on a clean branch, but each one says why.
+    assert.isTrue(hasContent(status()));
+    assert.isTrue(hasContent(status({ hasWorkingTreeChanges: true })));
+    assert.isTrue(hasContent(null, { fetchBackVisible: true }));
+    assert.isTrue(hasContent(null, { hasNotice: true }));
+    assert.isTrue(hasContent(null, { canPublishRepository: true }));
   });
 });
 

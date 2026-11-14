@@ -186,6 +186,29 @@ export function buildMenuItems(
   ];
 }
 
+/** A disabled item still counts when it says why, and SSH fetch-back keeps the menu open. */
+export function hasUsableGitMenuContent(input: {
+  readonly menuItems: readonly GitActionMenuItem[];
+  readonly gitStatus: VcsStatusResult | null;
+  readonly isBusy: boolean;
+  readonly hasPrimaryRemote: boolean;
+  readonly canWriteSourceControl: boolean;
+  readonly canPublishRepository: boolean;
+  readonly hasNotice: boolean;
+  readonly fetchBackVisible: boolean;
+}): boolean {
+  return (
+    input.canPublishRepository ||
+    input.hasNotice ||
+    input.fetchBackVisible ||
+    input.menuItems.some((item) =>
+      item.disabled
+        ? getMenuActionDisabledReason({ ...input, item }) !== null
+        : input.canWriteSourceControl,
+    )
+  );
+}
+
 export function resolveQuickAction(
   gitStatus: VcsStatusResult | null,
   isBusy: boolean,

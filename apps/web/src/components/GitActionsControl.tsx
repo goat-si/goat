@@ -47,6 +47,7 @@ import {
   formatGitActionElapsed,
   getMenuActionDisabledReason,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
+  hasUsableGitMenuContent,
   type GitActionProgressPresentation,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -1471,6 +1472,33 @@ export default function GitActionsControl({
   };
   const canPublishRepository =
     canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+  const isDetachedHead = gitStatusForActions?.refName === null;
+  const isCleanAndBehind =
+    gitStatusForActions !== null &&
+    gitStatusForActions.refName !== null &&
+    !gitStatusForActions.hasWorkingTreeChanges &&
+    gitStatusForActions.behindCount > 0 &&
+    gitStatusForActions.aheadCount === 0;
+  const showGitStatusError =
+    Boolean(gitStatusError) &&
+    !workspaceUnavailable(
+      workspaceStatus.data?.state,
+      activeServerThread?.worktreePath ?? null,
+      gitCwd,
+    );
+  const hasGitMenuContent = hasUsableGitMenuContent({
+    menuItems: gitActionMenuItems,
+    gitStatus: gitStatusForActions,
+    isBusy: isGitActionRunning,
+    hasPrimaryRemote,
+    canWriteSourceControl,
+    canPublishRepository,
+    hasNotice: isDetachedHead || isCleanAndBehind || showGitStatusError,
+    fetchBackVisible: sshFetchBack.visible,
+  });
+  // A disabled menu cannot refresh on open, and terminal edits or commits publish no status.
+  const refreshStatusForEmptyMenu = () =>
+    requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
   const initializeGit = () => {
     void (async () => {
       const result = await initAction.run();
@@ -1576,25 +1604,18 @@ export default function GitActionsControl({
           <MenuItemLabel>Publish repository...</MenuItemLabel>
         </MenuItem>
       ) : null}
-      {gitStatusForActions?.refName === null && (
+      {isDetachedHead && (
         <p className="px-2 py-1.5 text-xs text-warning">
           Detached HEAD: create and check out a branch to enable push and{" "}
           {changeRequestTerminology.singular} actions.
         </p>
       )}
-      {gitStatusForActions &&
-        gitStatusForActions.refName !== null &&
-        !gitStatusForActions.hasWorkingTreeChanges &&
-        gitStatusForActions.behindCount > 0 &&
-        gitStatusForActions.aheadCount === 0 && (
-          <p className="px-2 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
-        )}
-      {gitStatusError &&
-        !workspaceUnavailable(
-          workspaceStatus.data?.state,
-          activeServerThread?.worktreePath ?? null,
-          gitCwd,
-        ) && <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>}
+      {isCleanAndBehind && (
+        <p className="px-2 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
+      )}
+      {showGitStatusError && (
+        <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError}</p>
+      )}
     </>
   );
   if (!gitCwd) return null;
@@ -1667,6 +1688,8 @@ export default function GitActionsControl({
           role="group"
           aria-label="Git actions"
           {...(isPanel ? { ref: panelAnchorRef } : {})}
+          onPointerEnter={hasGitMenuContent ? undefined : refreshStatusForEmptyMenu}
+          onFocus={hasGitMenuContent ? undefined : refreshStatusForEmptyMenu}
           className={cn(
             "shrink-0",
             isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
@@ -1783,7 +1806,7 @@ export default function GitActionsControl({
                       panel={isPanel}
                     />
                   }
-                  disabled={isGitActionRunning && !sshFetchBack.visible}
+                  disabled={(isGitActionRunning && !sshFetchBack.visible) || !hasGitMenuContent}
                 >
                   <ChevronDownIcon
                     aria-hidden="true"
