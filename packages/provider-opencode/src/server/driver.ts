@@ -1,5 +1,5 @@
 import { settingsSecretLiteral } from "@goat/contracts";
-import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
+import { MemoryModelSelection, ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -13,8 +13,9 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as OpenCode2TextGeneration from "./v2/textGeneration.ts";
-import { makeOpenCodeTextGeneration } from "./textGeneration.ts";
+import { makeOpenCodeTextGeneration, requireOpenCodeMemoryIsolation } from "./textGeneration.ts";
 import {
+  MemoryGenerationRunnerContext,
   MemoryGenerationRunnerError,
   type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -75,6 +76,8 @@ import {
   type ProviderSnapshotSettings,
 } from "@goat/provider-core/server/snapshotSettings";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+const decodeMemoryContext = Schema.decodeEffect(MemoryGenerationRunnerContext);
+const decodeMemorySelection = Schema.decodeEffect(MemoryModelSelection);
 
 const DRIVER_KIND = ProviderDriverKind.make("opencode");
 
@@ -154,14 +157,34 @@ function selectOpenCodeRuntimeAdapter(input: {
 }
 
 function selectOpenCodeRuntimeTextGeneration(
-  probe: OpenCodeRuntimeProbe,
   resolve: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>,
   currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>,
+  memoryContext: MemoryGenerationRunnerContext,
+  external: boolean,
   v1: ProviderTextGeneration,
   v2: ProviderTextGeneration,
 ): ProviderTextGeneration {
-  // Memory preflight must not start a probe/server before the identity/isolation gates.
-  const memoryProbe = Effect.map(probe.lastSuccess, Option.getOrUndefined);
+  const memoryPreflight = Effect.fn("OpenCode.memoryPreflight")(function* (
+    operation: MemoryOperationName,
+    selection: MemoryModelSelection,
+  ) {
+    const failure = (code: "unavailable" | "identity_mismatch") =>
+      new TextGenerationError({
+        operation,
+        detail: "Memory runner identity or output is invalid.",
+        cause: new MemoryGenerationRunnerError({ code }),
+      });
+    if (memoryContext.environmentId === undefined) return yield* failure("unavailable");
+    const identity = yield* decodeMemoryContext(memoryContext, { onExcessProperty: "error" }).pipe(
+      Effect.mapError(() => failure("identity_mismatch")),
+    );
+    const model = yield* decodeMemorySelection(selection, {
+      onExcessProperty: "error",
+    }).pipe(Effect.mapError(() => failure("identity_mismatch")));
+    if (model.instanceId !== identity.providerInstanceId)
+      return yield* failure("identity_mismatch");
+    if (external) return yield* requireOpenCodeMemoryIsolation(operation);
+  });
   const select = <A, E, R, PE>(
     operation: string,
     probe: Effect.Effect<ProbedOpenCode | undefined, PE>,
@@ -193,27 +216,35 @@ function selectOpenCodeRuntimeTextGeneration(
     );
   return {
     resolveMemoryConflict: (input) =>
-      select("resolveMemoryConflict", memoryProbe, {
-        v1:
-          v1.resolveMemoryConflict === undefined
-            ? unsupportedMemory("resolveMemoryConflict")
-            : v1.resolveMemoryConflict(input),
-        v2:
-          v2.resolveMemoryConflict === undefined
-            ? unsupportedMemory("resolveMemoryConflict")
-            : v2.resolveMemoryConflict(input),
-      }),
+      memoryPreflight("resolveMemoryConflict", input.modelSelection).pipe(
+        Effect.andThen(
+          select("resolveMemoryConflict", resolve, {
+            v1:
+              v1.resolveMemoryConflict === undefined
+                ? unsupportedMemory("resolveMemoryConflict")
+                : v1.resolveMemoryConflict(input),
+            v2:
+              v2.resolveMemoryConflict === undefined
+                ? unsupportedMemory("resolveMemoryConflict")
+                : v2.resolveMemoryConflict(input),
+          }),
+        ),
+      ),
     generateMemorySummary: (input) =>
-      select("generateMemorySummary", memoryProbe, {
-        v1:
-          v1.generateMemorySummary === undefined
-            ? unsupportedMemory("generateMemorySummary")
-            : v1.generateMemorySummary(input),
-        v2:
-          v2.generateMemorySummary === undefined
-            ? unsupportedMemory("generateMemorySummary")
-            : v2.generateMemorySummary(input),
-      }),
+      memoryPreflight("generateMemorySummary", input.modelSelection).pipe(
+        Effect.andThen(
+          select("generateMemorySummary", resolve, {
+            v1:
+              v1.generateMemorySummary === undefined
+                ? unsupportedMemory("generateMemorySummary")
+                : v1.generateMemorySummary(input),
+            v2:
+              v2.generateMemorySummary === undefined
+                ? unsupportedMemory("generateMemorySummary")
+                : v2.generateMemorySummary(input),
+          }),
+        ),
+      ),
     generateCommitMessage: (input) =>
       select("generateCommitMessage", resolve, {
         v1: v1.generateCommitMessage(input),
@@ -536,9 +567,13 @@ export const OpenCodeDriver: ProviderDriver<
       currentEnvironment: probeEnvironment,
     });
     const textGeneration = selectOpenCodeRuntimeTextGeneration(
-      runtimeProbe,
       resolveRuntime,
       currentEnvironment,
+      {
+        providerInstanceId: instanceId,
+        ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
+      },
+      effectiveConfig.serverUrl.trim().length > 0,
       yield* makeOpenCodeTextGeneration(effectiveConfig, {
         environment: processEnv,
         currentEnvironment,

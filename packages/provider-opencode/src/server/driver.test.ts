@@ -7,6 +7,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  EventId,
+  GenerateMemorySummaryInput,
+  MessageId,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -28,6 +32,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -179,6 +184,79 @@ const lazyMiseShim = {
 } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
+  it.effect("memory follows a changed executable and caches its protocol", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const hostEnvironment = {
+        PATH: "/old",
+        HOME: root,
+        XDG_DATA_HOME: root,
+        OPENAI_API_KEY: "synthetic",
+      };
+      const host = yield* ProviderHost.ProviderHost;
+      const probes: string[] = [];
+      const launches: NodeJS.ProcessEnv[] = [];
+      const runtime = {
+        ...openCode2Runtime,
+        runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
+          Effect.sync(() => {
+            const path = environment?.PATH ?? "";
+            probes.push(path);
+            return { stdout: path === "/old" ? "1.18.32" : "2.0.18", stderr: "", code: 0 };
+          }),
+        startOpenCodeServerProcess: ({
+          environment,
+        }: {
+          readonly environment?: NodeJS.ProcessEnv;
+        }) =>
+          Effect.sync(() => launches.push(environment ?? {})).pipe(
+            Effect.andThen(reachedServer("memory")),
+          ),
+      };
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(ProviderHost.ProviderHost, {
+          ...host,
+          environmentId: EnvironmentId.make("owner"),
+        }),
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+        Effect.provideService(HostProcess.Environment, hostEnvironment),
+        Effect.provideService(HostProcess.HomeDirectory, root),
+        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+      );
+      yield* instance.snapshot.resolveMaintenance();
+      hostEnvironment.PATH = "/new";
+      const input = GenerateMemorySummaryInput.make({
+        cwd: root,
+        sourceThread: {
+          environmentId: EnvironmentId.make("source"),
+          threadId: ThreadId.make("thread"),
+        },
+        sourceWatermark: {
+          fromEventId: EventId.make("e1"),
+          toEventId: EventId.make("e2"),
+          throughSequence: 2,
+        },
+        messages: [{ messageId: MessageId.make("m1"), text: "hello", completed: true }],
+        modelSelection: { instanceId: instance.instanceId, model: "openai/gpt-5" },
+      });
+      const wrongIdentity = {
+        ...input,
+        modelSelection: { ...input.modelSelection, instanceId: ProviderInstanceId.make("foreign") },
+      };
+      const denied = yield* instance.textGeneration.generateMemorySummary!(wrongIdentity).pipe(
+        Effect.flip,
+      );
+      assert.deepInclude(denied.cause, { code: "identity_mismatch" });
+      assert.strictEqual(probes.filter((path) => path === "/new").length, 0);
+      yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
+      assert.strictEqual(probes.filter((path) => path === "/new").length, 1);
+      assert.isDefined(launches.at(-1)?.OPENCODE_PASSWORD);
+      yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
+      assert.strictEqual(probes.filter((path) => path === "/new").length, 1);
+      assert.isDefined(launches.at(-1)?.OPENCODE_PASSWORD);
+    }).pipe(Effect.scoped),
+  );
   it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
