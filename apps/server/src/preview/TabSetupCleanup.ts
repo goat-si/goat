@@ -21,6 +21,12 @@ export async function connectDesktopPage<T>(options: {
   const scope = await options.openScope();
   try {
     const connected = await options.connect(await options.endpoint(scope));
+    try {
+      await connected.page.emulateMedia({ colorScheme: null });
+    } catch (cause) {
+      await connected.browser.close().catch(() => {});
+      throw cause;
+    }
     return {
       page: connected.page,
       close: async () => {

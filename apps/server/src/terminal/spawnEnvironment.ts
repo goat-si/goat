@@ -1,5 +1,6 @@
 import { isOwnedEnvName } from "@goat/contracts/legacyT3Names";
 import { expandHomeVariable } from "@goat/provider-core/server/pathExpansion";
+import packageJson from "../../package.json" with { type: "json" };
 
 // The tmux/screen/Zellij keys name the multiplexer pane that launched the server,
 // so inheriting them points multiplexer-aware tools at that unrelated pane.
@@ -82,8 +83,15 @@ export function createTerminalSpawnEnv(
   for (const [key, value] of Object.entries(baseEnv)) {
     if (value === undefined) continue;
     if (shouldExcludeTerminalEnvKey(key)) continue;
+    if (
+      platform === "win32" &&
+      ["TERM_PROGRAM", "TERM_PROGRAM_VERSION"].includes(key.toUpperCase())
+    )
+      continue;
     spawnEnv[key] = value;
   }
+  spawnEnv.TERM_PROGRAM = "goat";
+  spawnEnv.TERM_PROGRAM_VERSION = packageJson.version;
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {
       const existingKey =

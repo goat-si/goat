@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import type { DisposableRecord } from "./disposable/disposableClass.ts";
-import { OTHER, PINNED, scope, setup } from "./HubMembership.testkit.ts";
+import { OTHER, owner, PINNED, scope, setup, verdict } from "./HubMembership.testkit.ts";
 
 // Design section 6: a disposable machine is reached only through its own Pen route, so no
 // kept-machine path links it under another alias or moves it to one.
@@ -226,4 +226,159 @@ it.effect("no GOAT is identified while no open record has an environment to comp
     yield* hub.membership.join(scope, { deviceAlias: "mini", transport: "hub-client" });
     expect(hub.calls.some((call) => call.startsWith("identify"))).toBe(false);
   }),
+);
+
+// Leave and repair would change a disposable machine's own link outside detach.
+const LINK = "lnk_0123456789abcdef";
+const onlyRead = (calls: ReadonlyArray<string>) =>
+  calls.every((call) => call === "home link status --json");
+const OWN = [
+  { alias: "pen-" + node, own: record() },
+  { alias: "mini", own: record({ linkId: LINK }) },
+];
+
+it.effect(
+  "hub.device_leave refuses an open disposable machine by its Pen alias or its link id, before consent, device calls or a revoke",
+  () =>
+    Effect.gen(function* () {
+      for (const { alias, own } of OWN) {
+        for (const decisionId of [undefined, "decision-1"]) {
+          const hub = yield* setup({ linked: [alias], disposable: [own] });
+          const refused = yield* hub.membership.leave(scope, {
+            deviceAlias: alias,
+            ...(decisionId === undefined ? {} : { decisionId }),
+          });
+          expect(refused.state).toBe("failed");
+          expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+          expect((yield* hub.inboxItems).items).toEqual([]);
+          expect(onlyRead(hub.calls)).toBe(true);
+        }
+      }
+    }),
+);
+
+it.effect(
+  "hub.device_repair refuses the whole ladder for an open disposable machine, since OpenCodex brings its tunnel back itself",
+  () =>
+    Effect.gen(function* () {
+      for (const { alias, own } of OWN) {
+        for (const decisionId of [undefined, "decision-1"]) {
+          const hub = yield* setup({
+            linked: [alias],
+            disposable: [own],
+            verdicts: [verdict(["P2"])],
+          });
+          const refused = yield* hub.membership.repair(scope, {
+            deviceAlias: alias,
+            ...(decisionId === undefined ? {} : { decisionId }),
+          });
+          expect(refused.state).toBe("failed");
+          expect(refused.message).toContain("OpenCodex retries");
+          expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+          expect((yield* hub.inboxItems).items).toEqual([]);
+          expect(onlyRead(hub.calls)).toBe(true);
+        }
+      }
+    }),
+);
+
+it.effect(
+  "an unreadable or forbidden Home link status still refuses leave and repair by the Pen alias, before any device read",
+  () =>
+    Effect.gen(function* () {
+      for (const linkStatus of ["forbidden", "failed"] as const) {
+        for (const decisionId of [undefined, "decision-1"]) {
+          for (const action of ["leave", "repair"] as const) {
+            const hub = yield* setup({ linkStatus, disposable: [record()] });
+            const input = {
+              deviceAlias: "pen-" + node,
+              ...(decisionId === undefined ? {} : { decisionId }),
+            };
+            const refused =
+              action === "leave"
+                ? yield* hub.membership.leave(scope, input)
+                : yield* hub.membership.repair(scope, input);
+            expect(refused.state).toBe("failed");
+            expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+            expect((yield* hub.inboxItems).items).toEqual([]);
+            expect(onlyRead(hub.calls)).toBe(true);
+          }
+        }
+      }
+    }),
+);
+
+it.effect(
+  "a trailing-dot Pen alias, and a person's request through the RPC, are refused the same way",
+  () =>
+    Effect.gen(function* () {
+      // The ws RPC passes the session as a person to these same methods.
+      const person = { sessionId: owner.sessionId, scopes: owner.scopes };
+      for (const caller of [undefined, person]) {
+        for (const action of ["leave", "repair"] as const) {
+          const hub = yield* setup({ linked: ["pen-" + node], disposable: [record()] });
+          const input = { deviceAlias: "pen-" + node + "." };
+          const refused =
+            action === "leave"
+              ? yield* hub.membership.leave(scope, input, caller)
+              : yield* hub.membership.repair(scope, input, caller);
+          expect(refused.state).toBe("failed");
+          expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+          expect((yield* hub.inboxItems).items).toEqual([]);
+          expect(onlyRead(hub.calls)).toBe(true);
+        }
+      }
+    }),
+);
+
+it.effect("a twin Pen name is refused by the record's own link id", () =>
+  Effect.gen(function* () {
+    const twin = penLine("cc-07", node) + penLine("cc-07", "d".repeat(26));
+    for (const action of ["leave", "repair"] as const) {
+      const hub = yield* setup({
+        linked: ["pen-cc-07"],
+        penKnownHosts: twin,
+        disposable: [record({ linkId: LINK })],
+      });
+      const refused =
+        action === "leave"
+          ? yield* hub.membership.leave(scope, { deviceAlias: "pen-cc-07" })
+          : yield* hub.membership.repair(scope, { deviceAlias: "pen-cc-07" });
+      expect(refused.message).toContain("matched by its OpenCodex link");
+      expect(onlyRead(hub.calls)).toBe(true);
+    }
+  }),
+);
+
+it.effect(
+  "an ended record, a kept Pen member and a twin Pen name on another link leave hub.device_leave and repair as they were",
+  () =>
+    Effect.gen(function* () {
+      const other = "d".repeat(26);
+      const fixtures = [
+        { alias: "pen-" + node, disposable: [record({ final: true, linkId: LINK })] },
+        {
+          alias: "pen-cc-09",
+          disposable: [record({ linkId: "lnk_aaaaaaaaaaaaaaaa" })],
+          penKnownHosts: penLine("cc-09", other),
+        },
+        {
+          alias: "pen-cc-07",
+          disposable: [record({ linkId: "lnk_aaaaaaaaaaaaaaaa" })],
+          penKnownHosts: penLine("cc-07", node) + penLine("cc-07", other),
+        },
+      ];
+      for (const { alias, ...fixture } of fixtures) {
+        const left = yield* setup({ linked: [alias], ...fixture });
+        expect((yield* left.membership.leave(scope, { deviceAlias: alias })).state).toBe("ready");
+        const repaired = yield* setup({
+          linked: [alias],
+          verdicts: [verdict(["P6"]), verdict()],
+          ...fixture,
+        });
+        expect((yield* repaired.membership.repair(scope, { deviceAlias: alias })).state).toBe(
+          "child",
+        );
+      }
+    }),
 );
