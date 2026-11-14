@@ -426,6 +426,40 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       ),
   );
 
+  it.effect("old session events cannot replace the current profile catalog", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = yield* Ref.make("/home/a");
+        const release = yield* Deferred.make<void>();
+        const waiting = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({ currentProfile: Ref.get(home) });
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/a");
+        const oldEvents = yield* Effect.gen(function* () {
+          yield* Deferred.succeed(waiting, undefined);
+          yield* Deferred.await(release);
+          yield* harness.provider.onConfigOptionsUpdated([], "/home/a");
+          yield* harness.provider.onAvailableCommands(
+            [{ name: "old", description: "Old command" }],
+            undefined,
+            "/home/a",
+          );
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(waiting);
+        yield* Ref.set(home, "/home/b");
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+        yield* harness.provider.onAvailableCommands(commands, undefined, "/home/b");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(oldEvents);
+        const snapshot = yield* harness.provider.snapshot.getSnapshot;
+        expect({ models: snapshot.models, commands: snapshot.slashCommands }).toEqual({
+          models: buildAntigravityModelsFromSession(sessionSetupResult),
+          commands: expectedCommands,
+        });
+      }),
+    ),
+  );
+
   it.effect("a sign-out is not lost when the home changes while it is applied", () =>
     Effect.scoped(
       Effect.gen(function* () {
