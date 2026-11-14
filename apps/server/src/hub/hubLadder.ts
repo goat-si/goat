@@ -12,7 +12,7 @@ import type { HubChildConnectionAdmission, HubOcx, HubOcxError, OcxOutput } from
 import type { HubParity } from "./HubParity.ts";
 
 /** Ladder order and the checks each rung addresses (§1.4). */
-export const LADDER: ReadonlyArray<{
+const LADDER: ReadonlyArray<{
   readonly step: "sync" | "restart" | "reconnect";
   readonly checks: ReadonlyArray<HubParityCheckId>;
 }> = [
