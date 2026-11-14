@@ -9,6 +9,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import {
+  BotProfile,
   BotRemoteWork,
   BotThreadRow,
   EnvironmentId,
@@ -17,6 +18,7 @@ import {
   type OrchestrationV2ThreadLauncher,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -26,8 +28,10 @@ import {
   v2ThreadShell,
 } from "../../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
 
-// One registry holds the real channel atoms, the real thread shells and the real hidden-key set;
-// only what a server would answer (session, connection, permission, RPC reads) is a fixture.
+// One registry holds the real channel atoms, the app's thread-shell wiring, the hidden-key set,
+// MobileBotWork and the roster. Stand-ins: the servers' answers (session, connection, permission,
+// RPC reads), the catalog, snapshots and presentations, native components, the Home-mode hook's
+// inputs, the row menu, and Home's other parts (face, status card, library, memory, search).
 type Props = Record<string, unknown> & { children?: ReactNode };
 const nativeAlert = vi.hoisted(() => vi.fn());
 const fx = vi.hoisted(() => ({
@@ -44,6 +48,8 @@ const fx = vi.hoisted(() => ({
     botId?: string,
   ) => import("effect/reactivity").Atom.Writable<any>,
   openThread: vi.fn(),
+  /** Every read the stand-in server was asked for, as tag and target. */
+  reads: [] as string[],
 }));
 vi.mock("../../state/atom-registry", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
@@ -93,9 +99,10 @@ vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
     createEnvironmentRpcQueryAtomFamily: (_runtime: unknown, options: { tag: string }) => {
       const family = A.family((key: string) => {
         const target = JSON.parse(key) as { environmentId: string; input?: { botId?: string } };
-        return A.make((get) =>
-          get(fx.answer(options.tag, target.environmentId, target.input?.botId)),
-        );
+        return A.make((get) => {
+          fx.reads.push(options.tag + " " + key);
+          return get(fx.answer(options.tag, target.environmentId, target.input?.botId));
+        });
       });
       return (target: unknown) => family(JSON.stringify(target));
     },
@@ -191,7 +198,7 @@ vi.mock("react-native", () => ({
     props.visible ? <div>{props.children}</div> : null,
   Alert: { alert: nativeAlert },
   AccessibilityInfo: { announceForAccessibility: () => {} },
-  Text: (props: Props) => <span>{props.children}</span>,
+  Text: (props: Props) => <span data-class={props.className as string}>{props.children}</span>,
   TextInput: () => null,
   Pressable: (
     props: Props & { onPress?: () => void; accessibilityLabel?: string; disabled?: boolean },
@@ -239,6 +246,7 @@ vi.mock("../../state/environments", () => ({
       ["env", "far"].map((id) => [
         id,
         {
+          connection: { phase: "connected" },
           serverConfig: {
             environment: {
               capabilities: fx.registry.get(fx.config(id))?.environment.capabilities,
@@ -300,7 +308,19 @@ vi.mock("../../components/ui/Button", () => ({
     <button onClick={props.onPress}>{props.label}</button>
   ),
 }));
+// The roster's face, strip and chrome are stand-ins; its rows' counts come from the real atoms.
+vi.mock("./useMobileGoatBotFace", () => ({
+  useMobileGoatBotFace: () => ({ state: "idle" }),
+  useMobileGoatBotFaceMotion: () => null,
+}));
+vi.mock("./MobileNeedsYouStrip", () => ({ MobileNeedsYouStrip: () => null }));
+vi.mock("../workspace/WorkspaceTabsContext", () => ({ useWorkspaceTabs: () => null }));
+vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({ themeAppearance: "light" }),
+}));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => null }));
 import { hiddenGoatBotThreadKeysAtom } from "../threads/goatBotThreadVisibility";
+import { MobileBotRosterView } from "./MobileBotRosterView";
 import { MobileBotWork } from "./MobileBotWork";
 
 const env = EnvironmentId.make("env");
@@ -421,8 +441,8 @@ const hiddenWork = () => {
   return workKeys.filter((item) => hidden.has(item));
 };
 const hiddenSet = () => [...fx.registry.get(hiddenGoatBotThreadKeysAtom)].sort();
-const setList = (result: unknown, environmentId = "env") =>
-  fx.registry.set(fx.answer("channel.listBotThreads", environmentId), result as never);
+const setList = (result: unknown, environmentId = "env", botId = "main") =>
+  fx.registry.set(fx.answer("channel.listBotThreads", environmentId, botId), result as never);
 const listed = (list: ReadonlyArray<BotThreadRow>, remoteWork: ReadonlyArray<BotRemoteWork> = []) =>
   AsyncResult.success({ rows: list, remoteWork, mainMessageCount: 0 });
 // Home opens the bot on this computer; a saved bot names it, otherwise the first connected one.
@@ -504,6 +524,7 @@ function setup() {
   fx.registry.set(fx.atoms.permission as never, true as never);
   fx.registry.set(fx.config("far"), configOf(far));
   saveBot(null);
+  fx.registry.set(fx.answer("channel.listBots", "env"), AsyncResult.success({ bots: [] }) as never);
   fx.registry.set(
     fx.answer("channel.listChildWork", "env"),
     AsyncResult.success({ groups: [] }) as never,
@@ -588,20 +609,35 @@ it("hides exactly the threads Home's current list opens, and each one opens from
   // Every hidden key, and nothing else, opened from Home.
   const opened = fx.openThread.mock.calls.map(([thread]) => key(thread.environmentId, thread.id));
   expect(opened.sort()).toEqual(hidden);
+  // Show work's child reads and a peek of a task left the hidden set as it was.
+  expect(
+    fx.reads.some((read) => read.startsWith("channel.listChildWork") && read.includes('"t1"')),
+  ).toBe(true);
+  await screen.press("Open Home");
+  await screen.press("Ship the release");
+  expect(screen.button("Back to home. Ship the release")).toBeDefined();
+  expect(hiddenSet()).toEqual(hidden);
   // The chore Home does not link stays in Threads; Home lists it among other threads.
   await screen.press("Open Home");
   expect(screen.button("GOAT thread: Tidy logs")).toBeDefined();
 });
 
-it("lists Home's work again when its list read fails or a destination disconnects", () => {
+it("lists Home's work again when its list read fails or a destination disconnects, while Home keeps its rows", async () => {
   setup();
   fx.registry.set(fx.config("far"), null);
   expect(hiddenWork()).not.toContain(key("far", "r1"));
   expect(hiddenWork()).toContain(key("env", "c1"));
   fx.registry.set(fx.config("far"), configOf(far));
   expect(hiddenWork()).toContain(key("far", "r1"));
-  setList(AsyncResult.failure(new Error("offline") as never));
+  // A refresh that fails keeps the earlier answer beside the error, as the app's reads do.
+  setList(
+    AsyncResult.failure(Cause.fail("offline"), {
+      previousSuccess: Option.some(listed(rows, [remote])),
+    }),
+  );
   expect(hiddenWork()).toEqual([]);
+  await using screen = await renderHome();
+  expect(screen.button("Actions for Ship the release")).toBeDefined();
 });
 
 it("hides nothing from Home while its first list read is pending, offline, or not permitted", () => {
@@ -632,6 +668,9 @@ it("returns Threads to the legacy rule when either visibility capability is with
       key("env", "k1"),
       ...[1, 2, 3, 4, 5, 6].map((n) => key("env", "fw" + n)),
     ]);
+    // Returned, Home's rule decides again.
+    fx.registry.set(fx.config("env"), configOf(env));
+    expect(hiddenWork(), missing).toEqual(workKeys.filter((item) => item !== key("env", "k1")));
   }
 });
 
@@ -680,4 +719,106 @@ it("hides nothing while this device shows GOAT Bot threads", () => {
     AsyncResult.success({ showGoatBotThreads: true }) as never,
   );
   expect(hiddenWork()).toEqual([]);
+});
+
+const scout = Schema.decodeUnknownSync(BotProfile)({
+  botId: "scout",
+  role: "member",
+  name: "Scout",
+  avatar: null,
+  purpose: "",
+  defaultModelSelection: null,
+  defaultProjectId: null,
+  environmentId: "env",
+  sessionThreadId: "scout-thread",
+  createdAt: at,
+  updatedAt: at,
+});
+// A member on a server that counts waits by visit, with its own list and status reads.
+function setupScout(input: { unread: ReadonlyArray<boolean>; waiting: number }) {
+  setup();
+  fx.registry.set(
+    fx.config("env"),
+    configOf(env, {
+      goatBotMembers: true,
+      goatBotProfiles: true,
+      goatBotStatus: true,
+      goatBotWaitingRead: true,
+      threadVisitedTracking: true,
+    }),
+  );
+  fx.registry.set(
+    fx.answer("channel.listBots", "env"),
+    AsyncResult.success({ bots: [{ botId: "scout", role: "member", state: "active" }] }) as never,
+  );
+  setScout(input);
+}
+function setScout(input: { unread: ReadonlyArray<boolean>; waiting: number }) {
+  setList(
+    listed(
+      input.unread.map((unread, n) => ({ ...task("s" + n, "Scout task " + n, "sw" + n), unread })),
+    ),
+    "env",
+    "scout",
+  );
+  fx.registry.set(
+    fx.answer("channel.getBotStatus", "env", "scout"),
+    AsyncResult.success({ waitingCount: input.waiting }) as never,
+  );
+}
+async function renderRoster() {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () =>
+    root.render(
+      <MobileBotRosterView
+        bots={[
+          { kind: "main", profile: null },
+          { kind: "member", profile: scout },
+        ]}
+        slackEnabled={false}
+        mainEnvironmentId={env}
+        onOpenBot={() => {}}
+      />,
+    ),
+  );
+  const row = () =>
+    [...container.querySelectorAll("button")].find((item) =>
+      item.getAttribute("aria-label")?.split(", ").includes("Scout"),
+    );
+  const marked = (className: string) =>
+    [...(row()?.querySelectorAll("span") ?? [])]
+      .filter((item) => item.getAttribute("data-class") === className)
+      .map((item) => item.textContent);
+  return {
+    label: () => row()?.getAttribute("aria-label") ?? "",
+    // The unread mark and the waiting badge, told apart by how each is drawn.
+    unread: () =>
+      marked("rounded-full bg-subtle-strong px-1.5 text-xs font-semibold text-foreground"),
+    waiting: () => marked("text-xs font-semibold text-foreground"),
+    rerender: () => act(async () => {}),
+    [Symbol.asyncDispose]: async () => act(async () => root.unmount()),
+  };
+}
+
+it("a governed member row counts the unread tasks of its bot's real current list, beside its waiting count", async () => {
+  setupScout({ unread: [true, false, true], waiting: 1 });
+  await using roster = await renderRoster();
+  expect(roster.unread()).toEqual(["2"]);
+  expect(roster.waiting()).toEqual(["1"]);
+  expect(roster.label()).toContain("2 unread tasks; recent work only; older work may be missing");
+});
+
+it("marking a member's tasks read and visiting it clear the unread and waiting counts independently", async () => {
+  setupScout({ unread: [true], waiting: 2 });
+  await using roster = await renderRoster();
+  expect([roster.unread(), roster.waiting()]).toEqual([["1"], ["2"]]);
+  // Mark read: the list answers the task read; the waiting count stays.
+  await act(async () => setScout({ unread: [false], waiting: 2 }));
+  expect([roster.unread(), roster.waiting()]).toEqual([[], ["2"]]);
+  expect(roster.label()).not.toContain("unread task");
+  // A new unread task, then a visit: the waiting count clears; the unread count stays.
+  await act(async () => setScout({ unread: [true], waiting: 0 }));
+  expect([roster.unread(), roster.waiting()]).toEqual([["1"], []]);
 });

@@ -59,6 +59,14 @@ const scout = Schema.decodeUnknownSync(BotProfile)({
   updatedAt: "2026-11-11T10:00:00.000Z",
 });
 
+function setup() {
+  member.shell = null;
+  member.latest = undefined;
+  member.refresh.mockClear();
+  member.error = null;
+  member.capabilities = {};
+}
+
 async function unread() {
   let value: boolean | undefined;
   function Probe() {
@@ -72,6 +80,7 @@ async function unread() {
 }
 
 it("marks a member's reply unread until a visit of its conversation reaches it", async () => {
+  setup();
   member.latest = { text: "Which machine?", at: "2026-11-11T10:05:00.000Z", author: "bot" };
   member.shell = {
     updatedAt: "2026-11-11T10:05:00.000Z",
@@ -87,12 +96,14 @@ it("marks a member's reply unread until a visit of its conversation reaches it",
 });
 
 it("never marks a member unread on a server that records no visits", async () => {
+  setup();
   member.latest = { text: "Hi, I'm Scout.", at: "2026-11-11T10:05:00.000Z", author: "bot" };
   member.shell = { updatedAt: "2026-11-11T10:05:00.000Z" };
   expect(await unread()).toBe(false);
 });
 
 it("a waiting count whose latest read failed is unavailable, not the earlier answer", async () => {
+  setup();
   let value: ReturnType<typeof useMobileMemberStatus> | undefined;
   function Probe() {
     value = useMobileMemberStatus(scout);
@@ -109,10 +120,10 @@ it("a waiting count whose latest read failed is unavailable, not the earlier ans
   member.error = "failed";
   await show();
   expect(value?.waitingState).toBe("unavailable");
-  member.error = null;
 });
 
 it("a waiting count from a server that cannot count by visit is unavailable", async () => {
+  setup();
   let value: ReturnType<typeof useMobileMemberStatus> | undefined;
   function Probe() {
     value = useMobileMemberStatus(scout);
@@ -125,5 +136,4 @@ it("a waiting count from a server that cannot count by visit is unavailable", as
     await act(async () => root.unmount());
     expect(value?.waitingState, missing).toBe("unavailable");
   }
-  member.capabilities = {};
 });

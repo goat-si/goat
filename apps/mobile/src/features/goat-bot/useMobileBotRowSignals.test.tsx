@@ -59,19 +59,25 @@ async function show(props: Parameters<typeof useMobileBotRowSignals>[0]) {
   await act(async () => root.unmount());
   return seen.current;
 }
+function setup(governed: boolean, unread: Record<string, number | "pending" | "unavailable"> = {}) {
+  state.governed = { env: governed };
+  state.unread = unread;
+  state.reads = [];
+  seen.current = undefined;
+}
 const env = EnvironmentId.make("env");
 const scout = BotId.make("scout");
 
 it("where Home does not govern the computer, a row has no signals and reads none of the bot's work", async () => {
-  state.governed = { env: false };
-  state.reads = [];
+  setup(false);
   expect(await show({ environmentId: env, botId: scout, waiting: "unavailable" })).toBeNull();
   expect(state.reads).toEqual([]);
 });
 
-it("where Home governs, a row counts its bot's unread recent tasks and says the count is recent work only", async () => {
-  state.governed = { env: true };
-  state.unread = { "unread:env:scout": 2 };
+// The count itself is derived from the bot's list in the shared atom; goatBotHomeThreadHiding.test.tsx
+// runs it from real task rows to the rendered row.
+it("where Home governs, a count it is given reads as unread recent work only", async () => {
+  setup(true, { "unread:env:scout": 2 });
   const signals = await show({ environmentId: env, botId: scout, waiting: "ready" });
   expect(signals?.unread).toBe(2);
   expect(signals?.missing).toBeNull();
@@ -79,8 +85,7 @@ it("where Home governs, a row counts its bot's unread recent tasks and says the 
 });
 
 it("names each count it cannot read, and says nothing while the bot's list is still loading", async () => {
-  state.governed = { env: true };
-  state.unread = { "unread:env:scout": "unavailable" };
+  setup(true, { "unread:env:scout": "unavailable" });
   expect(
     (await show({ environmentId: env, botId: scout, waiting: "unavailable" }))?.spoken,
   ).toEqual(["Unread and waiting unavailable"]);
