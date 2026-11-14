@@ -6,7 +6,7 @@ import {
   type GoatBotRef,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import type { BotProfile } from "@goat/contracts";
+import { BotId, type BotProfile, type EnvironmentId } from "@goat/contracts";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { useContext } from "react";
 
@@ -34,7 +34,8 @@ import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
-import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
+import { useGoatBotSidebarWaiting } from "./useGoatBotWaitingCount";
+import { GoatBotRowSignals } from "./GoatBotRowSignals";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
 import { useBotThreads } from "./useBotRoster";
 
@@ -68,7 +69,8 @@ function GoatBotSidebarObserver({
   slackEnabled: boolean;
   main: BotProfile | null;
 }) {
-  const count = useGoatBotWaitingCount();
+  const waiting = useGoatBotSidebarWaiting();
+  const count = waiting.count;
   const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -97,6 +99,7 @@ function GoatBotSidebarObserver({
               botRef={botRef}
               active={active}
               count={count}
+              waiting={waiting}
               onClick={handleClick}
               readMenu={readMenu}
             />
@@ -107,6 +110,7 @@ function GoatBotSidebarObserver({
               slackEnabled={slackEnabled}
               active={active}
               count={count}
+              waiting={waiting}
               onClick={handleClick}
               readMenu={readMenu}
               preview={null}
@@ -127,6 +131,7 @@ function GoatBotSidebarPreview({
   botRef,
   active,
   count,
+  waiting,
   onClick,
   readMenu,
 }: {
@@ -136,6 +141,12 @@ function GoatBotSidebarPreview({
   botRef: GoatBotRef;
   active: boolean;
   count: number | undefined;
+  waiting: {
+    environmentId: EnvironmentId | null;
+    governed: boolean;
+    count: number | undefined;
+    state: "ready" | "pending" | "unavailable";
+  };
   onClick: () => void;
   readMenu: GoatBotReadMenuProps;
 }) {
@@ -170,6 +181,7 @@ function GoatBotSidebarPreview({
       slackEnabled={slackEnabled}
       active={active}
       count={count}
+      waiting={waiting}
       onClick={onClick}
       readMenu={readMenu}
       preview={preview}
@@ -184,6 +196,7 @@ function GoatBotConversationRow({
   slackEnabled,
   active,
   count,
+  waiting,
   onClick,
   readMenu,
   preview,
@@ -194,6 +207,12 @@ function GoatBotConversationRow({
   slackEnabled: boolean;
   active: boolean;
   count: number | undefined;
+  waiting: {
+    environmentId: EnvironmentId | null;
+    governed: boolean;
+    count: number | undefined;
+    state: "ready" | "pending" | "unavailable";
+  };
   onClick: () => void;
   readMenu: GoatBotReadMenuProps;
   preview: GoatBotConversationPreview | null;
@@ -215,7 +234,14 @@ function GoatBotConversationRow({
       >
         {preview?.unread ? <span className="size-2.5 rounded-full bg-info" /> : null}
       </span>
-      <GoatBotMainAvatar size="md" place="list" surface="sidebar" emoji={avatar} countInLabel />
+      <GoatBotMainAvatar
+        size="md"
+        place="list"
+        surface="sidebar"
+        emoji={avatar}
+        countInLabel
+        waitingOverride={waiting.governed ? (count ?? null) : undefined}
+      />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span
@@ -236,6 +262,13 @@ function GoatBotConversationRow({
               <RelativeTimeLabel timestamp={at} />
             </span>
           ) : null}
+          <GoatBotRowSignals
+            environmentId={waiting.environmentId}
+            botId={BotId.make("main")}
+            governed={waiting.governed}
+            waiting={count}
+            waitingState={waiting.state}
+          />
           {count !== undefined && count > 0 ? (
             <Badge size="sm" variant="secondary" aria-hidden>
               {count}

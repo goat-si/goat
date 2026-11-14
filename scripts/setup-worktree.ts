@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
@@ -19,70 +20,87 @@ const PINNED_NODE_RERUN = "GOAT_SETUP_PINNED_NODE";
  */
 const RERUN_FILE_PREFIX = "setup-rerun-";
 
-/**
- * Ways to run setup again under the pinned Node when PATH's Node is another release.
- * `vp env` exists only in the global vp, so a machine without it gets Node from npm.
- */
 export function pinnedNodeRunners(input: {
   readonly pinned: string;
   readonly vp: boolean;
-  readonly npx: boolean;
-}): {
-  readonly command: string;
-  readonly tool: string;
-}[] {
-  const setup = "node scripts/setup-worktree.ts";
-  return [
-    ...(input.vp
-      ? [{ command: `vp env exec --node ${input.pinned} -- ${setup}`, tool: "vp" }]
-      : []),
-    ...(input.npx
-      ? [
-          {
-            command: `npx --yes --package=node@${input.pinned} -- ${setup}`,
-            tool: `npx node@${input.pinned}`,
-          },
-        ]
-      : []),
-  ];
-}
-
-/** The vite-plus release pnpm-workspace.yaml pins, so npx runs that one and not the latest. */
-export function pinnedVitePlusVersion(workspaceYaml: string): string | undefined {
-  // Only the catalog pins a release; an override of the same name must not stand in for it.
-  const lines = workspaceYaml.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^catalog:\s*(#.*)?$/.test(line));
-  if (start === -1) return undefined;
-  for (const line of lines.slice(start + 1)) {
-    if (line.trim() !== "" && !/^\s/.test(line) && !line.startsWith("#")) break;
-    const pin = /^ {2}vite-plus: ["']?(\d+\.\d+\.\d+)["']?\s*(?:#.*)?$/.exec(line)?.[1];
-    if (pin !== undefined) return pin;
-  }
-  return undefined;
+  readonly autoDownload: boolean;
+}): { readonly command: string; readonly tool: string }[] {
+  return input.vp && input.autoDownload
+    ? [
+        {
+          command: `vp env exec --node ${input.pinned} -- node scripts/setup-worktree.ts`,
+          tool: "vp",
+        },
+      ]
+    : [];
 }
 
 export function worktreeInstallCandidates(tools: {
   readonly vp: boolean;
   readonly pnpm: boolean;
-  readonly vitePlusVersion?: string | undefined;
-}): {
-  readonly command: string;
-  readonly tool: string;
-}[] {
+}): { readonly command: string; readonly tool: string }[] {
   return [
     ...(tools.vp ? [{ command: "vp i --frozen-lockfile", tool: "vp" }] : []),
     ...(tools.pnpm ? [{ command: "pnpm install --frozen-lockfile", tool: "pnpm" }] : []),
-    // Without the workspace's pin npx would run whatever release it finds, so it is left out.
-    // The package's executables are vp, vpr and vpx, so npx has to be told which to run.
-    ...(tools.vitePlusVersion === undefined
-      ? []
-      : [
-          {
-            command: `npx --yes --package=vite-plus@${tools.vitePlusVersion} -- vp i --frozen-lockfile`,
-            tool: "npx vite-plus",
-          },
-        ]),
   ];
+}
+
+// The 0.2.2 floor adds signed checksums; see docs/operations/development.md#worktrees.
+export function vpSupportsVerifiedNodeDownload(
+  timeout = 5_000,
+  command = "vp",
+): { supported: boolean; timedOut: boolean } {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-version-"));
+  const output = NodePath.join(directory, "stdout");
+  let fd: number | undefined;
+  try {
+    fd = NodeFS.openSync(output, "wx+");
+    // Windows needs a shell for command shims; POSIX uses a group to clean up descendants.
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
+    const windows = process.platform === "win32";
+    const options: NodeChildProcess.SpawnSyncOptions & { detached: boolean } = {
+      shell: windows,
+      detached: !windows,
+      stdio: ["ignore", fd, "ignore"],
+      timeout,
+      killSignal: "SIGKILL",
+    };
+    const result = NodeChildProcess.spawnSync(command, ["--version"], options);
+    const timedOut =
+      result.error !== undefined && "code" in result.error && result.error.code === "ETIMEDOUT";
+    if (timedOut && !windows && result.pid) {
+      try {
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The process group has already exited.
+      }
+    }
+    const stdout = NodeFS.readFileSync(output, "utf8");
+    const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(stdout.split(/\r?\n/, 1)[0] ?? "");
+    if (result.error || result.status !== 0 || !match) return { supported: false, timedOut };
+    const [, major = "0", minor = "0", patch = "0"] = match;
+    return {
+      supported:
+        Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2),
+      timedOut,
+    };
+  } finally {
+    try {
+      if (fd !== undefined) NodeFS.closeSync(fd);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+}
+
+/** The pnpm release root package.json names, for the message when no installer can run. */
+function pinnedPackageManager(): string {
+  const manifest: { readonly packageManager?: unknown } = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(worktree, "package.json"), "utf8"),
+  );
+  return typeof manifest.packageManager === "string"
+    ? manifest.packageManager.replace("@", " ")
+    : "pnpm";
 }
 
 export function isCorepackLauncherMissing(output: string): boolean {
@@ -210,12 +228,14 @@ async function main(): Promise<void> {
     // A machine that only has another Node, such as a fresh cloud VM, still sets up:
     // the same script runs once more under the pinned release and owns the markers.
     const pinned = readPinnedNodeVersion();
-    const runners =
-      // Windows has no process group to cancel a rerun through, so it keeps refusing.
-      // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, with no Effect runtime.
-      isRerun || process.platform === "win32"
-        ? []
-        : pinnedNodeRunners({ pinned, vp: toolOnPath("vp"), npx: toolOnPath("npx") });
+    const autoDownload = process.env.GOAT_SETUP_NO_NODE_DOWNLOAD !== "1";
+    // Windows has no process group to cancel a rerun through, so it keeps refusing.
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
+    const hasVp = autoDownload && !isRerun && process.platform !== "win32" && toolOnPath("vp");
+    const probe = hasVp ? vpSupportsVerifiedNodeDownload() : undefined;
+    const signatureBypassed = Boolean(process.env.VP_NODE_SKIP_SIGNATURE_VERIFY);
+    const verifiedVp = (probe?.supported ?? false) && !signatureBypassed;
+    const runners = pinnedNodeRunners({ pinned, vp: verifiedVp, autoDownload });
     const tried: string[] = [];
     for (const runner of runners) {
       process.stderr.write(
@@ -280,10 +300,23 @@ async function main(): Promise<void> {
           : `${runner.tool}: ${tail}`,
       );
     }
-    failureDetail =
-      tried.length === 0
-        ? unsupportedNode
-        : `${unsupportedNode}\nSetup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`;
+    const reason = !autoDownload
+      ? "GOAT_SETUP_NO_NODE_DOWNLOAD=1 prevents setup from downloading Node."
+      : hasVp && signatureBypassed
+        ? "VP_NODE_SKIP_SIGNATURE_VERIFY disables signature verification; unset it before setup downloads Node."
+        : hasVp && !verifiedVp
+          ? `${probe?.timedOut ? "vp did not answer its version probe. " : ""}Update vite-plus to 0.2.2 or later to enable verified Node downloads.`
+          : "";
+    failureDetail = [
+      unsupportedNode,
+      reason,
+      `Install Node.js ${pinned} (or a later ${pinned.split(".")[0]}.x) from nodejs.org, fnm, volta, or run vp env install ${pinned}; then run node scripts/setup-worktree.ts again.`,
+      ...(tried.length
+        ? [`Setup could not start itself under Node.js ${pinned}. Tried:\n${tried.join("\n")}`]
+        : []),
+    ]
+      .filter(Boolean)
+      .join("\n");
     process.stderr.write(`${failureDetail}\n`);
     rerunFoundUnsupportedNode = true;
     process.exit(1);
@@ -294,18 +327,10 @@ async function main(): Promise<void> {
   const projectRoot =
     process.env.GOAT_PROJECT_ROOT || process.env.T3CODE_PROJECT_ROOT || mainWorktree(); // goat-rename: legacy
 
-  // A fresh worktree has no node_modules and often no global `vp`.
-  const workspaceYaml = NodePath.join(worktree, "pnpm-workspace.yaml");
-  const candidates = worktreeInstallCandidates({
-    vp: toolOnPath("vp"),
-    pnpm: toolOnPath("pnpm"),
-    vitePlusVersion: NodeFS.existsSync(workspaceYaml)
-      ? pinnedVitePlusVersion(NodeFS.readFileSync(workspaceYaml, "utf8"))
-      : undefined,
-  });
+  const candidates = worktreeInstallCandidates({ vp: toolOnPath("vp"), pnpm: toolOnPath("pnpm") });
+  const installerGuidance = `Install vite-plus (see README, Getting started) or ${pinnedPackageManager()}, then run node scripts/setup-worktree.ts again.`;
   if (candidates.length === 0) {
-    failureDetail =
-      "No installer: vp and pnpm are not on PATH, and npx is not used because the vite-plus release pinned in pnpm-workspace.yaml could not be read.";
+    failureDetail = `No installer: vp and pnpm are not on PATH. ${installerGuidance}`;
     process.stderr.write(`${failureDetail}\n`);
     process.exit(1);
   }
@@ -349,7 +374,10 @@ async function main(): Promise<void> {
     }
     failureDetail = cancelSignal
       ? `Cancelled by ${cancelSignal}.`
-      : installOutput.trimEnd().split("\n").slice(-30).join("\n");
+      : launcherMissing
+        ? `pnpm on PATH is a Corepack shim whose launcher is missing. ${installerGuidance}`
+        : installOutput.trimEnd().split("\n").slice(-30).join("\n");
+    if (launcherMissing && !cancelSignal) process.stderr.write(`${failureDetail}\n`);
     process.exit(installStatus || 1);
   }
 

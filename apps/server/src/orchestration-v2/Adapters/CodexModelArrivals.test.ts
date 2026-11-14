@@ -329,6 +329,30 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("a kept process's home-relative catalog is not judged by this session's home", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped();
+    yield* writeCatalog(NodePath.join(home, "catalog.json"), { [known]: 1_048_576 }, 3_000);
+    const status = (retained: boolean) =>
+      makeCodexModelArrivals({
+        atStart: [model(known)],
+        offered: Effect.succeed([model(known)]),
+        listServed: Effect.succeed([known]),
+        startedAtMs: 2_000,
+        retained,
+        catalog: {
+          cwd: "/",
+          home,
+          fileSystem: fs,
+          readConfig: Effect.succeed({ config: { model_catalog_json: "~/catalog.json" } }),
+        },
+      })(known);
+    assert.strictEqual(yield* status(false), "outdated");
+    assert.strictEqual(yield* status(true), "ready");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect(
   "a catalog changed before GOAT first read it leaves every catalogued model outdated",
   () =>

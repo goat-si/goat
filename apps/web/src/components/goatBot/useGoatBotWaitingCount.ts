@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { ChannelBotRef, EnvironmentId } from "@goat/contracts";
+import { Atom } from "effect/reactivity";
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 
@@ -15,11 +16,16 @@ import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { GoatBotChannelPort } from "./goatBotChannelPort";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 import { useGoatBotEnabled } from "./useGoatBotSession";
 
-const useCounts = create<{ counts: ReadonlyMap<EnvironmentId, number> }>(() => ({
-  counts: new Map(),
-}));
+const useCounts = create<{
+  counts: ReadonlyMap<EnvironmentId, number>;
+  status: ReadonlyMap<
+    EnvironmentId,
+    { generation: number; port: GoatBotChannelPort; count: number | undefined }
+  >;
+}>(() => ({ counts: new Map(), status: new Map() }));
 const observers = new Map<
   EnvironmentId,
   {
@@ -132,11 +138,21 @@ export function useGoatBotWaitingCount() {
           if (result.bot !== null) rememberGoatBotFromStatus(result.bot, seenAtRequest);
           useCounts.setState((state) => ({
             counts: new Map(state.counts).set(environmentId, result.count),
+            status: supportsStatus
+              ? new Map(state.status).set(environmentId, { generation, port, count: result.count })
+              : state.status,
           }));
         };
         void readWaiting()
           .catch(() => {
-            // Keep the previous complete result, including an unknown first result.
+            if (!alive || !supportsStatus) return;
+            useCounts.setState((state) => ({
+              status: new Map(state.status).set(environmentId, {
+                generation,
+                port,
+                count: undefined,
+              }),
+            }));
           })
           .finally(() => {
             pending = false;
@@ -156,6 +172,13 @@ export function useGoatBotWaitingCount() {
         refresh,
         dispose: () => {
           alive = false;
+          useCounts.setState((state) => {
+            const status = new Map(state.status);
+            const prior = status.get(environmentId);
+            if (prior?.port === port && prior.generation === generation)
+              status.delete(environmentId);
+            return { status };
+          });
           window.clearInterval(interval);
           window.removeEventListener("focus", refresh);
         },
@@ -174,6 +197,41 @@ export function useGoatBotWaitingCount() {
     };
   }, [enabled, connected, environmentId, port, generation, supportsStatus]);
   return enabled && connected ? count : undefined;
+}
+
+const NOT_GOVERNED = Atom.make(false);
+
+/** Visit-aware status where Home governs the environment; elsewhere dev's legacy count. */
+export function useGoatBotSidebarWaiting() {
+  const legacy = useGoatBotWaitingCount();
+  const { enabled, environment, generation, port } = useGoatBotEnabled();
+  const configs = useAtomValue(environmentServerConfigsAtom);
+  const environmentId = environment?.environmentId ?? null;
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const governed = useAtomValue(
+    environmentId === null ? NOT_GOVERNED : goatBotGovernedAtom(environmentId),
+  );
+  const status = useCounts((values) =>
+    environmentId === null ? undefined : values.status.get(environmentId),
+  );
+  if (!governed) return { environmentId, governed, count: legacy, state: "ready" as const };
+  if (
+    !enabled ||
+    environment?.connected !== true ||
+    capabilities?.goatBotStatus !== true ||
+    capabilities.goatBotWaitingRead !== true ||
+    capabilities.threadVisitedTracking !== true
+  )
+    return { environmentId, governed, count: undefined, state: "unavailable" as const };
+  if (status === undefined || status.generation !== generation || status.port !== port)
+    return { environmentId, governed, count: undefined, state: "pending" as const };
+  return {
+    environmentId,
+    governed,
+    count: status.count,
+    state: status.count === undefined ? ("unavailable" as const) : ("ready" as const),
+  };
 }
 
 /** Chip updates while the bot screen is open also refresh the sidebar's shared count. */

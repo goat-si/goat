@@ -8,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 
@@ -211,5 +212,30 @@ describe("ResetCreditCoordinator", () => {
         Effect.scoped,
         Effect.provide(Layer.mergeAll(ResetCreditCoordinator.layerTest, NodeServices.layer)),
       ),
+  );
+
+  it.effect("re-probes after a reset until the limits are fresh, then gives up", () =>
+    Effect.gen(function* () {
+      const stale = { usageLimits: { checkedAt: "t0", windows: [] } };
+      const run = (freshFrom: number) =>
+        Effect.gen(function* () {
+          const probes = yield* Ref.make(0);
+          const refresh = Ref.updateAndGet(probes, (n) => n + 1).pipe(
+            Effect.map((n) =>
+              n >= freshFrom ? { usageLimits: { checkedAt: `t${n}`, windows: [] } } : stale,
+            ),
+          );
+          const fiber = yield* ResetCreditCoordinator.refreshAfterRedemption({
+            outcome: "reset",
+            getSnapshot: Effect.succeed(stale),
+            refresh,
+          }).pipe(Effect.forkChild);
+          yield* TestClock.adjust("1 minute");
+          return { confirmed: yield* Fiber.join(fiber), probes: yield* Ref.get(probes) };
+        });
+
+      assert.deepStrictEqual(yield* run(3), { confirmed: true, probes: 3 });
+      assert.deepStrictEqual(yield* run(Infinity), { confirmed: false, probes: 4 });
+    }),
   );
 });

@@ -129,7 +129,13 @@ export const status = (
       : undefined) ??
     (row.pen_admitted_at === null
       ? undefined
-      : enrollMessage(row.state, row.name, enroll, row.pen_admitted_at < row.state_since)) ??
+      : enrollMessage(
+          row.state,
+          row.name,
+          enroll,
+          row.pen_admitted_at < row.state_since,
+          row.link_operation_id,
+        )) ??
     stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);
   return {

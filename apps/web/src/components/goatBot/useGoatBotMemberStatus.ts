@@ -14,6 +14,8 @@ import { useEnvironmentQuery } from "~/state/query";
  */
 export function useGoatBotMemberStatus(member: BotProfile | null): {
   readonly waitingCount: number;
+  readonly sidebarWaitingCount: number | undefined;
+  readonly sidebarWaitingState: "ready" | "pending" | "unavailable";
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly tasks: ChannelGetBotStatusResult["tasks"];
 } {
@@ -41,8 +43,26 @@ export function useGoatBotMemberStatus(member: BotProfile | null): {
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
+  const visitAware =
+    supported &&
+    presentation?.serverConfig?.environment.capabilities.goatBotStatus === true &&
+    presentation.serverConfig.environment.capabilities.goatBotWaitingRead === true;
   return {
+    sidebarWaitingState: !visitAware
+      ? "unavailable"
+      : status.isSuccess
+        ? "ready"
+        : status.error
+          ? "unavailable"
+          : "pending",
     waitingCount: status.data?.waitingCount ?? 0,
+    sidebarWaitingCount:
+      supported &&
+      presentation?.serverConfig?.environment.capabilities.goatBotStatus === true &&
+      presentation.serverConfig.environment.capabilities.goatBotWaitingRead === true &&
+      status.isSuccess
+        ? status.data?.waitingCount
+        : undefined,
     latest: status.data?.latest,
     tasks: status.data?.tasks,
   };

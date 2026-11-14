@@ -268,8 +268,8 @@ export class HubOcx extends Context.Service<
   }
 >()("goat/hub/HubOcx") {}
 
-const phaseOf = (stderr: string) =>
-  /\b((?:remote|child|home|route)_[a-z_]{2,60}|routes_stored_reload_failed|link_not_found|link_changed|link_exclusive|link_not_home_initiated|link_operation_in_progress|pin_changed|pin_mismatch|trust_file_unexpected|invalid_body|invalid_link_id)\b/u.exec(
+export const phaseOf = (stderr: string) =>
+  /\b((?:remote|child|home|route)_[a-z_]{2,60}|routes_stored_reload_failed|link_not_found|link_changed|link_exclusive|link_not_home_initiated|link_operation_in_progress|pin_changed|pin_mismatch|trust_file_unexpected|invalid_body|invalid_link_id|(?<=\(code invalid_identity_file, hint )identity_file_[a-z_]{2,40}(?=\)))\b/u.exec(
     stderr,
   )?.[1];
 const causeOf = (stderr: string) =>

@@ -462,7 +462,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const codexHome = isChannelReception
         ? yield* makeReceptionCodexHome(
             operation,
-            configuredHome ?? effectiveEnvironment.CODEX_HOME ?? path.join(homeDirectory, ".codex"),
+            // Codex treats an empty CODEX_HOME as unset.
+            configuredHome ??
+              (effectiveEnvironment.CODEX_HOME || path.join(homeDirectory, ".codex")),
             { settings: effectiveConfig, environment: effectiveEnvironment },
           )
         : configuredHome;

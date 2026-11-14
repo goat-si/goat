@@ -1,3 +1,4 @@
+import { launchBranch } from "./launchBranch.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -518,14 +519,15 @@ const make = Effect.gen(function* () {
             );
         },
       );
-
       const requestedBranch = input.workspaceStrategy.branch;
       let branch: string | null;
       if (input.workspaceStrategy.type === "worktree" && requestedBranch === undefined) {
         const uuid = yield* randomUuidV4;
         branch = buildTemporaryWorktreeBranchName(() => uuid.replaceAll("-", ""));
       } else {
-        branch = requestedBranch ?? null;
+        branch = yield* launchBranch(git, input.workspaceStrategy, project.workspaceRoot).pipe(
+          Effect.mapError(mapError(input, "provision-worktree", threadId)),
+        );
       }
       let worktreePath =
         input.workspaceStrategy.type === "existing_worktree"
@@ -865,6 +867,7 @@ const make = Effect.gen(function* () {
       } else {
         yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
       }
+      if (branchRename !== null) yield* Fiber.join(branchRename);
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
       if (runId !== null) {
@@ -1220,7 +1223,11 @@ const make = Effect.gen(function* () {
           input.fromClient !== true
         )
           yield* assertWorkspaceExists(project, workspaceStrategy);
-        const initialBranch = workspaceStrategy.branch ?? null;
+        const initialBranch = yield* launchBranch(
+          git,
+          workspaceStrategy,
+          project.workspaceRoot,
+        ).pipe(Effect.mapError(mapError(input, "resolve-project")));
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
         const claimDispatch =

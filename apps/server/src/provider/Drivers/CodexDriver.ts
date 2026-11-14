@@ -1,7 +1,7 @@
 import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@goat/contracts";
+import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -309,8 +309,7 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        onUsageLimits: (update, scope) =>
-          snapshot.applyUsageLimits(update, pinnedHome === undefined ? scope : undefined),
+        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
         // New sessions read the same environment the status check uses.
         currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
@@ -339,18 +338,16 @@ export const CodexDriver: ProviderDriver<
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
     // manifest, so a slow or hung fetch never delays the provider check.
-    const probeHomes = new WeakMap<ServerProvider, string>();
     const checkProvider = modelCatalog.refreshInBackground.pipe(
-      Effect.andThen(currentEnvironment),
-      Effect.flatMap((env) =>
+      Effect.andThen(
         Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
+          currentEnvironment.pipe(
+            Effect.flatMap((env) =>
+              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
+            ),
+          ),
           currentCatalog,
-          (draft, catalog) => {
-            const result = stampIdentity(applyCodexModelCatalog(draft, catalog));
-            probeHomes.set(result, env.CODEX_HOME ?? "");
-            return result;
-          },
+          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
           { concurrent: true },
         ),
       ),
@@ -371,12 +368,6 @@ export const CodexDriver: ProviderDriver<
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
         ),
       checkProvider,
-      ...(pinnedHome === undefined
-        ? {
-            probeScope: (draft: ServerProvider) => probeHomes.get(draft),
-            currentScope: Effect.sync(() => baseEnvironment.CODEX_HOME ?? ""),
-          }
-        : {}),
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>
@@ -500,29 +491,23 @@ export const CodexDriver: ProviderDriver<
               cause,
             }),
         ),
-        // The windows just changed; re-probe so the snapshot says so. A
-        // failed probe republishes the pre-redemption limits rather than
-        // marking them failed, so "confirmed" means `checkedAt` moved past
-        // what was published before the redemption started.
         Effect.tap((outcome) =>
-          Effect.gen(function* () {
-            const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
-            const refreshed = yield* snapshot.refresh;
-            const after = refreshed.usageLimits?.checkedAt;
-            if (
-              outcome === "reset" &&
-              (after === undefined ||
-                after === before ||
-                refreshed.usageLimits?.unavailable?.reason === "probeFailed")
-            ) {
-              return yield* new ProviderDriverError({
-                driver: DRIVER_KIND,
-                instanceId,
-                detail:
-                  "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
-              });
-            }
-          }),
+          ResetCreditCoordinator.refreshAfterRedemption({
+            outcome,
+            getSnapshot: snapshot.getSnapshot,
+            refresh: snapshot.refresh,
+          }).pipe(
+            Effect.filterOrFail(
+              (confirmed) => confirmed,
+              () =>
+                new ProviderDriverError({
+                  driver: DRIVER_KIND,
+                  instanceId,
+                  detail:
+                    "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
+                }),
+            ),
+          ),
         ),
       );
 

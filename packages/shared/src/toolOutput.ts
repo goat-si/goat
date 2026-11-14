@@ -189,7 +189,11 @@ function readResult(value: unknown, budget: ResultReadBudget, depth = 0): Result
     value.is_error === true ||
     value._tag === "OrchestratorMcpFailure" ||
     value.error != null;
-  const content = value.structuredContent ?? value.content;
+  // Grok CLI wraps MCP results as { type: "MCP", output: { OkayOutput: "<result json>" } }.
+  const content =
+    value.structuredContent ??
+    value.content ??
+    (Predicate.isObject(value.output) ? value.output.OkayOutput : undefined);
   if (content !== undefined) {
     const nested = readResult(content, budget, depth + 1);
     return { ...nested, failed: failed || nested.failed };
@@ -281,13 +285,21 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
   return Object.keys(output).length === 0 ? undefined : output;
 }
 
+// OpenCode Code Mode reports a script's nested tool calls as one item with the script's result.
+const OPENCODE_CODE_MODE_TOOL_NAME = "execute";
+
 export function htmlRenderFromToolItem(item: {
   readonly toolName: string | null | undefined;
   readonly input?: unknown;
   readonly output?: unknown;
 }): HtmlRenderReference | undefined {
   const { toolName } = resolveGoatMcpItemCall(item);
-  if (resolveGoatMcpShippedToolId(toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
+  if (
+    item.toolName !== OPENCODE_CODE_MODE_TOOL_NAME &&
+    resolveGoatMcpShippedToolId(toolName) !== HTML_RENDER_TOOL_NAME
+  ) {
+    return undefined;
+  }
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
 }
@@ -301,17 +313,21 @@ export function mcpAppFromToolItem(item: {
   return app !== undefined && item.toolName === `${app.server}.${app.tool}` ? app : undefined;
 }
 
+// A superset of every needle below, so most outputs are rejected by this single scan.
+const FAILURE_HINT =
+  /enoent|no such|no files found|not found|commandnotfound|not recognized|cannot (?:find path|be found)|exit/i;
+
 /** Some providers report completion even when command output describes a failure. */
 export function toolOutputIndicatesFailure(text: string): boolean {
   return (
-    /file not found|no files found|enoent|no such file|commandnotfoundexception|command not found|is not recognized as the name of a cmdlet|a parameter cannot be found that matches parameter name/i.test(
+    FAILURE_HINT.test(text) &&
+    (/file not found|no files found|enoent|no such file|commandnotfoundexception|command not found|is not recognized as the name of a cmdlet|a parameter cannot be found that matches parameter name/i.test(
       text,
     ) ||
-    (/cannot find path/i.test(text) && /because it does not exist/i.test(text)) ||
-    (/is not recognized/i.test(text) && /the term '/i.test(text)) ||
-    /<exited with exit code\s+[1-9]\d*\s*>/i.test(text) ||
-    /exit(?:ed)? with exit code\s+[1-9]\d*/i.test(text) ||
-    /exit code\s*[:\s]\s*[1-9]\d*\b/i.test(text)
+      (/cannot find path/i.test(text) && /because it does not exist/i.test(text)) ||
+      (/is not recognized/i.test(text) && /the term '/i.test(text)) ||
+      /exit(?:ed)? with exit code\s+[1-9]\d*/i.test(text) ||
+      /exit code\s*[:\s]\s*[1-9]\d*\b/i.test(text))
   );
 }
 

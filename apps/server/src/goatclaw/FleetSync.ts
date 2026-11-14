@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -116,6 +117,7 @@ interface HostRecord extends HostReach {
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const links = yield* LinkedHosts.LinkedHosts;
   const records = new Map<string, HostRecord>();
   const gates = new Map<string, Semaphore.Semaphore>();
   const gate = (host: string) => {
@@ -197,6 +199,33 @@ export const make = Effect.gen(function* () {
   };
 
   /**
+   * The ceiling for this machine's policy call. Its link session was fixed when the link was
+   * made and only this one tool goes through it, so a link decides at its own access; every
+   * evaluation fails closed once that link changed, so the raised ceiling never reaches SSH.
+   */
+  const ceilingFor = Effect.fn("GoatclawFleetSync.ceilingFor")(function* (host: string) {
+    const captured = yield* links.find(host).pipe(Effect.orElseSucceed(() => Option.none()));
+    if (Option.isNone(captured)) return Effect.succeed("approval-required" as const);
+    const { token, host: link } = captured.value;
+    const access = link.access;
+    if (access === "read-only") return Effect.succeed("approval-required" as const);
+    const changed = new SshRemoteDispatch.SshRemoteDispatchError({
+      reason: "caller_changed",
+      message: `The link to ${host} changed during the goatclaw sync; nothing was sent.`,
+    });
+    return links.find(host).pipe(
+      Effect.mapError(() => changed),
+      Effect.flatMap((current) =>
+        Option.isSome(current) &&
+        current.value.token === token &&
+        current.value.host.access === access
+          ? Effect.succeed(access)
+          : Effect.fail(changed),
+      ),
+    );
+  });
+
+  /**
    * `connect` is for a launch or send that is about to reach the host anyway: it uses the same
    * connection it will, so a compatible runtime of another build still answers. The background
    * reconcile never starts or wakes a runtime.
@@ -206,6 +235,7 @@ export const make = Effect.gen(function* () {
     connect = false,
   ) {
     const checkedAt = yield* Clock.currentTimeMillis;
+    const authorize = yield* ceilingFor(host);
     const outcome = yield* local.pipe(
       Effect.flatMap((mine) =>
         dispatch
@@ -220,7 +250,7 @@ export const make = Effect.gen(function* () {
               ...(connect ? {} : { requireReady: true as const }),
               timeoutMs: CALL_TIMEOUT_MS,
             },
-            Effect.succeed("approval-required" as const),
+            authorize,
           )
           .pipe(
             Effect.flatMap(decodeResult),
@@ -294,7 +324,11 @@ export const make = Effect.gen(function* () {
   return GoatclawFleetSync.of({ receive, ensure, reconcile, hostState });
 });
 
-/** Registered once on the shared Scheduler, which ticks every few seconds; `due` throttles. */
+/**
+ * Registered once on the shared Scheduler, which ticks every few seconds; `due` throttles.
+ * Provides linked hosts itself, as SshRemoteDispatchLive does: a memoized layer keeps the
+ * context of its first build, which can sit outside where the runtime provides them.
+ */
 export const layer = Layer.effect(
   GoatclawFleetSync,
   Effect.gen(function* () {
@@ -303,4 +337,4 @@ export const layer = Layer.effect(
     yield* scheduler.register("goatclaw-fleet-sync", service.reconcile);
     return service;
   }),
-);
+).pipe(Layer.provide(LinkedHosts.layer));
