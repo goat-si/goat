@@ -34,6 +34,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import { claimedBy, refusalText, type RouteClaim } from "../hub/disposable/routeGuard.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
 import * as Context from "effect/Context";
@@ -236,6 +237,16 @@ export const make = Effect.gen(function* () {
 
   const add: HubNodes["Service"]["add"] = Effect.fn("HubNodes.add")(function* (input, options) {
     const before = yield* snapshot;
+    // Design section 6: a disposable machine is reached only through its own Pen route.
+    const disposable = yield* disposableMachines.recordsOrKept;
+    const refuseDisposable = (target: string, claim: RouteClaim) => {
+      const claimed = claimedBy(disposable, claim);
+      return claimed === undefined
+        ? Effect.void
+        : Effect.fail(
+            new HubNodesError({ reason: "refused", detail: refusalText(claimed, target) }),
+          );
+    };
     if (input.kind === "linked") {
       const result = yield* linked
         .link({
@@ -254,7 +265,7 @@ export const make = Effect.gen(function* () {
                     detail: "The hub cannot add itself as a node.",
                   }),
                 )
-              : Effect.void,
+              : refuseDisposable(input.name, { environmentId: descriptor.environmentId }),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -285,6 +296,7 @@ export const make = Effect.gen(function* () {
         reason: "refused",
         detail: "Cloud machine aliases are managed in Settings → Connections → Cloud machines.",
       });
+    yield* refuseDisposable(alias, { alias });
     const target = { alias, hostname: input.hostname, username: input.username, port: input.port };
     const identity = yield* ssh
       .identifyTarget({ ...target, hostname: target.hostname ?? alias })
@@ -299,6 +311,7 @@ export const make = Effect.gen(function* () {
         reason: "refused",
         detail: "The hub cannot add itself as a node.",
       });
+    yield* refuseDisposable(alias, { environmentId: identity });
     if (identity === null && options.requireIdentity)
       return yield* new HubNodesError({
         reason: "invalid_request",

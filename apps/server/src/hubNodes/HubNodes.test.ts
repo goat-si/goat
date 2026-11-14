@@ -26,18 +26,28 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import migration from "../persistence/Migrations/106_HubNodes.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
-
-const noDisposableMachines = DisposableMachineStore.DisposableMachineStore.of({
-  records: Effect.succeed([]),
-  recordsOrKept: Effect.succeed([]),
-  commitForward: () => Effect.die("no disposable machine commits in hub node tests"),
-});
 
 const hub = EnvironmentId.make("env-hub");
 const remote = EnvironmentId.make("env-box");
 const at = "2026-10-19T00:00:00.000Z";
+const disposableRecord = (nodeId: string, environmentId: EnvironmentId): DisposableRecord => ({
+  attachId: "attach-1",
+  nodeId,
+  state: "linked",
+  stateSince: at,
+  createdAt: at,
+  provisioner: { kind: "person" },
+  final: false,
+  environmentId,
+  machineInstallId: null,
+  sshdPin: null,
+  linkId: null,
+  conflicts: [],
+  penMember: true,
+});
 const descriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor)({
   environmentId: hub,
   label: "Hub",
@@ -111,7 +121,13 @@ const fixture = Effect.gen(function* () {
     identifyEffect: undefined as
       | Effect.Effect<EnvironmentId | null, SshRemoteDispatch.SshRemoteDispatchError>
       | undefined,
+    disposable: [] as Array<DisposableRecord>,
   };
+  const disposableMachines = DisposableMachineStore.DisposableMachineStore.of({
+    records: Effect.sync(() => state.disposable),
+    recordsOrKept: Effect.sync(() => state.disposable),
+    commitForward: () => Effect.die("no disposable machine commits in hub node tests"),
+  });
   const repository = HubNodeRepository.HubNodeRepository.of({
     ...original,
     listRegistrations: Effect.gen(function* () {
@@ -250,7 +266,7 @@ const fixture = Effect.gen(function* () {
   });
   const service = yield* HubNodes.make.pipe(
     Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
-    Effect.provideService(DisposableMachineStore.DisposableMachineStore, noDisposableMachines),
+    Effect.provideService(DisposableMachineStore.DisposableMachineStore, disposableMachines),
     Effect.provideService(LinkedHosts.LinkedHosts, linked),
     Effect.provideService(CloudMachineService.CloudMachineService, cloud),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
@@ -341,6 +357,35 @@ describe("HubNodes", () => {
       }),
     ),
   );
+  it.effect(
+    "refuses an SSH or linked route to a disposable machine, by its Pen alias or the environment it reached, before saving anything",
+    () =>
+      run(({ service, state, repository }) =>
+        Effect.gen(function* () {
+          const nodeId = "a".repeat(26);
+          state.disposable = [disposableRecord(nodeId, remote)];
+          const byAlias = yield* service.add(sshInput("pen-" + nodeId), options).pipe(Effect.flip);
+          expect(byAlias).toMatchObject({ reason: "refused" });
+          expect(byAlias.detail).toContain("disposable machine");
+          expect(state.identify).toEqual([]);
+          const byEnvironment = yield* service.add(sshInput("box"), options).pipe(Effect.flip);
+          expect(byEnvironment.detail).toContain("disposable machine");
+          const linkedTo = yield* service
+            .add(
+              { kind: "linked", name: "box", url: link.baseUrl, code: "c", access: "full-access" },
+              options,
+            )
+            .pipe(Effect.flip);
+          expect(linkedTo.detail).toContain("disposable machine");
+          expect(yield* repository.listRegistrations).toEqual([]);
+          expect(state.links).toEqual([]);
+          // Once the record ends, the same machine may be added as kept.
+          state.disposable = [{ ...disposableRecord(nodeId, remote), final: true }];
+          expect((yield* service.add(sshInput("box"), options)).node.environmentId).toBe(remote);
+        }),
+      ),
+  );
+
   it.effect("refuses a linked self replacement before changing the catalog or route state", () =>
     run(({ service, state, repository }) =>
       Effect.gen(function* () {
