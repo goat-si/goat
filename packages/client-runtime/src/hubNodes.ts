@@ -2,6 +2,7 @@ import {
   AuthHubProxyScope,
   sessionGrantsScope,
   type AuthSessionState,
+  type EnvironmentId,
   type HubNode,
   type HubNodeMachineClass,
   type HubNodeRoute,
@@ -36,6 +37,27 @@ function relativeAge(since: string, now: number): string | null {
         : `${Math.floor(minutes / 1440)}d`;
 }
 
+const STATE_WORDS: Readonly<Record<string, string>> = {
+  invited: "invited to Pen",
+  admitted: "admitted to Pen",
+  left_pen: "left Pen",
+  unknown: "in an unknown state",
+  pending_release: "waiting to be released",
+  purged: "removed",
+};
+const CONFLICT_WORDS: Readonly<Record<string, string>> = {
+  sshd_pin_shared: "another record has the same SSH host key",
+  environment_shared: "another record reaches the same GOAT",
+  install_shared: "another record names the same GOAT install",
+  link_shared: "another record holds the same link",
+  several_records: "several records match this device",
+  other_route: "the hub reaches it by another route than its Pen alias",
+  environment_changed: "it runs another GOAT than its record names",
+  host_key_changed: "it presented another SSH host key",
+};
+const inWords = (words: Readonly<Record<string, string>>, value: string) =>
+  words[value] ?? value.replaceAll("_", " ");
+
 /**
  * A Hub device's disposable class as people read it on every client: Disposable or Conflict, and
  * Still in Pen while its key is a member, then who attached it and how long it has been in its
@@ -64,12 +86,30 @@ export function hubNodeClassView(
     ],
     detail:
       "Attached by " +
-      (machineClass.provisioner.kind === "person"
-        ? "a person"
-        : `thread ${machineClass.provisioner.threadId}`) +
-      ` · ${machineClass.state}` +
-      (age === null ? "" : age === "now" ? " just now" : ` for ${age}`),
+      (machineClass.provisioner.kind === "person" ? "a person" : "an agent thread") +
+      ` · ${inWords(STATE_WORDS, machineClass.state)}` +
+      (age === null ? "" : age === "now" ? " just now" : ` for ${age}`) +
+      (machineClass.class === "disposable" || machineClass.conflicts.length === 0
+        ? ""
+        : " · Conflict: " +
+          machineClass.conflicts.map((reason) => inWords(CONFLICT_WORDS, reason)).join("; ")),
   };
+}
+
+/**
+ * Why a person may not add another route to a saved environment: the hub reaches it as a disposable
+ * machine, only through its own Pen route (design section 6). Undefined for a kept machine.
+ */
+export function disposableRouteRefusal(
+  nodes: ReadonlyArray<Pick<HubNode, "environmentId" | "label" | "machineClass">>,
+  environmentId: EnvironmentId,
+): string | undefined {
+  const node = nodes.find(
+    (entry) => entry.environmentId === environmentId && entry.machineClass !== undefined,
+  );
+  return node === undefined
+    ? undefined
+    : `${node.label} is a disposable machine: GOAT reaches it only through its own Pen route, so no other route may name it. Detach it in Settings → Hub on web or desktop first.`;
 }
 
 export function hubNodeRouteLabel(route: HubNodeRoute): string {

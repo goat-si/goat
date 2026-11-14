@@ -679,7 +679,8 @@ it("a disposable Hub device shows its class, Pen membership and who attached it;
       : { data: { nodes: [classed], notices: [] }, error: null, cause: null },
   );
   await render();
-  expect(container.textContent).toContain("Conflict · Still in Pen · Attached by thread thread-1");
+  expect(container.textContent).toContain("Conflict · Still in Pen · Attached by an agent thread");
+  expect(container.textContent).toContain("the hub reaches it by another route than its Pen alias");
   state.query.mockImplementation(base ?? (() => undefined));
   await render();
   expect(container.textContent).not.toContain("Still in Pen");

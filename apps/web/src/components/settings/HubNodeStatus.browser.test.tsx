@@ -47,8 +47,8 @@ it("a Hub device shows its disposable class, Pen membership, who attached it and
   await expect.element(screen.getByText("Disposable", { exact: true })).toBeVisible();
   await expect.element(screen.getByText("Still in Pen", { exact: true })).toBeVisible();
   await expect
-    .element(screen.getByText(/Attached by thread thread-1 · linked for 2h/))
+    .element(screen.getByText(/Attached by an agent thread · linked for 2h/))
     .toBeVisible();
-  screen.rerender(<HubNodeStatus now={now} node={node()} />);
+  await screen.rerender(<HubNodeStatus now={now} node={node()} />);
   await expect.element(screen.getByText("Disposable", { exact: true })).not.toBeInTheDocument();
 });
