@@ -10,7 +10,7 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
-import { goalHarness, runSelection } from "./testkit/SteeringHarness.ts";
+import { goalHarness, nextTurnSelectionHarness, runSelection } from "./testkit/SteeringHarness.ts";
 
 it.effect("restarts by stopping the running turn when the provider cannot interrupt-restart", () =>
   Effect.scoped(
@@ -151,4 +151,99 @@ it.effect("reports a restart that stops the running turn as restarted", () =>
       );
     }),
   ),
+);
+
+it.effect.each(["auto", "steer"] as const)(
+  "reports a stopping goal consistently on %s replay",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const name = `goal-send-${mode}`;
+        const { layer, startFirstTurn } = yield* goalHarness(name);
+        yield* Effect.gen(function* () {
+          const threadId = yield* startFirstTurn;
+          const service = yield* ThreadManagementService.ThreadManagementService;
+          const input = {
+            projectId: ProjectId.make(`project:${name}`),
+            commandId: CommandId.make("goal"),
+            threadId,
+            messageId: MessageId.make("message:goal"),
+            text: "/goal ship it",
+            attachments: [],
+            mode,
+            createdBy: "agent",
+            creationSource: "mcp",
+          } as const;
+          const sent = yield* service.sendToThread(input);
+          const replayed = yield* service.sendToThread(input);
+          assert.deepEqual([sent.delivery, replayed.delivery], ["queued", "queued"]);
+        }).pipe(
+          Effect.provide(
+            ThreadManagementService.layer.pipe(
+              Layer.provideMerge(layer),
+              Layer.provide(ServerSettings.layerTest()),
+              Layer.provide(
+                CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+              ),
+            ),
+          ),
+        );
+      }),
+    ),
+);
+
+it.effect.each(["supportsInterrupt", "supportsQueuedMessages"] as const)(
+  "rejects restart without %s and creates no replacement work",
+  (missing) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const name = `restart-no-${missing}`;
+        const { layer, startFirstTurn, interrupted, started } = yield* nextTurnSelectionHarness(
+          name,
+          false,
+          Effect.void,
+          false,
+          undefined,
+          true,
+          { [missing]: false },
+        );
+        yield* Effect.gen(function* () {
+          const threadId = yield* startFirstTurn;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const service = yield* ThreadManagementService.ThreadManagementService;
+          const failure = yield* Effect.flip(
+            service.sendToThread({
+              projectId: ProjectId.make(`project:${name}`),
+              commandId: CommandId.make("restart"),
+              threadId,
+              messageId: MessageId.make("message:restart"),
+              text: "replacement",
+              attachments: [],
+              mode: "restart",
+              createdBy: "agent",
+              creationSource: "mcp",
+            }),
+          );
+          assert.include(String(failure.cause), "interrupt_restart_steering");
+          yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.runs.length, 1);
+          assert.isFalse(
+            projection.turnItems.some((item) => item.type === "run_interrupt_request"),
+          );
+          assert.deepEqual(interrupted, []);
+          assert.equal(started.length, 1);
+        }).pipe(
+          Effect.provide(
+            ThreadManagementService.layer.pipe(
+              Layer.provideMerge(layer),
+              Layer.provide(ServerSettings.layerTest()),
+              Layer.provide(
+                CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+              ),
+            ),
+          ),
+        );
+      }),
+    ),
 );

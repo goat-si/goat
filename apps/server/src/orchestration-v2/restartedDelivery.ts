@@ -18,7 +18,7 @@ export function deliveryForDispatch(
   inputIntent: OrchestrationV2UserMessageInputIntent | null,
   restart: boolean,
 ) {
-  if (restartedAsNextTurn(dispatch, runId)) return "restarted" as const;
+  if (restart && restartedAsNextTurn(dispatch, runId)) return "restarted" as const;
   if (inputIntent === null || inputIntent === "queued_turn") return "queued" as const;
   if (inputIntent === "turn_start") return "started" as const;
   return restart ? ("restarted" as const) : ("steered" as const);

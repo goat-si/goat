@@ -1165,7 +1165,6 @@ const make = Effect.gen(function* () {
       );
       return { dispatch, projection, message, run, turnItem, delivery };
     });
-
   /** Dispatches one message and reads back the run it started, joined, or queued behind. */
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
@@ -1209,6 +1208,7 @@ const make = Effect.gen(function* () {
       OrchestrationV2Command,
       { readonly type: "message.dispatch" }
     >["dispatchMode"],
+    replayRestart = false,
   ) =>
     Effect.gen(function* () {
       const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
@@ -1229,9 +1229,12 @@ const make = Effect.gen(function* () {
         createdBy: input.createdBy,
         creationSource: input.creationSource,
       });
-      return yield* readDelivery(input, dispatched, dispatchMode.type);
+      return yield* readDelivery(
+        input,
+        dispatched,
+        replayRestart ? "restart_active" : dispatchMode.type,
+      );
     });
-
   /**
    * Where a message from another thread's agent goes right now: into the target's running
    * turn, into a new turn, or after the current one. "wait" means the turn is starting and
@@ -1296,7 +1299,6 @@ const make = Effect.gen(function* () {
       return { type: "wait", run: active } as const;
     });
   type AgentDelivery = Effect.Success<ReturnType<typeof decideAgentDelivery>>;
-
   const isAgentDeliverySignal = (event: OrchestrationV2DomainEvent) =>
     event.type === "run.updated" ||
     event.type === "run-attempt.updated" ||
@@ -1305,7 +1307,6 @@ const make = Effect.gen(function* () {
     event.type === "provider-session.updated" ||
     event.type === "provider-thread.updated" ||
     (event.type === "turn-item.updated" && event.payload.type === "run_interrupt_request");
-
   /** Follows the thread after the given sequence, deciding again on every relevant change. */
   const agentDeliveryChanges = (
     input: ThreadManagementSendInput,
@@ -1567,7 +1568,7 @@ const make = Effect.gen(function* () {
 
     if (target.messages.some((message) => message.id === input.messageId)) {
       if (yield* readRestartReceipt(receipts, input, ThreadManagementProjectionLoadError)) {
-        return yield* dispatchAndRead(input, input.commandId, { type: "start_immediately" });
+        return yield* dispatchAndRead(input, input.commandId, { type: "start_immediately" }, true);
       }
       const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
       return yield* readDelivery(
