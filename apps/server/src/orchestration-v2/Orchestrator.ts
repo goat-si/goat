@@ -1,3 +1,4 @@
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import { usageLimitHoldsQueue } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
 import { settlementAdmission } from "./goat/ThreadSettlementAdmission.ts";
@@ -562,20 +563,7 @@ function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs"
   return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
 }
 
-function isGoalCommand(message: {
-  readonly text: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-}): boolean {
-  return message.attachments.length === 0 && /^\/goal(?:\s|$)/u.test(message.text.trim());
-}
-
-/** A command the provider must run as its own turn: never steered in, never steered into. */
-export function isSeparateTurnCommand(message: {
-  readonly text: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-}): boolean {
-  return isNativeMaintenanceCommand(message) || isGoalCommand(message);
-}
+export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
@@ -814,6 +802,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const messageIntake = yield* KeyedLock.make<ThreadId>();
 
   /** The driver when this provider runs `/goal` natively, else undefined. */
   const goalDriverFor = Effect.fn("Orchestrator.goalDriverFor")(function* (
@@ -13370,7 +13359,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
-  const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+  const dispatchWithParent = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
       Effect.suspend(() =>
@@ -13392,6 +13381,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ? dispatch
       : threadDispatch.withLock(parentThreadId, dispatch);
   });
+
+  const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
+    command.type === "message.dispatch"
+      ? messageIntake.withLock(command.threadId, dispatchWithParent(command))
+      : dispatchWithParent(command);
 
   const handleRunUpdate = Effect.fn("Orchestrator.handleRunUpdate")(
     function* (stored: OrchestrationV2StoredEvent) {
