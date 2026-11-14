@@ -148,16 +148,36 @@ const make = Effect.gen(function* () {
         ...input,
         address: input.host ?? input.address!,
       });
-      const preflight = toAgentReport(
-        yield* setup.preflight(
-          resolved.host
-            ? { host: resolved.host }
-            : { ...resolved.input, host: resolved.input.address },
-          caller,
-        ),
+      const reviewed = yield* setup.preflight(
+        resolved.host
+          ? { host: resolved.host }
+          : { ...resolved.input, host: resolved.input.address },
+        caller,
       );
+      const preflight = toAgentReport(reviewed);
       if (preflight.steps.some((step) => step.state === "failed"))
         return { outcome: "failed", preflight };
+      // A disposable machine is reached only through its own Pen route (design section 6): its
+      // alias, or a new host's offered key that is its sshd pin, is refused before any trust or save.
+      const offeredKey = reviewed.steps.find((step) => step.id === "host_key")?.fingerprint;
+      const disposable = yield* hub.disposableRoute({
+        ...(resolved.host === undefined ? {} : { alias: resolved.host }),
+        ...(offeredKey === undefined ? {} : { hostKeyFingerprint: offeredKey }),
+      });
+      if (disposable !== undefined)
+        return {
+          saved: false,
+          preflight,
+          reason: disposable,
+          kind: "error",
+          code: "unsupported",
+          message: disposable,
+          fix: {
+            actor: "human",
+            instruction:
+              "Detach the disposable machine in Settings → Hub first, or remove it from Pen with pen revoke.",
+          },
+        };
       // Why the connection could not be saved, kept so a later denied step still explains it.
       let saveBlocked: string | undefined;
       const deniedReason = (message: string) =>

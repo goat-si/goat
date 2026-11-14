@@ -85,6 +85,8 @@ const fixture = (
     fingerprint?: boolean;
     trustResult?: SshHostResult;
     prepareResult?: SshHostResult;
+    /** The hub names this host a disposable machine by its alias or by the key it offers. */
+    disposable?: "alias" | "host_key";
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -182,6 +184,14 @@ const fixture = (
               }),
           }),
           Layer.mock(HubNodes.HubNodes)({
+            disposableRoute: (target) =>
+              Effect.sync(() =>
+                (options.disposable === "alias" && target.alias === "build") ||
+                (options.disposable === "host_key" &&
+                  target.hostKeyFingerprint === "SHA256:private")
+                  ? "build is a disposable machine (attach a-1, matched by its Pen alias)."
+                  : undefined,
+              ),
             add: (input, hubOptions) =>
               Effect.gen(function* () {
                 calls.push("hub");
@@ -257,6 +267,22 @@ const fixture = (
       },
     };
   });
+it.effect.each(["alias", "host_key"] as const)(
+  "a disposable machine named by its %s is refused after preflight, before any trust, catalog or hub save",
+  (by) =>
+    Effect.gen(function* () {
+      const f = yield* fixture(
+        by === "alias"
+          ? { disposable: by }
+          : { disposable: by, typed: true, fingerprint: true, blocked: "needs_review" },
+      );
+      const refused = yield* f.call();
+      expect(refused).toMatchObject({ saved: false, kind: "error", code: "unsupported" });
+      expect(JSON.stringify(refused)).toContain("disposable machine");
+      expect(JSON.stringify(refused)).not.toContain("SHA256:private");
+      expect(f.calls).toEqual(["preflight"]);
+    }),
+);
 it.effect("failed preflight creates no handoff and never dispatches", () =>
   Effect.gen(function* () {
     const f = yield* fixture({ blocked: "failed" });

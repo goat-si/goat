@@ -121,7 +121,9 @@ const testLayer = (
       ),
     ),
     Layer.provideMerge(liveThreadsLayer),
-    Layer.provideMerge(Layer.mock(HubNodes.HubNodes)(hub)),
+    Layer.provideMerge(
+      Layer.mock(HubNodes.HubNodes)({ disposableRoute: () => Effect.succeed(undefined), ...hub }),
+    ),
     Layer.provideMerge(
       Layer.mock(Broker.ConnectionCatalogBroker)({
         hasHost: Effect.succeed(false),
