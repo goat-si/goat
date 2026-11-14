@@ -172,6 +172,12 @@ const usageHarness = (input: {
     );
     /** A status check that commits under the host's current home. */
     const check = instance.snapshot.refresh.pipe(Effect.asVoid);
+    /** A check's own published snapshot's usage, unaffected by any later check. */
+    const checkedPercents = instance.snapshot.refresh.pipe(
+      Effect.map((snapshot) =>
+        (snapshot.usageLimits?.windows ?? []).map((window) => window.usedPercent),
+      ),
+    );
     /** Holds the next check after its probe and before its snapshot is published. */
     const holdNextCheck = Effect.gen(function* () {
       const gate = { reached: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
@@ -182,7 +188,7 @@ const usageHarness = (input: {
       Effect.sync(() => {
         abandoning = on;
       });
-    return { open, percents, check, holdNextCheck, abandonChecks };
+    return { open, percents, check, checkedPercents, holdNextCheck, abandonChecks };
   });
 
 it.layer(layerTest)("Codex usage and the session's home", (it) => {
@@ -279,6 +285,32 @@ it.layer(layerTest)("Codex usage and the session's home", (it) => {
         yield* check;
         yield* report;
         expect(yield* percents).not.toContain(10);
+      }).pipe(Effect.scoped),
+  );
+  it.effect(
+    "a report from the old home during a check for a new home is not kept by that check",
+    () =>
+      Effect.gen(function* () {
+        const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
+        const { open, percents, check, checkedPercents, holdNextCheck } = yield* usageHarness({
+          host,
+          usage: { a: 10, a2: 20 },
+        });
+        yield* check;
+        yield* yield* open("a");
+        expect(yield* percents).toContain(10);
+        const reportA2 = yield* open("a2");
+        // Opening a session starts a check under a; this one waits for it, so the next is b's.
+        yield* check;
+        host.CODEX_HOME = "/fixture/b";
+        const gate = yield* holdNextCheck;
+        const checking = yield* checkedPercents.pipe(Effect.forkChild);
+        yield* Deferred.await(gate.reached);
+        // The check for b has run its probe; a's session reports before b's snapshot is shown.
+        yield* reportA2;
+        yield* Deferred.succeed(gate.release, undefined);
+        // b's check read no usage, so nothing from a's sessions may be left on b's snapshot.
+        expect(yield* Fiber.join(checking)).toEqual([]);
       }).pipe(Effect.scoped),
   );
   it.effect("a check counts for usage only once its snapshot is shown", () =>

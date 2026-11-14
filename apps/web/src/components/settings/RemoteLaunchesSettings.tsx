@@ -20,6 +20,7 @@ import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
 import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
+import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { useThreadShells } from "~/state/entities";
 import {
   type EnvironmentPresentation,
@@ -180,7 +181,12 @@ function RemoteHostLaunches({
     reportFailure: false,
   });
   // The desktop dials through its own server's SSH config, so that server checks the host too.
-  const own = usePrimaryEnvironment()?.environmentId ?? null;
+  const primary = usePrimaryEnvironment();
+  const own = primary?.environmentId ?? null;
+  const primaryHttpBaseUrl =
+    primary?.entry.target._tag === "PrimaryConnectionTarget"
+      ? primary.entry.target.httpBaseUrl
+      : null;
   const checkedBy =
     own === null || own === dispatcher.environmentId
       ? [dispatcher.environmentId]
@@ -191,8 +197,13 @@ function RemoteHostLaunches({
   const canCheckOwn = useAtomValue(
     serverEnvironment.preflightSshHost.permissionAtom(own ?? dispatcher.environmentId),
   );
-  // Connect runs both guarded SSH checks, so it is offered only where a person may run them.
-  const canConnectOverSsh = window.desktopBridge !== undefined && canCheckDispatcher && canCheckOwn;
+  // As Add device: only with this desktop's native primary, whose SSH config the own check reads and
+  // the desktop dials with, and only where a person may run both guarded SSH checks.
+  const canConnectOverSsh =
+    own !== null &&
+    desktopOwnsSshHostConfig(window.desktopBridge, primaryHttpBaseUrl) &&
+    canCheckDispatcher &&
+    canCheckOwn;
   const dismissLaunch = useAtomCommand(serverEnvironment.dismissRemoteLaunch, {
     reportFailure: false,
   });
