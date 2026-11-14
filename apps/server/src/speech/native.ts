@@ -117,6 +117,7 @@ process.on("message", async (message) => {
     });
   }
 });
+// Exit teardown under in-flight native inference segfaults, so terminate without it.
 process.on("disconnect", () => process.kill(process.pid, "SIGKILL"));
 `;
 

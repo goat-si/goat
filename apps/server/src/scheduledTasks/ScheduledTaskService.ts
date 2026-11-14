@@ -719,7 +719,7 @@ export const layer = Layer.effect(
             return { task: active, threadId: null, firing: null };
           }
           if (yield* hasQueuedOccurrence(threadManagement, active, trigger)) {
-            yield* rescheduleMissedRun(active, startedAt);
+            yield* rescheduleMissedRun(active, startedAt, "previous occurrence still queued");
             return { task: active, threadId: null, firing: null };
           }
           // A queued delivery must not run a task that was paused, deleted and
@@ -963,10 +963,12 @@ export const layer = Layer.effect(
     const rescheduleMissedRun = Effect.fn("ScheduledTaskService.rescheduleMissedRun")(function* (
       task: ScheduledTask,
       now: DateTime.DateTime,
+      reason = "missed",
     ) {
       const next = nextRunAt(task, now);
-      yield* Effect.logInfo("Skipping missed schedule task run", {
+      yield* Effect.logInfo("Skipping schedule task run", {
         taskId: task.id,
+        reason,
         missedRunAt: task.nextRunAt,
         rescheduledTo: next,
       });

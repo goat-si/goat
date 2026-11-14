@@ -247,6 +247,7 @@ export async function readTranscriptRecords<State>(
 
     const append = (segment: Buffer) => {
       if (!streaming && pendingBytes + segment.length <= streamingThresholdBytes) {
+        // Copy: the next read overwrites the chunk this segment points into.
         if (segment.length > 0) pendingChunks.push(Buffer.from(segment));
         pendingBytes += segment.length;
         return;
