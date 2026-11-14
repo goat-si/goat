@@ -3,7 +3,7 @@ import { Atom } from "effect/reactivity";
 
 import { goatBotEnvironmentInputs } from "~/components/goatBot/goatBotEnvironmentInputs";
 import { useGlobalAgentStore } from "~/globalAgentStore";
-import { projectEnvironmentPresentation } from "./environments";
+import { projectEnvironmentPresentation } from "./environmentProjection";
 import { environmentPresentations } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 
