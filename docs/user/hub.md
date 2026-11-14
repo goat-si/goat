@@ -161,14 +161,15 @@ home to a path whose folders pass. Never change a shared or system folder or
 another user's folder or symlink, even as root.
 
 GOAT does not move its home for you, so when the list names a folder of yours,
-the `chmod go-w` it shows is the simpler fix. To move the home anyway, stop GOAT,
-move the folder, and start GOAT with `GOAT_HOME=<new>` or `--base-dir <new>`;
-the database, secrets and hub records move with it. Some things keep the old
-path: threads whose worktrees are in its `worktrees` folder still point there,
-so finish them first; a background service keeps serving the old home until you
-run `goat service uninstall --base-dir <old>` and then
-`goat service install --base-dir <new>`; and the desktop app's `goat` command
-needs **Remove** and **Install** again in **Settings → General → About**.
+the `chmod go-w` it shows is the simpler fix. To move the home anyway, first
+finish the threads whose worktrees are in its `worktrees` folder, since they
+keep pointing there. Before you move it, run `goat service uninstall` if GOAT
+runs as a background service, and choose **Remove** next to **goat command** in
+**Settings → General → About**; do both while the old home is in place.
+Then stop GOAT, move the folder, and start GOAT with `GOAT_HOME=<new>` or
+`--base-dir <new>`; the database, secrets and hub records move with it. Once it
+runs from the new home, run `goat service install --base-dir <new>` and choose
+**Install** again.
 A linked disposable machine's OpenCodex link also keeps the machine key's old
 path and stops working, so do not move the home while a disposable machine is
 linked.
