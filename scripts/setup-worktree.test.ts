@@ -96,7 +96,7 @@ function setupFixture(
             : nodeRunner;
     NodeFS.writeFileSync(
       NodePath.join(bin, "vp"),
-      `#!/bin/sh\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
       { mode: 0o755 },
     );
   }
@@ -423,6 +423,44 @@ describe("worktree setup contract", () => {
       fixture.cleanup();
     }
   });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a timed-out version probe leaves failure guidance and clears the running marker",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+      const preload = NodePath.join(fixture.root, "probe.cjs");
+      NodeFS.writeFileSync(
+        preload,
+        `const cp = require("node:child_process");
+const original = cp.spawnSync;
+cp.spawnSync = function (command, options) {
+  if (command === "vp --version") {
+    require("node:fs").writeFileSync(process.env.SETUP_TEST_LOG + ".timeout", String(options.timeout));
+    return { status: null, stdout: "", error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
+  }
+  return original.apply(this, arguments);
+};
+require("node:module").syncBuiltinESMExports();`,
+      );
+      fixture.env.NODE_OPTIONS = `--require=${preload}`;
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 1);
+        const failed = NodeFS.readFileSync(
+          NodePath.join(fixture.root, ".goat", "setup-failed"),
+          "utf8",
+        );
+        assert.include(failed, "vp did not answer");
+        assert.match(failed, /update vite-plus/i);
+        assert.isAbove(Number(NodeFS.readFileSync(`${fixture.log}.timeout`, "utf8")), 0);
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
+        assert.isFalse(NodeFS.existsSync(fixture.log));
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "refuses old vp and explains the update",

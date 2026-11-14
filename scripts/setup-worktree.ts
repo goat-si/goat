@@ -45,12 +45,21 @@ export function worktreeInstallCandidates(tools: {
 }
 
 // vite-plus 0.2.2 introduced PGP verification of Node's SHASUMS256.
-function vpSupportsVerifiedNodeDownload(): boolean {
-  const result = NodeChildProcess.spawnSync("vp --version", { shell: true, encoding: "utf8" });
+function vpSupportsVerifiedNodeDownload(): { supported: boolean; timedOut: boolean } {
+  const result = NodeChildProcess.spawnSync("vp --version", {
+    shell: true,
+    encoding: "utf8",
+    timeout: 5_000,
+  });
   const match = /^vp v(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(result.stdout?.split(/\r?\n/, 1)[0] ?? "");
-  if (result.status !== 0 || !match) return false;
+  const timedOut = result.error?.code === "ETIMEDOUT";
+  if (result.status !== 0 || !match) return { supported: false, timedOut };
   const [, major = "0", minor = "0", patch = "0"] = match;
-  return Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2);
+  return {
+    supported:
+      Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2),
+    timedOut,
+  };
 }
 
 /** The pnpm release root package.json names, for the message when no installer can run. */
@@ -192,7 +201,8 @@ async function main(): Promise<void> {
     // Windows has no process group to cancel a rerun through, so it keeps refusing.
     // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
     const hasVp = autoDownload && !isRerun && process.platform !== "win32" && toolOnPath("vp");
-    const verifiedVp = hasVp && vpSupportsVerifiedNodeDownload();
+    const probe = hasVp ? vpSupportsVerifiedNodeDownload() : undefined;
+    const verifiedVp = probe?.supported ?? false;
     const runners = pinnedNodeRunners({ pinned, vp: verifiedVp, autoDownload });
     const tried: string[] = [];
     for (const runner of runners) {
@@ -261,7 +271,7 @@ async function main(): Promise<void> {
     const reason = !autoDownload
       ? "GOAT_SETUP_NO_NODE_DOWNLOAD=1 prevents setup from downloading Node."
       : hasVp && !verifiedVp
-        ? "Update vite-plus to 0.2.2 or later to enable verified Node downloads."
+        ? `${probe?.timedOut ? "vp did not answer its version probe. " : ""}Update vite-plus to 0.2.2 or later to enable verified Node downloads.`
         : "";
     failureDetail = [
       unsupportedNode,
