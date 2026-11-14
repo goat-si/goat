@@ -1,9 +1,13 @@
 import * as NodeSqlite from "node:sqlite";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { ServerConfig } from "../config.ts";
+import { prepareNewSqliteDirectory } from "./sqliteCopyOnWrite.ts";
 
 export const V1_DATABASE_FILENAME = "state.sqlite";
 
@@ -51,6 +55,15 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
   const path = yield* Path.Path;
   const directory = path.dirname(destinationPath);
   const sourcePath = path.join(directory, V1_DATABASE_FILENAME);
+  const config = yield* Effect.serviceOption(ServerConfig);
+  if (
+    Option.isSome(config) &&
+    path.resolve(config.value.stateDir) === path.resolve(directory) &&
+    path.resolve(config.value.dbPath) === path.resolve(destinationPath) &&
+    (yield* HostProcess.Platform) === "linux"
+  ) {
+    yield* Effect.promise(() => prepareNewSqliteDirectory(destinationPath, sourcePath));
+  }
   yield* removeAbandonedCopies(directory).pipe(Effect.ignore({ log: true }));
   yield* Effect.gen(function* () {
     if (yield* fs.exists(destinationPath)) return;
