@@ -56,33 +56,31 @@ export function CommandOutputPanel(props: {
   // Parse after all hooks to preserve the text/theme compiler cache.
   const spans = terminalOutputSpans(text, TERMINAL_PALETTES[resolvedTheme]);
   return (
-    <div>
-      {data?.output.truncated ? (
-        <div className="text-muted-foreground italic">Earlier output not shown</div>
-      ) : null}
-      <CopyRegion text={text} label="Copy output">
-        <div
-          ref={scrollRef}
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            followRef.current =
-              element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_SLACK_PX;
-          }}
-          className="scroll-edge-fade max-h-48 overflow-auto pe-7 text-foreground/80"
-        >
-          {spans.map((span, index) =>
-            span.style === null ? (
-              span.text
-            ) : (
-              // Spans never reorder and are rebuilt on each update.
-              // oxlint-disable-next-line react/no-array-index-key
-              <span key={index} style={span.style}>
-                {span.text}
-              </span>
-            ),
-          )}
-        </div>
-      </CopyRegion>
-    </div>
+    <CopyRegion text={text} label="Copy output">
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          followRef.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_SLACK_PX;
+        }}
+        className="scroll-edge-fade max-h-48 overflow-auto pe-7 text-foreground/80"
+      >
+        {data?.output.truncated ? (
+          <div className="text-muted-foreground italic">Earlier output not shown</div>
+        ) : null}
+        {spans.map((span, index) =>
+          span.style === null ? (
+            span.text
+          ) : (
+            // Spans never reorder and are rebuilt on each update.
+            // oxlint-disable-next-line react/no-array-index-key
+            <span key={index} style={span.style}>
+              {span.text}
+            </span>
+          ),
+        )}
+      </div>
+    </CopyRegion>
   );
 }
