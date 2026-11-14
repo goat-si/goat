@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -8,6 +12,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
+import { resolveCommandPath } from "@goat/shared/shell";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -18,7 +23,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { AgentScope, type AgentScopeShape } from "@goat/shared/AgentScope";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import * as TestProviderHost from "../../../provider-testing/src/TestProviderHost.ts";
 import * as DocumentText from "../../../../apps/server/src/provider/DocumentText.ts";
@@ -48,32 +52,115 @@ it.live("runtime launches retain the environment captured at session open", () =
     const first = { ...process.env };
     process.env[key] = "new-host-value";
     const second = { ...process.env };
-    const observed: Array<string | undefined> = [];
-    const scope: AgentScopeShape = {
-      wrap: ({ command, args, env }) =>
-        Effect.sync(() => {
-          observed.push(env?.[key]);
-          return { command, args };
-        }),
-      watch: () => Effect.void,
-      stop: () => Effect.void,
-      clear: () => Effect.void,
-      kill: () => Effect.succeed(false),
-      oomKilled: () => Effect.succeed(false),
-    };
+    const observed: Array<string | null> = [];
     const path = yield* Path.Path;
     const agent = yield* path.fromFileUrl(
       new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
     );
     for (const environment of [first, first, second]) {
+      const received = yield* Deferred.make<string>();
       yield* AcpSessionRuntime.make({
-        spawn: { command: process.execPath, args: [agent], env: environment, shell: false },
+        spawn: {
+          command: process.execPath,
+          args: [
+            "-e",
+            `console.error(JSON.stringify(process.env.${key} ?? null)); import(process.argv[1])`,
+            agent,
+          ],
+          env: environment,
+          shell: false,
+        },
         sessionEnvironment: environment,
         cwd: process.cwd(),
         clientInfo: { name: "test", version: "1" },
-      }).pipe(Effect.provideService(AgentScope, scope));
+        onStderr: (text) => Deferred.succeed(received, text).pipe(Effect.asVoid),
+      });
+      observed.push(JSON.parse((yield* Deferred.await(received)).trim()));
     }
-    assert.deepEqual(observed, [undefined, undefined, "new-host-value"]);
+    assert.deepEqual(observed, [null, null, "new-host-value"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("new launches read host changes made after adapter creation", () =>
+  Effect.gen(function* () {
+    const key = "GOAT_ACP_LEGACY_LATE_VARIABLE";
+    const original = process.env[key];
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }),
+    );
+    const path = yield* Path.Path;
+    const agent = yield* path.fromFileUrl(
+      new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+    );
+    const observed: Array<string> = [];
+    for (const optedIn of [false, true]) {
+      delete process.env[key];
+      const received = yield* Deferred.make<string>();
+      const instanceId = ProviderInstanceId.make(`acp-late-${optedIn}`);
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        ...(optedIn
+          ? {
+              currentEnvironment: Effect.sync(() => ({
+                ...process.env,
+                INSTANCE_VALUE: "instance",
+              })),
+            }
+          : {}),
+        clientTerminals: { environment: { INSTANCE_VALUE: "instance" }, shellCommands: true },
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ProviderDriverKind.make(`acp-late-${optedIn}`),
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: (input) =>
+            AcpSessionRuntime.make({
+              ...input,
+              spawn: {
+                command: process.execPath,
+                args: [
+                  "-e",
+                  `console.error(JSON.stringify([process.env.${key} ?? null, process.env.INSTANCE_VALUE])); import(process.argv[1])`,
+                  agent,
+                ],
+                cwd: input.cwd,
+                env: {
+                  ...(input.sessionEnvironment ?? { INSTANCE_VALUE: "instance" }),
+                  GOAT_ACP_SESSION_LIFECYCLE: "1",
+                },
+                shell: false,
+              },
+              onStderr: (text) => Deferred.succeed(received, text).pipe(Effect.asVoid),
+            }),
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const threadId = ThreadId.make(`thread-late-${optedIn}`);
+      process.env[key] = "late";
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make(`session-${optedIn}`),
+        modelSelection,
+        runtimePolicy,
+      });
+      process.env[key] = "late";
+      yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+      observed.push((yield* Deferred.await(received)).trim());
+    }
+    assert.deepEqual(
+      observed.map((value) => JSON.parse(value)),
+      [
+        ["late", "instance"],
+        ["late", "instance"],
+      ],
+    );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
@@ -271,5 +358,61 @@ it.live("plan extraction receives the environment and launch captured by its ses
       | { environment?: NodeJS.ProcessEnv; launch?: unknown }
       | undefined;
     assert.deepEqual([context?.environment?.GOAT_PLAN_TEST_VALUE, context?.launch], ["old", "old"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("resolves relative PATH from the workspace and launches with the session PATH", () =>
+  Effect.gen(function* () {
+    const workspace = yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-acp-path-"))),
+      (directory) => Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+    );
+    const bin = NodePath.join(workspace, "bin");
+    const executable = NodePath.join(bin, "goat-acp-test-command");
+    NodeFS.mkdirSync(bin);
+    NodeFS.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const instanceId = ProviderInstanceId.make("acp-relative-path");
+    const path = yield* Path.Path;
+    const makeRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* path.fromFileUrl(
+        new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+      ),
+    });
+    const resolved: Array<unknown> = [];
+    const launchPaths: Array<string | undefined> = [];
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      currentEnvironment: Effect.succeed({ ...process.env, PATH: "bin" }),
+      selfInvocation: yield* resolveSelfInvocation(),
+      flavor: {
+        driver: ProviderDriverKind.make("acp-relative-path"),
+        capabilities: AcpProviderCapabilitiesV2,
+        resolveSessionLaunch: (environment, sessionEnvironment) => {
+          launchPaths.push(sessionEnvironment?.PATH);
+          return resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
+            Effect.provide(NodeServices.layer),
+          );
+        },
+        makeRuntime: (input) => {
+          resolved.push(input.sessionLaunch);
+          return makeRuntime(input);
+        },
+      },
+    });
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: workspace,
+    });
+    const modelSelection = { instanceId, model: "default" } as const;
+    const threadId = ThreadId.make("thread-relative-path");
+    yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("relative-path"),
+      modelSelection,
+      runtimePolicy,
+    });
+    assert.deepEqual({ resolved, launchPaths }, { resolved: [executable], launchPaths: ["bin"] });
   }).pipe(Effect.provide(layer), Effect.scoped),
 );

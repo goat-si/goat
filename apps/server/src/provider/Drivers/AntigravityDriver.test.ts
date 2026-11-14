@@ -87,13 +87,19 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   const makeExecutable = Effect.fn("AntigravityDriverTest.makeExecutable")(function* (
     name: string,
     options:
-      | { loginRequired?: boolean; initialMode?: string; newSessionErrorData?: unknown }
+      | {
+          loginRequired?: boolean;
+          initialMode?: string;
+          newSessionErrorData?: unknown;
+          promptCommand?: string;
+        }
       | boolean = {},
   ) {
     const loginRequired = typeof options === "boolean" ? options : (options.loginRequired ?? false);
     const initialMode = typeof options === "boolean" ? undefined : options.initialMode;
     const newSessionErrorData =
       typeof options === "boolean" ? undefined : options.newSessionErrorData;
+    const promptCommand = typeof options === "boolean" ? undefined : options.promptCommand;
     const directory = path.join(root, name);
     const executablePath = path.join(directory, "agy_acp_server.par");
     const harnessPath = path.join(directory, "localharness_external");
@@ -110,6 +116,9 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
         ...(initialMode === undefined
           ? []
           : [`export GOAT_ACP_INITIAL_MODE=${shellQuote(initialMode)}`]),
+        ...(promptCommand === undefined
+          ? []
+          : [`export GOAT_ACP_PROMPT_COMMAND=${shellQuote(promptCommand)}`]),
         ...(newSessionErrorData === undefined
           ? []
           : [
@@ -313,6 +322,71 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  // The runtime fixture uses POSIX shell scripts.
+  it.effect.skipIf(windowsHost)("session command updates retain the home captured at launch", () =>
+    Effect.gen(function* () {
+      const original = yield* HostProcess.Environment;
+      const host = { ...original, HOME: "/fixture/home-a" };
+      const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: h.profileDirectory,
+      });
+      const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+      const open = Effect.fn("openFixtureSession")(function* (name: string) {
+        h.controls.selected = yield* h.makeExecutable(`commands-${name}`, {
+          promptCommand: `command-${name}`,
+        });
+        const threadId = ThreadId.make(`commands-${name}`);
+        const session = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`commands-${name}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        return { session, threadId, providerThread };
+      });
+      const old = yield* open("old");
+      host.HOME = "/fixture/home-b";
+      const current = yield* open("current");
+      const run = Effect.fn("runFixtureSession")(function* (opened: typeof old) {
+        const terminal = yield* Deferred.make<void>();
+        const reader = yield* opened.session.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+          Effect.andThen(Deferred.succeed(terminal, undefined)),
+          Effect.forkChild,
+        );
+        yield* opened.session.startTurn(
+          makeTurnInput({
+            threadId: opened.threadId,
+            providerThread: opened.providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* Deferred.await(terminal);
+        yield* Fiber.join(reader);
+      });
+      yield* run(current);
+      expect(
+        (yield* h.instance.snapshot.getSnapshot).slashCommands.map((command) => command.name),
+      ).toEqual(["command-current"]);
+      yield* run(old);
+      expect(
+        (yield* h.instance.snapshot.getSnapshot).slashCommands.map((command) => command.name),
+      ).toEqual(["command-current"]);
+    }).pipe(Effect.scoped),
+  );
   // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)("reads user skills from the current host home", () =>
     Effect.gen(function* () {

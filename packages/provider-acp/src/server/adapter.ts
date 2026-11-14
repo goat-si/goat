@@ -1,12 +1,11 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
 import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -334,8 +333,10 @@ export interface AcpAdapterV2Flavor {
       }
     | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
   readonly resolveSessionLaunch?: (
     environment: NodeJS.ProcessEnv,
+    sessionEnvironment: NodeJS.ProcessEnv,
   ) => Effect.Effect<unknown, EffectAcpErrors.AcpError, Scope.Scope>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
@@ -1119,13 +1120,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
-        const environment =
-          options.currentEnvironment === undefined
-            ? options.clientTerminals?.environment
-            : yield* options.currentEnvironment;
-        const sessionEnvironment = environment === undefined ? undefined : { ...environment };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
         const sessionLaunch = yield* (
-          flavor.resolveSessionLaunch?.(sessionEnvironment ?? {}) ?? Effect.void
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
+          ) ?? Effect.void
         );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
@@ -1133,7 +1135,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: sessionEnvironment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);

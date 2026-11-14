@@ -771,6 +771,7 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   options?: {
     readonly binaryPath?: string | null;
     readonly env?: NodeJS.ProcessEnv;
+    readonly resolvedCommandPath?: string | null;
   },
 ) {
   const binaryPath = nonEmptyString(options?.binaryPath);
@@ -779,7 +780,10 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   }
 
   const env = options?.env ?? (yield* readCommandLookupEnv);
-  const resolvedCommandPath = yield* resolveCommandPath(binaryPath, { env });
+  const resolvedCommandPath =
+    options?.resolvedCommandPath !== undefined
+      ? options.resolvedCommandPath
+      : yield* resolveCommandPath(binaryPath, { env });
   if (!resolvedCommandPath) {
     return yield* resolver.resolve(null);
   }

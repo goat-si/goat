@@ -135,8 +135,10 @@ it.layer(layerTest)("CodexDriver", (it) => {
         const newBin = NodePath.join(root, "new", "packages", "standalone", "bin");
         for (const dir of [oldBin, newBin]) {
           yield* fs.makeDirectory(dir, { recursive: true });
-          yield* fs.writeFileString(NodePath.join(dir, "codex"), "#!/bin/sh\n");
-          yield* fs.chmod(NodePath.join(dir, "codex"), 0o755);
+          if (dir === newBin) {
+            yield* fs.writeFileString(NodePath.join(dir, "codex"), "#!/bin/sh\n");
+            yield* fs.chmod(NodePath.join(dir, "codex"), 0o755);
+          }
         }
         const host: NodeJS.ProcessEnv = { PATH: oldBin };
         const create = (override: boolean) =>
@@ -155,6 +157,11 @@ it.layer(layerTest)("CodexDriver", (it) => {
           );
         const inherited = yield* create(false);
         const overridden = yield* create(true);
+        const missing = yield* inherited.snapshot.resolveMaintenance();
+        expect(missing.update).toBeNull();
+        expect(yield* inherited.snapshot.resolveMaintenance()).toBe(missing);
+        yield* fs.writeFileString(NodePath.join(oldBin, "codex"), "#!/bin/sh\n");
+        yield* fs.chmod(NodePath.join(oldBin, "codex"), 0o755);
         const first = yield* inherited.snapshot.resolveMaintenance();
         expect(first.update?.executable).toBe(NodePath.join(oldBin, "codex"));
         expect(yield* inherited.snapshot.resolveMaintenance()).toBe(first);
@@ -541,10 +548,10 @@ it.layer(layerTest)("CodexDriver", (it) => {
         const launch = launches[0]!;
         expect(launch.settings.binaryPath).toBe(executable.executablePath);
         expect(launch.settings.launchArgs).toContain("openai_token_sharing");
-        expect(launch.environment.ACCESS_TOKEN).toBeUndefined();
+        expect(launch.environment.ACCESS_TOKEN).toBe("");
         expect(launch.settings.launchArgs).toContain("__managed-chatgpt-token");
         expect(launch.settings.launchArgs).not.toContain("dummy-owned-access");
-        expect(launch.environment.OPENAI_API_KEY).toBeUndefined();
+        expect(launch.environment.OPENAI_API_KEY).toBe("");
         expect(launch.environment.CODEX_HOME).toBe(launch.settings.homePath);
         const before = yield* instance.auth!.subscribe("test-owner").pipe(Stream.runHead);
         expect(Option.getOrThrow(before).phase).toBe("idle");
