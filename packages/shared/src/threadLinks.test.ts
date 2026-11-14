@@ -50,7 +50,7 @@ describe("thread links", () => {
       [`\\[old](${href})`, `\\[old](${href})`],
       [`\\\\[old](${href})`, `\\\\[New](${href})`],
       [`[x](https://example.com/?next=${href})`, `[x](https://example.com/?next=${href})`],
-    ]) {
+    ] as const) {
       expect(relabelThreadLinks(source, () => "New")).toBe(expected);
     }
   });
