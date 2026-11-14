@@ -154,6 +154,44 @@ describe("presentTaskChip", () => {
     ).toBe("1 question");
   });
 
+  const written = "I added clamp next to sum and the tests pass.";
+
+  it("does not call a task reportless when a written result shows under it", () => {
+    expect(
+      presentTaskChip(chip({ status: "completed", completionReport: "missing", summary: written })),
+    ).toMatchObject({ statusLabel: "Done", attentionLabel: null, summary: written });
+  });
+
+  it("shows what waits on a person instead of the missing report when a written result shows", () => {
+    expect(
+      presentTaskChip(
+        chip({
+          status: "completed",
+          completionReport: "missing",
+          summary: written,
+          openQuestionCount: 1,
+        }),
+      ).attentionLabel,
+    ).toBe("1 question");
+  });
+
+  it("keeps the missing-report line when nothing written stands in for the report", () => {
+    // "Finished." is the server's text for a worker that wrote nothing. A result that is exactly
+    // "Finished." cannot be told from it and keeps the line too (accepted limit).
+    for (const summary of ["Finished.", "NOT RUN: pnpm test", "", undefined]) {
+      expect([
+        summary,
+        presentTaskChip(
+          chip({
+            status: "completed",
+            completionReport: "missing",
+            ...(summary === undefined ? {} : { summary }),
+          }),
+        ).attentionLabel,
+      ]).toEqual([summary, "Finished without a report"]);
+    }
+  });
+
   it.each(["present", undefined] as const)(
     "preserves question labels when completion report is %s",
     (completionReport) => {
