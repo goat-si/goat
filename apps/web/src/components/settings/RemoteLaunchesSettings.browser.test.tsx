@@ -18,6 +18,7 @@ import { afterEach, beforeEach, expect, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   connect: vi.fn(),
+  preflight: vi.fn(),
   toast: vi.fn(),
   presentations: null as unknown as Atom.Writable<
     ReadonlyMap<EnvironmentId, { connection: { phase: string } }>
@@ -38,6 +39,7 @@ import { serverEnvironment } from "../../state/server";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 
 const realPresentationsAtom = environmentPresentations.presentationsAtom;
+const realPreflight = serverEnvironment.preflightSshHost;
 const dispatcher = EnvironmentId.make("dispatcher");
 const launch: RemoteLaunch = {
   host: "fixture-vps",
@@ -56,6 +58,18 @@ const progress: DesktopSshPreparationProgress = {
   hostAnswered: true,
   remainingMs: 800000,
 };
+const preflightReport = (
+  failed: ReadonlyArray<{ readonly id: "host_key"; readonly detail: string }>,
+) => ({
+  host: "pen-cc-07",
+  destination: { alias: "pen-cc-07", hostname: "pen-cc-07", user: "me", port: 22 },
+  ready: failed.length === 0,
+  steps: failed.map((step) => ({
+    ...step,
+    state: "failed",
+    summary: "This is a disposable machine.",
+  })),
+});
 let root: Root;
 let registry: AtomRegistry.AtomRegistry;
 let container: HTMLDivElement;
@@ -96,6 +110,9 @@ beforeEach(() => {
   } as never);
   Object.assign(environmentPresentations, { presentationsAtom: state.presentations });
   vi.spyOn(serverEnvironment, "remoteLaunches").mockReturnValue(state.launches as never);
+  // The dispatcher's guarded SSH preflight; it passes unless a test says otherwise.
+  state.preflight.mockReset().mockResolvedValue({ _tag: "Success", value: preflightReport([]) });
+  Object.assign(serverEnvironment, { preflightSshHost: state.preflight });
   registry = AtomRegistry.make();
   container = document.createElement("div");
   document.body.append(container);
@@ -108,6 +125,7 @@ afterEach(async () => {
   container.remove();
   delete (window as { desktopBridge?: unknown }).desktopBridge;
   Object.assign(environmentPresentations, { presentationsAtom: realPresentationsAtom });
+  Object.assign(serverEnvironment, { preflightSshHost: realPreflight });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -136,6 +154,8 @@ function mountAndConnect() {
       });
     });
     const input = yield* Deferred.await(gate.entered);
+    // The dispatcher's guarded preflight passed before the desktop connects.
+    expect(state.preflight).toHaveBeenCalledOnce();
     report = input.onPreparationProgress!;
     yield* actEffect(report(progress));
   });
@@ -192,54 +212,22 @@ it.effect("ignores reports from a replaced host and completion after unmount", (
 );
 
 it.effect(
-  "Connect refuses a host that is a disposable Hub device's route and never starts an SSH connection",
+  "Connect asks the dispatcher's guarded preflight first: a disposable machine under Pen's pen-<name> is refused with its text and never connected",
   () =>
     Effect.gen(function* () {
-      vi.spyOn(serverEnvironment, "hubNodesLive").mockReturnValue(
-        Atom.make(
-          AsyncResult.success({
-            hubEnvironmentId: dispatcher,
-            notices: [],
-            nodes: [
-              {
-                nodeId: EnvironmentId.make("cc-07"),
-                environmentId: EnvironmentId.make("cc-07"),
-                label: "cc-07",
-                kind: "ssh",
-                routes: [
-                  {
-                    routeId: "ssh:FIXTURE-VPS",
-                    source: "registered",
-                    target: {
-                      kind: "ssh",
-                      alias: "FIXTURE-VPS",
-                      hostname: null,
-                      username: null,
-                      port: null,
-                    },
-                    status: "online",
-                    checkedAt: null,
-                    lastSeenAt: null,
-                    lastError: null,
-                  },
-                ],
-                status: "online",
-                lastSeenAt: null,
-                addedBy: null,
-                machineClass: {
-                  class: "disposable",
-                  attachId: "a-1",
-                  state: "linked",
-                  stateSince: "2026-11-14T10:00:00.000Z",
-                  provisioner: { kind: "person" },
-                  penMember: true,
-                  conflicts: [],
-                },
-              },
-            ],
-          }),
-        ) as never,
+      state.launches = Atom.make<unknown>(
+        AsyncResult.success({ launches: [{ ...launch, host: "pen-cc-07" }], truncated: false }),
       );
+      vi.spyOn(serverEnvironment, "remoteLaunches").mockReturnValue(state.launches as never);
+      state.preflight.mockResolvedValue({
+        _tag: "Success",
+        value: preflightReport([
+          {
+            id: "host_key",
+            detail: "pen-cc-07 is a disposable machine (attach a-1, matched by its Pen alias).",
+          },
+        ]),
+      });
       yield* Effect.promise(async () => {
         await act(async () =>
           root.render(
@@ -259,11 +247,14 @@ it.effect(
         if (!button) throw new Error("Missing Connect");
         await act(async () => button.click());
       });
+      expect(state.preflight).toHaveBeenCalledWith(
+        expect.objectContaining({ environmentId: dispatcher, input: { host: "pen-cc-07" } }),
+      );
       expect(state.connect).not.toHaveBeenCalled();
       expect(state.toast).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "error",
-          description: expect.stringContaining("cc-07 is a disposable machine"),
+          description: expect.stringContaining("pen-cc-07 is a disposable machine"),
         }),
       );
     }),

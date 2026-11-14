@@ -17,7 +17,6 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import * as Effect from "effect/Effect";
 import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
-import { disposableAliasRefusal } from "@goat/client-runtime/hub-nodes";
 import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
@@ -25,7 +24,6 @@ import { useThreadShells } from "~/state/entities";
 import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
-import { useEnvironmentQuery } from "~/state/query";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -175,12 +173,9 @@ function RemoteHostLaunches({
     [],
   );
   const canConnectOverSsh = window.desktopBridge !== undefined;
-  // A disposable machine is reached only through its Pen route: Connect refuses one of its aliases.
-  const hubNodes = useEnvironmentQuery(
-    hostEnvironment === null && canConnectOverSsh
-      ? serverEnvironment.hubNodesLive({ environmentId: dispatcher.environmentId, input: {} })
-      : null,
-  ).data?.nodes;
+  const preflightSshHost = useAtomCommand(serverEnvironment.preflightSshHost, {
+    reportFailure: false,
+  });
   const dismissLaunch = useAtomCommand(serverEnvironment.dismissRemoteLaunch, {
     reportFailure: false,
   });
@@ -210,18 +205,34 @@ function RemoteHostLaunches({
   };
   const connectHost = async () => {
     if (connecting) return;
-    const refused = disposableAliasRefusal(hubNodes ?? [], group.host);
-    if (refused !== undefined) {
-      toastManager.add({
-        type: "error",
-        title: `Could not connect ${group.host}`,
-        description: refused,
-      });
-      return;
-    }
     const submissionId = ++submission.current;
     setConnecting(true);
     const connect = async () => {
+      // The dispatcher's guarded preflight refuses a disposable machine under any alias, by its Pen
+      // alias (Pen's pen-<name> too), offline, or the ED25519 key it offers; nothing connects then.
+      const checked = await preflightSshHost({
+        environmentId: dispatcher.environmentId,
+        input: { host: group.host },
+      });
+      if (submission.current !== submissionId) return;
+      if (checked._tag === "Failure") {
+        if (!isAtomCommandInterrupted(checked))
+          toastManager.add({
+            type: "error",
+            title: `Could not connect ${group.host}`,
+            description: errorMessage(squashAtomCommandFailure(checked)),
+          });
+        return;
+      }
+      const failed = checked.value.steps.find((step) => step.state === "failed");
+      if (failed !== undefined) {
+        toastManager.add({
+          type: "error",
+          title: `Could not connect ${group.host}`,
+          description: failed.detail ?? failed.summary,
+        });
+        return;
+      }
       const result = await connectSshEnvironment({
         target: { alias: group.host, hostname: group.host, username: null, port: null },
         label: "",

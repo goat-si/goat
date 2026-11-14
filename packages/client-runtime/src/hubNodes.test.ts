@@ -3,7 +3,6 @@ import * as Cause from "effect/Cause";
 import { RpcClientError } from "effect/rpc";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  disposableAliasRefusal,
   disposableRouteRefusal,
   hubDeviceAccess,
   hubNodeClassView,
@@ -138,39 +137,5 @@ describe("isHubNodesUnsupportedError", () => {
     const error: { cause?: unknown } = {};
     error.cause = error;
     expect(isHubNodesUnsupportedError(error)).toBe(false);
-  });
-});
-
-describe("disposableAliasRefusal", () => {
-  const machineClass = {
-    class: "disposable",
-    attachId: "a-1",
-    state: "linked",
-    stateSince: "2026-11-14T10:00:00.000Z",
-    provisioner: { kind: "person" as const },
-    penMember: true,
-    conflicts: [],
-  };
-  const route = (alias: string) => ({
-    routeId: "ssh:" + alias,
-    source: "registered" as const,
-    target: { kind: "ssh" as const, alias, hostname: null, username: null, port: null },
-    status: "online" as const,
-    checkedAt: null,
-    lastSeenAt: null,
-    lastError: null,
-  });
-  it("refuses an SSH connection to a host alias that is a disposable Hub device's route, compared as ssh does; a kept or ended one passes", () => {
-    const nodes = [
-      { label: "cc-07", routes: [route("pen-abc")], machineClass },
-      { label: "box", routes: [route("box")] },
-    ];
-    for (const alias of ["pen-abc", "PEN-ABC", "pen-abc."])
-      expect(disposableAliasRefusal(nodes, alias)).toContain("cc-07 is a disposable machine");
-    expect(disposableAliasRefusal(nodes, "box")).toBeUndefined();
-    // The hub projects no class once a record has ended.
-    expect(
-      disposableAliasRefusal([{ label: "cc-07", routes: [route("pen-abc")] }], "pen-abc"),
-    ).toBeUndefined();
   });
 });
