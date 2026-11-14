@@ -423,10 +423,9 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
   AND json_extract(root.payload_json, '$.deletedAt') IS NULL
   AND json_extract(root.payload_json, '$.archivedAt') IS NULL`;
 
-// A single read transaction keeps the copy consistent with concurrent server writes.
-const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
+// Reads the attached source inside the copy transaction, so the copied schema and rows come
+// from one snapshot of a database the server may be writing.
+const readSourceSchema = Effect.fn("readDevDbSourceSchema")(function* (sql: SqlClient.SqlClient) {
   const schema = yield* sql<{ type: string; name: string; sql: string }>`
     SELECT type, name, sql FROM src.sqlite_master
     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`;
@@ -501,7 +500,24 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
       }
     }
   }
+  return {
+    schema,
+    shadowTables,
+    virtualTables,
+    threadIdNullable,
+    writableColumns,
+    primaryKeys,
+    foreignKeys,
+    tables,
+    filtered,
+    cleared,
+  };
+});
 
+// A single read transaction keeps the copy consistent with concurrent server writes.
+const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
   // node:sqlite turns foreign keys on by default. The thread filter drops
   // parent rows (remote_report_bindings, and any self-reference) that a child
   // row still points at, so the INSERT fails before prune can run. The pragma
@@ -517,6 +533,18 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
+      const {
+        schema,
+        shadowTables,
+        virtualTables,
+        threadIdNullable,
+        writableColumns,
+        primaryKeys,
+        foreignKeys,
+        tables,
+        filtered,
+        cleared,
+      } = yield* readSourceSchema(sql);
       yield* rejectUnimportedLegacyThreads(sourcePath, tables, filtered);
       for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
       if (filtered) {
