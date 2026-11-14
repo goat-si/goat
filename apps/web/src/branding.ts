@@ -12,7 +12,12 @@ function readInjectedDesktopAppBranding(): DesktopAppBranding | null {
 const injectedDesktopAppBranding = readInjectedDesktopAppBranding();
 export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "GOAT";
 export const APP_STAGE_LABEL =
-  injectedDesktopAppBranding?.stageLabel ?? resolveWebAppStageLabel(import.meta.env);
+  injectedDesktopAppBranding?.stageLabel ??
+  resolveWebAppStageLabel({
+    VITE_HOSTED_APP_CHANNEL: import.meta.env.VITE_HOSTED_APP_CHANNEL,
+    VITE_RELEASE_CHANNEL: import.meta.env.VITE_RELEASE_CHANNEL,
+    DEV: import.meta.env.DEV,
+  });
 export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });
