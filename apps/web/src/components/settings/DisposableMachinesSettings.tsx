@@ -60,7 +60,19 @@ export function DisposableMachinesSettings({
   const canReissue = useAtomValue(
     serverEnvironment.hubMachinesReissue.permissionAtom(environmentId),
   );
+  const canDetach = useAtomValue(serverEnvironment.hubMachinesDetach.permissionAtom(environmentId));
+  const canRelease = useAtomValue(
+    serverEnvironment.hubMachinesRelease.permissionAtom(environmentId),
+  );
   const save = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const detachMachine = useAtomCommand(serverEnvironment.hubMachinesDetach, {
+    reportFailure: false,
+  });
+  const releaseMachine = useAtomCommand(serverEnvironment.hubMachinesRelease, {
+    reportFailure: false,
+  });
+  // A detach, a forced one and a release cannot be undone, so each asks once more on the row.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const reissue = useAtomCommand(serverEnvironment.hubMachinesReissue, { reportFailure: false });
   const list = useEnvironmentQuery(serverEnvironment.hubMachinesList({ environmentId, input: {} }));
   const [busy, setBusy] = useState(false);
@@ -111,6 +123,23 @@ export function DisposableMachinesSettings({
       if (minted) setDialog({ kind: "invite", invite: minted });
       else setError(`No new invite was made: ${result.value.message}`);
     }
+  }
+  async function endMachine(action: MachineAction, attachId: string) {
+    setConfirming(null);
+    setBusy(true);
+    setError(null);
+    const input = { attachId, clientRequestId: randomUUID() };
+    const result =
+      action === "release"
+        ? await releaseMachine({ environmentId, input })
+        : await detachMachine({
+            environmentId,
+            input: action === "force" ? { ...input, force: true } : input,
+          });
+    setBusy(false);
+    list.refresh();
+    if (result._tag === "Failure")
+      setError(failureText(squashAtomCommandFailure(result), ACTION_FAILED[action]));
   }
   // The hub keeps an ended consent switched on and reads it as closed; only a person renews it.
   const expired = disposableConsentEnded(settings, now);
@@ -343,6 +372,26 @@ export function DisposableMachinesSettings({
                     </Button>
                   </>
                 )}
+                {actionsOf(machine).map((action) => {
+                  const key = machine.attachId + ":" + action;
+                  const label = ACTION_LABEL[action];
+                  return (
+                    <Button
+                      key={action}
+                      size="xs"
+                      variant={confirming === key ? "destructive" : "ghost"}
+                      aria-label={`${confirming === key ? "Confirm " + label.toLowerCase() : label} ${machine.name}`}
+                      disabled={(action === "release" ? !canRelease : !canDetach) || busy}
+                      onClick={() =>
+                        confirming === key
+                          ? void endMachine(action, machine.attachId)
+                          : setConfirming(key)
+                      }
+                    >
+                      {confirming === key ? "Confirm" : label}
+                    </Button>
+                  );
+                })}
                 {machine.state === "invited" && (
                   <Button
                     size="xs"
@@ -370,6 +419,36 @@ export function DisposableMachinesSettings({
     </SettingsSection>
   );
 }
+
+type MachineAction = "detach" | "force" | "release";
+const ACTION_LABEL: Record<MachineAction, string> = {
+  detach: "Detach",
+  force: "Force detach",
+  release: "Release",
+};
+const ACTION_FAILED: Record<MachineAction, string> = {
+  detach: "Could not detach the machine.",
+  force: "Could not force the detach.",
+  release: "Could not release the attach.",
+};
+const DETACHABLE = new Set([
+  "admitted",
+  "attaching",
+  "linked",
+  "paused",
+  "unknown",
+  "retired",
+  "returned",
+]);
+/** What a person may end on this row: detach an admitted machine, force one detaching, or free a slot Pen cannot account for. */
+const actionsOf = (machine: HubMachineStatus): ReadonlyArray<MachineAction> => {
+  if (machine.class !== "disposable") return [];
+  if (machine.state === "detaching") return ["force"];
+  if (machine.penMember && DETACHABLE.has(machine.state)) return ["detach"];
+  if (!machine.penMember && (machine.state === "unknown" || machine.state === "paused"))
+    return ["release"];
+  return [];
+};
 
 /** A machine GOAT cannot reach yet: the person still has to add the hub's key to it. */
 const waitsForKey = (machine: HubMachineStatus) =>
