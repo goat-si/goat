@@ -8,7 +8,7 @@ import { inProgressHeads } from "./commitOperationHeads.ts";
 import { makeReviewDiffHash } from "./reviewDiffHash.ts";
 import { statusUpstreamRefreshFailureCooldown } from "./statusRefreshCooldown.ts";
 import { availableWorktreePath } from "./availableWorktreePath.ts";
-import { untrackedExceedsLimit } from "./untrackedSize.ts";
+import { selectUntrackedWithinLimit } from "./untrackedSize.ts";
 import {
   parseReviewNumstat,
   REVIEW_DIFF_ARGS,
@@ -2881,7 +2881,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     untrackedPaths: ReadonlyArray<string>,
     includeStagedDeletions = false,
-    maxBytes?: number,
+    allowPartial = true,
   ) {
     const [stagedDeletionsStdout, indexValue] = yield* Effect.all(
       [
@@ -2909,12 +2909,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { concurrency: 2 },
     );
     const stagedDeletions = new Set(stagedDeletionsStdout.split("\0").filter(Boolean));
-    const pathsToAdd = untrackedPaths.filter(
+    const candidates = untrackedPaths.filter(
       (relativePath) => includeStagedDeletions || !stagedDeletions.has(relativePath),
     );
-    if (maxBytes !== undefined && (yield* untrackedExceedsLimit(cwd, pathsToAdd, maxBytes)))
-      return null;
-    if (pathsToAdd.length === 0) return undefined;
+    const { selected: pathsToAdd, omitted } = yield* selectUntrackedWithinLimit(cwd, candidates);
+    if (pathsToAdd.length === 0 || (omitted && !allowPartial)) return { env: undefined, omitted };
 
     const indexPath = path.isAbsolute(indexValue.trim())
       ? indexValue.trim()
@@ -2967,7 +2966,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ],
       { env, stdin: `${pathsToAdd.join("\0")}\0` },
     );
-    return env;
+    return { env, omitted };
   });
 
   const readEmptyTreeHash = Effect.fn("readEmptyTreeHash")(function* (cwd: string) {
@@ -2985,7 +2984,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     pathArgs: ReadonlyArray<string>,
     onlyPath?: string,
     includeStagedDeletions = false,
-    maxBytes?: number,
+    allowPartial = true,
   ) {
     const untracked = yield* executeGit(
       "GitVcsDriver.review.listUntracked",
@@ -2998,10 +2997,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       (candidate) =>
         onlyPath === undefined || candidate === onlyPath || candidate === `${onlyPath}/`,
     );
-    if (paths.length === 0) return { env: undefined };
+    if (paths.length === 0) return { env: undefined, omitted: false };
     if (paths.length > REVIEW_UNTRACKED_MAX_FILES)
       return { unavailable: "Too many untracked files to count." };
-    const env = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions, maxBytes).pipe(
+    const index = yield* prepareReviewIndex(cwd, paths, includeStagedDeletions, allowPartial).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>
           Effect.fail(
@@ -3015,8 +3014,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ),
       }),
     );
-    if (env === null) return { unavailable: "Untracked files are too large to count." };
-    return { env };
+    if (index.omitted && !allowPartial)
+      return { unavailable: "Untracked files are too large to count." };
+    return index;
   });
   const prepareUntrackedReviewIndex = (
     ...args: Parameters<typeof prepareUntrackedReviewIndexOrReason>
@@ -3102,7 +3102,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const untracked = yield* untrackedTotalsBackoff(
       cwd,
       roots,
-      prepareUntrackedReviewIndexOrReason(cwd, pathspecs, undefined, false, 256 * 1024 * 1024),
+      prepareUntrackedReviewIndexOrReason(cwd, pathspecs, undefined, false, false),
     );
     const readNumstat = (ref: string) =>
       executeGit(
@@ -3257,14 +3257,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         const untracked =
           scope === "unstaged" && !trackedOnly
             ? yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path, true)
-            : { env: undefined };
+            : { env: undefined, omitted: false };
+        const complete = untracked !== null && !untracked.omitted;
         const stat = yield* readStats(
           scope === "staged" ? "HEAD" : null,
           untracked?.env,
           scope === "staged",
         );
         const patch =
-          (metadataOnly && untracked !== null) || stat.files.length === 0
+          (metadataOnly && complete) || stat.files.length === 0
             ? { stdout: "", stdoutTruncated: false }
             : yield* executeGit(
                 "GitVcsDriver.getReviewDiffPreview.patch",
@@ -3287,9 +3288,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           headRef: null,
           diff: patch.stdout,
           diffHash: yield* hashDiff(patch.stdout, stat.files),
-          truncated: patch.stdoutTruncated || untracked === null,
-          ...(metadataOnly && untracked !== null ? { patchesDeferred: true } : {}),
-          ...(untracked === null ? {} : { files: stat.files }),
+          truncated: patch.stdoutTruncated || !complete,
+          ...(metadataOnly && complete ? { patchesDeferred: true } : {}),
+          ...(complete ? { files: stat.files } : {}),
         } satisfies ReviewDiffPreviewSource;
       }).pipe(Effect.scoped);
       return {
@@ -3301,27 +3302,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const [dirtyTrackedResult, baseResult] = yield* Effect.gen(function* () {
       const untracked = trackedOnly
-        ? { env: undefined }
+        ? { env: undefined, omitted: false }
         : yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
+      const complete = untracked !== null && !untracked.omitted;
       const [dirty, base] =
         review.mergeBase === dirtyRef
-          ? yield* readTrackedDiff(
-              dirtyRef,
-              untracked?.env,
-              metadataOnly && untracked !== null,
-            ).pipe(Effect.map((result) => [result, result] as const))
+          ? yield* readTrackedDiff(dirtyRef, untracked?.env, metadataOnly && complete).pipe(
+              Effect.map((result) => [result, result] as const),
+            )
           : yield* Effect.all(
               [
-                readTrackedDiff(dirtyRef, untracked?.env, metadataOnly && untracked !== null),
-                readTrackedDiff(
-                  review.mergeBase,
-                  untracked?.env,
-                  metadataOnly && untracked !== null,
-                ),
+                readTrackedDiff(dirtyRef, untracked?.env, metadataOnly && complete),
+                readTrackedDiff(review.mergeBase, untracked?.env, metadataOnly && complete),
               ],
               { concurrency: 2 },
             );
-      if (untracked !== null) return [dirty, base] as const;
+      if (complete) return [dirty, base] as const;
       const incomplete = (ref: string | null, result: typeof dirty) =>
         ref === null ? result : { ...result, files: undefined, stdoutTruncated: true };
       return [incomplete(dirtyRef, dirty), incomplete(review.mergeBase, base)] as const;

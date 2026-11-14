@@ -42,6 +42,14 @@ it.layer(layerTest)("untracked size limit", (it) => {
       const driver = yield* GitVcsDriver.GitVcsDriver;
       const status = yield* driver.statusDetailsLocal(cwd, { includeBranchChanges: true });
       assert.deepStrictEqual(status.branchChanges, { baseRef: null, insertions: 1, deletions: 1 });
+      const preview = yield* driver.getReviewDiffPreview({ cwd, metadataOnly: true });
+      assert.deepStrictEqual(
+        preview.sources.find((source) => source.kind === "working-tree")?.files,
+        [
+          { path: "asset.data", previousPath: null, additions: 0, deletions: 1 },
+          { path: "ordinary.txt", previousPath: null, additions: 1, deletions: 0 },
+        ],
+      );
     }),
   );
 });
