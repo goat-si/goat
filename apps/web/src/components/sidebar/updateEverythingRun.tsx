@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { serverUpdateStateAtom } from "@goat/client-runtime/state/server";
-import { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, type ServerConfig } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -196,6 +196,13 @@ export function settleUpdateRunMachine(
   );
 }
 
+function runsVersion(config: ServerConfig | null, targetVersion: string): boolean {
+  return (
+    config !== null &&
+    resolveVersionMismatch(config.environment.serverVersion, targetVersion) === null
+  );
+}
+
 export function retryFailedUpdateRunServers(
   update: (
     target: ServerUpdateTarget,
@@ -209,12 +216,26 @@ export function retryFailedUpdateRunServers(
         ? [machine]
         : [],
   );
-  const retried = new Set(failed.map((machine) => machine.key));
+  const pending: typeof failed = [];
+  for (const machine of failed) {
+    if (
+      machine.server !== null &&
+      runsVersion(
+        appAtomRegistry.get(serverEnvironment.configValueAtom(machine.server.environmentId)),
+        machine.server.targetVersion,
+      )
+    ) {
+      settleUpdateRunMachine(machine.key, machine.providerFailure, { serverUpdated: true });
+    } else {
+      pending.push(machine);
+    }
+  }
+  const retried = new Set(pending.map((machine) => machine.key));
   const startedAt = Date.now();
   updateRunMachines((machine) =>
     retried.has(machine.key) ? { ...machine, result: null, failure: null, startedAt } : machine,
   );
-  for (const machine of failed) {
+  for (const machine of pending) {
     // Retry keeps the run's promise: a busy machine refuses again instead of losing its turns.
     const attempt =
       machine.server !== null
@@ -449,12 +470,7 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
     const unsubscribe = appAtomRegistry.subscribe(
       serverEnvironment.configValueAtom(server.environmentId),
       (config) => {
-        if (
-          config !== null &&
-          resolveVersionMismatch(config.environment.serverVersion, server.targetVersion) === null
-        ) {
-          settle(null);
-        }
+        if (runsVersion(config, server.targetVersion)) settle(null);
       },
       { immediate: true },
     );
