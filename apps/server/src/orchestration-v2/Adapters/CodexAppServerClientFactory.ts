@@ -46,7 +46,6 @@ export interface CodexAppServerClientFactoryShape {
     readonly threadId: ThreadId;
     readonly providerSessionId: OrchestrationV2ProviderSession["id"];
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-    readonly onRetained?: () => void;
     readonly routeArgs?: ReadonlyArray<string>;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
@@ -338,8 +337,6 @@ export const layerAppServerClientFactory: Layer.Layer<
             .ensureReleasedClear(input.instanceId, input.providerSessionId, input.threadId)
             .pipe(Effect.mapError(openError));
         if (recordName !== undefined && kept === "connect") {
-          // Retained records do not carry the process launch home.
-          input.onRetained?.();
           const existing = yield* detached
             .connectExisting(input.instanceId, recordName, input.providerSessionId)
             .pipe(Effect.mapError(openError));

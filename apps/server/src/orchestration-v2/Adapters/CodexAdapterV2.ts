@@ -1577,10 +1577,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           detached,
           survivors,
         });
-        let usageScope = env.CODEX_HOME ?? "";
         const client = yield* clientFactory
           .open({
-            onRetained: () => (usageScope = "\0retained"),
             instanceId: adapterOptions.instanceId,
             threadId: input.threadId,
             providerSessionId: input.providerSessionId,
@@ -4561,7 +4559,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, usageScope);
+              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, env.CODEX_HOME ?? "");
             }
           }).pipe(Effect.orDie),
         );
