@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { rejectUnimportedLegacyThreads } from "./legacy-dev-seed.ts";
 import { pruneDevSettleScripts } from "./prune-dev-settle-scripts.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -516,6 +517,7 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
+      yield* rejectUnimportedLegacyThreads(sourcePath, tables, filtered);
       for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
       if (filtered) {
         yield* sql`CREATE TEMP TABLE copied_threads (thread_id TEXT PRIMARY KEY)`;
@@ -812,8 +814,6 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (modeChange !== undefined) {
     yield* Console.log(describePrivateDevDirectoryChange(stateDir, modeChange));
   }
-  yield* ensureNotInUse(databasePath);
-
   const wrapPhase =
     (phase: MigrateDevDbPhaseError["phase"], phaseDatabasePath: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -828,8 +828,15 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     yield* Console.log(`Copying visible threads from ${sourcePath} (read-only)...`);
     yield* copySourceSlice(sourcePath).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
-      wrapPhase("snapshot", sourcePath),
+      Effect.catchTags({
+        SqlError: (cause) =>
+          Effect.fail(
+            new MigrateDevDbPhaseError({ phase: "snapshot", databasePath: sourcePath, cause }),
+          ),
+      }),
     );
+
+    yield* ensureNotInUse(databasePath);
 
     // Migrate first so prune queries can use columns missing from older sources.
     yield* Console.log("Running migrations on the snapshot...");

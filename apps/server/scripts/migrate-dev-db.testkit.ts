@@ -23,9 +23,9 @@ const scriptsSchema = Schema.fromJsonString(
 const encodeScripts = Schema.encodeSync(scriptsSchema);
 const decodeScripts = Schema.decodeUnknownSync(scriptsSchema);
 
-export const withDatabase = <A, E>(
+export const withDatabase = <A, E, R>(
   databasePath: string,
-  effect: Effect.Effect<A, E, SqlClient.SqlClient>,
+  effect: Effect.Effect<A, E, R | SqlClient.SqlClient>,
 ) => effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: databasePath })));
 
 export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(function* (
