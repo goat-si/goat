@@ -1,3 +1,4 @@
+import { ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { RpcClientError } from "effect/rpc";
 import { describe, expect, it } from "vite-plus/test";
@@ -10,7 +11,7 @@ describe("hubNodeClassView", () => {
     attachId: "a-1",
     state: "linked",
     stateSince: "2026-11-14T10:00:00.000Z",
-    provisioner: { kind: "thread" as const, threadId: "thread-1" },
+    provisioner: { kind: "thread" as const, threadId: ThreadId.make("thread-1") },
     penMember: true,
     conflicts: [],
   };

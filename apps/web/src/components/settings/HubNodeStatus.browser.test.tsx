@@ -1,4 +1,4 @@
-import { EnvironmentId, type HubNode } from "@goat/contracts";
+import { EnvironmentId, type HubNode, ThreadId } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 
 import { render } from "../../../test/render";
@@ -13,11 +13,12 @@ const node = (machineClass?: HubNode["machineClass"]): HubNode => ({
   routes: [
     {
       routeId: "ssh:pen-cc7",
-      source: "registration",
+      source: "registered",
       target: { kind: "ssh", alias: "pen-cc7", hostname: null, username: null, port: null },
       status: "online",
       checkedAt: null,
       lastSeenAt: null,
+      lastError: null,
     },
   ],
   status: "online",
@@ -36,7 +37,7 @@ it("a Hub device shows its disposable class, Pen membership, who attached it and
         attachId: "a-1",
         state: "linked",
         stateSince: "2026-11-14T10:00:00.000Z",
-        provisioner: { kind: "thread", threadId: "thread-1" },
+        provisioner: { kind: "thread", threadId: ThreadId.make("thread-1") },
         penMember: true,
         conflicts: [],
       })}

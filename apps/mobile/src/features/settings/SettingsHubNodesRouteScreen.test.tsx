@@ -4,6 +4,7 @@ import {
   type HostStatusEntry,
   type HubNode,
   type OpenCodexChildSetup,
+  ThreadId,
 } from "@goat/contracts";
 import { useSyncExternalStore, act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -667,7 +668,7 @@ it("a disposable Hub device shows its class, Pen membership and who attached it;
       attachId: "a-1",
       state: "linked",
       stateSince: "2026-11-14T10:00:00.000Z",
-      provisioner: { kind: "thread", threadId: "thread-1" },
+      provisioner: { kind: "thread", threadId: ThreadId.make("thread-1") },
       penMember: true,
       conflicts: ["other_route"],
     },
