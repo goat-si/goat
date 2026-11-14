@@ -7,7 +7,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
@@ -65,6 +66,126 @@ const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: 
   });
 
 it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
+  it.effect("retries a release download that GitHub answers with a gateway timeout", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-retry-" });
+      const checksums = yield* validChecksums;
+      const requests: string[] = [];
+      const gatewayTimeoutServed = yield* Deferred.make<void>();
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          requests.push(request.url);
+          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          if (requests.length === 1) {
+            Deferred.doneUnsafe(gatewayTimeoutServed, Effect.void);
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response("", { status: 504 })),
+            );
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(isChecksums ? checksums : archiveBytes),
+            ),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(gatewayTimeoutServed);
+      yield* TestClock.adjust(Duration.seconds(2));
+      const paths = yield* Fiber.join(install);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.equal(requests.filter((url) => url.endsWith("/SHA256SUMS")).length, 2);
+    }),
+  );
+
+  it.effect("retries a release archive whose body fails after the host answered", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-retry-body-" });
+      const checksums = yield* validChecksums;
+      let archiveRequests = 0;
+      const archiveRequested = yield* Deferred.make<void>();
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          const response = HttpClientResponse.fromWeb(
+            request,
+            new Response(isChecksums ? checksums : archiveBytes),
+          );
+          if (isChecksums || ++archiveRequests > 1) return Effect.succeed(response);
+          const failingBody = Stream.concat(
+            Stream.make(archiveBytes.slice(0, 4)),
+            Stream.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.DecodeError({ request, response }),
+              }),
+            ),
+          );
+          Deferred.doneUnsafe(archiveRequested, Effect.void);
+          // TestClock follows the work a woken sleep starts, so one adjust reaches the retry wait.
+          return Effect.sleep("1 second").pipe(
+            Effect.as<HttpClientResponse.HttpClientResponse>(
+              Object.create(response, { stream: { value: failingBody } }),
+            ),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(archiveRequested);
+      yield* TestClock.adjust(Duration.seconds(3));
+      const paths = yield* Fiber.join(install);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.equal(archiveRequests, 2);
+    }),
+  );
+
+  it.effect("fails at once when the release host cannot be reached", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-offline-" });
+      let requests = 0;
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          requests += 1;
+          return Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request }),
+            }),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.die("must not validate without a download"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(requests, 1);
+    }),
+  );
+
   it.effect("reuses a verified cache only while its executable matches the install record", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

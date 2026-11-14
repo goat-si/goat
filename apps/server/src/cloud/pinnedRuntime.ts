@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -165,6 +166,15 @@ const cachedInstallMatchesRecord = (input: PinnedRuntimeInstallInput, paths: Pin
     return Option.isSome(actual) && actual.value === record.value.entrySha256;
   });
 
+const isTransientDownloadFailure = (
+  error: HttpClientError.HttpClientError | Cause.TimeoutError,
+): boolean => {
+  if (error._tag === "TimeoutError") return false;
+  if (error.reason._tag === "DecodeError") return true;
+  const status = error.response?.status;
+  return status !== undefined && (status >= 500 || status === 429 || status === 408);
+};
+
 const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(function* (
   httpClient: HttpClient.HttpClient,
   url: string,
@@ -207,6 +217,11 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
         return bytes;
       }),
     ),
+    Effect.retry({
+      times: 3,
+      schedule: Schedule.exponential("2 seconds"),
+      while: isTransientDownloadFailure,
+    }),
     Effect.mapError(
       (cause) =>
         new PinnedRuntimeInstallError({
