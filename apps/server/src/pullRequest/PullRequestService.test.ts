@@ -1,4 +1,4 @@
-import { registerInteractiveRateLimitTest } from "./PullRequestInteractive.testkit.ts";
+import { registerPullRequestBehaviorTests } from "./PullRequestInteractive.testkit.ts";
 import {
   project,
   changeRequest,
@@ -2013,7 +2013,7 @@ it.effect("stops new reads after a rate limit while leaving manual actions avail
   }),
 );
 
-registerInteractiveRateLimitTest(makeService);
+registerPullRequestBehaviorTests(makeService);
 
 it.effect("refuses a repository that does not belong to the requested project", () =>
   Effect.gen(function* () {
