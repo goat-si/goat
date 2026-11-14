@@ -3,6 +3,10 @@ import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
+import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 
 import * as BootService from "../cloud/bootService.ts";
@@ -28,6 +32,31 @@ const COMPACT_STEP_LABELS: Record<DatabaseMaintenance.DatabaseCompactStep, strin
   "rebuild-search": "Rebuilding the search index",
   checkpoint: "Flushing the write-ahead log",
 };
+
+const lockServerHome = Effect.fn("runDoctor.lockServerHome")(function* (databasePath: string) {
+  const path = yield* Path.Path;
+  const stateDir = path.dirname(databasePath);
+  return yield* Effect.acquireRelease(
+    Effect.gen(function* () {
+      const lock = yield* Effect.try({
+        try: () => tryAcquireServerOwnerLock(stateDir, "doctor"),
+        catch: (cause) => new DatabaseMaintenance.DatabaseInUseError({ path: databasePath, cause }),
+      });
+      if (lock !== undefined) return lock;
+      const owner = yield* readLiveServerRuntimeState(
+        path.join(stateDir, "server-runtime.json"),
+      ).pipe(Effect.orElseSucceed(() => Option.none()));
+      return yield* new DatabaseMaintenance.DatabaseInUseError({
+        path: databasePath,
+        cause: new Error("server ownership lock is held"),
+        ...(Option.isSome(owner)
+          ? { pid: owner.value.pid, serviceManaged: owner.value.serviceManaged === true }
+          : {}),
+      });
+    }),
+    (lock) => Effect.sync(() => lock.release()),
+  );
+});
 
 export const runDoctor = Effect.fn("runDoctor")(function* (
   databasePath: string,
@@ -123,19 +152,20 @@ export const runDoctor = Effect.fn("runDoctor")(function* (
       );
     // Report the repair before restarting, which can fail independently.
     yield* service.withStopped(
-      maintenance
-        .compact(databasePath, reportStep)
-        .pipe(
-          Effect.tap((result) =>
-            Clock.monotonicTimeNanos.pipe(
-              Effect.flatMap((now) =>
-                Console.log(
-                  `Done in ${formatElapsed(now - startedAt)}: ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)}, ${result.deletedEventCount} superseded events removed.`,
-                ),
+      lockServerHome(databasePath).pipe(
+        Effect.andThen(maintenance.compact(databasePath, reportStep)),
+
+        Effect.tap((result) =>
+          Clock.monotonicTimeNanos.pipe(
+            Effect.flatMap((now) =>
+              Console.log(
+                `Done in ${formatElapsed(now - startedAt)}: ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)}, ${result.deletedEventCount} superseded events removed.`,
               ),
             ),
           ),
         ),
+        Effect.scoped,
+      ),
     );
   }
   if (selected.includes("legacy")) {
