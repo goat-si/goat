@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -111,14 +112,19 @@ const requireRoot = Effect.gen(function* () {
 
 it.effect(
   "offers no Scratch, only a GOAT bot project, when the data dir sits inside a checkout",
-  () =>
-    Effect.gen(function* () {
+  () => {
+    const warnings: string[] = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Warn") warnings.push(String(message));
+    });
+    return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const checkout = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-scratch-repo-" });
       yield* git(checkout, ["init", "--quiet"]);
       const baseDir = path.join(checkout, ".t3");
       yield* fileSystem.makeDirectory(baseDir);
+      const repositoryRoot = (yield* git(baseDir, ["rev-parse", "--show-toplevel"])).stdout.trim();
       yield* Effect.gen(function* () {
         const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
         assert.isTrue(Option.isNone(yield* scratch.scratchRoot));
@@ -126,7 +132,8 @@ it.effect(
         const failure = yield* Effect.flip(scratch.ensureScratchProject);
         assert.equal(failure._tag, "ScratchUnavailableError");
         assert.include(failure.message, baseDir);
-        assert.include(failure.message, checkout);
+        assert.include(failure.message.replaceAll(baseDir, ""), repositoryRoot);
+        yield* Effect.flip(scratch.ensureScratchProject);
 
         // The GOAT bot still gets a project of its own beside the data dir's other folders.
         const projects = yield* ProjectService.ProjectService;
@@ -136,8 +143,15 @@ it.effect(
         assert.equal(project.workspaceRoot, path.resolve(baseDir, "goat-bot"));
         assert.equal(project.title, "GOAT bot");
         assert.isTrue(yield* fileSystem.exists(project.workspaceRoot));
-      }).pipe(Effect.provide(layer(baseDir)));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(layer(baseDir), Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      );
+      assert.equal(warnings.length, 1);
+      assert.include(warnings[0], baseDir);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  },
 );
 
 it.effect("offers a Scratch folder when Git is not installed", () =>
