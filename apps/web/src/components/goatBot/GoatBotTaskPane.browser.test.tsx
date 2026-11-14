@@ -42,6 +42,7 @@ const state = vi.hoisted(() => ({
   sourceIdentity: "first" as string | null,
   baseline: new Set<string>(),
   sources: new Set<string>(),
+  chips: new Map<string, unknown>(),
 }));
 vi.mock("./useGoatBotSource", () => ({
   useGoatBotSource: () => ({ baselineIds: state.baseline, sourceIds: state.sources }),
@@ -151,6 +152,7 @@ vi.mock("./useBotRoster", () => ({
       remoteWork: [],
       loaded: true,
       failed: false,
+      chips: state.chips,
       refresh: state.refresh,
     };
   },
@@ -541,6 +543,7 @@ it("failing-first: a task-pane answer follows its own folded question without mo
 function setup() {
   state.noRows = false;
   state.lookupSupported = false;
+  state.chips = new Map();
   state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
@@ -555,7 +558,7 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
   const close = vi.fn();
   await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();
-  await expect.element(screen.getByText("Needs your input")).toBeVisible();
+  await expect.element(screen.getByText("Waiting for you", { exact: true })).toBeVisible();
   expect(state.session).toHaveBeenCalledWith("task-1");
   expect(state.update).toHaveBeenCalledWith({
     environmentId: "env",
@@ -783,4 +786,29 @@ it("Open Home from an older task goes to the bot's chat with its Home named in h
   expect(screen.router?.state.location.state.goatBotOpenHome).toBe(
     goatBotHomeKey(EnvironmentId.make("env"), null),
   );
+});
+
+// Regression: Home's row said "Waiting for your answer" and the pane it opened said "Working".
+it("says in the header that a running task waits for your answer when its worker asks", async () => {
+  setup();
+  state.row = { status: "running", generation: undefined, unread: false };
+  state.chips = new Map([
+    [
+      "task-1",
+      {
+        taskId: "task-1",
+        taskVersion: 2,
+        status: "running",
+        openQuestionCount: 0,
+        observed: {
+          pullRequests: [],
+          needsYou: [{ kind: "question", since: "2026-11-04T10:00:00.000Z" }],
+        },
+      },
+    ],
+  ]);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect.element(screen.getByText("Waiting for your answer")).toBeVisible();
+  expect(screen.getByText("Working", { exact: true }).query()).toBeNull();
 });

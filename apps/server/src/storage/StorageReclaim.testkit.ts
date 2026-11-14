@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId, type HostCapacitySnapshot, type StorageItem } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import type { SqlError } from "effect/sql/SqlError";
 
 import * as ServerConfig from "../config.ts";
@@ -48,6 +50,7 @@ export const layer = (tempRoot: string) =>
   StorageReclaim.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        hostWithoutServiceUnit(tempRoot),
         Layer.succeed(
           StorageReclaim.StorageFileRemovalHook,
           (removedPath) => machine.afterFileRemoved?.(removedPath) ?? Effect.void,
@@ -113,6 +116,39 @@ export const layer = (tempRoot: string) =>
     ),
     Layer.provideMerge(NodeServices.layer),
   );
+
+/**
+ * Runtime cleanup reads the boot service unit. Without this the host's unit decides, and a Linux
+ * host with systemd but no user bus (a CI runner) leaves every runtime undecided.
+ */
+const hostWithoutServiceUnit = (tempRoot: string) => {
+  const home = `${tempRoot}/storage-reclaim-no-home`;
+  const { XDG_CONFIG_HOME: _ignored, ...env } = process.env;
+  return Layer.mergeAll(
+    Layer.succeed(HostProcess.HomeDirectory, home),
+    ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...env, HOME: home } })),
+    Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return FileSystem.FileSystem.of({
+          ...fs,
+          stat: (file) =>
+            file === "/run/systemd/system"
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "stat",
+                    pathOrDescriptor: file,
+                  }),
+                )
+              : fs.stat(file),
+        });
+      }),
+    ),
+  );
+};
 
 /** A GOAT home whose worktrees folder holds one leftover folder of a removed checkout. */
 export const setup = Effect.gen(function* () {

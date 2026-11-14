@@ -52,6 +52,7 @@ vi.mock("./useBotRoster", () => ({
     failed: mocks.threads.failed,
     failure: mocks.threads.failure,
     turnsWaiting: mocks.turnsWaiting,
+    chips: new Map(),
     refresh: mocks.refreshThreads,
   }),
 }));

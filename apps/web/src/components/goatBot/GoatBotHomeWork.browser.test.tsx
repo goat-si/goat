@@ -1,4 +1,10 @@
-import { ChannelTaskId, EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
+import {
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+  type BotThreadRow,
+  type ChannelTaskChip,
+} from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -664,4 +670,36 @@ it("records the member Home when opening a worker link from its row", async () =
       taskId: "task-a",
     }),
   );
+});
+
+// Regression: the row said Working while the bot's face said it waited for an answer.
+it("says a running task waits for your answer when its worker asks you something", async () => {
+  setup();
+  const rows = [
+    taskRow("quiet", "Keep going", "running", "2026-11-09T01:00:00.000Z"),
+    taskRow("asks", "Pick a name", "running", "2026-11-09T02:00:00.000Z"),
+  ];
+  const chips = new Map([
+    [
+      ChannelTaskId.make("asks"),
+      {
+        taskId: "asks",
+        taskVersion: 2,
+        status: "running",
+        openQuestionCount: 0,
+        observed: {
+          pullRequests: [],
+          needsYou: [{ kind: "question", since: "2026-11-09T02:00:00.000Z" }],
+        },
+      } as unknown as ChannelTaskChip,
+    ],
+  ]);
+  await using screen = await render(view(rows, { chips }));
+  await expect
+    .element(screen.getByRole("button", { name: /^Pick a name/ }))
+    .toMatchTextContent(/Waiting for your answer/);
+  await expect
+    .element(screen.getByRole("button", { name: /^Keep going/ }))
+    .toMatchTextContent(/Working/);
+  expect(titles(screen, ["Keep going", "Pick a name"])).toEqual(["Keep going", "Pick a name"]);
 });

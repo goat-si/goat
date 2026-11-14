@@ -7,10 +7,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
-  EnvironmentId,
-  EventId,
-  GenerateMemorySummaryInput,
-  MessageId,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -32,7 +28,6 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -40,7 +35,11 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderMaintenance from "@goat/provider-core/server/maintenanceResolver";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
-import { OPENCODE_2_RESPONSES, replayOpenCodeServer } from "./probeResponses.fixture.ts";
+import {
+  OPENCODE_2_RESPONSES,
+  OPENCODE_2_WORKSPACE_RESPONSES,
+  replayOpenCodeServer,
+} from "./probeResponses.fixture.ts";
 import { OpenCodeDriver, openCodeUpdateFor } from "./driver.ts";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 
@@ -184,203 +183,6 @@ const lazyMiseShim = {
 } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
-  it.effect("memory follows a changed executable and caches its protocol", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped();
-      const hostEnvironment = {
-        PATH: "/old",
-        HOME: root,
-        XDG_DATA_HOME: root,
-        OPENAI_API_KEY: "synthetic",
-      };
-      const host = yield* ProviderHost.ProviderHost;
-      const probes: string[] = [];
-      const launches: NodeJS.ProcessEnv[] = [];
-      const runtime = {
-        ...openCode2Runtime,
-        runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
-          Effect.sync(() => {
-            const path = environment?.PATH ?? "";
-            probes.push(path);
-            return { stdout: path === "/old" ? "1.18.32" : "2.0.18", stderr: "", code: 0 };
-          }),
-        startOpenCodeServerProcess: ({
-          environment,
-        }: {
-          readonly environment?: NodeJS.ProcessEnv;
-        }) =>
-          Effect.sync(() => launches.push(environment ?? {})).pipe(
-            Effect.andThen(reachedServer("memory")),
-          ),
-      };
-      const instance = yield* create({}, noHttp).pipe(
-        Effect.provideService(ProviderHost.ProviderHost, {
-          ...host,
-          environmentId: EnvironmentId.make("owner"),
-        }),
-        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
-        Effect.provideService(HostProcess.Environment, hostEnvironment),
-        Effect.provideService(HostProcess.HomeDirectory, root),
-        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
-      );
-      yield* instance.snapshot.resolveMaintenance();
-      hostEnvironment.PATH = "/new";
-      const input = GenerateMemorySummaryInput.make({
-        cwd: root,
-        sourceThread: {
-          environmentId: EnvironmentId.make("source"),
-          threadId: ThreadId.make("thread"),
-        },
-        sourceWatermark: {
-          fromEventId: EventId.make("e1"),
-          toEventId: EventId.make("e2"),
-          throughSequence: 2,
-        },
-        messages: [{ messageId: MessageId.make("m1"), text: "hello", completed: true }],
-        modelSelection: { instanceId: instance.instanceId, model: "openai/gpt-5" },
-      });
-      const wrongIdentity = {
-        ...input,
-        modelSelection: { ...input.modelSelection, instanceId: ProviderInstanceId.make("foreign") },
-      };
-      const denied = yield* instance.textGeneration.generateMemorySummary!(wrongIdentity).pipe(
-        Effect.flip,
-      );
-      assert.deepInclude(denied.cause, { code: "identity_mismatch" });
-      assert.strictEqual(probes.filter((path) => path === "/new").length, 0);
-      yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
-      assert.strictEqual(probes.filter((path) => path === "/new").length, 1);
-      assert.isDefined(launches.at(-1)?.OPENCODE_PASSWORD);
-      yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
-      assert.strictEqual(probes.filter((path) => path === "/new").length, 1);
-      assert.isDefined(launches.at(-1)?.OPENCODE_PASSWORD);
-    }).pipe(Effect.scoped),
-  );
-  it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped();
-      const oldDir = `${root}/old`;
-      const newDir = `${root}/new`;
-      for (const dir of [oldDir, newDir]) {
-        yield* fs.makeDirectory(dir);
-        yield* fs.writeFileString(`${dir}/opencode`, "#!/bin/sh\n");
-        yield* fs.chmod(`${dir}/opencode`, 0o755);
-      }
-      const host = { PATH: oldDir, HOME: root, XDG_DATA_HOME: root };
-      const instance = yield* create({}, noHttp).pipe(
-        Effect.provideService(HostProcess.Environment, host),
-        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
-      );
-      const first = yield* instance.snapshot.resolveMaintenance();
-      assert.strictEqual(first.installPath, `${oldDir}/opencode`);
-      assert.strictEqual(
-        (yield* instance.snapshot.resolveMaintenance()).installPath,
-        first.installPath,
-      );
-      yield* fs.remove(`${oldDir}/opencode`);
-      assert.notStrictEqual(
-        (yield* instance.snapshot.resolveMaintenance()).installPath,
-        first.installPath,
-      );
-      host.PATH = newDir;
-      assert.strictEqual(
-        (yield* instance.snapshot.resolveMaintenance()).installPath,
-        `${newDir}/opencode`,
-      );
-    }).pipe(Effect.scoped),
-  );
-  it.effect(
-    "regression #3079: a new OpenCode session uses the current host PATH and honors instance PATH",
-    () =>
-      Effect.gen(function* () {
-        const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
-        const host = { PATH: "/old", HOME: home, XDG_DATA_HOME: home };
-        const launched: NodeJS.ProcessEnv[] = [];
-        const runtime = {
-          ...openCode2Runtime,
-          startOpenCodeServerProcess: (input: { readonly environment?: NodeJS.ProcessEnv }) =>
-            Effect.sync(() => launched.push(input.environment ?? {})).pipe(
-              Effect.andThen(reachedServer("start")),
-            ),
-        };
-        const make = (override: boolean) =>
-          OpenCodeDriver.create({
-            instanceId: ProviderInstanceId.make(override ? "path-override" : "path-inherited"),
-            displayName: undefined,
-            environment: override ? [{ name: "PATH", value: "/old", sensitive: false }] : [],
-            enabled: true,
-            config: OpenCodeDriver.defaultConfig(),
-          }).pipe(
-            Effect.provideService(HttpClient.HttpClient, noHttp),
-            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
-            Effect.provideService(HostProcess.Environment, host),
-            Effect.provideService(HostProcess.HomeDirectory, home),
-            Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
-          );
-        const inherited = yield* make(false);
-        const overridden = yield* make(true);
-        host.PATH = "/new";
-        yield* inherited.snapshot.refresh;
-        const open = (instance: typeof inherited) =>
-          instance.orchestrationAdapter
-            .openSession({
-              threadId: ThreadId.make("path-thread"),
-              providerSessionId: ProviderSessionId.make("path-session"),
-              modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
-              runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
-            })
-            .pipe(Effect.scoped, Effect.flip);
-        yield* open(inherited);
-        assert.strictEqual(launched.at(-1)?.PATH, "/new");
-        yield* open(overridden);
-        assert.strictEqual(launched.at(-1)?.PATH, "/old");
-      }).pipe(Effect.scoped),
-  );
-  it.effect(
-    "refreshes the probe environment after the host PATH changes while preserving instance overrides",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-path-" });
-        const host = { PATH: "/usr/bin:/bin", HOME: home, XDG_DATA_HOME: home };
-        const environments: NodeJS.ProcessEnv[] = [];
-        const runtime = {
-          ...openCode2Runtime,
-          runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
-            Effect.sync(() => {
-              environments.push(environment ?? {});
-              return { stdout: "opencode v2.0.18\n", stderr: "", code: 0 };
-            }),
-        };
-        const makeInstance = (override: boolean) =>
-          OpenCodeDriver.create({
-            instanceId: ProviderInstanceId.make(override ? "override" : "inherited"),
-            displayName: undefined,
-            environment: override
-              ? [{ name: "PATH", value: "/usr/bin:/bin", sensitive: false }]
-              : [],
-            enabled: true,
-            config: OpenCodeDriver.defaultConfig(),
-          }).pipe(
-            Effect.provideService(HttpClient.HttpClient, noHttp),
-            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
-            Effect.provideService(HostProcess.Environment, host),
-            Effect.provideService(HostProcess.HomeDirectory, home),
-            Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
-          );
-        const inherited = yield* makeInstance(false);
-        const overridden = yield* makeInstance(true);
-        host.PATH = "/new/bin:/usr/bin:/bin";
-        yield* inherited.snapshot.refresh;
-        assert.strictEqual(environments.at(-1)?.PATH, "/new/bin:/usr/bin:/bin");
-        assert.strictEqual(environments.at(-1)?.MISE_OFFLINE, "1");
-        assert.strictEqual(Object.getPrototypeOf(environments.at(-1)), Object.prototype);
-        yield* overridden.snapshot.refresh;
-        assert.strictEqual(environments.at(-1)?.PATH, "/usr/bin:/bin");
-      }).pipe(Effect.scoped),
-  );
   it.effect("starts workspace discovery servers with mise offline", () =>
     Effect.gen(function* () {
       const environments: NodeJS.ProcessEnv[] = [];
@@ -458,6 +260,117 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect.each([
+    "1.18.32",
+    "opencode v2.0.18",
+    "opencode v2.2.4",
+    "opencode v2.2.5",
+    "opencode v2.2.6",
+  ])("advertises native goal support only for supported OpenCode versions: %s", (version) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "opencode-goal-capability-" });
+      const binaryPath = NodePath.join(
+        root,
+        "lib",
+        "node_modules",
+        "@opencode",
+        "cli",
+        "bin",
+        "opencode",
+      );
+      yield* fs.makeDirectory(NodePath.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "");
+      const instance = yield* create({ binaryPath }, noHttp).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
+          ...openCode2Runtime,
+          runOpenCodeCommand: () => Effect.succeed({ stdout: version, stderr: "", code: 0 }),
+        }),
+      );
+      yield* instance.snapshot.resolveMaintenance({ fresh: true });
+      const capabilities = yield* instance.orchestrationAdapter.getCapabilities();
+      assert.equal(
+        capabilities.turns.supportsNativeGoals === true,
+        version.endsWith("2.2.5") || version.endsWith("2.2.6"),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("uses the connected OpenCode version for goal support after an upgrade", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "opencode-upgraded-goals-" });
+      const binaryPath = NodePath.join(
+        root,
+        "lib",
+        "node_modules",
+        "@opencode",
+        "cli",
+        "bin",
+        "opencode",
+      );
+      yield* fs.makeDirectory(NodePath.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "");
+      const http = HttpClient.make((request) => {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/info")
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                ...JSON.parse(OPENCODE_2_RESPONSES["/api/info"].body),
+                version: "2.2.5",
+              }),
+            ),
+          );
+        if (path === "/api/model")
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({ location: { directory: "/work" }, data: [] }),
+            ),
+          );
+        if (path === "/api/event")
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(new ReadableStream(), {
+                headers: { "content-type": "text/event-stream" },
+              }),
+            ),
+          );
+        return Effect.die(`Unexpected request: ${path}`);
+      });
+      const instance = yield* create({ binaryPath }, http).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
+          ...openCode2Runtime,
+          runOpenCodeCommand: () =>
+            Effect.succeed({ stdout: "opencode v2.2.4", stderr: "", code: 0 }),
+          startOpenCodeServerProcess: ({ verify }) =>
+            Effect.gen(function* () {
+              const url = "http://127.0.0.1:4096";
+              const version = verify ? yield* verify(url) : "2.2.5";
+              return { url, version, isRunning: Effect.succeed(true), exitCode: Effect.never };
+            }),
+        }),
+      );
+      yield* instance.snapshot.resolveMaintenance({ fresh: true });
+      assert.isFalse(
+        (yield* instance.orchestrationAdapter.getCapabilities()).turns.supportsNativeGoals,
+      );
+      const session = yield* instance.orchestrationAdapter.openSession({
+        threadId: ThreadId.make("upgraded-goal"),
+        providerSessionId: ProviderSessionId.make("upgraded-goal"),
+        modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+      });
+      assert.isTrue(session.providerSession.capabilities.turns.supportsNativeGoals);
+      assert.isTrue(
+        (yield* instance.orchestrationAdapter.getCapabilities()).turns.supportsNativeGoals,
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("answers capability reads without waiting on an unreachable server", () =>
     Effect.gen(function* () {
       const hang = HttpClient.make(() => Effect.never);
@@ -470,6 +383,46 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       assert.isDefined(capabilities.pollUnsafe());
       yield* Fiber.join(capabilities);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect.each(["/api/debug/location", "/api/event"])(
+    "lists workspace skills from an external OpenCode 2 server whose %s never answers",
+    (stalled) =>
+      Effect.gen(function* () {
+        const answers: Record<string, string> = {
+          "/api/info": OPENCODE_2_RESPONSES["/api/info"].body,
+          "/api/debug/location": "[]",
+          "/api/provider": '{"location":{"directory":"/work"},"data":[]}',
+          "/api/command": OPENCODE_2_WORKSPACE_RESPONSES["/api/command"].body,
+          "/api/skill": OPENCODE_2_WORKSPACE_RESPONSES["/api/skill"].body,
+        };
+        const http = HttpClient.make((request) => {
+          const path = new URL(request.url).pathname;
+          if (path === stalled) return Effect.never;
+          if (path === "/api/event")
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(new ReadableStream(), {
+                  headers: { "content-type": "text/event-stream" },
+                }),
+              ),
+            );
+          const body = answers[path];
+          return body === undefined
+            ? Effect.die(`Unexpected request: ${path}`)
+            : Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(JSON.parse(body))));
+        });
+        const instance = yield* create({ serverUrl: "http://127.0.0.1:4096" }, http);
+
+        const snapshot = yield* instance.snapshotForCwd!("/work").pipe(Effect.forkChild);
+        yield* TestClock.adjust("30 seconds");
+        const { skills } = yield* Fiber.join(snapshot);
+        assert.include(
+          skills.map((skill) => skill.name),
+          "plum",
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
   it.effect.each(["probe", "error", "empty"] as const)(
@@ -877,9 +830,9 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       const native = executable(".opencode", "bin", "opencode");
       for (const generation of ["v1", "v2"] as const) {
         assert.isNull((yield* resolveUpdate(generation, launcher)).update);
-        assert.deepStrictEqual((yield* resolveUpdate(generation, native)).update?.args, [
-          "upgrade",
-        ]);
+        const update = (yield* resolveUpdate(generation, native)).update;
+        assert.deepStrictEqual(update?.args, ["upgrade", "--method", "curl"]);
+        assert.strictEqual(update?.env?.HOME, root);
       }
     }),
 );

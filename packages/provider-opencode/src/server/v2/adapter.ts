@@ -1,3 +1,38 @@
+import {
+  RECONNECT_ATTEMPTS,
+  RECONNECT_DELAY,
+  RECONCILE_TIMEOUT,
+  RECONNECT_WAIT,
+  LOST_BACKGROUND,
+  INVENTORY_TIMEOUT,
+  ACTIVE_CHECK_TIMEOUT,
+  CLEAR_PROMPT_REJECTIONS,
+} from "./connectionConstants.ts";
+import { turnPromptId, steerPromptId } from "./promptIds.ts";
+import { modelRef, malformedModel, sameModel, type ModelRef } from "./modelRef.ts";
+import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
+export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
+import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
+import {
+  agentFor,
+  skillMentions,
+  formQuestions,
+  formAnswer,
+  approves,
+  permissionGone,
+  formGone,
+  agentPaths,
+  ref,
+  sessionIdOf,
+  textOf,
+  stringField,
+  subagentOutput,
+  isContinuation,
+  wakeTurnId,
+  claudeUsageLimit,
+  boundaryAfter,
+  promptOf,
+} from "./adapterUtilities.ts";
 import { commandOf, declinedNote, reportOutcome, sessionGrantLabel } from "./adapterHelpers.ts";
 import * as NodeURL from "node:url";
 
@@ -6,9 +41,7 @@ import {
   Agent,
   Form,
   Location,
-  Model,
   Permission,
-  Provider,
   Session,
   SessionMessage,
   Skill,
@@ -17,6 +50,7 @@ import {
 import { Mcp } from "@opencode/schema/mcp";
 import {
   isOrchestrationV2WorkActive,
+  parseGoalCommand,
   type ChatAttachment,
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
@@ -33,7 +67,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type MessageId,
   type ModelSelection,
-  type ProviderApprovalDecision,
+  type PlanId,
   type ProviderInstanceId,
   type RunId,
   type RuntimeRequestId,
@@ -58,7 +92,6 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import { borrowConnection } from "./borrowConnection.ts";
-import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
@@ -72,10 +105,10 @@ import {
 } from "./sessionRules.ts";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
-import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import * as KeyedLock from "@goat/shared/KeyedLock";
-import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
+import { modelSelectionsEqual } from "@goat/shared/model";
 import { causeErrorTag } from "@goat/shared/observability";
+import { compareSemverVersions } from "@goat/shared/semver";
 
 import {
   isProviderNativeImageAttachment,
@@ -104,6 +137,12 @@ import {
 } from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 import { openCodeLiveWork } from "../liveWork.ts";
+import {
+  isNativeTodoList,
+  todoSteps,
+  turnTokenUsage,
+  type NativeTodoList,
+} from "./todoProjection.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -157,8 +196,8 @@ const OpenCode2ProviderCapabilities = {
     approvalsCanOriginateFromSubagents: true,
   },
   planning: {
-    emitsPlanUpdated: false,
-    emitsTodoList: false,
+    emitsPlanUpdated: true,
+    emitsTodoList: true,
     emitsProposedPlan: false,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
@@ -210,7 +249,7 @@ interface TurnOwner {
   readonly runtimePolicy: Pick<ProviderAdapter.ProviderAdapterV2RuntimePolicy, "cwd">;
 }
 
-interface ActiveTurn {
+export interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
@@ -235,6 +274,7 @@ interface ActiveTurn {
   before: string | null | undefined;
   compaction: { readonly nativeId: string; readonly startedAt: DateTime.Utc } | undefined;
   compactions: number;
+  todoPlanId: PlanId | undefined;
   retry:
     | {
         readonly retry: OrchestrationV2ProviderRetry;
@@ -295,6 +335,9 @@ interface ThreadState {
   readonly sessionId: string;
   providerThread: OrchestrationV2ProviderThread;
   publishedBackgroundWork?: boolean;
+  goalRevision: number;
+  goalFresh: boolean;
+  goalRefreshing: boolean;
   readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   active: ActiveTurn | undefined;
   model: ModelRef | undefined;
@@ -370,170 +413,12 @@ interface PendingRequest {
     | { readonly type: "form"; readonly id: string; readonly form: NativeForm };
 }
 
-/**
- * OpenCode skips every tool of a server whose name is over 64 characters (its
- * tool namespace limit), and its router rejects adding one over 100, so a
- * thread id that does not fit, or whose sanitization is lossy, is replaced by
- * a digest of the original id so shortening the prefix cannot merge names.
- */
-export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threadId: string) {
-  const sanitized = threadId.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
-  const name = `goat-${sanitized}`;
-  // Keep the readable-id ceiling the t3-code- prefix had (56), so a shorter
-  // prefix never makes more ids readable and widens own-thread wildcards.
-  if (sanitized === threadId && sanitized.length <= 56) return name;
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(threadId))
-    .pipe(Effect.orDie);
-  return `goat-${Hex.encode(digest).slice(0, 16)}`;
-});
-
-/**
- * The thread's managed Cua Driver, registered per directory beside its GOAT
- * server. Always a digest: a readable id would exceed OpenCode's 64-character
- * tool namespace with this longer prefix.
- */
-export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadId: string) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(threadId))
-    .pipe(Effect.orDie);
-  return `${McpProviderSession.CUA_MCP_SERVER_NAME}-${Hex.encode(digest).slice(0, 16)}`;
-});
-
 // Rejection without a message stops the whole execution, meaning Cancel.
 const DECLINED = "The user declined this request.";
-
-const text = (value: string | undefined, fallback: string) => value?.trim() || fallback;
-
-const formQuestions = (
-  form: NativeForm,
-):
-  | { readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion> }
-  | { readonly unsupported: string } => {
-  const questions: Array<OrchestrationV2UserInputQuestion> = [];
-  for (const [index, field] of form.fields.entries()) {
-    if (field.type === "external") return { unsupported: "a link to open" };
-    if (field.type !== "string" && field.type !== "multiselect") {
-      return { unsupported: `a ${field.type} value` };
-    }
-    if (field.hidden === true) return { unsupported: "a hidden field" };
-    if ((field.when?.length ?? 0) > 0) return { unsupported: "a field that depends on another" };
-    const header = text(field.title, `Question ${index + 1}`);
-    const options = (field.options ?? []).map((option) => {
-      const label = text(option.label, text(option.value, "Option"));
-      return { label, description: text(option.description, label), value: option.value };
-    });
-    questions.push({
-      id: field.key,
-      header,
-      question: text(field.description, header),
-      options,
-      multiSelect: field.type === "multiselect",
-      allowCustomAnswer: field.custom === true || options.length === 0,
-    });
-  }
-  return { questions };
-};
-
-const formAnswer = (form: NativeForm, answers: Readonly<Record<string, unknown>>) => {
-  const answer: Record<string, string | ReadonlyArray<string>> = {};
-  for (const field of form.fields) {
-    const raw = answers[field.key];
-    const values = (Array.isArray(raw) ? raw : [raw]).filter(
-      (value): value is string => typeof value === "string" && value.trim().length > 0,
-    );
-    if (values.length > 0) {
-      answer[field.key] = field.type === "multiselect" ? values : values.join(", ");
-    }
-  }
-  return answer;
-};
-
-const approves = (decision: ProviderApprovalDecision) =>
-  decision === "accept" || decision === "acceptForSession" || decision === "acceptAlways";
-
-const permissionGone = {
-  PermissionNotFoundError: () => Effect.void,
-  SessionNotFoundError: () => Effect.void,
-};
-const formGone = {
-  FormNotFoundError: () => Effect.void,
-  FormAlreadySettledError: () => Effect.void,
-  SessionNotFoundError: () => Effect.void,
-};
-
-const agentPaths = (rules: ReadonlyArray<Rule>) =>
-  rules.filter(
-    (entry) =>
-      entry.effect === "allow" &&
-      entry.resource !== "*" &&
-      (entry.action === "edit" || entry.action === "external_directory"),
-  );
-
-const ref = (nativeId: string, strength: "strong" | "weak" = "strong") => ({
-  driver: OPENCODE_PROVIDER,
-  nativeId,
-  strength,
-});
-
-const sessionIdOf = (providerThread: OrchestrationV2ProviderThread) => {
-  const nativeId = providerThread.nativeThreadRef?.nativeId;
-  return nativeId === undefined || nativeId === null
-    ? Effect.fail(
-        new ProviderAdapter.ProviderAdapterProtocolError({
-          driver: OPENCODE_PROVIDER,
-          detail: `Provider thread ${providerThread.id} has no OpenCode session`,
-        }),
-      )
-    : Effect.succeed(nativeId);
-};
-
-const textOf = (content: ReadonlyArray<{ readonly type: string; readonly text?: string }>) =>
-  content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("\n");
-
-const stringField = (record: Readonly<Record<string, unknown>> | undefined, key: string) => {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-};
-
-const subagentOutput = (text: string) =>
-  /^<subagent\b[^>]*>\n?([\s\S]*?)\n?<\/subagent>$/.exec(text.trim())?.[1] ?? text;
-
-const isContinuation = (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-  turnInput.message.createdBy === "agent" && turnInput.message.creationSource === "provider";
-
-const wakeTurnId = (sessionId: string, attemptId: string) => `${sessionId}:wake:${attemptId}`;
-const isWakeTurn = (turn: OrchestrationV2ProviderTurn) =>
-  turn.nativeTurnRef?.nativeId?.includes(":wake:") === true;
-
-// OpenCode's claude-agent reports a spent Claude plan as provider.unknown with Claude's own text.
-const claudeUsageLimit = (message: string | undefined) =>
-  message !== undefined && /^You've hit your [^\n·]*\blimit\b/.test(message)
-    ? { resetAt: /\bResets at (\d{4}-\d\d-\d\dT[\d:.]+Z)\.?\s*$/.exec(message)?.[1] ?? null }
-    : undefined;
 
 const INTERRUPT_TIMEOUT = "10 seconds";
 const INSTRUCTIONS_KEY = "goat";
 const MEMORY_INSTRUCTIONS_KEY = "goat_memory";
-const RECONNECT_ATTEMPTS = 5;
-const RECONNECT_DELAY = "2 seconds";
-const RECONCILE_TIMEOUT = "15 seconds";
-const RECONNECT_WAIT = "30 seconds";
-const LOST_BACKGROUND =
-  "GOAT lost its connection to OpenCode while this subagent ran, so its result is not shown.";
-const INVENTORY_TIMEOUT = "5 seconds";
-const ACTIVE_CHECK_TIMEOUT = "5 seconds";
-// Other failures may still have admitted the prompt.
-const CLEAR_PROMPT_REJECTIONS: ReadonlySet<string> = new Set([
-  "InvalidRequestError",
-  "ConflictError",
-  "UnauthorizedError",
-  "CommandNotFoundError",
-  "SkillNotFoundError",
-]);
-
 export const OPENCODE_2_STILL_STOPPING =
   "OpenCode is still stopping the previous turn. Send the message again in a moment.";
 const REQUEST_REPLY_TIMEOUT = "10 seconds";
@@ -546,102 +431,7 @@ const deliver = <E>(answer: Effect.Effect<void, E>) =>
     Effect.map(Exit.isSuccess),
   );
 
-type ModelRef = ReturnType<typeof Model.Ref.make>;
-
-// msg_ IDs cannot cross sessions; include session identity because GOAT IDs repeat across environments.
-// Pre-acknowledgement IDs also establish fork/rollback boundaries.
-const turnPromptId = (sessionId: string, attemptId: string) =>
-  SessionMessage.ID.make(`msg_t3_turn_${sessionId}:${attemptId}`);
-const steerPromptId = (sessionId: string, messageId: string) =>
-  SessionMessage.ID.make(`msg_t3_steer_${sessionId}:${messageId}`);
-
-const promptOf = (turn: OrchestrationV2ProviderTurn) => {
-  const nativeId = turn.nativeTurnRef?.nativeId;
-  return nativeId?.startsWith("msg_") === true ? nativeId : undefined;
-};
-
-const boundaryAfter = (
-  turns: ReadonlyArray<OrchestrationV2ProviderTurn>,
-  providerThreadId: OrchestrationV2ProviderThread["id"],
-  kept: OrchestrationV2ProviderTurn | undefined,
-  prompts: ReadonlySet<string>,
-) => {
-  const later = turns
-    .filter(
-      (turn) =>
-        turn.providerThreadId === providerThreadId &&
-        (kept === undefined || turn.ordinal > kept.ordinal),
-    )
-    .toSorted((left, right) => left.ordinal - right.ordinal);
-  if (later.some((turn) => promptOf(turn) === undefined && !isWakeTurn(turn))) {
-    return Effect.fail(
-      new ProviderAdapter.ProviderAdapterProtocolError({
-        driver: OPENCODE_PROVIDER,
-        detail:
-          "This OpenCode conversation has turns from an earlier GOAT version, so it can't be cut there.",
-      }),
-    );
-  }
-  return Effect.succeed(
-    later.map(promptOf).find((messageId) => messageId !== undefined && prompts.has(messageId)) ??
-      null,
-  );
-};
-
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
-
-const modelRef = (selection: ProviderAdapter.ProviderAdapterV2TurnInput["modelSelection"]) => {
-  const parsed = OpenCodeRuntime.parseOpenCodeModelSlug(selection.model);
-  if (parsed === null) return undefined;
-  const variant = getModelSelectionStringOptionValue(selection, "variant");
-  return Model.Ref.make({
-    providerID: Provider.ID.make(parsed.providerID),
-    id: Model.ID.make(parsed.modelID),
-    ...(variant === undefined ? {} : { variant: Model.VariantID.make(variant) }),
-  });
-};
-const malformedModel = (model: string) =>
-  `OpenCode model '${model}' must use provider/model format`;
-const sameModel = (left: ModelRef, right: ModelRef | undefined) =>
-  left.providerID === right?.providerID &&
-  left.id === right?.id &&
-  (left.variant ?? "default") === (right?.variant ?? "default");
-
-const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-  input.runtimePolicy.interactionMode === "plan" ? "plan" : "build";
-
-const skillMentions = (text: string) => [
-  ...new Set([...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => match[2] ?? [])),
-];
-
-const turnTokenUsage = (turn: ActiveTurn, status: OrchestrationV2ProviderTurn["status"]) => {
-  // A step whose start was missed, in a reconnect gap or as an unreadable event, ran on an unreported model.
-  const models =
-    turn.models.size === 0 || turn.missedEvents || turn.steps > turn.startedSteps
-      ? {}
-      : { models: [...turn.models] };
-  return turn.steps === 0
-    ? {
-        usageScope: "main_agent" as const,
-        usageStatus: "unavailable" as const,
-        hasSubagents: turn.usedSubagents,
-        ...models,
-      }
-    : {
-        ...models,
-        usageScope: "main_agent" as const,
-        usageStatus:
-          status === "completed" && !turn.missedEvents && turn.steps >= turn.startedSteps
-            ? ("complete" as const)
-            : ("partial" as const),
-        inputTokens: turn.usage.input,
-        cachedInputTokens: turn.usage.cached,
-        cacheCreationTokens: turn.usage.cacheWrite,
-        outputTokens: turn.usage.output,
-        reasoningTokens: turn.usage.reasoning,
-        hasSubagents: turn.usedSubagents,
-      };
-};
 
 export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: ProviderInstanceId) {
   const server = yield* OpenCode2Server.OpenCode2Server;
@@ -652,6 +442,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
   const crypto = yield* Crypto.Crypto;
   const driver = OPENCODE_PROVIDER;
+  let nativeGoalSupport: boolean | undefined;
   const mcpServerNameFor = (threadId: string) =>
     goatMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
   const cuaServerNameFor = (threadId: string) =>
@@ -666,13 +457,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     },
   ) {
     let connection = initial.connection;
+    const supportsNativeGoals = () => compareSemverVersions(connection.version, "2.2.5") >= 0;
+    nativeGoalSupport = supportsNativeGoals();
+    const goalHoldsTurn = (state: ThreadState) =>
+      supportsNativeGoals() &&
+      (state.goalRefreshing || (state.goalFresh && state.providerThread.goal?.status === "active"));
     let client = connection.client;
     const sessionScope = yield* Effect.scope;
     // Project config changes model limits; key by directory because this runtime serves all instance threads.
     const contextWindows = new Map<string, Map<string, number>>();
+    const modelVariants = new Map<string, Map<string, ReadonlySet<string>>>();
     const directoryOf = (cwd: string | null | undefined) => cwd ?? host.paths.cwd;
     const windowOf = (cwd: string | null | undefined, model: string) =>
       contextWindows.get(directoryOf(cwd))?.get(model);
+    const listedModelRef = (selection: ModelSelection, cwd: string | null | undefined) =>
+      modelRef(selection, modelVariants.get(directoryOf(cwd))?.get(selection.model));
     const now = yield* DateTime.now;
     let session: OrchestrationV2ProviderSession = {
       id: input.providerSessionId,
@@ -681,7 +480,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       status: "ready",
       cwd: input.runtimePolicy.cwd ?? host.paths.cwd,
       model: input.modelSelection.model,
-      capabilities: OpenCode2ProviderCapabilities,
+      capabilities: {
+        ...OpenCode2ProviderCapabilities,
+        turns: {
+          ...OpenCode2ProviderCapabilities.turns,
+          supportsNativeGoals: supportsNativeGoals(),
+        },
+      },
       createdAt: now,
       updatedAt: now,
       lastError: null,
@@ -720,6 +525,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ): ThreadState => ({
       sessionId,
       providerThread,
+      goalRevision: 0,
+      goalFresh: false,
+      goalRefreshing: false,
       providerTurns: new Map(),
       active: undefined,
       model: undefined,
@@ -811,6 +619,46 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         providerThread: state.providerThread,
         pendingBackgroundWork,
       });
+    });
+
+    // Goal changes share the event stream, so do not create a span per notification.
+    const updateGoal = Effect.fnUntraced(function* (
+      state: ThreadState,
+      goal: typeof NativeGoal.Type,
+    ) {
+      state.goalRevision += 1;
+      state.goalFresh = true;
+      state.goalRefreshing = false;
+      state.providerThread = {
+        ...state.providerThread,
+        goal:
+          goal === null
+            ? null
+            : {
+                objective: goal.objective,
+                status: goal.status,
+                checks: goal.rounds,
+                ...(goal.reason === undefined ? {} : { lastCheck: goal.reason }),
+              },
+        updatedAt: yield* DateTime.now,
+      };
+      yield* emitProviderThread(state);
+    });
+
+    const readGoal = Effect.fn("OpenCode2Adapter.readGoal")(function* (state: ThreadState) {
+      const revision = state.goalRevision;
+      const result = yield* client.rpc.call({
+        rpcID: "opencode.goal",
+        method: "get",
+        location: { directory: state.directory },
+        input: { sessionID: state.sessionId },
+      });
+      const goal = yield* decodeGoal(result.output);
+      yield* lock.withPermit(
+        Effect.gen(function* () {
+          if (state.goalRevision === revision) yield* updateGoal(state, goal);
+        }),
+      );
     });
 
     const setSessionStatus =
@@ -959,6 +807,50 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
+    // Todo updates share the provider event span.
+    const emitTodo = Effect.fnUntraced(function* (
+      state: ThreadState,
+      turn: ActiveTurn,
+      todos: typeof NativeTodoList.Type.todos,
+    ) {
+      turn.todoPlanId ??= yield* idAllocator.allocate.plan({
+        threadId: turn.input.threadId,
+        ...(turn.input.runId === null ? {} : { runId: turn.input.runId }),
+        driver,
+      });
+      const nativeId = `${state.sessionId}:todo:${turn.providerTurn.id}`;
+      const now = yield* DateTime.now;
+      const startedAt = turn.startedAt.get(nativeId) ?? now;
+      turn.startedAt.set(nativeId, startedAt);
+      const steps = todoSteps(todos, nativeId);
+      const base = itemBase(state, turn, nativeId, "completed", startedAt, now, now);
+      yield* emitNode(state, turn, nativeId, "todo_list", "completed", startedAt, now);
+      yield* emit({
+        type: "plan.updated",
+        driver,
+        plan: {
+          id: turn.todoPlanId,
+          threadId: turn.input.threadId,
+          runId: turn.input.runId,
+          nodeId: base.nodeId,
+          kind: "todo_list",
+          status: steps.every((step) => step.status === "completed") ? "completed" : "active",
+          steps,
+        },
+      });
+      yield* emit({
+        type: "turn_item.updated",
+        driver,
+        turnItem: {
+          ...base,
+          type: "todo_list",
+          title: "Todo list",
+          planId: turn.todoPlanId,
+          steps,
+        },
+      });
+    });
+
     const emitTool = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
@@ -968,6 +860,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ) {
       const tool = turn.tools.get(id);
       if (tool === undefined) return;
+      if (tool.name === "todowrite") {
+        if (status === "running") return;
+        if (status === "completed" && isNativeTodoList(result?.metadata)) {
+          const projected = yield* emitTodo(state, turn, result.metadata.todos).pipe(
+            Effect.as(true),
+            Effect.catchTags({
+              IdAllocatorV2AllocationError: (error) =>
+                Effect.logWarning("Could not allocate an OpenCode todo list.", error).pipe(
+                  Effect.as(false),
+                ),
+            }),
+          );
+          if (projected) return;
+        }
+      }
       const updatedAt = yield* DateTime.now;
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
@@ -1130,6 +1037,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       before: undefined,
       compaction: undefined,
       compactions: 0,
+      todoPlanId: undefined,
       retry: undefined,
       interrupted: false,
       unsent: false,
@@ -1968,9 +1876,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const sessionOfEvent = (event: OpenCode2Client.OpenCode2StreamEvent) =>
       event.type === "unreadable.execution.ended" || event.type === "unreadable.execution.started"
         ? event.sessionID
-        : "sessionID" in event.data && typeof event.data.sessionID === "string"
-          ? event.data.sessionID
-          : undefined;
+        : event.type === "form.created"
+          ? event.data.form.sessionID
+          : "sessionID" in event.data && typeof event.data.sessionID === "string"
+            ? event.data.sessionID
+            : undefined;
 
     const executionEnd = (type: string) =>
       type === "session.execution.succeeded" ||
@@ -2260,7 +2170,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
       end: TurnTerminal,
     ) {
-      if (end.status === "completed" && turn.steers.size > 0) {
+      if (end.status === "completed" && (turn.steers.size > 0 || goalHoldsTurn(state))) {
         turn.heldEnd = end;
         return;
       }
@@ -2268,7 +2178,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     const endIfSettled = (state: ThreadState, turn: ActiveTurn) =>
-      turn.heldEnd !== undefined && turn.steers.size === 0
+      turn.heldEnd !== undefined && turn.steers.size === 0 && !goalHoldsTurn(state)
         ? finishTurn(state, turn.heldEnd)
         : Effect.void;
 
@@ -2393,6 +2303,42 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (sessionId === undefined) return;
       const state = threads.get(sessionId);
       if (state === undefined) return;
+      if (event.type === "rpc.opencode.goal.changed") {
+        if (!supportsNativeGoals()) return;
+        const goal = yield* decodeGoal(event.data["goal"]).pipe(Effect.result);
+        if (goal._tag === "Failure") {
+          state.goalFresh = false;
+          state.goalRefreshing = true;
+          state.goalRevision += 1;
+          const revision = state.goalRevision;
+          yield* Effect.logWarning(
+            "Could not decode an OpenCode goal update; refreshing its state.",
+          );
+          yield* Effect.forkIn(
+            readGoal(state).pipe(
+              Effect.timeout(INVENTORY_TIMEOUT),
+              Effect.catch(() =>
+                Effect.logWarning(
+                  "Could not refresh OpenCode goal state after an unreadable update.",
+                ),
+              ),
+              Effect.ensuring(
+                lock.withPermit(
+                  Effect.gen(function* () {
+                    if (state.goalRevision === revision) state.goalRefreshing = false;
+                    if (state.active !== undefined) yield* endIfSettled(state, state.active);
+                  }),
+                ),
+              ),
+            ),
+            sessionScope,
+          );
+          return;
+        }
+        yield* updateGoal(state, goal.success);
+        if (state.active !== undefined) yield* endIfSettled(state, state.active);
+        return;
+      }
       if (event.type === "session.model.selected" || event.type === "session.step.started") {
         if (event.type === "session.model.selected") state.model = event.data.model;
         const providerThread = withReportedModel(state.providerThread, event.data.model);
@@ -2487,6 +2433,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const found = start === null || read.at(-1)?.id === start;
       if (!found) return undefined;
       const recent = before !== undefined && before !== null ? read.slice(0, -1) : read;
+      for (const message of recent) {
+        if (message.type === "user" && turn.steers.delete(message.id)) {
+          turn.settledInbox.add(message.id);
+        }
+      }
       const idle = recent.find((message) => message.type === "idle");
       const assistant = recent.find((message) => message.type === "assistant");
       if (assistant?.retry !== undefined) {
@@ -2557,7 +2508,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     });
 
     // Restarts retain the previous session.outcome; without an idle item, the lost execution was interrupted.
-    const reconcile = Effect.gen(function* () {
+    const reconcile = Effect.fn("OpenCode2Adapter.reconcile")(function* () {
       // Read deepest sessions first; subagent turns end before their waiting parents.
       const running = [...threads]
         .filter(([, state]) => state.active !== undefined)
@@ -2586,9 +2537,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (turn === undefined) continue;
         turn.missedEvents = true;
         const ended = yield* backfill(sessionId, state);
-        if (sessionId in active || state.active !== turn) continue;
-        yield* finishTurn(
-          state,
+        if (state.active !== turn) continue;
+        if (sessionId in active) {
+          turn.heldEnd = undefined;
+          continue;
+        }
+        const terminal: TurnTerminal =
           ended?.outcome === "succeeded"
             ? { status: turn.interrupted ? "interrupted" : "completed" }
             : ended?.outcome === "failed"
@@ -2599,8 +2553,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                     class: "provider_error",
                   }),
                 }
-              : { status: "interrupted" },
-        );
+              : { status: "interrupted" };
+        yield* endExecution(state, turn, terminal);
       }
       for (const state of background) {
         for (const call of runningCalls(state)) {
@@ -2656,14 +2610,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const previous = currentScope;
       connection = next;
       client = next.client;
+      nativeGoalSupport = supportsNativeGoals();
+      session = {
+        ...session,
+        capabilities: {
+          ...session.capabilities,
+          turns: { ...session.capabilities.turns, supportsNativeGoals: supportsNativeGoals() },
+        },
+      };
       currentScope = scope;
       yield* Scope.close(previous, Exit.void);
       // A restarted server forgot GOAT's MCP servers; the next turn adds them again.
       for (const state of threads.values()) {
         state.mcp = undefined;
         state.cua = undefined;
+        state.goalFresh = false;
+        state.goalRefreshing = false;
+        state.goalRevision += 1;
       }
-      yield* lock.withPermit(reconcile).pipe(Effect.timeout(RECONCILE_TIMEOUT));
+      if (supportsNativeGoals()) {
+        yield* Effect.forEach(
+          [...threads.values()],
+          (state) => readGoal(state).pipe(Effect.ignore({ log: true })),
+          { concurrency: 4, discard: true },
+        ).pipe(Effect.timeout(INVENTORY_TIMEOUT), Effect.ignore({ log: true }));
+      }
+      yield* lock.withPermit(reconcile()).pipe(Effect.timeout(RECONCILE_TIMEOUT));
       return stream;
     }).pipe(
       Effect.retry({ times: RECONNECT_ATTEMPTS - 1, schedule: Schedule.spaced(RECONNECT_DELAY) }),
@@ -2742,15 +2714,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       Effect.suspend(() => {
         const windows = contextWindows.get(directory) ?? new Map<string, number>();
         contextWindows.set(directory, windows);
+        const variants = modelVariants.get(directory) ?? new Map<string, ReadonlySet<string>>();
+        modelVariants.set(directory, variants);
         return client.model.list({ location: { directory } }).pipe(
           Effect.timeout("5 seconds"),
           Effect.tap((models) =>
             Effect.sync(() => {
               for (const model of models.data) {
-                windows.set(
-                  `${model.providerID}/${model.id}`,
-                  model.limit.input ?? model.limit.context,
-                );
+                const slug = `${model.providerID}/${model.id}`;
+                windows.set(slug, model.limit.input ?? model.limit.context);
+                variants.set(slug, new Set(model.variants.map((variant) => variant.id)));
               }
             }),
           ),
@@ -3473,9 +3446,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         turn.unsent = false;
         return true;
       };
+      const finishControl = lock.withPermit(
+        Effect.suspend(() =>
+          state.active === turn ? finishTurn(state, { status: "completed" }) : Effect.void,
+        ),
+      );
       const text = turnInput.message.text.trim();
       const bare = turnInput.message.attachments.length === 0;
       const id = turnPromptId(sessionId, turnInput.attemptId);
+      const goalCommand = supportsNativeGoals() ? parseGoalCommand(turnInput.message) : null;
+      if (goalCommand?.type === "show") {
+        if (!sending()) return;
+        yield* readGoal(state);
+        return yield* finishControl;
+      }
       if (bare && text === "/compact") {
         if (!sending()) return;
         return yield* client.session.compact({ sessionID, id }).pipe(Effect.asVoid);
@@ -3495,7 +3479,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (state.active !== turn || turn.interrupted) return;
           yield* prepareMemory(sessionId, state, turnInput);
           if (!sending()) return;
-          return yield* client.session.command({ sessionID, ...command });
+          if (goalCommand?.type === "pause" || goalCommand?.type === "clear") {
+            yield* client.session
+              .command({ sessionID, ...command })
+              .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
+            return yield* finishControl;
+          }
+          return yield* client.session.command({ sessionID, ...command }).pipe(Effect.asVoid);
         }
       }
       const mentions = skillMentions(text);
@@ -3554,7 +3544,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             });
           }
           yield* readModelsOnce(threadInput.runtimePolicy.cwd);
-          const model = modelRef(threadInput.modelSelection);
+          const model = listedModelRef(threadInput.modelSelection, threadInput.runtimePolicy.cwd);
           if (model === undefined) {
             return yield* new ProviderAdapter.ProviderAdapterProtocolError({
               driver: OPENCODE_PROVIDER,
@@ -3640,6 +3630,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const loaded = threads.has(sessionId);
           const state = register(providerThread, native, cwd ?? native.location.directory);
           if (!loaded) yield* stopLeftoverRequests(state);
+          if (!loaded && supportsNativeGoals()) {
+            yield* readGoal(state).pipe(
+              Effect.timeout(INVENTORY_TIMEOUT),
+              Effect.ignore({ log: true }),
+            );
+          }
           yield* writeRules(state, threadInput.runtimePolicy ?? state.policy);
           if (cwd != null && native.location.directory !== cwd) {
             yield* client.session.move({
@@ -3724,7 +3720,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                   }),
                 });
               }
-              const model = modelRef(turnInput.modelSelection);
+              const model = listedModelRef(turnInput.modelSelection, turnInput.runtimePolicy.cwd);
               if (model === undefined) {
                 yield* begin;
                 return yield* finishTurn(state, {
@@ -4233,7 +4229,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     instanceId,
     driver,
     getCapabilities: Effect.fn("OpencodeAdapter.getCapabilities")(function () {
-      return Effect.succeed(OpenCode2ProviderCapabilities);
+      return Effect.succeed({
+        ...OpenCode2ProviderCapabilities,
+        turns: {
+          ...OpenCode2ProviderCapabilities.turns,
+          ...(nativeGoalSupport === undefined ? {} : { supportsNativeGoals: nativeGoalSupport }),
+        },
+      });
     }),
     planSelectionTransition: Effect.fn("OpencodeAdapter.planSelectionTransition")(function () {
       return Effect.succeed(turnScopedSelectionTransition());
