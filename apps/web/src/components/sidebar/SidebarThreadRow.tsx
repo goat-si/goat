@@ -1,3 +1,4 @@
+import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
@@ -141,17 +142,6 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
-
-function JumpHintBadge(props: { label: string }) {
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-3xs font-medium tracking-tight text-foreground shadow-sm"
-    >
-      {props.label}
-    </span>
-  );
-}
 
 function synchronizeSidebarSpinner(event: AnimationEvent<SVGSVGElement>) {
   if (event.animationName !== "spin") return;
@@ -1525,6 +1515,12 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     isActive: props.isRouteActive,
   });
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const contextDragListeners = useThreadContextDragHandle({
+    threadKey: scopedThreadKey(threadRef),
+    title: thread.title,
+    disabled: false,
+    unrestricted: true,
+  });
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(
     props.isHighlighted || props.isRouteActive,
   );
@@ -1585,6 +1581,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
             <button
               ref={rowRef}
               id={props.resultId}
+              {...contextDragListeners}
               type="button"
               role="option"
               tabIndex={-1}
