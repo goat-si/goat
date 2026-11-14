@@ -20,15 +20,10 @@ import {
   Rows3Icon,
   TextWrapIcon,
 } from "~/components/solar";
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronsDownUp,
-  ChevronsUpDown,
-} from "~/components/solar/nodes";
+import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
-import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
+import { useDiffViewControls } from "./diffs/useDiffViewControls";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
@@ -101,6 +96,7 @@ import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 import { getCachedFileEntry } from "./diffs/cachedFileEntry";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
+import { DiffFileCollapseToggle } from "./diffs/DiffFileCollapseToggle";
 import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 
@@ -108,49 +104,6 @@ type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "goat.diffFileTreeOpen";
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
-
-function DiffFileCollapseToggle({
-  filePath,
-  fileKey,
-  collapsed,
-  unavailable,
-  iconClassName,
-  onToggle,
-}: {
-  filePath: string;
-  fileKey: string;
-  collapsed: boolean;
-  unavailable: boolean;
-  iconClassName: string;
-  onToggle: (fileKey: string) => void;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="icon-micro"
-            variant="ghost"
-            className="-ms-0.5"
-            aria-label={collapsed ? `Expand ${filePath}` : `Collapse ${filePath}`}
-            aria-expanded={!collapsed}
-            disabled={unavailable}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(fileKey);
-            }}
-          />
-        }
-      >
-        <MorphIcon
-          className={cn("size-4", iconClassName)}
-          icon={collapsed ? ChevronRight : ChevronDown}
-        />
-      </TooltipTrigger>
-      <TooltipPopup side="top">{collapsed ? "Expand diff" : "Collapse diff"}</TooltipPopup>
-    </Tooltip>
-  );
-}
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -530,13 +483,25 @@ export default function DiffPanel({
   const diffLineStat = sourceLineStat ?? getDiffLineStat(renderableFiles);
   const fileTreeEntries = diffFileTreeEntries(visibleFiles);
   const treeRevealScope = JSON.stringify([collapseScopeKey, diffSelection]);
-  const codeViewReveal = useCodeViewFileReveal(treeRevealScope);
+  const remainingFileCount = renderableFiles.length - settledFileCount;
+  const {
+    reveal: codeViewReveal,
+    scroll: codeViewScroll,
+    attach: attachCodeView,
+    flush: flushCodeView,
+  } = useDiffViewControls(
+    treeRevealScope,
+    collapseScopeKey,
+    !isRefreshingDiff && remainingFileCount === 0,
+    remainingFileCount > 0 ? loadNextFiles : null,
+  );
   const revealDiffFile = useStableCallback((filePath: string) => {
     const index = renderableFileEntries.findIndex(
       (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
     );
     const file = renderableFileEntries[index];
     if (!file) return false;
+    codeViewScroll.discard();
     updateCollapsedDiffFiles((current) => {
       const next = new Set(current);
       next.delete(file.fileKey);
@@ -619,6 +584,7 @@ export default function DiffPanel({
   });
 
   const toggleDiffFileCollapse = () => {
+    codeViewScroll.discard();
     setCodeViewRevision((current) => current + 1);
     updateCollapsedDiffFiles((current) => toggleAllDiffFiles(shownFileKeys, current));
   };
@@ -1131,7 +1097,8 @@ export default function DiffPanel({
                   <AnnotatableCodeView
                     environmentId={activeThread?.environmentId}
                     key={collapseScopeKey ?? reviewSectionId}
-                    viewerRef={codeViewReveal.attach}
+                    viewerRef={attachCodeView}
+                    onScroll={codeViewScroll.onScroll}
                     codeViewKey={`${codeViewMountKey}:${lazySource ? filePatchScope : "preview"}`}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
@@ -1190,7 +1157,7 @@ export default function DiffPanel({
                       preferredHighlighter: PREFERRED_HIGHLIGHTER,
                       themeType: resolvedTheme as DiffThemeType,
                       stickyHeaders: true,
-                      onPostRender: codeViewReveal.flush,
+                      onPostRender: flushCodeView,
                       ...(currentLoadDiffFiles ? { loadDiffFiles } : {}),
                     }}
                   />
