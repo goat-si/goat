@@ -158,7 +158,9 @@ const make = Effect.gen(function* () {
   }
   // Local sends that reached their destination but whose settle failed; at most
   // MAX_PENDING_RELEASES, retried by later passes, never sent again.
-  const pendingSettles = new Map<string, PendingSettle>();
+  const pendingSettles = new Map<PendingSettle["deliveryId"], PendingSettle>();
+  // When a pass next takes back local rows left delivering with no settle kept for them.
+  let orphanScanAt: number | undefined;
   // One slot: a request made during a run asks for one more run after it.
   const reconcileRequests = yield* Queue.sliding<string>(1);
 
@@ -180,7 +182,7 @@ const make = Effect.gen(function* () {
           owner,
           now: DateTime.formatIso(now),
           before: DateTime.formatIso(DateTime.subtractDuration(now, RECONCILE_INTERVAL)),
-          exclude: [...inFlight],
+          exclude: [...inFlight, ...pendingSettles.keys()],
           limit: RECONCILE_BATCH,
         })
         .pipe(Effect.result);
@@ -324,10 +326,22 @@ const make = Effect.gen(function* () {
     if (
       outcome.type !== "delivered" ||
       (kind !== "goat" && kind !== "mcp") ||
-      settled.failure.reason === "ownership_lost" ||
-      pendingSettles.size >= MAX_PENDING_RELEASES
+      settled.failure.reason === "ownership_lost"
     )
       return yield* settled.failure;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (pendingSettles.size >= MAX_PENDING_RELEASES) {
+      // Past the cap the row stays delivering; a later pass takes it back and sends it again.
+      yield* Effect.logWarning("channel delivery sent but not settled; too many waiting", {
+        deliveryId: delivery.deliveryId,
+        error: settled.failure,
+      });
+      orphanScanAt = Math.min(
+        orphanScanAt ?? Infinity,
+        now + Duration.toMillis(RECONCILE_INTERVAL),
+      );
+      return;
+    }
     yield* Effect.logWarning("channel delivery sent but not settled; settling it again later", {
       deliveryId: delivery.deliveryId,
       error: settled.failure,
@@ -337,14 +351,34 @@ const make = Effect.gen(function* () {
       sentAt,
       outcome,
       tries: 0,
-      nextAt:
-        DateTime.toEpochMillis(yield* DateTime.now) + Duration.toMillis(RELEASE_RETRY_INTERVAL),
+      nextAt: now + Duration.toMillis(RELEASE_RETRY_INTERVAL),
     });
   });
 
   /** Retries due settles: every few seconds at first, then at the reconciliation pace. */
-  const retrySettles = Effect.fn("ChannelDeliveryWorker.retrySettles")(function* () {
+  const retrySettles = Effect.fn("ChannelDeliveryWorker.retrySettles")(function* (owner: string) {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (orphanScanAt !== undefined && orphanScanAt <= now) {
+      const released = yield* ledger
+        .releaseUnsentDeliveries({
+          owner,
+          now: DateTime.formatIso(DateTime.makeUnsafe(now)),
+          before: DateTime.formatIso(
+            DateTime.makeUnsafe(now - Duration.toMillis(RECONCILE_INTERVAL)),
+          ),
+          exclude: [...inFlight, ...pendingSettles.keys()],
+          limit: RECONCILE_BATCH,
+        })
+        .pipe(Effect.result);
+      orphanScanAt =
+        released._tag === "Success"
+          ? released.success.remaining
+            ? now + Duration.toMillis(RECONCILE_INTERVAL)
+            : undefined
+          : released.failure.reason === "ownership_lost"
+            ? undefined
+            : now + Duration.toMillis(RECONCILE_INTERVAL);
+    }
     const due = [...pendingSettles.values()].filter((entry) => entry.nextAt <= now);
     for (const entry of due.slice(0, RELEASE_BATCH)) {
       const result = yield* ledger
@@ -509,7 +543,7 @@ const make = Effect.gen(function* () {
   });
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
-    yield* retrySettles();
+    yield* retrySettles(owner);
     let handled = yield* deliverReceipts(owner);
     while (handled < MAX_PER_PASS) {
       const claimed = yield* ledger.claimDue({

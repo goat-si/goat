@@ -60,8 +60,9 @@ export const unsentDeliveryQueries = (
   sql: SqlClient.SqlClient,
   input: { readonly before: string; readonly exclude: string; readonly limit: number },
 ) => {
+  // A local destination records once per delivery id, so its row may go again even after a send.
   const unsent = sql`state IN ('pending', 'delivering') AND state = 'delivering'
-    AND send_started_at IS NULL AND destination_kind NOT IN ('goat', 'mcp')
+    AND (destination_kind IN ('goat', 'mcp') OR send_started_at IS NULL)
     AND delivery_id NOT IN (SELECT value FROM json_each(${input.exclude}))`;
   return {
     selection: sql`SELECT delivery_id FROM channel_outbox

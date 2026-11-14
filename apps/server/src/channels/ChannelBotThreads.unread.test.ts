@@ -409,6 +409,38 @@ describe("task unread follows delivered messages", () => {
   );
 
   it.effect(
+    "regression #2550: past the cap of waiting settles, a recorded post is taken back and settles once the database recovers",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          const ids = Array.from({ length: 101 }, (_, index) =>
+            ChannelTaskId.make("task:sat-" + String(index).padStart(3, "0")),
+          );
+          for (const id of ids) yield* task(id);
+          yield* refuseMarks;
+          yield* queue(...ids.map((id) => message("sat-" + id.slice("task:sat-".length), id)));
+          yield* deliverDue;
+          yield* deliverDue;
+          const sql = yield* SqlClient.SqlClient;
+          const states = sql<{ readonly state: string; readonly n: number }>`SELECT state,
+            count(*) AS n FROM channel_outbox WHERE delivery_id LIKE 'sat-%' GROUP BY state`;
+          assert.deepStrictEqual(yield* states, [{ state: "delivering", n: 101 }]);
+          yield* allowMarks;
+          yield* TestClock.adjust("30 seconds");
+          for (let pass = 0; pass < 3; pass++) yield* deliverDue;
+          assert.deepStrictEqual(yield* states, [{ state: "delivered", n: 101 }]);
+          const [records] = yield* sql<{ readonly n: number }>`SELECT count(*) AS n
+            FROM orchestration_command_receipts WHERE command_type = 'channel.timeline.record'`;
+          assert.strictEqual(records?.n, 101);
+          const [marks] = yield* sql<{ readonly n: number }>`SELECT count(*) AS n
+            FROM channel_runtime_state WHERE key LIKE 'task-message-mark:%'`;
+          assert.strictEqual(marks?.n, 101);
+        }),
+      ),
+  );
+
+  it.effect(
     "regression #2550: a message queued, then acknowledged over, then delivered is unread",
     () =>
       provide(
