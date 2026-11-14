@@ -198,6 +198,7 @@ export function MobileBotRoster(props: {
         slackEnabled={roster.slackEnabled}
         preview={preview?.text}
         unread={preview?.unread}
+        mainEnvironmentId={environmentId}
         onOpenBot={props.onOpenBot}
         onOpenTask={props.onOpenTask}
         onUnknownBot={roster.refreshBots ?? undefined}

@@ -16,6 +16,8 @@ import { useEnvironmentQuery } from "../../state/query";
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
+  /** Whether the waiting count was read: before an answer, or after a failed read, it is 0. */
+  readonly waitingState: "ready" | "pending" | "unavailable";
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
@@ -52,6 +54,8 @@ export function useMobileMemberStatus(bot: BotProfile): {
   const data = status.data ?? null;
   return {
     waitingCount: data?.waitingCount ?? 0,
+    waitingState:
+      data !== null ? "ready" : supported && status.error !== null ? "unavailable" : "pending",
     latest,
     unread,
     status:

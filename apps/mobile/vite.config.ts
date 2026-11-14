@@ -59,6 +59,7 @@ const reactTests = [
   "src/features/goat-bot/MobileBotWork.test.tsx",
   "src/features/goat-bot/MobileBotWork.lookup.test.tsx",
   "src/features/goat-bot/MobileBotWork.taskScreen.test.tsx",
+  "src/features/goat-bot/useMobileBotRowSignals.test.tsx",
   "src/features/goat-bot/MobileBotTaskList.test.tsx",
   "src/features/goat-bot/useMobileBotWorkHistory.test.tsx",
   "src/features/goat-bot/useMobileBotTaskLookup.test.tsx",
