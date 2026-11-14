@@ -15,18 +15,9 @@ interface RevokeEntry {
 }
 
 /**
- * A Home's link revoke, recover and operation journal as OpenCodex v2.100.3 answers them for an
- * ephemeral Child with an explicit route (src/link/remote-plant.ts purgeDisconnectRemote,
- * src/server/management/link-routes.ts, link-operation.ts, src/cli/link.ts):
- * - a purge whose ssh fails (a silent machine), or whose Child kept its binary, settles unknown with
- *   remote_disconnect_failed, and the CLI line carries no hint;
- * - a Child's link-bound refusal (child_link_mismatch, child_residual, expect_link_unsupported) or a
- *   missing planted ocx-child (managed_child_missing, no hint on the line) settles failed_clean;
- * - a repeated purge id replays its recorded answer; a forced revoke left open or unknown resumes;
- * - a forced revoke leaves a tombstone; tombstone_limit is refused (409) and recorded;
- *   link_operation_in_progress is refused (409) before any journal entry;
- * - resolve marks an unknown or residual entry resolved; recover settles a tombstone once the machine
- *   answers, and a person's forget drops it.
+ * A Home's link revoke, recover and journal as OpenCodex v2.100.3 answers them for an ephemeral
+ * Child with an explicit route (remote-plant.ts purgeDisconnectRemote, link-routes.ts, link.ts);
+ * each answer it gives is listed on its control fields. Installs itself on the enrollment fake.
  */
 export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
   const revokes = new Map<string, RevokeEntry>();

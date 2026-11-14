@@ -191,3 +191,12 @@ export const linkByAlias = (output: OcxOutput | undefined, alias: string) => {
   const link = status.links.find((one) => one.alias?.toLowerCase() === alias.toLowerCase());
   return link !== undefined && LINK_ID.test(link.id) ? link.id : null;
 };
+
+const decodeConflicts = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+/** The record's only conflict is a changed SSH host key, which a person's force may pass. */
+export const onlyHostKeyConflict = (json: string) => {
+  const conflicts = decodeConflicts(json);
+  return conflicts._tag === "Some" && conflicts.value.every((code) => code === "host_key_changed");
+};

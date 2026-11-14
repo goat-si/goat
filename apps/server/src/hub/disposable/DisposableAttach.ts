@@ -44,6 +44,7 @@ import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvit
 import { makeSharedPasses } from "./sharedPasses.ts";
 import { makeAuthority, Provisioners } from "./attachAuthority.ts";
 import { makeEnroll } from "./DisposableEnroll.ts";
+import { makeDetachAdmission } from "./DetachAdmission.ts";
 import { makeDetach } from "./DisposableDetach.ts";
 import { MachineKey } from "./machineKey.ts";
 import {
@@ -210,6 +211,7 @@ export const make = Effect.gen(function* () {
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
   const enrollment = yield* makeEnroll(exclusive);
   const detacher = yield* makeDetach(exclusive, enrollment.busy);
+  const admission = yield* makeDetachAdmission(exclusive);
   /** The public line a machine must trust; attach makes the key, a read never does. */
   const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
@@ -795,8 +797,8 @@ export const make = Effect.gen(function* () {
   return DisposableAttach.of({
     attach,
     reissue,
-    detach: detacher.detach,
-    release: detacher.release,
+    detach: admission.detach,
+    release: admission.release,
     list,
     nodeOf,
     reconcile,
