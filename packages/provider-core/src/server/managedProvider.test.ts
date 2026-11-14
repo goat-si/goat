@@ -796,11 +796,11 @@ describe("makeManagedServerProvider", () => {
           const newer = yield* provider.refresh;
           const session = (usedPercent: number) =>
             ({ id: "five_hour", kind: "session", label: "Session", usedPercent }) as const;
+          // Started immediately, the collector has subscribed before forkChild returns.
           const published = yield* Stream.take(provider.streamChanges, 2).pipe(
             Stream.runCollect,
-            Effect.forkChild,
+            Effect.forkChild({ startImmediately: true }),
           );
-          yield* Effect.yieldNow;
           yield* provider.applyUsageLimits(
             { checkedAt: "2026-04-10T00:00:06.000Z", windows: [session(40)] },
             { appliesTo },
