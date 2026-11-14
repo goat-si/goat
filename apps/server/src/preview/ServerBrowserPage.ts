@@ -1,3 +1,4 @@
+import { actionabilityReason } from "./actionability.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 
 import {
@@ -231,7 +232,12 @@ const unsentOnTimeout = (cause: unknown) =>
     ? new ServerBrowserOperationError(
         "PreviewAutomationTimeoutError",
         "The target was not found or not ready before the deadline, so no input was sent.",
-        { beforeInput: true },
+        {
+          beforeInput: true,
+          ...(actionabilityReason(cause.message)
+            ? { actionability: actionabilityReason(cause.message) }
+            : {}),
+        },
       )
     : cause;
 
@@ -250,6 +256,7 @@ const settled = async (
       throw unsentOnTimeout(cause);
     },
   );
+  let waitingFor: "visible" | "enabled" | "stable" = "visible";
   try {
     await abortable(
       () =>
@@ -258,7 +265,8 @@ const settled = async (
         ),
       gate.signal,
     );
-    if (enabled)
+    if (enabled) {
+      waitingFor = "enabled";
       await abortable(
         () =>
           actionCall(gate, () =>
@@ -266,6 +274,8 @@ const settled = async (
           ),
         gate.signal,
       );
+    }
+    waitingFor = "stable";
     await abortable(
       () =>
         actionCall(gate, () =>
@@ -274,7 +284,16 @@ const settled = async (
       gate.signal,
     );
   } catch (cause) {
-    throw unsentOnTimeout(cause);
+    const error = unsentOnTimeout(cause);
+    if (
+      error instanceof ServerBrowserOperationError &&
+      error.tag === "PreviewAutomationTimeoutError"
+    )
+      throw new ServerBrowserOperationError(error.tag, error.message, {
+        ...(typeof error.detail === "object" && error.detail !== null ? error.detail : {}),
+        actionability: waitingFor,
+      });
+    throw error;
   } finally {
     disposeAction(gate, handle);
   }
@@ -756,9 +775,14 @@ export const click = async (
         : {};
     const beforeInput = "beforeInput" in detail && detail.beforeInput === true;
     const label = JSON.stringify(target.length > 200 ? `${target.slice(0, 200)}...` : target);
-    const reason = beforeInput
+    const baseReason = beforeInput
       ? `No input was sent. The click target ${label} was not ready before the deadline.`
       : `The click may have been sent; check the page before retrying. The target was ${label}.`;
+    const actionability = "actionability" in detail ? detail.actionability : undefined;
+    const reason =
+      actionability === "visible" || actionability === "enabled" || actionability === "stable"
+        ? `${baseReason} Playwright last saw: element is not ${actionability}.`
+        : baseReason;
     throw new ServerBrowserOperationError("PreviewAutomationTimeoutError", reason, {
       ...detail,
       reason,
