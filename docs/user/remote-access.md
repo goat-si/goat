@@ -831,7 +831,10 @@ goat pair --scope orchestration:read --scope relay:read
 
 The selected scopes replace the default permissions. The same option works with
 `goat auth pairing create` and `goat auth session issue`; each command's
-`--help` lists the available scopes. Without `--scope`, pairing tokens and issued
+`--help` lists the available scopes. `goat pair` prints a link for the server running from
+the default GOAT home; on a machine that runs more than one environment, pass
+`--base-dir <dir>` for the one you mean. `goat auth pairing create` prints a pairing
+code, or a link when you add `--base-url <url>`. Without `--scope`, pairing tokens and issued
 bearer sessions get every permission, including managing access.
 A terminal or a full-access agent on the host can reach those as well, so a
 client that should not manage access also needs to go without `terminal:operate`
