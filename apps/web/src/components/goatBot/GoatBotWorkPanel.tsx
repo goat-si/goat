@@ -262,7 +262,7 @@ export function GoatBotWorkPanel({
             // Work that finished meanwhile may have pushed this row behind Show more.
             if (
               peeked !== undefined &&
-              workRowCollapsed(rows, environmentId, remoteWork, peek.taskId)
+              workRowCollapsed(rows, environmentId, remoteWork, peek.taskId, current.chips)
             )
               setShowAllWork(true);
             setFocusTarget(peeked === undefined ? "home" : peek.taskId);

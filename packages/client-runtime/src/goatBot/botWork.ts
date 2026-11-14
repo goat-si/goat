@@ -147,8 +147,9 @@ export function workRowCollapsed(
   environmentId: EnvironmentId,
   remoteWork: ReadonlyArray<BotRemoteWork>,
   taskId: ChannelTaskId,
+  chips: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = NO_CHIPS,
 ): boolean {
-  return botHomeWork(rows, [], environmentId, remoteWork)
+  return botHomeWork(rows, [], environmentId, remoteWork, chips)
     .finished.slice(COLLAPSED_FINISHED)
     .some((task) => task.row.task.taskId === taskId);
 }
