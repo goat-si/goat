@@ -1,3 +1,4 @@
+import { queuedRunEditDraftKey } from "../../queuedRunEditDraftId";
 import { useAtomValue } from "@effect/atom-react";
 import {
   makeQueuedRunEditStore,
@@ -88,8 +89,8 @@ export interface QueuedRunEditContent {
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
 }
 
-function queuedEditDraftTarget(routeThreadRef: ScopedThreadRef, runId: RunId) {
-  return DraftId.make(`queued-edit:${scopedThreadKey(routeThreadRef)}:${runId}`);
+function queuedRunEditDraftId(ref: ScopedThreadRef, runId: RunId) {
+  return DraftId.make(queuedRunEditDraftKey(ref, runId));
 }
 
 async function submitQueuedRunEdit(input: {
@@ -222,7 +223,7 @@ export function useQueuedRunEdit(input: {
   const editing = activeThreadId === null ? null : storedEdit;
   const isSaving = useAtomValue(queuedRunEdits.savingAtom)[editKey] === true;
   const draftTarget =
-    editing === null ? threadDraftTarget : queuedEditDraftTarget(routeThreadRef, editing.runId);
+    editing === null ? threadDraftTarget : queuedRunEditDraftId(routeThreadRef, editing.runId);
 
   const imageResources = (editing?.existingAttachments ?? [])
     .filter((attachment) => attachment.type === "image")
@@ -245,7 +246,7 @@ export function useQueuedRunEdit(input: {
   const clearEditDraft = (runId: RunId) =>
     useComposerDraftStore
       .getState()
-      .clearComposerContent(queuedEditDraftTarget(routeThreadRef, runId));
+      .clearComposerContent(queuedRunEditDraftId(routeThreadRef, runId));
 
   const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
     if (activeThreadId === null) return;
@@ -253,7 +254,7 @@ export function useQueuedRunEdit(input: {
     if (queuedRunEditBlockedReason({ openQuestionCount: pending?.userInputs.length ?? 0 }) !== null)
       return;
     if (editing !== null && editing.runId !== request.runId) clearEditDraft(editing.runId);
-    const target = queuedEditDraftTarget(routeThreadRef, request.runId);
+    const target = queuedRunEditDraftId(routeThreadRef, request.runId);
     const text = stripAttachmentOnlyBootstrapPrompt(request.text);
     const store = useComposerDraftStore.getState();
     store.clearComposerContent(target);
@@ -286,7 +287,7 @@ export function useQueuedRunEdit(input: {
         // unscoped and names the thread: the user may be anywhere by now.
         onRunLeftQueue: (_, edit) => {
           void recoverQueuedMessageEdit({
-            editTarget: queuedEditDraftTarget(routeThreadRef, edit.runId),
+            editTarget: queuedRunEditDraftId(routeThreadRef, edit.runId),
             threadTarget: threadDraftTarget,
             originalText: edit.originalText,
             removedExistingAttachment: edit.removedExistingAttachment === true,

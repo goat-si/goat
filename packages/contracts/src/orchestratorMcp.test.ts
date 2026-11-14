@@ -45,6 +45,7 @@ import {
 const decodePendingRequestRespondInput = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondInput,
 );
+const decodeScheduleTaskInput = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
 const decodePendingRequestRespondResult = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondResult,
 );
@@ -740,4 +741,12 @@ it("decodes list, detail and search replies across peer versions", () => {
     expect(() => Schema.decodeUnknownSync(current)(olderReply)).not.toThrow();
     expect(Schema.decodeUnknownSync(current)(newReply)).toEqual(newReply);
   }
+});
+
+it("rejects a nonboolean schedule binding and advertises the cross-project default", () => {
+  const base = { prompt: "Synthetic", schedule: { type: "interval", everyMs: 60000 } };
+  expect(() => decodeScheduleTaskInput({ ...base, bindToCurrentThread: "true" })).toThrow();
+  expect(JSON.stringify(Schema.toJsonSchemaDocument(OrchestratorMcpScheduleTaskInput))).toContain(
+    "true in own project, else false",
+  );
 });

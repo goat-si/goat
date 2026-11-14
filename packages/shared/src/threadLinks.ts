@@ -14,7 +14,7 @@ const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${pro
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.
 // A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
 const THREAD_LINK_OUTSIDE_CODE = new RegExp(
-  String.raw`(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(\`+)[^\n]*?\4)|\[[^\]\n]*\]\((?:<(?<angleHref>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s<>]+)>|(?<href>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s>)]+))\)`,
+  String.raw`\\[!-/:-@[-\`{-~]|(?<fence>(\`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(\`+)[^\n]*?\4)|\[[^[\]\n]*\]\((?:<(?<angleHref>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s<>]+)>|(?<href>(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s>)]+))\)`,
   "g",
 );
 

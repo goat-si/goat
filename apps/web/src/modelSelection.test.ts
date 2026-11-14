@@ -1,3 +1,4 @@
+import { provider, settingsWithProviderInstances } from "./modelSelection.testkit";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -25,56 +26,6 @@ import {
   resolveAppModelSelectionState,
   resolveEffectiveDefaultModelSelection,
 } from "./modelSelection";
-
-function provider(input: {
-  provider?: ProviderDriverKind;
-  instanceId: string;
-  models?: ReadonlyArray<string>;
-  supportsTextGeneration?: boolean;
-}): ServerProvider {
-  const driver =
-    input.provider ??
-    (input.instanceId.startsWith("claude_")
-      ? ProviderDriverKind.make("claudeAgent")
-      : ProviderDriverKind.make("codex"));
-  return {
-    instanceId: ProviderInstanceId.make(input.instanceId),
-    driver,
-    ...(input.supportsTextGeneration === undefined
-      ? {}
-      : { supportsTextGeneration: input.supportsTextGeneration }),
-    enabled: true,
-    installed: true,
-    version: null,
-    status: "ready",
-    auth: { status: "authenticated" },
-    checkedAt: "2026-01-01T00:00:00.000Z",
-    models: (input.models ?? []).map((slug) => ({
-      slug,
-      name: slug,
-      isCustom: false,
-      capabilities: {},
-    })),
-    slashCommands: [],
-    skills: [],
-  };
-}
-
-function settingsWithProviderInstances(): UnifiedSettings {
-  return {
-    ...DEFAULT_UNIFIED_SETTINGS,
-    providerInstances: {
-      [ProviderInstanceId.make("claudeAgent")]: {
-        driver: ProviderDriverKind.make("claudeAgent"),
-        config: { customModels: [] },
-      },
-      [ProviderInstanceId.make("claude_openrouter")]: {
-        driver: ProviderDriverKind.make("claudeAgent"),
-        config: { customModels: ["openai/gpt-5.5"] },
-      },
-    },
-  };
-}
 
 describe("scoped default model selections", () => {
   // regression: #27997 equal automatic defaults can resolve to different providers
@@ -466,6 +417,11 @@ describe("instance-scoped model selection", () => {
       availableModel: "gemini-3.1-pro",
       missingModel: "gemini-3.1-pro-high",
     },
+    {
+      driverName: "cursor",
+      availableModel: "auto-smart",
+      missingModel: "claude-opus-5-5",
+    },
   ])("$driverName catalog gaps", ({ driverName, availableModel, missingModel }) => {
     it("preserves a selected model when a catalog refresh no longer contains it", () => {
       const providers = [
@@ -571,6 +527,35 @@ describe("instance-scoped model selection", () => {
 
     expect(state.selectedModel).toBe("gpt-5.6-sol");
     expect(dispatch.modelOptionsForDispatch).toBeUndefined();
+  });
+
+  it("sends a Cursor thread's stored model and options when the catalog lacks them", () => {
+    const instanceId = ProviderInstanceId.make("cursor");
+    const driver = ProviderDriverKind.make("cursor");
+    const stored = createModelSelection(instanceId, "claude-opus-5-5", [
+      { id: "effort", value: "medium" },
+    ]);
+    const providers = [provider({ provider: driver, instanceId, models: ["auto-smart"] })];
+    const state = deriveEffectiveComposerModelState({
+      draft: null,
+      providers,
+      selectedProvider: driver,
+      selectedInstanceId: instanceId,
+      threadModelSelection: stored,
+      projectModelSelection: null,
+      settings: settingsWithProviderInstances(),
+    });
+    const dispatch = getComposerProviderState({
+      provider: driver,
+      model: state.selectedModel,
+      models: providers[0]!.models,
+      modelOptions: state.modelOptions?.[instanceId],
+      planModeEnabled: false,
+    });
+
+    expect(
+      createModelSelection(instanceId, state.selectedModel, dispatch.modelOptionsForDispatch),
+    ).toEqual(stored);
   });
 
   it("preserves an explicit draft OpenCode selection while the catalog is empty", () => {
