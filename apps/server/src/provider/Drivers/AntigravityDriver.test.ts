@@ -343,9 +343,6 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       expect(snapshot.skills.map((skill) => skill.name)).toEqual(["new-skill"]);
       yield* h.refresh();
       expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
-      expect(yield* fs.readLink(path.join(h.profileDirectory, "config", "skills"))).toBe(
-        path.join(newHome, ".gemini", "config", "skills"),
-      );
       const acquired = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       h.controls.beforeAcquire = Deferred.succeed(acquired, undefined).pipe(
@@ -358,6 +355,107 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       yield* Fiber.join(oldLaunch);
       expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("authenticated");
     }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)(
+    "overlapping sessions retain their captured home skills across restart",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const homes = [path.join(root, "a"), path.join(root, "b")];
+        for (const home of homes)
+          yield* fs.makeDirectory(path.join(home, ".gemini", "config", "skills"), {
+            recursive: true,
+          });
+        const host = { ...original, HOME: homes[0] };
+        const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+        const threadId = ThreadId.make("skills-overlap");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: root,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = (token: string) => ({
+          environmentId: EnvironmentId.make("environment"),
+          threadId,
+          providerSessionId: "mcp-session",
+          providerInstanceId: h.instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer ${token}`,
+          browserToolsAvailable: false,
+        });
+        yield* sessions.set(config("old"));
+        const first = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("skills-a"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* first.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const firstHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!firstHome) return yield* Effect.die("Missing first runtime home");
+        host.HOME = homes[1];
+        const second = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("skills-b"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const secondHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!secondHome) return yield* Effect.die("Missing second runtime home");
+        expect(yield* fs.readLink(path.join(firstHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(firstHome, "config", "skills"))).toBe(
+          path.join(homes[0]!, ".gemini", "config", "skills"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "config", "skills"))).toBe(
+          path.join(homes[1]!, ".gemini", "config", "skills"),
+        );
+        yield* sessions.set(config("new"));
+        yield* first.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* first.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const restartedHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!restartedHome) return yield* Effect.die("Missing restarted runtime home");
+        expect(yield* fs.readLink(path.join(restartedHome, "config", "skills"))).toBe(
+          path.join(homes[0]!, ".gemini", "config", "skills"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "config", "skills"))).toBe(
+          path.join(homes[1]!, ".gemini", "config", "skills"),
+        );
+      }).pipe(Effect.scoped),
   );
   // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
@@ -499,7 +597,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         ]);
         for (const launch of nativeLaunches) {
           expect(launch.args).toEqual(hostPlatform === "linux" ? ["--uid="] : []);
-          expect(launch.profileDirectory).toBe(h.profileDirectory);
+          expect(launch.profileDirectory).toBe(launch.tempDirectory);
           expect(launch.forceFileStorage).toBe("1");
           expect(launch.extendEnv).toBe(false);
         }

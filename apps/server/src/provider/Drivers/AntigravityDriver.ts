@@ -43,6 +43,7 @@ import {
   buildAntigravityAcpSpawnInput,
   isAntigravitySignInRequiredError,
   prepareAntigravityProfile,
+  prepareAntigravityRuntimeHome,
   resolveAntigravityInstanceDirectories,
   type AntigravityAuthConfig,
 } from "../antigravityAuthSupport.ts";
@@ -245,6 +246,7 @@ export const AntigravityDriver: ProviderDriver<
         auth,
         userHome,
         tempDirectory: directories.runtimeTemp,
+        skipUserSkills: true,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -284,6 +286,14 @@ export const AntigravityDriver: ProviderDriver<
               ),
             ),
       );
+      const runtimeProfile = yield* prepareAntigravityRuntimeHome({
+        directory: runtimeTempDirectory,
+        profile,
+        userHome,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
       const runtime = yield* makeAntigravityAcpRuntime({
         ...input,
         runtimeVersion: executable.version,
@@ -291,7 +301,7 @@ export const AntigravityDriver: ProviderDriver<
         childProcessSpawner: spawner,
         spawn: buildAntigravityAcpSpawnInput({
           installation: executable,
-          profile,
+          profile: runtimeProfile,
           cwd: input.cwd,
           baseEnv: mergeThreadEnvironment(
             withAgentDeviceEnvironment(processEnvironment, input),
