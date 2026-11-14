@@ -2,7 +2,14 @@ import { useState } from "react";
 import { act, useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotId, BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  BotId,
+  BotThreadRow,
+  type ChannelTaskChip,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
@@ -111,6 +118,7 @@ vi.mock("./MobileBotRowMenu", () => ({
 }));
 const state = vi.hoisted(() => ({
   rows: [] as BotThreadRow[],
+  chips: new Map() as ReadonlyMap<ChannelTaskId, ChannelTaskChip>,
   remoteWork: [] as object[],
   groups: [] as object[],
   childKeys: [] as unknown[],
@@ -309,6 +317,7 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 import { MobileBotWork } from "./MobileBotWork";
+import { taskChip } from "./mobileTaskChipFixture";
 
 // The chat's header chip opens the home; this stands in for it.
 function WorkWithChip(props: Omit<Parameters<typeof MobileBotWork>[0], "open" | "onOpenChange">) {
@@ -351,6 +360,7 @@ afterEach(async () => {
   root = undefined;
   Object.assign(state, {
     rows: [],
+    chips: new Map(),
     remoteWork: [],
     groups: [],
     childKeys: [],
@@ -391,6 +401,7 @@ async function open(taskId?: string) {
         onOpenThread={state.openThread}
         onDraft={state.draft}
         workRevision={state.workRevision}
+        taskChips={state.chips}
       />,
     ),
   );
@@ -859,6 +870,52 @@ it("orders running, waiting, and finished work and collapses finished rows", asy
   expect(button("finished-5")).toBeDefined();
   await press("Show less");
   expect(button("finished-5")).toBeUndefined();
+});
+
+// The conversation's newest chip says what a task's worker asks; Home reads it as the face does.
+const asking = (kind: "approval" | "sign_in") => ({
+  observed: { pullRequests: [], needsYou: [{ kind, since: at }] },
+});
+const statusOf = (title: string) => button(title)?.getAttribute("aria-label");
+
+it("lists running work whose worker asks under waiting, in the wait's words on the row and its label", async () => {
+  // Asks is the newest, so it would lead the running group if it were still running.
+  const newest = { ...task("asks", "Asks"), lastActivityAt: "2026-11-11T03:00:00.000Z" };
+  const ended = task("ended", "Ended") as Extract<BotThreadRow, { kind: "task" }>;
+  const finished = { ...ended, task: { ...ended.task, status: "completed" } } as BotThreadRow;
+  state.rows = [
+    newest,
+    task("approves", "Approves"),
+    task("signs", "Signs"),
+    task("plain", "Plain"),
+    finished,
+  ];
+  state.chips = new Map([
+    [ChannelTaskId.make("asks"), taskChip("asks", { openQuestionCount: 1 })],
+    [ChannelTaskId.make("approves"), taskChip("approves", asking("approval"))],
+    [ChannelTaskId.make("signs"), taskChip("signs", asking("sign_in"))],
+    [ChannelTaskId.make("plain"), taskChip("plain", {})],
+  ]);
+  await open();
+  expect(statusOf("Asks")).toBe("Asks, Waiting for your answer");
+  expect(statusOf("Approves")).toBe("Approves, Waiting for your approval");
+  expect(statusOf("Signs")).toBe("Signs, Waiting for you to sign in");
+  expect(statusOf("Plain")).toBe("Plain, Working");
+  const content = home()?.textContent ?? "";
+  expect(content).toContain("Waiting for your answer");
+  // Running work, then what waits on the person, then finished work.
+  expect(content.indexOf("Plain")).toBeLessThan(content.indexOf("Asks"));
+  expect(content.indexOf("Asks")).toBeLessThan(content.indexOf("Ended"));
+});
+
+it("shows the wait in a peek's header", async () => {
+  state.rows = [task("asks", "Asks")];
+  state.chips = new Map([[ChannelTaskId.make("asks"), taskChip("asks", { openQuestionCount: 1 })]]);
+  await open();
+  await press("Asks");
+  const peek = (container.textContent ?? "").replace(home()?.textContent ?? "", "");
+  expect(peek).toContain("Waiting for your answer");
+  expect(peek).not.toContain("Working");
 });
 
 it("offers an action button for each task and keeps expansion bounded to 50", async () => {

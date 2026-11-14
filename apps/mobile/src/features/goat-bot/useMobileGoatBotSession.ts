@@ -71,6 +71,7 @@ import { goatBotWorkRevision } from "./goatBotWorkRevision";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
+import { useMobileTaskChips } from "./useMobileTaskChips";
 import {
   settleMobileGoatBotEnsure,
   goatBotSessionKey,
@@ -656,6 +657,7 @@ export function useMobileGoatBotSession(
     () => (visible ? goatBotWorkRevision(visibleTurnItems) : null),
     [visible, visibleTurnItems],
   );
+  const taskChips = useMobileTaskChips(visibleTurnItems, workRevision);
   const refreshThreads = threads.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Refresh the bot's task list when its conversation's task records change.
   useEffect(() => {
@@ -800,6 +802,8 @@ export function useMobileGoatBotSession(
     supportsTaskThreads,
     /** Changes when a task record in the conversation changes; null while the chat is hidden. */
     workRevision,
+    /** The newest chip of each task in the conversation, kept across streamed tokens. */
+    taskChips,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
