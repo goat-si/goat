@@ -1,5 +1,8 @@
 import { assertSlowStatus } from "./SlowStatusAssertions.testkit.ts";
-import { assertUnclaimedClose } from "./UnclaimedTabAssertions.testkit.ts";
+import {
+  assertForeignEvaluateRejected,
+  assertUnclaimedClose,
+} from "./UnclaimedTabAssertions.testkit.ts";
 import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.testkit.ts";
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
@@ -963,6 +966,7 @@ it.effect("enforces provider ownership and explicit targets when a session has m
         input: {},
       });
       expect(diagnostics.console.entries[0]?.text).toBe("another agent's evidence");
+      yield* assertForeignEvaluateRejected(broker, scope, tabId);
       yield* broker.invoke({
         scope,
         operation: "open",

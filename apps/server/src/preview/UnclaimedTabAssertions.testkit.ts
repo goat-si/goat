@@ -5,13 +5,12 @@ import type * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as Manager from "./Manager.ts";
 
 type Scope = typeof import("./ServerBrowser.test.ts").scope;
-export const assertUnclaimedClose = (
+export const assertForeignEvaluateRejected = (
   broker: Broker.PreviewAutomationBroker["Service"],
   scope: Scope,
   ownedTabId: PreviewTabId,
 ) =>
   Effect.gen(function* () {
-    const manager = yield* Manager.PreviewManager;
     const foreignScope = { ...scope, thread: { ...scope.thread, providerSessionId: "agent-b" } };
     const foreignEvaluate = yield* broker
       .invoke<void>({
@@ -25,6 +24,16 @@ export const assertUnclaimedClose = (
       _tag: "PreviewAutomationControlInterruptedError",
       reason: "agentMismatch",
     });
+  });
+
+export const assertUnclaimedClose = (
+  broker: Broker.PreviewAutomationBroker["Service"],
+  scope: Scope,
+  ownedTabId: PreviewTabId,
+) =>
+  Effect.gen(function* () {
+    const manager = yield* Manager.PreviewManager;
+    const foreignScope = { ...scope, thread: { ...scope.thread, providerSessionId: "agent-b" } };
     const foreign = yield* broker
       .invoke<void>({ scope: foreignScope, tabId: ownedTabId, operation: "close", input: {} })
       .pipe(Effect.flip);
