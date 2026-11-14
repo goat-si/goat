@@ -109,7 +109,7 @@ export async function verifySidebarReopen({
       socket,
       details,
       threadRef,
-      turnItem(threadRef.threadId, "after-reopen", "assistant", "After reopen", 4),
+      turnItem(threadRef.threadId, "catch-up", "assistant", "Catch-up reply", 4),
       3,
     );
     expect(status.textContent).toMatch(/Research replied\.|New reply from Research\./);
@@ -117,8 +117,31 @@ export async function verifySidebarReopen({
     await expect
       .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
       .toBeVisible();
+    const catchUpClause = status.textContent;
+    await act(() => {
+      scroll.scrollTop = scroll.scrollHeight;
+      scroll.dispatchEvent(new Event("scroll"));
+    });
+    expect(screen.container.textContent).not.toContain("Jump to latest");
+    await act(() => {
+      scroll.scrollTop = 0;
+      scroll.dispatchEvent(new Event("scroll"));
+    });
+    await deliver(
+      socket,
+      details,
+      threadRef,
+      turnItem(threadRef.threadId, "new-reply", "assistant", "New reply", 5),
+      4,
+    );
+    expect(status.textContent).toMatch(/Research replied\.|New reply from Research\./);
+    expect(status.textContent).not.toBe(catchUpClause);
+    expect(changes).toHaveLength(2);
+    await expect
+      .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
+      .toBeVisible();
     await screen.rerender(<ReopenChat MemberChat={MemberChat} threadRef={threadRef} open />);
-    expect(changes).toHaveLength(1);
+    expect(changes).toHaveLength(2);
   } finally {
     observer.disconnect();
   }
