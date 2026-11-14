@@ -1,7 +1,39 @@
 import * as Cause from "effect/Cause";
 import { RpcClientError } from "effect/rpc";
 import { describe, expect, it } from "vite-plus/test";
-import { hubDeviceAccess, isHubNodesUnsupportedError } from "./hubNodes.ts";
+import { hubDeviceAccess, hubNodeClassView, isHubNodesUnsupportedError } from "./hubNodes.ts";
+
+describe("hubNodeClassView", () => {
+  const now = Date.parse("2026-11-14T12:00:00.000Z");
+  const machineClass = {
+    class: "disposable",
+    attachId: "a-1",
+    state: "linked",
+    stateSince: "2026-11-14T10:00:00.000Z",
+    provisioner: { kind: "thread" as const, threadId: "thread-1" },
+    penMember: true,
+    conflicts: [],
+  };
+  it("shows a disposable machine's class, Pen membership, provisioner, state and its age; a kept one shows nothing", () => {
+    expect(hubNodeClassView(machineClass, now)).toEqual({
+      badges: [
+        { label: "Disposable", tone: "info" },
+        { label: "Still in Pen", tone: "secondary" },
+      ],
+      detail: "Attached by thread thread-1 · linked for 2h",
+    });
+    expect(
+      hubNodeClassView(
+        { ...machineClass, class: "conflict", penMember: false, provisioner: { kind: "person" } },
+        now,
+      ),
+    ).toEqual({
+      badges: [{ label: "Conflict", tone: "warning" }],
+      detail: "Attached by a person · linked for 2h",
+    });
+    expect(hubNodeClassView(undefined, now)).toBeUndefined();
+  });
+});
 
 describe("hubDeviceAccess", () => {
   const session = (permissions: ReadonlyArray<"orchestration:read" | "hub:proxy">) => ({

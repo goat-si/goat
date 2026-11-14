@@ -3,6 +3,7 @@ import {
   sessionGrantsScope,
   type AuthSessionState,
   type HubNode,
+  type HubNodeMachineClass,
   type HubNodeRoute,
   type HubNodesRemoveInput,
 } from "@goat/contracts";
@@ -16,18 +17,59 @@ export function hubNodeStatusLabel(status: HubNode["status"]): string {
 
 export function hubNodeLastSeenLabel(lastSeenAt: string | null, now: number): string | null {
   if (lastSeenAt === null) return null;
-  const elapsed = Math.max(0, now - Date.parse(lastSeenAt));
+  const relative = relativeAge(lastSeenAt, now);
+  return relative === null
+    ? null
+    : `last seen ${relative === "now" ? "just now" : `${relative} ago`}`;
+}
+
+function relativeAge(since: string, now: number): string | null {
+  const elapsed = Math.max(0, now - Date.parse(since));
   if (!Number.isFinite(elapsed)) return null;
   const minutes = Math.floor(elapsed / 60_000);
-  const relative =
-    minutes < 1
-      ? "just now"
-      : minutes < 60
-        ? `${minutes}m ago`
-        : minutes < 1440
-          ? `${Math.floor(minutes / 60)}h ago`
-          : `${Math.floor(minutes / 1440)}d ago`;
-  return `last seen ${relative}`;
+  return minutes < 1
+    ? "now"
+    : minutes < 60
+      ? `${minutes}m`
+      : minutes < 1440
+        ? `${Math.floor(minutes / 60)}h`
+        : `${Math.floor(minutes / 1440)}d`;
+}
+
+/**
+ * A Hub device's disposable class as people read it on every client: Disposable or Conflict, and
+ * Still in Pen while its key is a member, then who attached it and how long it has been in its
+ * state. A kept machine (no class) shows nothing.
+ */
+export function hubNodeClassView(
+  machineClass: HubNodeMachineClass | undefined,
+  now: number,
+):
+  | {
+      readonly badges: ReadonlyArray<{
+        readonly label: string;
+        readonly tone: "info" | "warning" | "secondary";
+      }>;
+      readonly detail: string;
+    }
+  | undefined {
+  if (machineClass === undefined) return undefined;
+  const age = relativeAge(machineClass.stateSince, now);
+  return {
+    badges: [
+      machineClass.class === "disposable"
+        ? { label: "Disposable", tone: "info" }
+        : { label: "Conflict", tone: "warning" },
+      ...(machineClass.penMember ? [{ label: "Still in Pen", tone: "secondary" as const }] : []),
+    ],
+    detail:
+      "Attached by " +
+      (machineClass.provisioner.kind === "person"
+        ? "a person"
+        : `thread ${machineClass.provisioner.threadId}`) +
+      ` · ${machineClass.state}` +
+      (age === null ? "" : age === "now" ? " just now" : ` for ${age}`),
+  };
 }
 
 export function hubNodeRouteLabel(route: HubNodeRoute): string {
