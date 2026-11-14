@@ -28,8 +28,19 @@ A new worktree sets itself up. When `git worktree add` creates a checkout, the
 `.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
 or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
-When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
-`npx vite-plus`, and prints which tool it ran.
+
+Setup needs the Node release pinned in root `package.json` (or a later release of the same major)
+and either vite-plus or the pnpm release named in `packageManager`. Under another Node it reruns
+itself under the pinned release with `vp env exec`, but only with vite-plus 0.2.2 or later, which
+verifies the Node download against nodejs.org's signed checksums. It installs with
+`vp i --frozen-lockfile`, or `pnpm install --frozen-lockfile` when vp is absent.
+
+When it cannot, setup stops and says what to install: the pinned Node (nodejs.org, fnm, volta or
+`vp env install <pin>`), a newer vite-plus, or an installer ([Install vp](../../README.md#install-vp)
+or that pnpm release, also when the pnpm on PATH is a Corepack shim whose launcher is missing).
+Then run `node scripts/setup-worktree.ts` again from the worktree root. Set
+`GOAT_SETUP_NO_NODE_DOWNLOAD=1` to keep setup from fetching Node; the installer still fetches
+packages it lacks.
 
 Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
