@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotProfile } from "@goat/contracts";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 type Rect = readonly [number, number, number, number];
@@ -159,7 +159,7 @@ vi.mock("./GoatBotFace", () => ({
   ),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: "env", threadId: "bot" } }),
+  useMobileGoatBotHomeMode: () => ({ botRef: { environmentId: link.savedRef, threadId: "bot" } }),
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 // The open asks read: a real query view over this atom. Like a server, what it holds (`state`)
@@ -192,7 +192,13 @@ vi.mock("../../connection/catalog", async () => {
   };
 });
 // The bot computer's connection as the app sees it; each test sets it.
-const link = vi.hoisted(() => ({ phase: "connected" }));
+const link = vi.hoisted(() => ({
+  phase: "connected",
+  /** The bot this device saved; the Home claim can move to another computer before it changes. */
+  savedRef: "env",
+  /** The computer's config; null before anything was read from it (a cold start offline). */
+  config: { environment: { capabilities: { goatBotOpenAsks: true } } } as object | null,
+}));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
@@ -201,6 +207,14 @@ vi.mock("../../state/environments", () => ({
         {
           connection: { phase: link.phase },
           entry: { target: { label: "Studio Mac" } },
+          serverConfig: link.config,
+        },
+      ],
+      [
+        "old",
+        {
+          connection: { phase: "disconnected" },
+          entry: { target: { label: "Old Mac" } },
           serverConfig: { environment: { capabilities: { goatBotOpenAsks: true } } },
         },
       ],
@@ -304,6 +318,7 @@ async function showRoster(
     root?.render(
       <RegistryContext value={registry}>
         <MobileBotRosterView
+          mainEnvironmentId={EnvironmentId.make("env")}
           bots={[
             { kind: "main", profile: null },
             { kind: "member", profile: scout },
@@ -528,6 +543,8 @@ it("on the phone's bot list, an ask opens the GoatBot screen of its bot on that 
 function setupLink(phase: string) {
   registry = AtomRegistry.make();
   link.phase = phase;
+  link.savedRef = "env";
+  link.config = { environment: { capabilities: { goatBotOpenAsks: true } } };
   resetKeptPerComputerForTests();
 }
 
@@ -630,4 +647,24 @@ it("offline, a deleted bot's Restore stays in view, disabled with the reason; ba
   );
   await showPhoneList({ connected: true, mayManage: true, deleted: [gone] });
   expect(restore()?.disabled).toBe(false);
+});
+
+it("reads the asks of the computer the roster shows, not a saved bot on a computer the Home claim has left", async () => {
+  setupLink("connected");
+  // The Home claim moved to "env"; the saved bot still names "old", which is offline.
+  link.savedRef = "old";
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  expect(stripButton()?.getAttribute("aria-label")).toBe(
+    "1 waiting for you. Scout: Which machine?",
+  );
+  expect(container.textContent).not.toContain("Old Mac");
+});
+
+it("says what waits is unavailable after a cold start offline, before anything was read from the computer", async () => {
+  setupLink("disconnected");
+  link.config = null;
+  await showRoster(true);
+  expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
 });

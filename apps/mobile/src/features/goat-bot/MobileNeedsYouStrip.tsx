@@ -3,6 +3,7 @@ import {
   type BotProfile,
   type ChannelOpenAsk,
   type ChannelTaskId,
+  type EnvironmentId,
   MAIN_BOT_ID,
 } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
@@ -10,7 +11,6 @@ import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { goatBotTime } from "./GoatBotMessageParts";
-import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileOpenAsks } from "./useMobileOpenAsks";
 
 /**
@@ -22,6 +22,8 @@ export function MobileNeedsYouStrip(props: {
   /** The shown bots; hidden members still have asks, and open from here too. */
   readonly bots: ReadonlyArray<BotRosterEntry>;
   readonly hidden: ReadonlyArray<BotProfile>;
+  /** The computer the roster lists bots from; the asks are read from the same one. */
+  readonly environmentId: EnvironmentId | null;
   /** The roster is on screen; coming back into view reads the asks again. */
   readonly visible: boolean;
   readonly onOpenAsk: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
@@ -32,8 +34,7 @@ export function MobileNeedsYouStrip(props: {
    */
   readonly onUnknownBot?: (() => void) | undefined;
 }) {
-  const { botRef } = useMobileGoatBotHomeMode();
-  const open = useMobileOpenAsks(botRef?.environmentId ?? null, props.visible);
+  const open = useMobileOpenAsks(props.environmentId, props.visible);
   const [expanded, setExpanded] = useState(false);
   const members = [
     ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),

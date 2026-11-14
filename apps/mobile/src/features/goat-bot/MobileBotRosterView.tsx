@@ -156,6 +156,7 @@ export function MobileBotRosterView(props: {
       <MobileNeedsYouStrip
         bots={props.bots}
         hidden={props.members?.hidden ?? []}
+        environmentId={props.mainEnvironmentId ?? null}
         visible={props.visible ?? true}
         onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
         onUnknownBot={props.onUnknownBot}
