@@ -22,6 +22,7 @@ import {
   type ChannelSearchBotTasksResult,
   type BotWorkResult,
   GoatBotWorkKind,
+  isGoatBotSessionThreadId,
   MAIN_BOT_ID,
   ProjectId,
 } from "@goat/contracts";
@@ -37,6 +38,14 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
+import {
+  botRowPullRequests,
+  observedPullRequestSource,
+  threadPullRequestColumns,
+  threadPullRequestSource,
+  type PullRequestSource,
+  type ThreadPullRequestColumns,
+} from "./channelBotRowPullRequests.ts";
 import {
   decodeHistoryCursor,
   launchesStatement,
@@ -60,7 +69,7 @@ const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildW
 const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
-interface ChildRow {
+interface ChildRow extends ThreadPullRequestColumns {
   readonly key?: string;
   readonly value_json: string;
   readonly title: string | null;
@@ -157,13 +166,37 @@ const make = Effect.gen(function* () {
     );
     const marks = new Map(markRows.map((row) => [row.key, row.value_json]));
     const launchLimit = options.launchLimit;
+    const listsTask = (task: ChannelTask) =>
+      !options.unknownView && !options.threadsOnly?.has(task.taskId);
+    // A session thread serves several tasks, so its links belong to none of them.
+    const workerIds = [
+      ...new Set(
+        tasks.flatMap((task) =>
+          listsTask(task) &&
+          task.worker !== undefined &&
+          task.worker.host === undefined &&
+          !isGoatBotSessionThreadId(task.worker.threadId)
+            ? [task.worker.threadId]
+            : [],
+        ),
+      ),
+    ];
+    const workerRows =
+      workerIds.length === 0
+        ? []
+        : yield* sql<{ readonly thread_id: string } & ThreadPullRequestColumns>`SELECT p.thread_id,
+            ${threadPullRequestColumns(sql)}
+            FROM orchestration_v2_projection_threads p WHERE p.thread_id IN ${sql.in(workerIds)}`.pipe(
+            Effect.mapError(failed),
+          );
+    const workerColumns = new Map(workerRows.map((row) => [row.thread_id, row]));
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
     // cannot hide that a task has more launches than the page lists.
     const truncated = new Set<string>();
     const childRows: ReadonlyArray<ChildRow> =
       launchLimit === undefined
         ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
-        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
+        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
       FROM channel_runtime_state s
       JOIN json_each(${taskIds}) ids
         ON s.key >= ('child-work:' || ids.value || ':') AND s.key < ('child-work:' || ids.value || ';')
@@ -195,6 +228,7 @@ const make = Effect.gen(function* () {
       title: item.title,
       projectId: item.project_id,
       recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
+      pullRequestColumns: item,
     });
     let skippedLaunches = 0;
     const children =
@@ -223,8 +257,16 @@ const make = Effect.gen(function* () {
     const launchesTruncated = tasks.flatMap((task) =>
       truncated.has(task.taskId) ? [task.taskId] : [],
     );
+    // A thread whose links cannot be read leaves the row to its other sources.
+    let skippedPullRequests = 0;
+    const readSource = (columns: ThreadPullRequestColumns | undefined) => {
+      const source = columns === undefined ? undefined : threadPullRequestSource(columns);
+      if (source !== "unreadable") return source === undefined ? [] : [source];
+      skippedPullRequests += 1;
+      return [];
+    };
     for (const task of tasks) {
-      if (!options.unknownView && !options.threadsOnly?.has(task.taskId)) {
+      if (listsTask(task)) {
         const view = viewsByTask.get(task.taskId) ?? {
           taskId: task.taskId,
           pinnedAt: null,
@@ -241,6 +283,17 @@ const make = Effect.gen(function* () {
               taskId: task.taskId,
             },
           );
+        const threadSources: Array<PullRequestSource> = [
+          ...readSource(
+            task.worker === undefined ? undefined : workerColumns.get(task.worker.threadId),
+          ),
+          // The join reads only a local launch's thread.
+          ...children.flatMap(({ child, pullRequestColumns }) =>
+            child.ownerId === owner.ownerId && child.taskId === task.taskId
+              ? readSource(pullRequestColumns)
+              : [],
+          ),
+        ];
         rows.push({
           kind: "task",
           task: {
@@ -264,6 +317,7 @@ const make = Effect.gen(function* () {
                   threadId: task.worker.threadId,
                 },
               }),
+          ...botRowPullRequests(threadSources, observedPullRequestSource(task)),
         });
       }
       for (const { child, title, projectId, recordedKind } of children) {
@@ -307,7 +361,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork, launchesTruncated, skippedLaunches };
+    return { rows, remoteWork, launchesTruncated, skippedLaunches, skippedPullRequests };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
@@ -385,6 +439,11 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed),
     );
     const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});
+    if (built.skippedPullRequests > 0)
+      yield* Effect.logWarning("GOAT Bot work rows left out pull requests they could not read", {
+        botId,
+        skippedThreads: built.skippedPullRequests,
+      });
     return {
       rows: built.rows,
       mainMessageCount: messages,
@@ -423,13 +482,18 @@ const make = Effect.gen(function* () {
       threadsOnly: page.threadsOnly,
       launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
     });
-    const partial = page.skippedTasks > 0 || built.skippedLaunches > 0 || skippedViews > 0;
+    const partial =
+      page.skippedTasks > 0 ||
+      built.skippedLaunches > 0 ||
+      skippedViews > 0 ||
+      built.skippedPullRequests > 0;
     if (partial)
       yield* Effect.logWarning("GOAT Bot task history left out records it could not read", {
         botId,
         skippedTasks: page.skippedTasks,
         skippedLaunches: built.skippedLaunches,
         skippedViews,
+        skippedPullRequestThreads: built.skippedPullRequests,
       });
     return {
       rows: built.rows,
@@ -547,7 +611,7 @@ const make = Effect.gen(function* () {
       ),
       remoteWork: built.remoteWork,
       launchesTruncated: built.launchesTruncated.length > 0,
-      partial: !known || built.skippedLaunches > 0,
+      partial: !known || built.skippedLaunches > 0 || built.skippedPullRequests > 0,
     };
   });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (
