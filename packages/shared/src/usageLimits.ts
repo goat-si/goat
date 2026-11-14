@@ -56,9 +56,9 @@ export const CURSOR_USAGE_WINDOWS = [
 
 export function cursorUsageWindowDetails(id: string, pool?: LimitPool) {
   const details = CURSOR_USAGE_WINDOWS.find((window) => window.id === id);
-  return details &&
-    pool &&
-    ((pool.windows.length === 1 && id === "totalPercentUsed") || hasDuplicateCursorTotal(pool))
+  if (details && pool && hasDuplicateCursorTotal(pool))
+    return { ...details, label: "Usage", description: undefined };
+  return details && pool && pool.windows.length === 1 && id === "totalPercentUsed"
     ? { ...details, label: null, description: undefined }
     : details;
 }

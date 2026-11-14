@@ -36,7 +36,7 @@ it.each([
     ],
     ids: ["autoPercentUsed"],
     remaining: [86],
-    label: null,
+    label: "Usage",
   },
   {
     reports: [
@@ -66,7 +66,9 @@ it.each([
   const visible = displayLimitWindows(pool);
   expect(visible.map((window) => window.id)).toEqual(ids);
   expect(visible.map((window) => window.remainingPercent)).toEqual(remaining);
-  expect(cursorUsageWindowDetails(ids.at(-1)!, pool)?.label).toBe(label);
+  const details = cursorUsageWindowDetails(ids.at(-1)!, pool);
+  expect(details?.label).toBe(label);
+  if (label === "Usage") expect(details?.description).toBeUndefined();
 });
 
 it("weights pooled Codex quota and resets by plan capacity", () => {
