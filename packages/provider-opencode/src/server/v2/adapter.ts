@@ -9,7 +9,7 @@ import {
   CLEAR_PROMPT_REJECTIONS,
 } from "./connectionConstants.ts";
 import { turnPromptId, steerPromptId } from "./promptIds.ts";
-import { modelRef, malformedModel, sameModel } from "./modelRef.ts";
+import { modelRef, malformedModel, sameModel, type ModelRef } from "./modelRef.ts";
 import { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal } from "./nativeGoal.ts";
@@ -41,7 +41,6 @@ import {
   Agent,
   Form,
   Location,
-  Model,
   Permission,
   Session,
   SessionMessage,
@@ -432,8 +431,6 @@ const deliver = <E>(answer: Effect.Effect<void, E>) =>
     Effect.map(Exit.isSuccess),
   );
 
-type ModelRef = ReturnType<typeof Model.Ref.make>;
-
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
 
 export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: ProviderInstanceId) {
@@ -484,9 +481,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const sessionScope = yield* Effect.scope;
     // Project config changes model limits; key by directory because this runtime serves all instance threads.
     const contextWindows = new Map<string, Map<string, number>>();
+    const modelVariants = new Map<string, Map<string, ReadonlySet<string>>>();
     const directoryOf = (cwd: string | null | undefined) => cwd ?? host.paths.cwd;
     const windowOf = (cwd: string | null | undefined, model: string) =>
       contextWindows.get(directoryOf(cwd))?.get(model);
+    const listedModelRef = (selection: ModelSelection, cwd: string | null | undefined) =>
+      modelRef(selection, modelVariants.get(directoryOf(cwd))?.get(selection.model));
     const now = yield* DateTime.now;
     let session: OrchestrationV2ProviderSession = {
       id: input.providerSessionId,
@@ -2727,15 +2727,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       Effect.suspend(() => {
         const windows = contextWindows.get(directory) ?? new Map<string, number>();
         contextWindows.set(directory, windows);
+        const variants = modelVariants.get(directory) ?? new Map<string, ReadonlySet<string>>();
+        modelVariants.set(directory, variants);
         return client.model.list({ location: { directory } }).pipe(
           Effect.timeout("5 seconds"),
           Effect.tap((models) =>
             Effect.sync(() => {
               for (const model of models.data) {
-                windows.set(
-                  `${model.providerID}/${model.id}`,
-                  model.limit.input ?? model.limit.context,
-                );
+                const slug = `${model.providerID}/${model.id}`;
+                windows.set(slug, model.limit.input ?? model.limit.context);
+                variants.set(slug, new Set(model.variants.map((variant) => variant.id)));
               }
             }),
           ),
@@ -3554,7 +3555,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             });
           }
           yield* readModelsOnce(threadInput.runtimePolicy.cwd);
-          const model = modelRef(threadInput.modelSelection);
+          const model = listedModelRef(threadInput.modelSelection, threadInput.runtimePolicy.cwd);
           if (model === undefined) {
             return yield* new ProviderAdapter.ProviderAdapterProtocolError({
               driver: OPENCODE_PROVIDER,
@@ -3730,7 +3731,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                   }),
                 });
               }
-              const model = modelRef(turnInput.modelSelection);
+              const model = listedModelRef(turnInput.modelSelection, turnInput.runtimePolicy.cwd);
               if (model === undefined) {
                 yield* begin;
                 return yield* finishTurn(state, {
