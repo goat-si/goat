@@ -17,6 +17,8 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { AgentScope, type AgentScopeShape } from "@goat/shared/AgentScope";
+import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import * as TestProviderHost from "../../../provider-testing/src/TestProviderHost.ts";
 import * as DocumentText from "../../../../apps/server/src/provider/DocumentText.ts";
 import { makeTurnInput } from "../../../../apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
@@ -29,6 +31,49 @@ const layer = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+);
+
+it.live("runtime launches retain the environment captured at session open", () =>
+  Effect.gen(function* () {
+    const key = "GOAT_ACP_SNAPSHOT_LATE_VARIABLE";
+    const original = process.env[key];
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }),
+    );
+    delete process.env[key];
+    const first = { ...process.env };
+    process.env[key] = "new-host-value";
+    const second = { ...process.env };
+    const observed: Array<string | undefined> = [];
+    const scope: AgentScopeShape = {
+      wrap: ({ command, args, env }) =>
+        Effect.sync(() => {
+          observed.push(env?.[key]);
+          return { command, args };
+        }),
+      watch: () => Effect.void,
+      stop: () => Effect.void,
+      clear: () => Effect.void,
+      kill: () => Effect.succeed(false),
+      oomKilled: () => Effect.succeed(false),
+    };
+    const path = yield* Path.Path;
+    const agent = yield* path.fromFileUrl(
+      new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+    );
+    for (const environment of [first, first, second]) {
+      yield* AcpSessionRuntime.make({
+        spawn: { command: process.execPath, args: [agent], env: environment, shell: false },
+        sessionEnvironment: environment,
+        cwd: process.cwd(),
+        clientInfo: { name: "test", version: "1" },
+      }).pipe(Effect.provideService(AgentScope, scope));
+    }
+    assert.deepEqual(observed, [undefined, undefined, "new-host-value"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
 it.live(
