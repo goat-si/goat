@@ -3551,6 +3551,8 @@ const make = Effect.gen(function* () {
         (View.hasLineageFilter(lineage) && input.projectId === undefined)
           ? undefined
           : yield* resolveProjectTarget(parent, input.projectId);
+      if (!input.allProjects && input.projectId !== undefined)
+        yield* requireProject(input.projectId);
       const listFailure = (error: unknown) =>
         failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`);
       const edges = yield* threadManagement.listLaunchEdges().pipe(Effect.mapError(listFailure));
