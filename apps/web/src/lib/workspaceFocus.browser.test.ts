@@ -353,6 +353,23 @@ describe("workspace area focus", () => {
     expect(document.activeElement).toBe(bringBack);
   });
 
+  it("focuses the panel's own default ahead of a side chat input earlier in the page", () => {
+    using fixture = setup();
+    const panel = fixture.area("panel", 3);
+    const content = document.createElement("div");
+    content.setAttribute("data-right-panel-surface-content", "");
+    panel.element.append(content);
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    fixture.area("composer", 2, content).element.append(editor);
+    const panelDefault = document.createElement("button");
+    panelDefault.textContent = "Address";
+    panelDefault.dataset.workspaceFocusDefault = "";
+    panel.element.append(panelDefault);
+    expect(fixture.controller.focus("panel")).toBe(true);
+    expect(document.activeElement).toBe(panelDefault);
+  });
+
   it("waits for a requested area to mount", async () => {
     using fixture = setup();
     fixture.area("composer", 2);

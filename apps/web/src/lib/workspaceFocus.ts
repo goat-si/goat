@@ -136,15 +136,18 @@ export function createWorkspaceFocusController(doc: Document) {
       isWorkspaceElementVisible(element) && !element.matches(":disabled");
     const belongs = (element: HTMLElement) => workspaceArea(element) === area && usable(element);
     // A side chat's message input sits in its own area inside the panel. Opening the
-    // panel focuses it, but F6 visits that area on its own, so it moves past it here.
+    // panel focuses it when the panel has no default of its own; F6 visits that area on its own.
     // A nested timeline stands in only for its own area, never ahead of that input.
-    const preferred = Array.from(
+    const candidates = Array.from(
       area.querySelectorAll<HTMLElement>(
         '[data-workspace-focus-default], [data-sidebar-row][aria-current="page"], [data-settings-section][aria-current="page"], .xterm-helper-textarea, [contenteditable="true"]',
       ),
-    ).find((element) =>
-      nested && !standsInFor(element, area) ? usable(element) : belongs(element),
     );
+    const preferred =
+      candidates.find(belongs) ??
+      (nested
+        ? candidates.find((element) => !standsInFor(element, area) && usable(element))
+        : undefined);
     const fallback = Array.from(area.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).find(
       (element) => element.tabIndex >= 0 && belongs(element),
     );
