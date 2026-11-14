@@ -64,7 +64,9 @@ export function useMobileOpenAsks(
   useEffect(() => {
     if (supported && connected && inView) refresh();
   }, [supported, connected, inView, refresh]);
-  if (!supported) return { state: "unsupported" };
+  // Nothing read from a selected computer yet (a cold start offline) is unknown, not an older server.
+  const unknown = presentation !== undefined && presentation.serverConfig == null;
+  if (!supported && !(unknown && !connected)) return { state: "unsupported" };
   if (!connected) {
     if (kept === null)
       return { state: "unavailable", computer: presentation?.entry.target.label ?? "its computer" };
