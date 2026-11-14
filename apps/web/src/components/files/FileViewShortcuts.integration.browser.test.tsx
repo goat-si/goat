@@ -115,6 +115,7 @@ const READ: ProjectReadFileResult = {
 type Order = "persisted" | "new-install";
 
 function setup(customRules: KeybindingRule[] = [], order: Order = "persisted") {
+  localStorage.removeItem("goat.fileTreeExpandedDirectories");
   // Defaults list files.find before chat.find, which is also how an existing install's
   // backfill stores it. The other order puts the chat rule first.
   const defaults =
@@ -487,6 +488,43 @@ describe("tree and viewer focus", () => {
     expect(first.isConnected).toBe(false);
   });
 
+  it("moves focus into a file's editor when its row is clicked, and leaves Enter and folder clicks in the tree", async () => {
+    setup();
+    const attached = new Map([
+      ["src/index.ts", deferred<void>()],
+      ["notes.md", deferred<void>()],
+    ]);
+    const onAttach = (path: string) => attached.get(path)?.resolve();
+    await using screen = await render(<SwitchingView onAttach={onAttach} />, {
+      router: false /* nothing links */,
+    });
+    await attached.get("src/index.ts")!.promise;
+    const focusedRow = () =>
+      screen.container
+        .querySelector("file-tree-container")
+        ?.shadowRoot?.activeElement?.getAttribute("data-item-path");
+    await vi.waitFor(() => expect(treeRow(screen.container, "src/")).not.toBeNull());
+
+    // The open file's folder starts expanded, so this click collapses it.
+    await userEvent.click(treeRow(screen.container, "src/")!);
+    await vi.waitFor(() =>
+      expect(treeRow(screen.container, "src/")!.getAttribute("aria-expanded")).toBe("false"),
+    );
+    expect(focusedRow()).toBe("src/");
+    treeRow(screen.container, "notes.md")!.focus();
+    await userEvent.keyboard("{Enter}");
+    await attached.get("notes.md")!.promise;
+    expect(focusedRow()).toBe("notes.md");
+    expect(editorRoot(screen.container).activeElement).toBeNull();
+
+    await userEvent.click(treeRow(screen.container, "src/")!);
+    await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
+    await userEvent.click(treeRow(screen.container, "src/index.ts")!);
+    await vi.waitFor(() =>
+      expect(editorRoot(screen.container).activeElement?.textContent).toContain("// src/index.ts"),
+    );
+  });
+
   it("focuses the open file's editor at once when Cmd/Ctrl+Down names that file", async () => {
     setup();
     const attached = deferred<void>();
@@ -658,7 +696,8 @@ describe("tree item actions", () => {
     ]);
     await using screen = await renderView();
     await vi.waitFor(() => expect(treeRow(screen.container, "notes.md")).not.toBeNull());
-    await userEvent.click(treeRow(screen.container, "notes.md")!);
+    // A click would open the file and move focus to its editor; the row keeps it from the keyboard.
+    treeRow(screen.container, "notes.md")!.focus();
     await userEvent.keyboard(chord([MOD, "Alt", "Shift"], "n"));
     await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("notes.md", "file name"));
     state.readFile.mockResolvedValueOnce({

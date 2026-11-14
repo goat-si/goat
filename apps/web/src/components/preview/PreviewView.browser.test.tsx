@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   addImage: vi.fn(),
   pictureInPicture: false,
   showEmptyState: false,
+  idleServerTab: false,
   loading: false,
   nativeServerTab: false,
   serverTab: false,
@@ -127,8 +128,13 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
           "tab-1": {
             threadId: "thread-1",
             tabId: "tab-1",
-            runtime: mocks.serverTab || mocks.nativeServerTab ? "server" : "desktop",
-            navStatus: { _tag: "Success", url: mocks.url, title: "Example" },
+            runtime:
+              mocks.idleServerTab || mocks.serverTab || mocks.nativeServerTab
+                ? "server"
+                : "desktop",
+            navStatus: mocks.idleServerTab
+              ? { _tag: "Idle" }
+              : { _tag: "Success", url: mocks.url, title: "Example" },
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -176,6 +182,8 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { commitBrowserViewportChange } from "~/browser/browserViewportActions";
+import { resolveResponsiveBrowserViewportSize } from "~/browser/browserViewportLayout";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
@@ -239,6 +247,7 @@ function setup() {
   mocks.pickElement.mockReset();
   mocks.pictureInPicture = false;
   mocks.showEmptyState = false;
+  mocks.idleServerTab = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
   mocks.serverTab = false;
@@ -256,6 +265,30 @@ function setup() {
 }
 
 describe("PreviewView", () => {
+  it("lets the pointer reach a local server card above an idle server-rendered tab", async () => {
+    setup();
+    mocks.idleServerTab = true;
+    mocks.servers = [
+      {
+        host: "localhost",
+        port: 8081,
+        url: "http://localhost:8081/",
+        requestedUrl: "http://localhost:8081/",
+        processName: "python3",
+        pid: 4242,
+        terminal: null,
+        source: "scanner",
+      },
+    ];
+    await using _screen = await render(<ToastProvider timeout={0}>{view()}</ToastProvider>);
+    const card = page.getByRole("button", { name: /localhost:8081/ });
+    await expect.element(card).toBeVisible();
+
+    const rect = card.element().getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    expect(card.element().contains(hit)).toBe(true);
+  });
+
   it("focuses the address on a forwarded desktop action while visible (#22328)", async () => {
     setup();
     using stack = new DisposableStack();
@@ -312,6 +345,24 @@ describe("PreviewView", () => {
     }
   });
 
+  it("sizes the first device viewport of a streamed tab to its panel", async () => {
+    setup();
+    mocks.serverTab = true;
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex;flex-direction:column;width:800px;height:600px";
+    await using screen = await render(view(), { container });
+    const canvas = screen.container.querySelector("canvas")!;
+    await expect.element(page.elementLocator(canvas)).toBeVisible();
+    const rect = canvas.closest("[data-server-browser-surface]")!.getBoundingClientRect();
+    vi.mocked(commitBrowserViewportChange).mockResolvedValueOnce(undefined);
+    await userEvent.click(screen.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Show device toolbar" }));
+    expect(commitBrowserViewportChange).toHaveBeenCalledWith(expect.anything(), {
+      _tag: "freeform",
+      ...resolveResponsiveBrowserViewportSize(rect, 1),
+    });
+  });
+
   it("activates the existing scoped browser surface and refuses closed or replaced results", async () => {
     setup();
     await using _screen = await render(view());
@@ -350,6 +401,33 @@ describe("PreviewView", () => {
     },
   );
 
+  it.each([true, false])(
+    "keeps the address on IME Enter (isComposing: %s)",
+    async (isComposing) => {
+      setup();
+      await using _screen = await render(view());
+      const input = page.getByPlaceholder("Search or enter URL");
+      await input.fill("https://example.com/pinyin");
+
+      const enter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        isComposing,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(enter, "keyCode", { value: 229 });
+      act(() => {
+        input.element().dispatchEvent(enter);
+      });
+
+      await expect.element(input).toHaveFocus();
+      await expect.element(input).toHaveValue("https://example.com/pinyin");
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(enter.defaultPrevented).toBe(true);
+    },
+  );
+
   it("retains the annotation locally when its own environment loses access during capture", async () => {
     setup();
     const picked = annotation("annotation-revoked");
@@ -383,6 +461,27 @@ describe("PreviewView", () => {
     await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(picked, null));
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+  });
+
+  it("hands key focus to the page's webview before picking an element", async () => {
+    setup();
+    using stack = new DisposableStack();
+    const viewport = document.createElement("div");
+    viewport.dataset.previewViewport = TEST_RUNTIME_TAB_ID;
+    const guest = document.createElement("webview");
+    guest.tabIndex = -1;
+    viewport.append(guest);
+    document.body.prepend(viewport);
+    stack.defer(() => viewport.remove());
+    let focusedAtPick: Element | null = null;
+    mocks.pickElement.mockImplementation(async () => {
+      focusedAtPick = document.activeElement;
+      return null;
+    });
+    await using _screen = await render(view());
+    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
+    await vi.waitFor(() => expect(mocks.pickElement).toHaveBeenCalled());
+    expect(focusedAtPick).toBe(guest);
   });
 
   it("still sends annotation text when the picked element's crop is malformed", async () => {
