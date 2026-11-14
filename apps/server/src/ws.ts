@@ -246,6 +246,7 @@ import {
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
+import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import { launchErrorFor } from "./orchestration-v2/launchErrors.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import {
@@ -345,7 +346,6 @@ function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): Se
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
-
 const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -1273,7 +1273,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     );
   },
 );
-
 export const layerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   connectionCatalogBroker: ConnectionCatalogBroker.ConnectionCatalogBroker["Service"],
@@ -1290,6 +1289,7 @@ export const layerWsRpc = (
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+      const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
         | PreparedRunRetryServices
@@ -2190,39 +2190,50 @@ export const layerWsRpc = (
               enqueuePublicOrchestrationCommand(
                 input,
                 startup,
-                ThreadMessageIntake.launchThread({
-                  commandId: input.commandId,
-                  ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
-                  ...(input.reuseExistingThread === undefined
-                    ? {}
-                    : { reuseExistingThread: input.reuseExistingThread }),
-                  projectId: input.projectId,
-                  title: input.title,
-                  ...(input.generateTitle === undefined
-                    ? {}
-                    : { generateTitle: input.generateTitle }),
-                  modelSelection: input.modelSelection,
-                  runtimeMode: input.runtimeMode,
-                  interactionMode: input.interactionMode,
-                  workspaceStrategy: input.workspaceStrategy,
-                  ...(input.initialMessage === undefined
-                    ? {}
-                    : {
-                        initialMessage: {
-                          ...(input.initialMessage.messageId === undefined
-                            ? {}
-                            : { messageId: input.initialMessage.messageId }),
-                          text: input.initialMessage.text,
-                          attachments: input.initialMessage.attachments,
-                          ...(input.initialMessage.context === undefined
-                            ? {}
-                            : { context: input.initialMessage.context }),
-                        },
+                threadLaunch
+                  .checkWorktreeBase({
+                    commandId: input.commandId,
+                    projectId: input.projectId,
+                    workspaceStrategy: input.workspaceStrategy,
+                  })
+                  .pipe(
+                    Effect.andThen(
+                      ThreadMessageIntake.launchThread({
+                        commandId: input.commandId,
+                        ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+                        ...(input.reuseExistingThread === undefined
+                          ? {}
+                          : { reuseExistingThread: input.reuseExistingThread }),
+                        projectId: input.projectId,
+                        title: input.title,
+                        ...(input.generateTitle === undefined
+                          ? {}
+                          : { generateTitle: input.generateTitle }),
+                        modelSelection: input.modelSelection,
+                        runtimeMode: input.runtimeMode,
+                        interactionMode: input.interactionMode,
+                        workspaceStrategy: input.workspaceStrategy,
+                        ...(input.initialMessage === undefined
+                          ? {}
+                          : {
+                              initialMessage: {
+                                ...(input.initialMessage.messageId === undefined
+                                  ? {}
+                                  : { messageId: input.initialMessage.messageId }),
+                                text: input.initialMessage.text,
+                                attachments: input.initialMessage.attachments,
+                                ...(input.initialMessage.context === undefined
+                                  ? {}
+                                  : { context: input.initialMessage.context }),
+                              },
+                            }),
+                        createdBy: "user",
+                        creationSource: input.creationSource ?? "web",
+                        fromClient: true,
                       }),
-                  createdBy: "user",
-                  creationSource: input.creationSource ?? "web",
-                  fromClient: true,
-                }).pipe(Effect.provide(intakeContext)),
+                    ),
+                    Effect.provide(intakeContext),
+                  ),
               ).pipe(
                 // A resumed launch is a retry of one already counted.
                 Effect.tap((result) =>
@@ -2249,6 +2260,9 @@ export const layerWsRpc = (
                 Effect.catchTags({
                   AttachmentClaimError: launchErrorFor(input),
                   ThreadLaunchError: launchErrorFor(input, "Failed to launch thread"),
+                  ThreadLaunchBaseRefError: launchErrorFor(input),
+                  ThreadLaunchBranchError: launchErrorFor(input),
+                  ThreadLaunchBranchConflictError: launchErrorFor(input),
                   ThreadLaunchWorkspaceMissingError: launchErrorFor(input),
                   ServerRuntimeStartupError: launchErrorFor(input, "Failed to launch thread"),
                   ThreadManagementProviderInstanceDisabledError: launchErrorFor(input),
