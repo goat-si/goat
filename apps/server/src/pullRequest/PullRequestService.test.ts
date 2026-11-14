@@ -1,3 +1,4 @@
+import { registerInteractiveRateLimitTest } from "./PullRequestInteractive.testkit.ts";
 import {
   project,
   changeRequest,
@@ -146,7 +147,7 @@ it.effect("does not wait for an in-flight detail read to display a preview", () 
   }),
 );
 
-function makeService(input: {
+export function makeService(input: {
   readonly settings?: ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
@@ -2011,6 +2012,8 @@ it.effect("stops new reads after a rate limit while leaving manual actions avail
     assert.lengthOf(paused.errors, 1);
   }),
 );
+
+registerInteractiveRateLimitTest(makeService);
 
 it.effect("refuses a repository that does not belong to the requested project", () =>
   Effect.gen(function* () {
