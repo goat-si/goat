@@ -111,6 +111,8 @@ export const fakeEnrollHost = () => {
     knownHostsUnwritable: false,
     /** Where GOAT's state folder keeps known_hosts now; a moved home changes it. */
     knownHostsDir: "/srv/goat/disposable/known_hosts/",
+    /** Answers the ocx calls it knows (detach's revoke and recover) before the enrollment fake. */
+    extraOcx: undefined as ((args: ReadonlyArray<string>) => OcxOutput | undefined) | undefined,
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
@@ -190,6 +192,11 @@ export const fakeEnrollHost = () => {
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
     keyPath: () => Effect.sync(() => control.keyPath),
+    forgetKnownHosts: (attachId) =>
+      Effect.sync(() => {
+        control.knownHosts.delete(attachId);
+        return true;
+      }),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
@@ -223,6 +230,8 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.calls.push(args);
+            const extra = control.extraOcx?.(args);
+            if (extra !== undefined) return extra;
             if (args[0] === "link" && args[1] === "add") return add(args);
             if (args[0] === "link" && args[1] === "operations" && control.journalUnreadable)
               return output(1);
