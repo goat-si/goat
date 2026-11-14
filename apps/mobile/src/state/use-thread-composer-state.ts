@@ -15,6 +15,7 @@ import { threadRuntimeIsActive } from "@goat/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import {
+  canResumeThread,
   deriveProviderSubagentStatus,
   deriveProviderExtensionStatuses,
   deriveResumableRunId,
@@ -362,10 +363,10 @@ export function useThreadComposerState() {
     projection: selectedThreadProjection?.projection,
   });
   const selectedThreadRuntime = selectedThreadProjection
-    ? deriveThreadRuntime(selectedThreadProjection.projection)
+    ? deriveThreadRuntime(selectedThreadProjection.projection, serverConfig?.providers)
     : (selectedThreadShell?.runtime ?? null);
   const selectedThreadActivityRun = selectedThreadProjection
-    ? deriveThreadActivityRun(selectedThreadProjection.projection)
+    ? deriveThreadActivityRun(selectedThreadProjection.projection, serverConfig?.providers)
     : (selectedThreadShell?.latestRun ?? null);
 
   const isCompacting = (() => {
@@ -412,6 +413,9 @@ export function useThreadComposerState() {
   const resumableRunId = selectedThreadProjection
     ? deriveResumableRunId(selectedThreadProjection.projection, selectedThreadRuntime)
     : null;
+  const canResume = selectedThreadProjection
+    ? canResumeThread(selectedThreadProjection.projection, resumableRunId, queueHeld)
+    : queueHeld;
 
   const runlessWorkStartedAt = selectedThreadProjection
     ? deriveRunlessWorkStartedAt(selectedThreadProjection.projection)
@@ -956,6 +960,7 @@ export function useThreadComposerState() {
     canSteerActiveTurn,
     queueHeld,
     resumableRunId,
+    canResume,
     queuedRunEdit,
     isSavingQueuedEdit,
     cancelQueuedRunEdit,

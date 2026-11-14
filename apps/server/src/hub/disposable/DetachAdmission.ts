@@ -33,7 +33,14 @@ const NOT_PROVISIONER =
 // A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
 const RELEASABLE = new Set(["unknown"]);
 /** Outcomes of a stopped retirement force that OpenCodex may still hold: open, unknown, or unread. */
-const MAY_OWE = new Set(["open", "unsettled", "not_found", "unreadable", "retirement_owned"]);
+const MAY_OWE = new Set([
+  "open",
+  "unsettled",
+  "not_found",
+  "unreadable",
+  "retirement_owned",
+  "owner_open",
+]);
 // Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const DETACHABLE = new Set([
@@ -161,16 +168,24 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const retiring = retires(enroll.health, yield* Clock.currentTimeMillis);
         const stoppedForce =
           row.state === "linked" && known?.force === true && known.stop !== undefined;
-        const mayOwe = outcome !== undefined && MAY_OWE.has(outcome);
+        // A stop stored with no outcome (every answer lost) may owe as much as an unread one.
+        const mayOwe = outcome === undefined || MAY_OWE.has(outcome);
         if (stoppedForce && mayOwe && !person && !retiring)
           return yield* fail(
             "person_required",
             "This machine's removal without it is unfinished in OpenCodex; only a person goes on with it, in Settings → Hub on web or desktop.",
           );
         const retirement = stoppedForce && (person ? mayOwe || failing : retiring);
-        // Not read since it stopped, on a machine that answers: the force step reads it first.
+        // Not read since it stopped, on a machine that answers: the force step reads it, and the
+        // owner it stored, first. A person's Force stays a force.
         const check =
-          retirement && !failing && (outcome === "not_found" || outcome === "unreadable");
+          retirement &&
+          !failing &&
+          input.force !== true &&
+          (outcome === undefined ||
+            outcome === "not_found" ||
+            outcome === "unreadable" ||
+            outcome === "retirement_owned");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true

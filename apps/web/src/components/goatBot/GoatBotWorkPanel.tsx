@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
+  botTaskWait,
   goatBotTurnsOutsideList,
   goatBotWaitingInChatText,
   presentTaskStatus,
@@ -245,7 +246,8 @@ export function GoatBotWorkPanel({
           statusLabel={
             peeked === undefined
               ? ""
-              : presentTaskStatus(peeked.task.status, peeked.view.doneAt).label
+              : (botTaskWait(peeked, current.chips.get(peeked.task.taskId)) ??
+                presentTaskStatus(peeked.task.status, peeked.view.doneAt).label)
           }
           rows={peekRows(peek.taskId)}
           source={peekSource}
@@ -260,7 +262,7 @@ export function GoatBotWorkPanel({
             // Work that finished meanwhile may have pushed this row behind Show more.
             if (
               peeked !== undefined &&
-              workRowCollapsed(rows, environmentId, remoteWork, peek.taskId)
+              workRowCollapsed(rows, environmentId, remoteWork, peek.taskId, current.chips)
             )
               setShowAllWork(true);
             setFocusTarget(peeked === undefined ? "home" : peek.taskId);
@@ -354,6 +356,7 @@ export function GoatBotWorkPanel({
                 botName={botName}
                 rows={rows}
                 remoteWork={remoteWork}
+                chips={current.chips}
                 loaded={loaded}
                 failed={failed}
                 failure={failure}

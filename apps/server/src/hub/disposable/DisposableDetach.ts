@@ -11,7 +11,9 @@ import { type Columns, type Row } from "./attachRow.ts";
 import {
   makeForceStep,
   refusalOf,
+  ownerHolds,
   repeatOwner,
+  resolveOwed,
   REVOKE_TIMEOUT_MS,
   revokeArgs,
   withDetach,
@@ -230,6 +232,16 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   const forceStep = makeForceStep(ops);
 
   /**
+   * GOAT's own owner revoke finished the removal: a purge owner did so with the Child's receipt; a
+   * force owner removed the link without the machine, so its tombstone goes to recover.
+   */
+  const ownerDone = (row: Row, enroll: Enroll, admitted: Detach, owner: string) => {
+    if (!owner.includes(".force.")) return finish(row, withDetach(enroll, admitted), "purged");
+    const { owner: _owner, ...going } = admitted;
+    return forceStep(row, withDetach(enroll, { ...going, operationId: owner, force: true }));
+  };
+
+  /**
    * A journalled purge revoke; clean only with the Child's purged receipt for this link id. A silent
    * machine's purge settles unknown with remote_disconnect_failed (OpenCodex v2.100.3): that counts
    * as one failed check, the next purge waits 30 minutes under a new id once the old one is resolved,
@@ -292,16 +304,27 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     };
     if (!(yield* note(row, withDetach(enroll, admitted)))) return;
     const sent = yield* host.ocx([...revokeArgs(linkId, operationId), "--json"], REVOKE_TIMEOUT_MS);
-    if (sent?.refusal?.code === "link_retirement_owned") {
+    if (ownerHolds(sent?.refusal?.code, owner)) {
       const resumed = yield* repeatOwner(ops, linkId, owner);
-      if (resumed.kind === "clean")
-        return yield* finish(row, withDetach(enroll, admitted), "purged");
+      if (resumed.kind === "clean" && owner !== undefined)
+        return yield* ownerDone(row, enroll, admitted, owner);
       return yield* halt(
         row,
         enroll,
-        { ...admitted, outcome: "retirement_owned", refusal: "link_retirement_owned" },
+        {
+          ...admitted,
+          outcome: resumed.kind === "open" ? "owner_open" : "retirement_owned",
+          refusal: sent?.refusal?.code ?? "link_retirement_owned",
+        },
         "link_retirement_owned",
       );
+    }
+    // Gone while GOAT's own revoke finished it (during a restart or a click): read that first.
+    if (sent?.refusal?.code === "link_not_found" && owner !== undefined) {
+      const finished = yield* readEntry(owner, linkId, owner.includes(".force."));
+      // Unread: the next pass sends this id again and reads the owner then.
+      if (finished.kind === "unreadable") return;
+      if (finished.kind === "clean") return yield* ownerDone(row, enroll, admitted, owner);
     }
     // Removed without a purge receipt: someone else revoked it; recover asks whether a cleanup of
     // the machine waits.
@@ -353,7 +376,17 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           return yield* halt(
             row,
             enroll,
-            { ...admitted, outcome: outcome.state },
+            // The repeat's own answer: a resume that could not settle leaves the entry open, and an
+            // unread one is not called unknown.
+            {
+              ...admitted,
+              outcome:
+                again.kind === "unsettled"
+                  ? again.state
+                  : again.kind === "failed_clean"
+                    ? again.code
+                    : again.kind,
+            },
             "revoke_unsettled",
           );
         }
@@ -496,13 +529,19 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const linkId = row.link_id;
     const nowMs = yield* Clock.currentTimeMillis;
     if (stored.triedAtMs !== undefined && nowMs - stored.triedAtMs < CHECK_EVERY_MS) return;
-    // A replaced purge whose resolve failed after the force committed is resolved first; the
-    // record never ends while it is owed.
-    const { supersedes, ...before } = stored;
-    if (supersedes !== undefined && !(yield* resolveSuperseded(supersedes)))
+    // A replaced purge or GOAT's owner revoke left unresolved is resolved first; the record never
+    // ends while one is owed.
+    const { supersedes: _supersedes, owner: _owner, ...before } = stored;
+    const owed = yield* resolveOwed(ops, stored);
+    if (owed !== undefined)
       return yield* note(
         row,
-        withDetach(enroll, { ...stored, triedAtMs: nowMs, outcome: "resolve_owed" }),
+        withDetach(enroll, {
+          ...stored,
+          supersedes: owed,
+          triedAtMs: nowMs,
+          outcome: "resolve_owed",
+        }),
       );
     if (linkId === null) return yield* finish(row, withDetach(enroll, before), "purged");
     const answer = recoverAnswer(

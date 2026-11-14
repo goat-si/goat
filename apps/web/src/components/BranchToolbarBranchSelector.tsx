@@ -50,6 +50,7 @@ import {
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
+  shouldReuseSelectedWorktree,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
@@ -410,7 +411,7 @@ export function BranchToolbarBranchSelector({
       refName,
     });
 
-    if (selectionTarget.reuseExistingWorktree) {
+    if (shouldReuseSelectedWorktree(selectionTarget, canWriteSourceControl)) {
       setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();

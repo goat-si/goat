@@ -3,6 +3,7 @@ import { assert, describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
@@ -183,6 +184,104 @@ describe("ssh command", () => {
         assert.equal(result.failure.stdout, '{"credential":"[redacted]"}\n');
       }
     }).pipe(Effect.provide(layerProcess));
+  });
+
+  it.effect.each(["pairing-secret\\", "pairing-secret\\u12", "pairing-secret"])(
+    "redacts incomplete credentials on failure and timeout: %s",
+    (value) =>
+      Effect.gen(function* () {
+        const stdout = `{"credential":"${value}`;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const failureSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed(makeFailedProcess({ stdout })),
+        );
+        const failure = yield* Effect.result(
+          runSshCommand(target, {}).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failureSpawner),
+          ),
+        );
+        assert.isTrue(Result.isFailure(failure));
+        if (Result.isFailure(failure)) assert.instanceOf(failure.failure, SshCommandError);
+        if (Result.isFailure(failure) && failure.failure instanceof SshCommandError)
+          assert.notInclude(failure.failure.stdout ?? "", "pairing-secret");
+
+        const read = yield* Deferred.make<void>();
+        const timeoutSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed({
+            ...makeNeverFinishingProcess(),
+            stdout: Stream.make(encoder.encode(stdout)).pipe(
+              Stream.ensuring(Deferred.succeed(read, undefined)),
+            ),
+          }),
+        );
+        const fiber = yield* Effect.forkChild(
+          Effect.result(
+            runSshCommand(target, { timeoutMs: 1 }).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, timeoutSpawner),
+            ),
+          ),
+        );
+        yield* Deferred.await(read);
+        yield* TestClock.adjust(Duration.millis(1));
+        const timeout = yield* Fiber.join(fiber);
+        assert.isTrue(Result.isFailure(timeout));
+        if (Result.isFailure(timeout)) assert.instanceOf(timeout.failure, SshCommandError);
+        if (Result.isFailure(timeout) && timeout.failure instanceof SshCommandError)
+          assert.notInclude(timeout.failure.stdout ?? "", "pairing-secret");
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
+  );
+
+  it.effect.each([false, true])("redacts stderr from errors and logs on timeout %s", (timesOut) => {
+    const logs: string[] = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(JSON.stringify(message));
+    });
+    return Effect.gen(function* () {
+      const secret = "synthetic-stderr-secret";
+      const stderr = `{"credential":"${secret}"}`;
+      const read = yield* Deferred.make<void>();
+      const spawner = lazyChildProcessSpawner(() =>
+        Effect.succeed(
+          timesOut
+            ? {
+                ...makeNeverFinishingProcess(),
+                stderr: Stream.make(encoder.encode(stderr)).pipe(
+                  Stream.ensuring(Deferred.succeed(read, undefined)),
+                ),
+              }
+            : makeFailedProcess({ stdout: "", stderr }),
+        ),
+      );
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      const fiber = yield* Effect.forkChild(
+        Effect.result(
+          runSshCommand(target, { timeoutMs: 1 }).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ),
+      );
+      if (timesOut) {
+        yield* Deferred.await(read);
+        yield* TestClock.adjust(Duration.millis(1));
+      }
+      const result = yield* Fiber.join(fiber);
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        if (!(result.failure instanceof SshCommandError)) return;
+        assert.notInclude(result.failure.stderr, secret);
+        assert.notInclude(result.failure.message, secret);
+      }
+      assert.notInclude(JSON.stringify(logs), secret);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          TestClock.layer(),
+          Logger.layer([logger], { mergeWithExisting: false }),
+        ),
+      ),
+    );
   });
 
   it.effect.each([

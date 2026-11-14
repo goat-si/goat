@@ -70,6 +70,28 @@ export const repeatOwner = (
       );
 
 /**
+ * Whether a new id's refusal means GOAT's own earlier revoke should go again: an unfinished
+ * removal holds the link, or (OpenCodex refuses every other id while one is open) the owner GOAT
+ * stored is left open by a resume that could not settle.
+ */
+export const ownerHolds = (code: string | undefined, owner: string | undefined) =>
+  code === "link_retirement_owned" || (code === "link_operation_open" && owner !== undefined);
+
+/**
+ * Marks resolved the purge a force replaced and GOAT's owner revoke, once the removal is done, so no
+ * entry of the record stays unknown and unresolved on the Home (a plain force leaves its owner so).
+ * Answers the first id whose resolve failed, which waits for the next pass.
+ */
+export const resolveOwed = Effect.fn("DisposableDetach.resolveOwed")(function* (
+  ops: DetachOps,
+  detach: Detach,
+) {
+  for (const id of new Set([detach.supersedes, detach.owner]))
+    if (id !== undefined && !(yield* ops.resolveSuperseded(id))) return id;
+  return undefined;
+});
+
+/**
  * Removes the link without the machine under its own operation id, leaving a tombstone recover
  * settles. A stored forced id is read first: committed goes on, a settled refusal or a resolved
  * entry gets a new id (tombstone_limit: the same id, then a new one in the same step), anything
@@ -77,7 +99,7 @@ export const repeatOwner = (
  */
 export const makeForceStep = (ops: DetachOps) =>
   Effect.fn("DisposableDetach.force")(function* (row: Row, enroll: Enroll) {
-    const { note, halt, audit, finish, readEntry, resolveSuperseded } = ops;
+    const { note, halt, audit, finish, readEntry } = ops;
     const linkId = row.link_id;
     const before = enroll.detach ?? { step: "revoke", attempt: 0 };
     const retire = row.state === "linked";
@@ -115,8 +137,25 @@ export const makeForceStep = (ops: DetachOps) =>
       // A person's detach after an unreadable read-back: what the id still owes decides.
       if (before.outcome === "check") {
         if (known.kind === "unreadable") return;
-        if (known.kind === "failed_clean" || known.kind === "not_found")
-          return yield* note(row, withDetach(enroll, { step: "revoke", attempt: before.attempt }));
+        const ownedBy = before.owner;
+        const held =
+          ownedBy === undefined
+            ? undefined
+            : yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
+        if (held?.kind === "unreadable") return;
+        const owes =
+          held !== undefined &&
+          (held.kind === "open" || (held.kind === "unsettled" && !held.resolved));
+        if ((known.kind === "failed_clean" || known.kind === "not_found") && !owes)
+          return yield* note(
+            row,
+            withDetach(enroll, {
+              step: "revoke",
+              attempt: before.attempt,
+              // A resolved owner may still hold the removal's receipt: a purge refused for it repeats it.
+              ...(held?.kind === "unsettled" && ownedBy !== undefined ? { owner: ownedBy } : {}),
+            }),
+          );
       }
       if (known.kind === "clean" && !pending) {
         const { outcome: _checked, ...going } = before;
@@ -186,18 +225,36 @@ export const makeForceStep = (ops: DetachOps) =>
       result = yield* send(revokeOperationId(row.attach_id, "force", next), next, 1, stored);
       if (result === undefined) return;
     }
-    const { sent, elsewhere } = result;
-    let { admitted, outcome } = result;
+    const { sent } = result;
+    let { admitted, outcome, elsewhere } = result;
+    // Gone while GOAT's own owner revoke finished it (during a restart or a click): read that first.
+    if (elsewhere && admitted.owner !== undefined) {
+      const ownedBy = admitted.owner;
+      const finished = yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
+      // Unread: the next pass sends the new id again and reads the owner then.
+      if (finished.kind === "unreadable") return;
+      if (finished.kind === "clean" && !ownedBy.includes(".force."))
+        return yield* finish(row, withDetach(enroll, admitted), "purged");
+      if (finished.kind === "clean") {
+        const { owner: _owner, ...going } = admitted;
+        admitted = { ...going, operationId: ownedBy };
+        elsewhere = false;
+      }
+    }
     // An unfinished removal holds the link: GOAT's previous id goes once more, and a stop names the
     // owner's way out when that does not finish it.
-    if (sent?.refusal?.code === "link_retirement_owned") {
+    if (ownerHolds(sent?.refusal?.code, admitted.owner)) {
       const ownedBy = admitted.owner;
       const resumed = yield* repeatOwner(ops, linkId, ownedBy);
       if (resumed.kind !== "clean" || ownedBy === undefined)
         return yield* halt(
           row,
           enroll,
-          { ...admitted, outcome: "retirement_owned", refusal: "link_retirement_owned" },
+          {
+            ...admitted,
+            outcome: resumed.kind === "open" ? "owner_open" : "retirement_owned",
+            refusal: sent?.refusal?.code ?? "link_retirement_owned",
+          },
           "link_retirement_owned",
         );
       // GOAT's purge finished the removal with the Child's receipt.
@@ -212,12 +269,12 @@ export const makeForceStep = (ops: DetachOps) =>
       const settled = pending
         ? { ...admitted, pendingResent: true as const }
         : withoutTry(admitted);
-      const { supersedes: _resolving, ...committed } = settled;
-      const resolved = supersedes === undefined || (yield* resolveSuperseded(supersedes));
+      const { supersedes: _resolving, owner: _owned, ...committed } = settled;
+      const owed = yield* resolveOwed(ops, settled);
       const saved = yield* note(
         row,
         withDetach(enroll, {
-          ...(resolved ? committed : settled),
+          ...(owed === undefined ? committed : { ...settled, supersedes: owed }),
           step: "recover",
           ...(elsewhere ? { elsewhere: true as const, outcome: "link_not_found" } : {}),
         }),

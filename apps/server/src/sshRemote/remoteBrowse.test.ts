@@ -16,14 +16,20 @@ describe("remote folder browsing over POSIX sh", () => {
   let head: string;
   const quotedName = "owner's folder'; touch INJECTED; #";
 
-  const environment = () => ({ HOME: home, PATH: process.env.PATH, LC_ALL: "C" });
+  const environment = () => ({
+    HOME: home,
+    PATH: process.env.PATH,
+    LC_ALL: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+  });
   const git = (cwd: string, ...args: string[]) =>
     NodeChildProcess.execFileSync(
       "git",
       ["-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", ...args],
       {
         cwd,
-        env: { ...environment(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+        env: environment(),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -241,7 +247,13 @@ describe("remote folder browsing on a Windows shell", () => {
           maxEntries: 10,
         }),
         cwd: home,
-        env: { HOME: home, PATH: `${shims}:${process.env.PATH}`, LC_ALL: "C" },
+        env: {
+          HOME: home,
+          PATH: `${shims}:${process.env.PATH}`,
+          LC_ALL: "C",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        },
         encoding: "utf8",
         timeout: 10_000,
       }),

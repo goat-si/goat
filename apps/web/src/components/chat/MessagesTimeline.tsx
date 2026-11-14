@@ -1079,6 +1079,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     activeTurnInProgress,
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,
+    providerStartingLabel: latestRun?.providerStartingLabel ?? null,
     latestRunId: latestRun?.runId ?? null,
   };
   // Mounted in both the empty and filled timeline so a thread's first turn

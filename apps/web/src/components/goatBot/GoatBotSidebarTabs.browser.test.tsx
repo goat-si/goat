@@ -304,7 +304,7 @@ it("labels task status", async () => {
   useGlobalAgentStore.getState().setMode("bot");
   // The router is mocked to exercise the roster independently.
   await using screen = await render(<GoatBotSidebarTabs />, { router: false });
-  await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeInTheDocument();
+  await expect.element(screen.getByRole("img", { name: "Waiting for you" })).toBeInTheDocument();
 });
 
 it("opens the task actions with the keyboard and returns focus on Escape", async () => {

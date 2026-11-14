@@ -1,3 +1,4 @@
+import { canResumeThread } from "@goat/client-runtime/state/thread-execution";
 import {
   type EnvironmentId,
   type ProviderInteractionMode,
@@ -27,6 +28,7 @@ interface ComposerResumeInput {
   readonly activeThread: EnvironmentThreadShell | undefined;
   readonly resumableRunId: RunId | null;
   readonly hasHeldQueuedRuns: boolean;
+  readonly projection: Parameters<typeof canResumeThread>[0] | null;
   readonly isSendBusy: boolean;
   readonly isConnecting: boolean;
   readonly isRevertingCheckpoint: boolean;
@@ -60,6 +62,7 @@ export function useComposerResume(input: ComposerResumeInput) {
     activeThread,
     resumableRunId,
     hasHeldQueuedRuns,
+    projection,
     isSendBusy,
     isConnecting,
     isRevertingCheckpoint,
@@ -84,12 +87,14 @@ export function useComposerResume(input: ComposerResumeInput) {
     () => new Set(),
   );
   const isResuming = resumingThreadKeys.has(routeThreadKey);
+  const canResume =
+    projection !== null && canResumeThread(projection, resumableRunId, hasHeldQueuedRuns);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
 
   const onResume = async () => {
     if (
       !activeThread ||
-      (resumableRunId === null && !hasHeldQueuedRuns) ||
+      !canResume ||
       isSendBusy ||
       isResuming ||
       isConnecting ||
@@ -165,5 +170,5 @@ export function useComposerResume(input: ComposerResumeInput) {
     });
   };
 
-  return { onResume, isResuming };
+  return { onResume, isResuming, canResume };
 }
