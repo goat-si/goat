@@ -2,7 +2,10 @@ export const DEFAULT_COMPOSER_PLACEHOLDER = "Ask anything. @ files, $ skills, / 
 
 export function composerPlaceholder(state: {
   readonly approval: { readonly supportsFeedback?: boolean } | null;
-  readonly question: { readonly isChoiceOnlyPendingQuestion: boolean } | null;
+  readonly question: {
+    readonly allowCustomAnswer?: boolean | undefined;
+    readonly options: ReadonlyArray<unknown>;
+  } | null;
   readonly planFollowUp: boolean;
   readonly projectSelectionRequired: boolean;
   readonly showProviderUnavailable: boolean;
@@ -13,9 +16,11 @@ export function composerPlaceholder(state: {
       : "Send a message to decline and redirect the agent";
   }
   if (state.question) {
-    return state.question.isChoiceOnlyPendingQuestion
+    return state.question.allowCustomAnswer === false
       ? "Choose an option above"
-      : "Type your own answer, or leave this blank to use the selected option";
+      : state.question.options.length === 0
+        ? "Type your answer"
+        : "Type your own answer, or leave this blank to use the selected option";
   }
   if (state.planFollowUp) {
     return "Add feedback to refine the plan, or leave this blank to implement it";

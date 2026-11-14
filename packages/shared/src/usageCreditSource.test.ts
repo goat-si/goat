@@ -203,7 +203,7 @@ it("redeems through the hub when it holds a credit, even with a fresher native r
     environmentId: "env-a",
     input: { sourceId: "hub", accountId: "claude-same@example.com.json", creditId: "hub-credit" },
   });
-  expect(account?.limits.resetCredits?.availableCount).toBe(2);
+  expect(account?.limits.resetCredits?.availableCount).toBe(3);
 });
 
 it("keeps direct grant choices in the composer when a newer hub has a credit", () => {
@@ -242,4 +242,29 @@ it("keeps direct grant choices in the composer when a newer hub has a credit", (
   const report = collectProviderUsageLimits(native.instanceId, [native], hub, now);
   expect(report?.accounts[0]?.limits.resetCredits).toEqual(native.usageLimits?.resetCredits);
   expect(report?.accounts[0]?.resetCreditInput).toEqual({ instanceId: "claude" });
+});
+
+it("does not offer redemption when the chosen hub credit has no id", () => {
+  const limits = { checkedAt, windows: [window] };
+  const selected = provider({
+    usageLimits: limits,
+    auth: { status: "authenticated", email: "same@example.com" },
+  });
+  const hub = [
+    {
+      ...source,
+      accounts: [
+        {
+          id: "duplicate",
+          driver: selected.driver,
+          email: "same@example.com",
+          usageLimits: { ...limits, resetCredits: { availableCount: 2 } },
+        },
+      ],
+    },
+  ];
+  const report = collectProviderUsageLimits(selected.instanceId, [selected], hub, now);
+  expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
+  expect(report?.accounts[0]?.redeemable).toBe(false);
+  expect(report?.accounts[0]?.resetCreditInput).toBeUndefined();
 });

@@ -25,6 +25,7 @@ import {
 const decodePendingRequestRespondInput = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondInput,
 );
+const decodeScheduleTaskInput = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
 const decodePendingRequestRespondResult = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondResult,
 );
@@ -516,4 +517,12 @@ it("retains notification policy in MCP writes and future-policy task output", ()
   expect(
     Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decodeTask(task))).notificationPolicy,
   ).toBe("future");
+});
+
+it("rejects a nonboolean schedule binding and advertises the cross-project default", () => {
+  const base = { prompt: "Synthetic", schedule: { type: "interval", everyMs: 60000 } };
+  expect(() => decodeScheduleTaskInput({ ...base, bindToCurrentThread: "true" })).toThrow();
+  expect(JSON.stringify(Schema.toJsonSchemaDocument(OrchestratorMcpScheduleTaskInput))).toContain(
+    "true in own project, else false",
+  );
 });

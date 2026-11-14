@@ -54,8 +54,7 @@ describe("ThemeImportDialog", () => {
       </StrictMode>,
     );
 
-    // One input event: keystrokes more than the search debounce apart would search a prefix first.
-    await userEvent.fill(page.getByLabelText("Search Open VSX themes"), "night");
+    await userEvent.type(page.getByLabelText("Search Open VSX themes"), "night");
 
     await expect.element(page.getByRole("heading", { name: "Nightfall" })).toBeVisible();
     expect(searchOpenVsxThemes).toHaveBeenCalledWith(

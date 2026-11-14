@@ -21,6 +21,13 @@ const withNodeServices = <A, E>(
   );
 
 describe("Cursor usage limits", () => {
+  it("retains a unified total for account aggregation", () => {
+    const windows = cursorUsageResponseToLimits(
+      { planUsage: { totalPercentUsed: 1.77, autoPercentUsed: 1.77 } },
+      checkedAt,
+    ).windows;
+    expect(windows.map((window) => window.id)).toEqual(["autoPercentUsed", "totalPercentUsed"]);
+  });
   const checkedAt = "2026-09-16T00:00:00.000Z";
 
   it("uses the advertised percentages and billing-cycle reset", () => {

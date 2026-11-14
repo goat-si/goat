@@ -286,6 +286,53 @@ describe("pools", () => {
     expect(account?.environments).toEqual([{ environmentId: "env-a", label: "Laptop" }]);
   });
 
+  it("redeems through the hub when it holds a credit, even with a fresher native read", () => {
+    const native = provider({
+      driver: claude,
+      instanceId: ProviderInstanceId.make("claude"),
+      auth: { status: "authenticated", email: "same@example.com" },
+      usageLimits: {
+        checkedAt: "2026-09-03T11:30:00.000Z",
+        windows: [{ ...window, usedPercent: 40 }],
+        resetCredits: { availableCount: 3, nextCreditId: "native-credit" },
+      },
+    });
+    const input = new Map([
+      [
+        EnvironmentId.make("env-a"),
+        {
+          ...laptop,
+          serverConfig: {
+            providers: [native],
+            usageLimitSources: [
+              {
+                ...source,
+                accounts: [
+                  {
+                    id: "claude-same@example.com.json",
+                    driver: claude,
+                    email: "same@example.com",
+                    usageLimits: {
+                      checkedAt,
+                      windows: [{ ...window, usedPercent: 55 }],
+                      resetCredits: { availableCount: 2, nextCreditId: "hub-credit" },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    const [account] = collectLimitAccounts(input);
+    expect(account?.redeem).toEqual({
+      environmentId: "env-a",
+      input: { sourceId: "hub", accountId: "claude-same@example.com.json", creditId: "hub-credit" },
+    });
+    expect(account?.limits.resetCredits?.availableCount).toBe(3);
+  });
+
   it("redeems on the environment whose snapshot supplied the credits on show", () => {
     const stale = provider({
       auth: { status: "authenticated", email: "same@example.com" },
@@ -951,25 +998,7 @@ describe("/usage-limits", () => {
     ]);
   });
 
-  it("does not offer redemption when the chosen hub credit has no id", () => {
-    const hub = [
-      {
-        ...sources[0]!,
-        accounts: [
-          {
-            ...sources[0]!.accounts[0]!,
-            usageLimits: { ...limits, resetCredits: { availableCount: 2 } },
-          },
-        ],
-      },
-    ];
-    const report = collectProviderUsageLimits(selected.instanceId, [selected], hub, now);
-    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
-    expect(report?.accounts[0]?.redeemable).toBe(false);
-    expect(report?.accounts[0]?.resetCreditInput).toBeUndefined();
-  });
-
-  it("redeems through the hub even when the native snapshot is fresher", () => {
+  it("redeems a native duplicate through the hub even when the native snapshot is fresher", () => {
     const fresher = provider({
       usageLimits: {
         checkedAt: "2026-09-03T11:30:00.000Z",
@@ -1003,7 +1032,7 @@ describe("/usage-limits", () => {
       accountId: "duplicate",
       creditId: "hub-credit",
     });
-    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
+    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(3);
   });
 
   it("keeps unidentified custom instances separate, filtering by driver", () => {

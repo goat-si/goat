@@ -1,3 +1,4 @@
+import { queuedRunEditThreadId } from "./queuedRunEditDraftId";
 import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./state/modelPickPending";
 import * as draftModels from "./lib/persistedModelSelections";
@@ -1166,13 +1167,12 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       ))
     : baseModel;
-  // Options come from the first of the draft, thread and project that has any. Their selections
-  // stay with them, so a fallback instance can check which model the options belong to.
+  // Draft options win; otherwise an existing thread's options, even none, outrank the project's.
+  // Selections stay with them, so a fallback instance can check which model the options belong to.
   const optionSelections =
     [
       input.draft?.modelSelectionByProvider,
-      selectionsByInstance(input.threadModelSelection),
-      selectionsByInstance(input.projectModelSelection),
+      selectionsByInstance(input.threadModelSelection ?? input.projectModelSelection),
     ].find((selections) => modelSelectionByProviderToOptions(selections) !== null) ?? null;
   const modelOptions = modelSelectionByProviderToOptions(optionSelections);
 
@@ -1422,7 +1422,6 @@ export function resolveComposerDraftKey(
   const threadKey = composerTargetKey(normalizedTarget);
   return threadKey.length > 0 ? threadKey : null;
 }
-
 function resolveComposerThreadId(
   state: ComposerThreadLookupState,
   target: ComposerThreadTarget,
@@ -1434,7 +1433,10 @@ function resolveComposerThreadId(
   if (typeof normalizedTarget !== "string") {
     return normalizedTarget.threadId;
   }
-  return state.draftThreadsByThreadKey[normalizedTarget]?.threadId ?? null;
+  return (
+    state.draftThreadsByThreadKey[normalizedTarget]?.threadId ??
+    queuedRunEditThreadId(normalizedTarget)
+  );
 }
 
 function getComposerDraftState(

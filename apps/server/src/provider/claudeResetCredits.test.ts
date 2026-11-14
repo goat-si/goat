@@ -62,14 +62,6 @@ describe("claudeResetCreditsToContract", () => {
       availableCount: 2,
       nextCreditId: "grant_a",
       nextExpiresAt: "2026-10-01T00:00:00.000Z",
-      options: [
-        expect.objectContaining({
-          creditId: "grant_a",
-          label: "Full reset",
-          availableCount: 2,
-          expiresAt: "2026-10-01T00:00:00.000Z",
-        }),
-      ],
     });
   });
 
@@ -153,18 +145,7 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
         Effect.provideService(HostProcess.Platform, "linux"),
         Effect.provideService(HttpClient.HttpClient, client),
       );
-      expect(credits).toEqual({
-        availableCount: 1,
-        nextCreditId: "grant_a",
-        options: [
-          {
-            creditId: "grant_a",
-            label: "Full reset",
-            description: "Refills your 5-hour and weekly limits.",
-            availableCount: 1,
-          },
-        ],
-      });
+      expect(credits).toEqual({ availableCount: 1, nextCreditId: "grant_a" });
     }),
   );
 
