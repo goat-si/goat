@@ -220,7 +220,7 @@ export function sanitizeTerminalHistoryChunk(
       if (escapeSequenceEndIndex === null) {
         return { visibleText, pendingControlSequence: input.slice(index) };
       }
-      append(input.slice(index, escapeSequenceEndIndex));
+      if (nextCodePoint !== 0x5a) append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
       continue;
     }
