@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
+import { PreviewOpenInput } from "./preview.ts";
 import {
   PreviewAutomationHost,
   PreviewAutomationInvalidSelectorError,
@@ -47,6 +48,23 @@ describe("PreviewAutomationLogsInput", () => {
     ]) {
       expect(() => decode(invalid)).toThrow();
     }
+  });
+});
+
+describe("PreviewOpenInput", () => {
+  const decode = Schema.decodeUnknownSync(PreviewOpenInput);
+  it("decodes a tab without zoom and appearance and rejects values the browser lacks", () => {
+    expect(decode({ threadId: "thread-1", runtime: "server" })).toEqual({
+      threadId: "thread-1",
+      runtime: "server",
+    });
+    expect(decode({ threadId: "thread-1", zoomFactor: 1.25, colorScheme: "dark" })).toEqual({
+      threadId: "thread-1",
+      zoomFactor: 1.25,
+      colorScheme: "dark",
+    });
+    expect(() => decode({ threadId: "thread-1", zoomFactor: 7 })).toThrow();
+    expect(() => decode({ threadId: "thread-1", colorScheme: "sepia" })).toThrow();
   });
 });
 
