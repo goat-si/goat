@@ -41,6 +41,7 @@ import {
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
+import { scrollIntoView } from "./actionScroll.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { aimClickPoint } from "./clickAim.ts";
 import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
@@ -310,9 +311,7 @@ const locatePoint = async (
   const viewport = page.viewportSize();
   let box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   if (!inViewport(box, viewport)) {
-    await gate();
-    gate.signal?.throwIfAborted();
-    await actionCall(gate, () => locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }));
+    await scrollIntoView(locator, deadline, gate);
     box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   }
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
