@@ -1,30 +1,19 @@
 import { assert, describe, it } from "@effect/vitest";
-import {
-  ChannelDeliveryId,
-  ChannelInputId,
-  ChannelTaskId,
-  type ChannelOutboundMessage,
-} from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import { classifySqliteError, SqlError } from "effect/sql/SqlError";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
-import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as Ledger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as Views from "./channelTaskViews.ts";
-import { timelineIdsFor } from "./channelIds.ts";
 import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 import {
   makeMarkWarnings,
@@ -48,164 +37,29 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
-import { at, history, insertTask, provide, setup } from "./testkit/botThreadHistory.fixture.ts";
+import { at, history, provide, setup } from "./testkit/botThreadHistory.fixture.ts";
 
-const taskId = ChannelTaskId.make("task:unread");
-const otherId = ChannelTaskId.make("task:other");
-const destination = { kind: "goat", environmentId, threadId: botThreadId } as const;
-const message = (id: string, forTask = taskId): ChannelOutboundMessage => ({
-  deliveryId: ChannelDeliveryId.make(id),
-  destination,
-  kind: "result",
-  text: id,
-  taskId: forTask,
-});
-const now = Effect.map(DateTime.now, DateTime.formatIso);
-/** A task as reception leaves it: its input's receipt already went out, so its messages may follow. */
-const task = (id: string) =>
-  Effect.gen(function* () {
-    yield* insertTask(id, { status: "running", createdAt: at(1) });
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT OR IGNORE INTO channel_outbox (delivery_id, cause_key, input_id, kind,
-      destination_kind, message_json, state, next_attempt_at, created_at, updated_at)
-      VALUES ('receipt:input:1', 'reply:input:1', 'input:1', 'receipt', 'goat', '{}', 'delivered',
-      ${at(1)}, ${at(1)}, ${at(1)})`;
-  });
-/** Queues messages the way every producer does: through the ledger's outbox insert. */
-const queue = (...items: ReadonlyArray<ChannelOutboundMessage>) =>
-  Effect.gen(function* () {
-    yield* (yield* Ledger.ChannelLedger).enqueueDeliveries(
-      items.map((item) => ({
-        deliveryId: item.deliveryId,
-        causeKey: "test:" + item.deliveryId,
-        ...(item.taskId === undefined ? {} : { taskId: item.taskId }),
-        message: item,
-      })),
-      yield* now,
-    );
-  });
-const ownerToken = Effect.gen(function* () {
-  const runtime = yield* ChannelRuntime.ChannelRuntime;
-  assert.isTrue(yield* runtime.claimForWork);
-  return runtime.ownerToken;
-});
-/** The real delivery worker hands GOAT rows to the real GOAT transport; receipts settle first. */
-const deliverDue = Effect.gen(function* () {
-  const token = yield* ownerToken;
-  const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
-  yield* worker.deliverDue(token);
-  yield* worker.settleReceipts;
-  yield* worker.deliverDue(token);
-});
-const deliver = (...items: ReadonlyArray<ChannelOutboundMessage>) =>
-  Effect.andThen(queue(...items), deliverDue);
-/** A task write one second later, as a status change, a follow-up or a bot step would make. */
-const statusUpdate = (id = taskId) =>
-  Effect.gen(function* () {
-    yield* TestClock.adjust("1 second");
-    const ledger = yield* Ledger.ChannelLedger;
-    const changed = yield* commitTransition(ledger, (yield* ledger.getTask(id))!, {
-      type: "task.worker.bound",
-      payload: { worker: { environmentId, threadId: botThreadId, generation: 1 } },
-    });
-    assert.isDefined(changed);
-  });
-const followUp = (key: string) =>
-  Effect.gen(function* () {
-    yield* TestClock.adjust("1 second");
-    const ledger = yield* Ledger.ChannelLedger;
-    const changed = yield* commitTransition(ledger, (yield* ledger.getTask(taskId))!, {
-      type: "task.followup.received",
-      payload: { inputId: ChannelInputId.make(key), text: "more", from: "Owner", generation: 1 },
-    });
-    assert.isDefined(changed);
-  });
-const rows = Effect.gen(function* () {
-  const result = yield* (yield* BotThreads.ChannelBotThreads).list(owner);
-  return result.rows.flatMap((item) => (item.kind === "task" ? [item] : []));
-});
-const row = (id = taskId) =>
-  Effect.gen(function* () {
-    const found = (yield* rows).find((item) => item.task.taskId === id);
-    assert.isDefined(found);
-    return found!;
-  });
-const acknowledge = (readThrough: string) =>
-  Effect.gen(function* () {
-    yield* (yield* Views.ChannelTaskViews).update({ taskId, readThrough }, owner);
-  });
-/** A task whose first message the person has read. */
-const ready = Effect.gen(function* () {
-  yield* setup;
-  yield* task(taskId);
-  yield* statusUpdate();
-  yield* deliver(message("initial"));
-  yield* acknowledge((yield* row()).lastActivityAt);
-  assert.isFalse((yield* row()).unread);
-});
-const sqlRows = <A extends object>(
-  run: (sql: SqlClient.SqlClient) => Effect.Effect<ReadonlyArray<A>, SqlError>,
-) => Effect.flatMap(SqlClient.SqlClient, run);
-const markOf = sqlRows(
-  (sql) =>
-    sql<{ readonly value_json: string }>`SELECT value_json FROM channel_runtime_state
-    WHERE key = ${messageMarkKey(ownerId, taskId)}`,
-);
-const outboxState = (id: string) =>
-  Effect.map(
-    sqlRows(
-      (sql) =>
-        sql<{ readonly state: string }>`SELECT state FROM channel_outbox WHERE delivery_id = ${id}`,
-    ),
-    (found) => found[0]?.state,
-  );
-/** Commands the GOAT transport committed for a delivery: one per message it ever recorded. */
-const recordsOf = (id: string) =>
-  Effect.map(
-    sqlRows(
-      (sql) =>
-        sql<{ readonly n: number }>`SELECT count(*) AS n FROM orchestration_command_receipts
-        WHERE command_id = ${timelineIdsFor(botThreadId, "delivery:" + id, "send").commandId}`,
-    ),
-    (found) => found[0]?.n ?? 0,
-  );
-const refuseMarks = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TRIGGER refuse_mark_insert BEFORE INSERT ON channel_runtime_state
-    WHEN NEW.key LIKE 'task-message-mark:%' BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
-  yield* sql`CREATE TRIGGER refuse_mark_update BEFORE UPDATE ON channel_runtime_state
-    WHEN NEW.key LIKE 'task-message-mark:%' BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
-});
-const allowMarks = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`DROP TRIGGER refuse_mark_insert`;
-  yield* sql`DROP TRIGGER refuse_mark_update`;
-});
-const updatedAt = (id = taskId) =>
-  Effect.gen(function* () {
-    return (yield* (yield* Ledger.ChannelLedger).getTask(id))!.task.updatedAt;
-  });
-const warnings = () => {
-  const logs: string[] = [];
-  const layer = Logger.layer(
-    [
-      Logger.make(({ message: logged, logLevel }) => {
-        if (logLevel === "Warn") logs.push(JSON.stringify(logged));
-      }),
-    ],
-    { mergeWithExisting: false },
-  );
-  return { logs, layer };
-};
-const withHolds = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
-    Effect.provide(
-      BotThreads.layer.pipe(
-        Layer.provideMerge(Views.layer),
-        Layer.provideMerge(Layer.provideMerge(LedgerCallHolds.layer, makeHarness().layer)),
-      ),
-    ),
-  );
+import {
+  taskId,
+  otherId,
+  message,
+  now,
+  task,
+  queue,
+  ownerToken,
+  deliverDue,
+  deliver,
+  statusUpdate,
+  followUp,
+  rows,
+  row,
+  acknowledge,
+  ready,
+  markOf,
+  outboxState,
+  updatedAt,
+  warnings,
+} from "./testkit/botThreadUnread.fixture.ts";
 
 describe("task unread follows delivered messages", () => {
   it.effect(
@@ -248,260 +102,6 @@ describe("task unread follows delivered messages", () => {
           assert.isTrue(Option.isNone(yield* Queue.poll(seen)));
           yield* acknowledge(delivered.lastActivityAt);
           assert.isFalse((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: a message that never reaches the bot thread leaves the row read, unmoved and without a mark",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          const before = yield* row();
-          const mark = yield* markOf;
-          const sql = yield* SqlClient.SqlClient;
-          const doomed = timelineIdsFor(botThreadId, "delivery:doomed-message", "send").commandId;
-          // Trigger bodies take no bound parameters; the command id is a plain generated id.
-          yield* sql.unsafe(
-            `CREATE TRIGGER refuse_doomed BEFORE INSERT ON orchestration_command_receipts
-            WHEN NEW.command_id = '${doomed}' BEGIN SELECT RAISE(ABORT, 'timeline refused'); END`,
-          );
-          yield* queue(message("doomed-message"));
-          for (let attempt = 0; attempt < 10; attempt++) {
-            yield* deliverDue;
-            yield* TestClock.adjust("5 minutes");
-          }
-          assert.strictEqual(yield* outboxState("doomed-message"), "failed");
-          assert.strictEqual(yield* recordsOf("doomed-message"), 0);
-          const after = yield* row();
-          assert.isFalse(after.unread);
-          assert.strictEqual(after.lastActivityAt, before.lastActivityAt);
-          assert.deepStrictEqual(yield* markOf, mark);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: a crash between the bot-thread record and the settle is recovered with one record, one settle and one mark",
-    () =>
-      withHolds(
-        Effect.gen(function* () {
-          yield* ready;
-          const ledger = yield* Ledger.ChannelLedger;
-          yield* (yield* LedgerCallHolds).failNext(
-            "recordDelivery",
-            new Ledger.ChannelLedgerError({ reason: "ownership_lost", detail: "process stopped" }),
-            (input) => input.deliveryId === "crashed",
-          );
-          yield* TestClock.adjust("1 second");
-          yield* queue(message("crashed"));
-          assert.isTrue(Exit.isFailure(yield* Effect.exit(deliverDue)));
-          assert.strictEqual(yield* recordsOf("crashed"), 1);
-          assert.strictEqual(yield* outboxState("crashed"), "delivering");
-          assert.isFalse((yield* row()).unread);
-          yield* ledger.settleInterruptedDeliveries({ owner: yield* ownerToken, now: yield* now });
-          yield* deliverDue;
-          assert.strictEqual(yield* recordsOf("crashed"), 1);
-          assert.strictEqual(yield* outboxState("crashed"), "delivered");
-          const current = yield* row();
-          assert.isTrue(current.unread);
-          assert.deepStrictEqual(yield* markOf, [
-            { value_json: JSON.stringify({ at: current.lastActivityAt }) },
-          ]);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: a post whose mark write fails stays unsettled and read, then settles once without a second record",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          const before = yield* row();
-          yield* refuseMarks;
-          yield* TestClock.adjust("1 second");
-          yield* deliver(message("refused"));
-          assert.strictEqual(yield* recordsOf("refused"), 1);
-          assert.strictEqual(yield* outboxState("refused"), "delivering");
-          const unsettled = yield* row();
-          assert.isFalse(unsettled.unread);
-          assert.strictEqual(unsettled.lastActivityAt, before.lastActivityAt);
-          yield* allowMarks;
-          yield* TestClock.adjust("5 seconds");
-          yield* deliverDue;
-          assert.strictEqual(yield* recordsOf("refused"), 1);
-          assert.strictEqual(yield* outboxState("refused"), "delivered");
-          assert.isTrue((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: a receipt whose mark write fails is settled again inside its deadline and turns the row unread",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-            goatInput("one more thing", "receipt-input"),
-            rpcContext,
-          );
-          const receipt: ChannelOutboundMessage = {
-            ...message("receipt"),
-            kind: "receipt",
-            inReplyToInputId: input.inputId,
-          };
-          yield* refuseMarks;
-          yield* (yield* Ledger.ChannelLedger).enqueueDeliveries(
-            [
-              {
-                deliveryId: receipt.deliveryId,
-                causeKey: "reply:" + input.inputId,
-                inputId: input.inputId,
-                taskId,
-                message: receipt,
-              },
-            ],
-            yield* now,
-          );
-          yield* deliverDue;
-          assert.strictEqual(yield* recordsOf("receipt"), 1);
-          assert.strictEqual(yield* outboxState("receipt"), "delivering");
-          assert.isFalse((yield* row()).unread);
-          yield* allowMarks;
-          yield* TestClock.adjust("5 seconds");
-          yield* deliverDue;
-          assert.strictEqual(yield* recordsOf("receipt"), 1);
-          assert.strictEqual(yield* outboxState("receipt"), "delivered");
-          assert.isTrue((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: a settle that keeps failing past the quick retries settles once the database recovers, freeing the task's later posts",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          yield* refuseMarks;
-          yield* TestClock.adjust("1 second");
-          yield* deliver(message("stuck"));
-          yield* queue(message("behind"));
-          for (let pass = 0; pass < 10; pass++) {
-            yield* TestClock.adjust("30 seconds");
-            yield* deliverDue;
-          }
-          assert.strictEqual(yield* outboxState("stuck"), "delivering");
-          assert.strictEqual(yield* outboxState("behind"), "pending");
-          assert.isFalse((yield* row()).unread);
-          yield* allowMarks;
-          yield* TestClock.adjust("30 seconds");
-          yield* deliverDue;
-          assert.strictEqual(yield* recordsOf("stuck"), 1);
-          assert.strictEqual(yield* outboxState("stuck"), "delivered");
-          assert.strictEqual(yield* outboxState("behind"), "delivered");
-          assert.isTrue((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: past the cap of waiting settles, a recorded post is taken back and settles once the database recovers",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* setup;
-          const ids = Array.from({ length: 101 }, (_, index) =>
-            ChannelTaskId.make("task:sat-" + String(index).padStart(3, "0")),
-          );
-          for (const id of ids) yield* task(id);
-          yield* refuseMarks;
-          yield* queue(...ids.map((id) => message("sat-" + id.slice("task:sat-".length), id)));
-          yield* deliverDue;
-          yield* deliverDue;
-          const sql = yield* SqlClient.SqlClient;
-          const states = sql<{ readonly state: string; readonly n: number }>`SELECT state,
-            count(*) AS n FROM channel_outbox WHERE delivery_id LIKE 'sat-%' GROUP BY state`;
-          assert.deepStrictEqual(yield* states, [{ state: "delivering", n: 101 }]);
-          yield* allowMarks;
-          yield* TestClock.adjust("30 seconds");
-          for (let pass = 0; pass < 3; pass++) yield* deliverDue;
-          assert.deepStrictEqual(yield* states, [{ state: "delivered", n: 101 }]);
-          const [records] = yield* sql<{ readonly n: number }>`SELECT count(*) AS n
-            FROM orchestration_command_receipts WHERE command_type = 'channel.timeline.record'`;
-          assert.strictEqual(records?.n, 101);
-          const [marks] = yield* sql<{ readonly n: number }>`SELECT count(*) AS n
-            FROM channel_runtime_state WHERE key LIKE 'task-message-mark:%'`;
-          assert.strictEqual(marks?.n, 101);
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: an overflow that lands while a recovery scan runs is kept for the next scan",
-    () =>
-      withHolds(
-        Effect.gen(function* () {
-          yield* setup;
-          const ids = Array.from({ length: 101 }, (_, index) =>
-            ChannelTaskId.make("task:scan-" + String(index).padStart(3, "0")),
-          );
-          for (const id of ids) yield* task(id);
-          yield* refuseMarks;
-          yield* queue(...ids.map((id) => message("scan-" + id.slice("task:scan-".length), id)));
-          yield* deliverDue;
-          yield* deliverDue;
-          // 100 settles wait and one post is over the cap, so a scan is due 30 seconds from now.
-          yield* TestClock.adjust("30 seconds");
-          const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
-            goatInput("and this", "scan-receipt-input"),
-            rpcContext,
-          );
-          const receipt: ChannelOutboundMessage = {
-            ...message("scan-receipt", ids[0]),
-            kind: "receipt",
-            inReplyToInputId: input.inputId,
-          };
-          yield* (yield* Ledger.ChannelLedger).enqueueDeliveries(
-            [
-              {
-                deliveryId: receipt.deliveryId,
-                causeKey: "reply:" + input.inputId,
-                inputId: input.inputId,
-                taskId: ids[0],
-                message: receipt,
-              },
-            ],
-            yield* now,
-          );
-          const token = yield* ownerToken;
-          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
-          const holds = yield* LedgerCallHolds;
-          // The receipt is sent and in flight, its settle held, when the scan takes its snapshot.
-          const settle = yield* holds.holdNext(
-            "recordDelivery",
-            (call) => call.deliveryId === "scan-receipt",
-          );
-          yield* worker.deliverReceipts(token);
-          yield* settle.reached;
-          const scan = yield* holds.holdNext("releaseUnsentDeliveries");
-          const pass = yield* Effect.forkChild(worker.deliverDue(token));
-          yield* scan.reached;
-          // While the scan is held, the receipt's settle fails and finds the queue full.
-          yield* settle.release;
-          yield* worker.settleReceipts;
-          assert.strictEqual(yield* outboxState("scan-receipt"), "delivering");
-          yield* allowMarks;
-          yield* scan.release;
-          yield* Fiber.join(pass);
-          assert.strictEqual(yield* outboxState("scan-receipt"), "delivering");
-          yield* TestClock.adjust("30 seconds");
-          for (let round = 0; round < 3; round++) yield* deliverDue;
-          assert.strictEqual(yield* outboxState("scan-receipt"), "delivered");
-          assert.strictEqual(yield* recordsOf("scan-receipt"), 1);
         }),
       ),
   );
