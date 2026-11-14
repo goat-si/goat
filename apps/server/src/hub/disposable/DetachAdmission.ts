@@ -168,16 +168,24 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const retiring = retires(enroll.health, yield* Clock.currentTimeMillis);
         const stoppedForce =
           row.state === "linked" && known?.force === true && known.stop !== undefined;
-        const mayOwe = outcome !== undefined && MAY_OWE.has(outcome);
+        // A stop stored with no outcome (every answer lost) may owe as much as an unread one.
+        const mayOwe = outcome === undefined || MAY_OWE.has(outcome);
         if (stoppedForce && mayOwe && !person && !retiring)
           return yield* fail(
             "person_required",
             "This machine's removal without it is unfinished in OpenCodex; only a person goes on with it, in Settings → Hub on web or desktop.",
           );
         const retirement = stoppedForce && (person ? mayOwe || failing : retiring);
-        // Not read since it stopped, on a machine that answers: the force step reads it first.
+        // Not read since it stopped, on a machine that answers: the force step reads it, and the
+        // owner it stored, first. A person's Force stays a force.
         const check =
-          retirement && !failing && (outcome === "not_found" || outcome === "unreadable");
+          retirement &&
+          !failing &&
+          input.force !== true &&
+          (outcome === undefined ||
+            outcome === "not_found" ||
+            outcome === "unreadable" ||
+            outcome === "retirement_owned");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true

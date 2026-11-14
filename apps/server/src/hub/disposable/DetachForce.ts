@@ -137,7 +137,16 @@ export const makeForceStep = (ops: DetachOps) =>
       // A person's detach after an unreadable read-back: what the id still owes decides.
       if (before.outcome === "check") {
         if (known.kind === "unreadable") return;
-        if (known.kind === "failed_clean" || known.kind === "not_found")
+        const ownedBy = before.owner;
+        const held =
+          ownedBy === undefined
+            ? undefined
+            : yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
+        if (held?.kind === "unreadable") return;
+        const owes =
+          held !== undefined &&
+          (held.kind === "open" || (held.kind === "unsettled" && !held.resolved));
+        if ((known.kind === "failed_clean" || known.kind === "not_found") && !owes)
           return yield* note(row, withDetach(enroll, { step: "revoke", attempt: before.attempt }));
       }
       if (known.kind === "clean" && !pending) {
