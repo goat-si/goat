@@ -771,44 +771,58 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 
-  it.effect("a usage update lands only in a snapshot its condition accepts when it applies", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const probeSnapshot = yield* Ref.make<ServerProvider>(refreshedSnapshot);
-        const provider = yield* makeManagedServerProvider<TestSettings>({
-          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
-          getSettings: Effect.succeed({ enabled: true }),
-          streamSettings: Stream.empty,
-          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
-          initialSnapshot: () => Effect.succeed(initialSnapshot),
-          checkProvider: Ref.get(probeSnapshot),
-          refreshOnInterval: false,
-        });
-        const accepted = (yield* provider.refresh).checkedAt;
-        // A report judged against the shown snapshot, then a newer check commits before it applies.
-        const appliesTo = (shown: ServerProvider) => shown.checkedAt === accepted;
-        yield* Ref.set(probeSnapshot, {
-          ...refreshedSnapshot,
-          checkedAt: "2026-04-10T00:00:05.000Z",
-        });
-        const newer = yield* provider.refresh;
-        const session = {
-          id: "five_hour",
-          kind: "session",
-          label: "Session",
-          usedPercent: 40,
-        } as const;
-        yield* provider.applyUsageLimits(
-          { checkedAt: "2026-04-10T00:00:06.000Z", windows: [session] },
-          { appliesTo },
-        );
-        assert.strictEqual(yield* provider.getSnapshot, newer);
-        yield* provider.applyUsageLimits(
-          { checkedAt: "2026-04-10T00:00:07.000Z", windows: [session] },
-          { appliesTo: (shown) => shown.checkedAt === newer.checkedAt },
-        );
-        assert.deepStrictEqual((yield* provider.getSnapshot).usageLimits?.windows, [session]);
-      }),
-    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  it.effect(
+    "a usage update its condition rejects leaves the snapshot and its subscribers alone",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const probeSnapshot = yield* Ref.make<ServerProvider>(refreshedSnapshot);
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Ref.get(probeSnapshot),
+            refreshOnInterval: false,
+          });
+          const accepted = (yield* provider.refresh).checkedAt;
+          // A report judged against the shown snapshot, then a newer check commits before it applies.
+          const appliesTo = (shown: ServerProvider) => shown.checkedAt === accepted;
+          yield* Ref.set(probeSnapshot, {
+            ...refreshedSnapshot,
+            checkedAt: "2026-04-10T00:00:05.000Z",
+          });
+          const newer = yield* provider.refresh;
+          const session = (usedPercent: number) =>
+            ({ id: "five_hour", kind: "session", label: "Session", usedPercent }) as const;
+          const published = yield* Stream.take(provider.streamChanges, 2).pipe(
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+          yield* provider.applyUsageLimits(
+            { checkedAt: "2026-04-10T00:00:06.000Z", windows: [session(40)] },
+            { appliesTo },
+          );
+          assert.strictEqual(yield* provider.getSnapshot, newer);
+          yield* provider.applyUsageLimits(
+            { checkedAt: "2026-04-10T00:00:07.000Z", windows: [session(70)] },
+            { appliesTo: (shown) => shown.checkedAt === newer.checkedAt },
+          );
+          assert.deepStrictEqual((yield* provider.getSnapshot).usageLimits?.windows, [session(70)]);
+          // Without a condition an update applies as it always has.
+          yield* provider.applyUsageLimits({
+            checkedAt: "2026-04-10T00:00:08.000Z",
+            windows: [session(80)],
+          });
+          // The rejected update published nothing: subscribers see only the two that applied.
+          const events = Array.from(yield* Fiber.join(published));
+          assert.deepStrictEqual(
+            events.map((event) => event.usageLimits?.windows),
+            [[session(70)], [session(80)]],
+          );
+        }),
+      ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 });
