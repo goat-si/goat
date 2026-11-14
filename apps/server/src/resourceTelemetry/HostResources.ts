@@ -9,6 +9,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -89,6 +90,10 @@ const make = Effect.fn("makeHostResources")(function* () {
   const readFile = (path: string) => fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
 
   const sample = Effect.fn("HostResources.sample")(function* () {
+    // Started before any file read, so the interval runs from the start of the sample.
+    const interval = yield* Effect.forkChild(Effect.sleep("200 millis"), {
+      startImmediately: true,
+    });
     // cgroup v2 only; limits of the server's own cgroup, which is `/` inside a container.
     const cgroupPath =
       platform === "linux"
@@ -123,7 +128,7 @@ const make = Effect.fn("makeHostResources")(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
     const [, extras] = yield* Effect.all(
       [
-        Effect.sleep("200 millis"),
+        Fiber.join(interval),
         readHostCapacityExtras({
           platform,
           dataDir: baseDir,

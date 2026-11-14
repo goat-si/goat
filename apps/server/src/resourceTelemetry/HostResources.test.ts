@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as NodeOS from "node:os";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -52,8 +53,8 @@ const unlimitedCgroup = {
   [`${cgroup}/memory.stat`]: [`anon ${450 * MiB}\ninactive_file ${100 * MiB}\n`],
 };
 
-// Each path serves its values in order and repeats the last one.
-const linuxHost = (files: Record<string, ReadonlyArray<string>>) => {
+// Each path serves its values in order and repeats the last one, after `answered` when given.
+const linuxHost = (files: Record<string, ReadonlyArray<string>>, answered = Effect.void) => {
   const reads = new Map<string, number>();
   return HostResources.layer.pipe(
     Layer.provide(
@@ -76,7 +77,7 @@ const linuxHost = (files: Record<string, ReadonlyArray<string>>) => {
             }
             const index = reads.get(path) ?? 0;
             reads.set(path, index + 1);
-            return Effect.succeed(values[Math.min(index, values.length - 1)]!);
+            return Effect.as(answered, values[Math.min(index, values.length - 1)]!);
           },
         }),
         Layer.succeed(HostProcess.Platform, "linux"),
@@ -228,5 +229,23 @@ describe("HostResources.layer", () => {
         }),
       ),
     ),
+  );
+
+  it.effect("times its sample from before the first Linux file read answers", () =>
+    Effect.gen(function* () {
+      setup(0.25);
+      const answered = yield* Deferred.make<void>();
+      const snapshot = yield* Effect.gen(function* () {
+        const host = yield* HostResources.HostResources;
+        const fiber = yield* Effect.forkChild(host.read);
+        // The interval passes while /proc/self/cgroup is still being read, as on a real host.
+        yield* TestClock.adjust("200 millis");
+        yield* Deferred.succeed(answered, undefined);
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(linuxHost(unlimitedCgroup, Deferred.await(answered))));
+
+      assert.strictEqual(snapshot.cpuCount, 8);
+      assert.closeTo(snapshot.cpuUtilization ?? Number.NaN, 0.25, 1e-9);
+    }),
   );
 });
