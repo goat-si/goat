@@ -21,7 +21,7 @@ it.effect("keeps redacted output the command emitted before timing out", () => {
         stdout: Stream.concat(
           Stream.make(
             encoder.encode(
-              'PROGRESS: extracting\n{"credential":"pairing-secret"}\n{"token":"partial-secret',
+              'PROGRESS: extracting\n{"credential":"pairing-secret"}\n{"token":"partial\\"secret',
             ),
           ),
           Stream.never,

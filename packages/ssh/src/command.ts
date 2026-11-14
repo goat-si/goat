@@ -334,7 +334,7 @@ export const sshDiagnosticChunks = <E>(
 
 function redactSshErrorOutput(output: string, keepTail = false): string {
   const redacted = output.replace(
-    /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+("|$)/giu,
+    /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")(?:\\.|[^"\\])*("|$)/giu,
     "$1[redacted]$2",
   );
   if (redacted.length <= MAX_SSH_ERROR_OUTPUT_LENGTH) return redacted;
