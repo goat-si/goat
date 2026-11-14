@@ -25,7 +25,7 @@ it("shows the zero spend cap when there are no usage windows", async () => {
       ),
     );
     expect(container.textContent).toContain("Monthly spend: $0 cap");
-    expect(container.textContent).not.toContain("No usage limits");
+    expect(container.textContent).not.toContain("No limits reported.");
   } finally {
     await act(() => root.unmount());
     vi.unstubAllGlobals();

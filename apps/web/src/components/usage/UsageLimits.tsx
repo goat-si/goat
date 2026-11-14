@@ -407,3 +407,7 @@ export function UsageLimitsSection({
   );
   return <UsageLimitsPooled presentations={selected} now={now} cursorPrompt={cursorPrompt} />;
 }
+
+export function ZeroSpendCap() {
+  return <span className="text-muted-foreground">Monthly spend: $0 cap</span>;
+}

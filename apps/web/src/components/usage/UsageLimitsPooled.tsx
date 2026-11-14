@@ -28,7 +28,7 @@ import { Alert, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PaceIcon, ResetCredits, barColor } from "./UsageLimits";
+import { PaceIcon, ResetCredits, ZeroSpendCap, barColor } from "./UsageLimits";
 
 const ORIGIN_BADGE = {
   pool: { label: "Shared pool", variant: "info" },
@@ -203,7 +203,7 @@ function GroupTable({
               </td>
               <td className="px-2 py-2.5">
                 <StatusCell row={row} now={now} />
-                {row.account?.limits.zeroSpendCap ? <span>Monthly spend: $0 cap</span> : null}
+                {row.account?.limits.zeroSpendCap ? <ZeroSpendCap /> : null}
               </td>
               {group.windows.map((window) => {
                 const member = window.columns.find(

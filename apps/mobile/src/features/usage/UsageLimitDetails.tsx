@@ -19,9 +19,11 @@ export function UsageLimitDetails({
       ) : (
         <View className="gap-3">{children}</View>
       )}
-      {limits.zeroSpendCap ? (
-        <Text className="text-sm text-foreground-muted">Monthly spend: $0 cap</Text>
-      ) : null}
+      {limits.zeroSpendCap ? <ZeroSpendCap /> : null}
     </>
   );
+}
+
+export function ZeroSpendCap() {
+  return <Text className="text-sm text-foreground-muted">Monthly spend: $0 cap</Text>;
 }
