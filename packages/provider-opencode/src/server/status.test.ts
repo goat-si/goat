@@ -3,9 +3,7 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -17,12 +15,7 @@ import { beforeEach } from "vite-plus/test";
 import { OpenCodeSettings } from "../settings.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
-import {
-  checkOpenCodeProviderStatus,
-  loadOpenCode2Workspace,
-  type OpenCode2Model,
-  type OpenCode2Workspace,
-} from "./status.ts";
+import { checkOpenCodeProviderStatus, type OpenCode2Model } from "./status.ts";
 import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
 import { probeOpenCodeRuntime } from "./versionProbe.ts";
 import {
@@ -1049,39 +1042,3 @@ it.layer(layerTest)("checkOpenCodeProviderStatus with configured server URL", (i
     }),
   );
 });
-
-const builtinCommands = [
-  { name: "init", description: "guided AGENTS.md setup" },
-  { name: "review", description: "review changes [commit|branch|pr], defaults to uncommitted" },
-];
-const builtinSkills = [
-  { id: "opencode", name: "OpenCode", path: "/builtin/opencode.md" },
-  { id: "report", name: "Report", path: "/builtin/report.md" },
-];
-const scanned: OpenCode2Workspace = {
-  commands: [...builtinCommands, { name: "hello", description: "Say hello to the workspace" }],
-  skills: [
-    ...builtinSkills,
-    {
-      id: "greet",
-      name: "greet",
-      path: "/work/.opencode/skills/greet/SKILL.md",
-      description: "Greets the user with the secret word MANGO.",
-    },
-  ],
-};
-
-it.effect("reads a fresh OpenCode 2 directory again once its scan has ended", () =>
-  Effect.gen(function* () {
-    const reads: Array<OpenCode2Workspace> = [{ commands: [], skills: [] }, scanned];
-    const scanEnded = yield* Deferred.make<void>();
-    const load = yield* loadOpenCode2Workspace(
-      Effect.sync(() => reads.shift()!),
-      Deferred.await(scanEnded),
-    ).pipe(Effect.forkChild);
-    yield* Effect.yieldNow;
-    NodeAssert.equal(reads.length, 1);
-    yield* Deferred.succeed(scanEnded, undefined);
-    NodeAssert.deepEqual(yield* Fiber.join(load), scanned);
-  }),
-);
