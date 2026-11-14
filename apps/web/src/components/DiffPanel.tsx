@@ -25,7 +25,7 @@ import {
 import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
-import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
+import { useDiffViewControls } from "./diffs/useDiffViewControls";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
@@ -52,6 +52,7 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { selectVisibleDiffFiles } from "./DiffPanel.logic";
+import { gitDiffPreviewInput } from "~/lib/gitDiffPreviewInput";
 import { DiffPanelAwaitingCheckpoint, useDiffPanelTurn } from "./diffs/DiffPanelTurn";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
@@ -129,7 +130,8 @@ export default function DiffPanel({
   }));
   const diffLayout = settings.diffLayout;
   const [wordWrap, setWordWrapOverride] = useWordWrap(settings.wordWrap);
-  const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
+  const diffIgnoreWhitespace =
+    useDiffPanelSessionStore((state) => state.ignoreWhitespace) ?? settings.diffIgnoreWhitespace;
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     DIFF_FILE_TREE_STORAGE_KEY,
     false,
@@ -254,13 +256,12 @@ export default function DiffPanel({
   );
   const branchDiffPreviewInput =
     canReadFiles && isGitSelection && activeThread && activeCwd
-      ? {
+      ? gitDiffPreviewInput({
           cwd: activeCwd,
           scope: GIT_REVIEW_SCOPES[selectedGitScope].sourceKind,
-          ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
+          baseRef: selectedBaseRef,
           ignoreWhitespace: diffIgnoreWhitespace,
-          metadataOnly: true,
-        }
+        })
       : undefined;
   const canRefreshGitDiff =
     isGitRepo && isGitSelection && activeThread != null && activeCwd != null;
@@ -482,13 +483,25 @@ export default function DiffPanel({
   const diffLineStat = sourceLineStat ?? getDiffLineStat(renderableFiles);
   const fileTreeEntries = diffFileTreeEntries(visibleFiles);
   const treeRevealScope = JSON.stringify([collapseScopeKey, diffSelection]);
-  const codeViewReveal = useCodeViewFileReveal(treeRevealScope);
+  const remainingFileCount = renderableFiles.length - settledFileCount;
+  const {
+    reveal: codeViewReveal,
+    scroll: codeViewScroll,
+    attach: attachCodeView,
+    flush: flushCodeView,
+  } = useDiffViewControls(
+    treeRevealScope,
+    collapseScopeKey,
+    !isRefreshingDiff && remainingFileCount === 0,
+    remainingFileCount > 0 ? loadNextFiles : null,
+  );
   const revealDiffFile = useStableCallback((filePath: string) => {
     const index = renderableFileEntries.findIndex(
       (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
     );
     const file = renderableFileEntries[index];
     if (!file) return false;
+    codeViewScroll.discard();
     updateCollapsedDiffFiles((current) => {
       const next = new Set(current);
       next.delete(file.fileKey);
@@ -571,6 +584,7 @@ export default function DiffPanel({
   });
 
   const toggleDiffFileCollapse = () => {
+    codeViewScroll.discard();
     setCodeViewRevision((current) => current + 1);
     updateCollapsedDiffFiles((current) => toggleAllDiffFiles(shownFileKeys, current));
   };
@@ -902,9 +916,9 @@ export default function DiffPanel({
                 variant="ghost"
                 size="sm"
                 pressed={diffIgnoreWhitespace}
-                onPressedChange={(pressed) => {
-                  setDiffIgnoreWhitespace(Boolean(pressed));
-                }}
+                onPressedChange={(pressed) =>
+                  useDiffPanelSessionStore.getState().setIgnoreWhitespace(Boolean(pressed))
+                }
               />
             }
           >
@@ -1084,7 +1098,8 @@ export default function DiffPanel({
                   <AnnotatableCodeView
                     environmentId={activeThread?.environmentId}
                     key={collapseScopeKey ?? reviewSectionId}
-                    viewerRef={codeViewReveal.attach}
+                    viewerRef={attachCodeView}
+                    onScroll={codeViewScroll.onScroll}
                     codeViewKey={`${codeViewMountKey}:${lazySource ? filePatchScope : "preview"}`}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
@@ -1143,7 +1158,7 @@ export default function DiffPanel({
                       preferredHighlighter: PREFERRED_HIGHLIGHTER,
                       themeType: resolvedTheme as DiffThemeType,
                       stickyHeaders: true,
-                      onPostRender: codeViewReveal.flush,
+                      onPostRender: flushCodeView,
                       ...(currentLoadDiffFiles ? { loadDiffFiles } : {}),
                     }}
                   />

@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   draft: null as (Branched & { worktreePath: null; envMode: "local" }) | null,
   branch: "main",
   isDefaultRef: false,
+  failAction: false,
   actions: [] as { scope: { cwd: string | null }; input: GitActionInput }[],
   metadataRequests: [] as { environmentId: string; branch: string }[],
   toasts: [] as Toast[],
@@ -56,6 +57,7 @@ vi.mock(import("~/state/query"), async (original) => ({
   ...(await original()),
   useEnvironmentQuery: (() => ({
     data: {
+      sources: [],
       sourceControlProviders: [],
       isRepo: true,
       refName: state.branch,
@@ -121,6 +123,7 @@ vi.mock(import("~/lib/sourceControlActions"), async (original) => ({
   useGitStackedAction: ((scope: { cwd: string | null }) => ({
     run: async (input: GitActionInput) => {
       state.actions.push({ scope, input });
+      if (state.failAction) return AsyncResult.failure(Cause.fail(new Error("commit failed")));
       if (input.featureBranch) state.branch = "feature";
       state.afterGitAction?.();
       return {
@@ -190,6 +193,7 @@ function setup() {
   state.draft = null;
   state.branch = "main";
   state.isDefaultRef = false;
+  state.failAction = false;
   state.actions = [];
   state.metadataRequests = [];
   state.toasts = [];
@@ -239,4 +243,20 @@ describe("Live branch sync", () => {
       await vi.waitFor(() => expect(state.draft?.branch).toBe(branch));
     }
   });
+});
+
+it("keeps a commit message for retry when the commit fails", async () => {
+  setup();
+  state.failAction = true;
+  await using screen = await render(control());
+  await userEvent.click(screen.getByRole("button", { name: "Git action options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Commit", exact: true }));
+  await userEvent.fill(page.getByPlaceholder("Leave empty to auto-generate"), "Keep this message");
+  await userEvent.click(page.getByRole("button", { name: "Commit", exact: true }));
+  await vi.waitFor(() => expect(state.actions).toHaveLength(1));
+  await userEvent.click(screen.getByRole("button", { name: "Git action options" }));
+  await userEvent.click(page.getByRole("menuitem", { name: "Commit", exact: true }));
+  await expect
+    .element(page.getByPlaceholder("Leave empty to auto-generate"))
+    .toHaveValue("Keep this message");
 });

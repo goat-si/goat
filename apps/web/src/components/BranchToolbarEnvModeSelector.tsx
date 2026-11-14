@@ -91,7 +91,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <Tooltip>
         <TooltipTrigger render={lockedRow} />
         <TooltipPopup>
-          {forceNewWorktree ? "Each model starts in its own worktree." : workspaceLabel}
+          {forceNewWorktree
+            ? "Each model starts in its own worktree."
+            : (activeWorktreePath ?? workspaceLabel)}
         </TooltipPopup>
       </Tooltip>
     );

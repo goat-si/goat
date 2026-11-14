@@ -15,6 +15,7 @@ import {
   CircleDashedIcon,
   CircleDotIcon,
   CircleSlashIcon,
+  CircleStopIcon,
   CircleXIcon,
   UserCheckIcon,
   UserRoundIcon,
@@ -213,7 +214,11 @@ const CHECK_STATUS_PRESENTATION = {
     toneClassName: "text-success-foreground",
   },
   failure: { label: "Failed", Icon: CircleXIcon, toneClassName: "text-destructive" },
-  cancelled: { label: "Cancelled", Icon: CircleXIcon, toneClassName: "text-destructive" },
+  cancelled: {
+    label: "Cancelled",
+    Icon: CircleStopIcon,
+    toneClassName: "text-muted-foreground/70",
+  },
   skipped: { label: "Skipped", Icon: CircleSlashIcon, toneClassName: "text-muted-foreground/70" },
   neutral: { label: "Neutral", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
 } as const satisfies Record<

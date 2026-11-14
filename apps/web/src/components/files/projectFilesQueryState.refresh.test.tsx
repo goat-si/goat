@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   type AuthSessionState,
   type ProjectListEntriesResult,
+  type ProjectFileFailure,
   ProjectReadFileError,
   type ProjectReadFileResult,
 } from "@goat/contracts";
@@ -434,7 +435,7 @@ describe("project query refresh", () => {
 it("confirms files from reads and preserves that identity until a definitive folder result", () => {
   const contents = file("# readme");
   const success = AsyncResult.success(contents);
-  const failure = (kind: ProjectReadFileError["failure"], cached = false) =>
+  const failure = (kind: ProjectFileFailure, cached = false) =>
     AsyncResult.failure(
       Cause.fail(
         new ProjectReadFileError({ cwd: "/repo", relativePath: "src/preview.ts", failure: kind }),
