@@ -111,6 +111,7 @@ import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
+import { advertisedModel } from "./ModelSelectionValidation.ts";
 import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
 
 import {
@@ -1456,16 +1457,15 @@ const make = Effect.gen(function* () {
       requestedModel !== undefined &&
       provider !== undefined &&
       provider.models.length > 0 &&
-      !provider.models.some((candidate) => candidate.slug === requestedModel)
+      advertisedModel(provider, requestedModel) === undefined
     ) {
       return yield* failure(
         "model_unavailable",
         `Model ${requestedModel} is not advertised by provider ${instanceId}.`,
       );
     }
-
-    const descriptors = provider.models.find((candidate) => candidate.slug === model)?.capabilities
-      ?.optionDescriptors;
+    const advertised = advertisedModel(provider, model);
+    const descriptors = advertised?.capabilities?.optionDescriptors;
     const requestedOptions = withLegacyUltracodeEffort(descriptors, input.target?.options);
     if (requestedOptions !== undefined) {
       const invalid = invalidOptionSelections(requestedOptions, descriptors);
@@ -1476,9 +1476,10 @@ const make = Effect.gen(function* () {
         );
       }
     }
-
     const inheritsOptions =
-      instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
+      instanceId === inheritedSelection.instanceId &&
+      (advertised?.slug ?? model) ===
+        (advertisedModel(provider, inheritedSelection.model)?.slug ?? inheritedSelection.model);
     const options = overrideOptionSelections(
       inheritsOptions
         ? knownOptions(

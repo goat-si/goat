@@ -3,11 +3,18 @@ import {
   type ModelSelection,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
+  type ServerProvider,
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import * as Effect from "effect/Effect";
 
 import type * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+
+export const advertisedModel = (provider: ServerProvider, model: string) =>
+  provider.models.find((candidate) => candidate.slug === model) ??
+  provider.models.find((candidate) =>
+    candidate.aliases?.some((alias) => alias.toLowerCase() === model.toLowerCase()),
+  );
 
 export function knownOptions(
   options: ReadonlyArray<ProviderOptionSelection> | undefined,
@@ -71,7 +78,7 @@ export const checkModelSelection = Effect.fn("McpModelSelection.check")(function
     requested &&
     candidate !== undefined &&
     candidate.models.length > 0 &&
-    !candidate.models.some((model) => model.slug === selection.model);
+    advertisedModel(candidate, selection.model) === undefined;
   if (misses(provider)) {
     const refreshed = yield* registry.refreshInstance(provider.instanceId);
     provider = refreshed.find((entry) => entry.instanceId === selection.instanceId) ?? provider;
@@ -82,8 +89,7 @@ export const checkModelSelection = Effect.fn("McpModelSelection.check")(function
       });
   }
   if (selection.options !== undefined) {
-    const descriptors = provider.models.find((model) => model.slug === selection.model)
-      ?.capabilities?.optionDescriptors;
+    const descriptors = advertisedModel(provider, selection.model)?.capabilities?.optionDescriptors;
     const invalid = invalidOptionSelections(selection.options, descriptors);
     if (invalid.length > 0)
       return yield* new OrchestratorMcpFailure({
