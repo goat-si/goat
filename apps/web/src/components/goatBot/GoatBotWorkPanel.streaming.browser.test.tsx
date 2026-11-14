@@ -1,6 +1,6 @@
 import { EnvironmentId, ThreadId, type BotProfile } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { useSyncExternalStore } from "react";
+import { Profiler, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import "~/index.css";
 import { act, render } from "../../../test/render";
@@ -76,11 +76,6 @@ vi.mock("@goat/client-runtime/goatBot", async (original) => {
     botHomeWork: (...args: Parameters<typeof real.botHomeWork>) => {
       stream.counts.homeRenders += 1;
       return real.botHomeWork(...args);
-    },
-    // GoatBotWorkPanel builds Home's notice from this once per render.
-    goatBotTurnsOutsideList: (...args: Parameters<typeof real.goatBotTurnsOutsideList>) => {
-      stream.counts.panelRenders += 1;
-      return real.goatBotTurnsOutsideList(...args);
     },
     // useBotThreads reads the conversation for the bot's own questions and its task cards.
     goatBotTurnsWaiting: (...args: Parameters<typeof real.goatBotTurnsWaiting>) => {
@@ -222,16 +217,23 @@ async function streamReply() {
   return text;
 }
 
+// Each commit of the panel's tree, whatever inside it rendered.
+const countPanelRender = () => {
+  stream.counts.panelRenders += 1;
+};
+
 function Home({ peekRows }: { readonly peekRows: () => ReadonlyArray<never> }) {
   return (
     <GoatBotMemberContext value={member}>
-      <GoatBotWorkPanel
-        environmentId={EnvironmentId.make("env")}
-        threadId={ThreadId.make("bot")}
-        onOpenFile={noop}
-        onClose={noop}
-        peekRows={peekRows}
-      />
+      <Profiler id="home" onRender={countPanelRender}>
+        <GoatBotWorkPanel
+          environmentId={EnvironmentId.make("env")}
+          threadId={ThreadId.make("bot")}
+          onOpenFile={noop}
+          onClose={noop}
+          peekRows={peekRows}
+        />
+      </Profiler>
     </GoatBotMemberContext>
   );
 }
