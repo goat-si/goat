@@ -286,7 +286,7 @@ it("a detaching machine that left Pen says when its slot is free, for a detach a
     .toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Force detach cc-1" }));
   await expect
-    .element(screen.getByText(/has left Pen, so its slot is free once a person forgets/))
+    .element(screen.getByText(/has left Pen, so its slot is free once the detach ends/))
     .toBeVisible();
   await expect.element(screen.getByText(/stays in Pen/)).not.toBeInTheDocument();
 });
