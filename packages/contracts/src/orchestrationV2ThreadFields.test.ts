@@ -80,3 +80,12 @@ it("decodes Cursor's session store directory beside older native metadata", () =
   const olderClient = Schema.decodeUnknownSync(Schema.Struct(oldFields));
   expect(olderClient({ cursorStoreCwd: "/repo", title: "Thread" })).toEqual({ title: "Thread" });
 });
+
+it("refuses a Cursor session store directory that is not an absolute path", () => {
+  const decode = Schema.decodeUnknownSync(OrchestrationV2ProviderThreadNativeMetadata);
+  expect(() => decode({ cursorStoreCwd: "repo" })).toThrow();
+  expect(() => decode({ cursorStoreCwd: "../other-project" })).toThrow();
+  expect(() => decode({ cursorStoreCwd: "~/repo" })).toThrow();
+  expect(decode({ cursorStoreCwd: "C:\\work\\repo" }).cursorStoreCwd).toBe("C:\\work\\repo");
+  expect(decode({ cursorStoreCwd: "\\\\server\\share" }).cursorStoreCwd).toBe("\\\\server\\share");
+});
