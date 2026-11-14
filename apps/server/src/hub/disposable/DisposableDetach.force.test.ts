@@ -64,7 +64,7 @@ it.effect(
 );
 
 it.effect(
-  "a link_retirement_pending that persists after the one resend waits 30 minutes between tries, with no audit row per repeat",
+  "a link_retirement_pending that persists after the one resend waits 30 minutes between tries, with no audit row per repeat, until a person's detach buys one more resend",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -74,7 +74,8 @@ it.effect(
         yield* detach(PERSON, attachId, "d-1", true);
         yield* detachPass;
         ocx.machineAnswers = true;
-        ocx.recoverRefusal = "link_retirement_pending";
+        ocx.pendingReceipt = true;
+        ocx.pendingFault = true;
         for (let tick = 0; tick < 12; tick += 1) {
           yield* TestClock.adjust(HOUR / 4);
           yield* detachPass;
@@ -85,6 +86,16 @@ it.effect(
         const recovers = host.control.calls.filter((args) => args[1] === "recover").length;
         // Three hours at one try per 30 minutes, give or take the first.
         expect(recovers).toBeLessThanOrEqual(7);
+        // The fault is fixed: the text tells a person to detach again, which repeats the revoke once.
+        expect((yield* listed(attachId))?.message).toContain("detaches it again");
+        ocx.pendingFault = false;
+        yield* detach(PERSON, attachId, "d-2");
+        for (let tick = 0; tick < 6; tick += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        expect(ocx.sent.filter((id) => id === attachId + ".force.1")).toHaveLength(3);
+        expect((yield* listed(attachId))?.state).toBe("purged");
       }),
     ),
 );
@@ -157,6 +168,62 @@ it.effect("a force after a handshake found a changed host key resolves the purge
   ),
 );
 
+it.effect(
+  "a stopped retirement force that had committed is read back once the machine answers: retired, with its audit row",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "unreachable");
+        ocx.machineAnswers = false;
+        // Every read of the force is lost until it stops after three sends; the next read finds it committed.
+        ocx.loseRead = 7;
+        yield* detachPass;
+        // The force goes at the 49th failure and stops after its third send, a pass later.
+        for (let check = 0; check < 51; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        expect((yield* listed(attachId))?.message).toContain("stopped");
+        host.control.reachAnswers.delete(nodeId);
+        ocx.machineAnswers = true;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        expect((yield* listed(attachId))?.state).toBe("retired");
+        expect((yield* audits(attachId, "retired")).length).toBe(1);
+      }),
+    ),
+);
+
+it.effect(
+  "a machine that answers while its stopped retirement cannot be read back is handshaken once per 30 minutes",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { nodeId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "unreachable");
+        ocx.machineAnswers = false;
+        ocx.tombstoneLimit = true;
+        yield* detachPass;
+        for (let check = 0; check < 48; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        host.control.reachAnswers.delete(nodeId);
+        ocx.machineAnswers = true;
+        ocx.loseRead = 100;
+        yield* TestClock.adjust(HOUR / 2);
+        const before = host.control.reached.length;
+        for (let pass = 0; pass < 5; pass += 1) yield* detachPass;
+        expect(host.control.reached.length - before).toBe(1);
+      }),
+    ),
+);
+
 it.effect("a resolve still owed at the last recover is retried before the record ends", () =>
   world((pen, home, _grant, host) =>
     Effect.gen(function* () {
@@ -172,7 +239,11 @@ it.effect("a resolve still owed at the last recover is retried before the record
       ocx.machineAnswers = true;
       yield* TestClock.adjust(HOUR / 2);
       yield* detachPass;
-      expect((yield* listed(attachId))?.state).not.toBe("purged");
+      const owed = yield* listed(attachId);
+      expect(owed?.state).not.toBe("purged");
+      expect(owed?.message).toContain(
+        "ocx link operations resolve --operation-id " + attachId + ".purge.1 --yes",
+      );
       yield* TestClock.adjust(HOUR / 2);
       yield* detachPass;
       yield* detachPass;

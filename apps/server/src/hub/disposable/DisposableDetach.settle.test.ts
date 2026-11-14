@@ -26,7 +26,7 @@ it.effect(
         const done = yield* listed(attachId);
         expect(done?.state).toBe("purged");
         expect(done?.message).toContain(attachId + ".link.1");
-        expect(done?.message).toContain("may still hold");
+        expect(done?.message).toContain("may hold the planted Child");
         expect(ocx.sent).toEqual([]);
       }),
     ),
@@ -134,7 +134,8 @@ it.effect(
         expect(host.control.links.has("lnk_00000000000000aa")).toBe(true);
         const done = yield* listed(attachId);
         expect(done?.state).toBe("purged");
-        expect(done?.message).toContain("may still hold the planted Child");
+        expect(done?.message).toContain("may hold the planted Child");
+        expect(done?.message).toContain("lnk_00000000000000aa");
       }),
     ),
 );

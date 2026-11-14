@@ -60,6 +60,12 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
      * link_retirement_owned (link-routes.ts foreignRetirement, resumeRetirementBeforeReplay).
      */
     ownsReceiptOnLimit: false,
+    /**
+     * Recover answers link_retirement_pending until a repeat of the committed forced revoke clears
+     * its receipt; while pendingFault holds (a full disk), a repeat does not clear it.
+     */
+    pendingReceipt: false,
+    pendingFault: false,
     /** The next forced revokes are refused before the journal (another operation holds the link). */
     busy: 0,
     /** The next journal reads fail, as a lost answer would. */
@@ -116,8 +122,11 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       known !== undefined &&
       (!force || known.state === "committed" || known.state === "failed_clean") &&
       known.ownsReceipt !== true
-    )
+    ) {
+      if (force && known.state === "committed" && !control.pendingFault)
+        control.pendingReceipt = false;
       return answer(known);
+    }
     if (force && control.busy > 0) {
       control.busy -= 1;
       return refused(5, { code: "link_operation_in_progress" });
@@ -189,6 +198,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     if (control.childMissing)
       return refused(1, { code: "remote_recover_failed", hint: "managed_child_missing" });
     if (control.recoverRefusal !== undefined) return refused(5, { code: control.recoverRefusal });
+    if (control.pendingReceipt) return refused(5, { code: "link_retirement_pending" });
     tombstones.delete(linkId);
     return { code: 0, stdout: json({ linkId, outcome: "clean", purged: true }) };
   };
