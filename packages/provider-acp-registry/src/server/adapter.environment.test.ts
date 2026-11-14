@@ -8,6 +8,7 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -17,6 +18,16 @@ import { makeTurnInput } from "../../../../apps/server/src/orchestration-v2/Adap
 import { AcpRegistrySettings } from "../settings.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import { makeAcpRegistryAdapterV2 } from "./adapter.ts";
+import {
+  decodeAcpRegistrySettings,
+  layerResolver,
+  registryUrl,
+  makeAgent,
+  makeRegistry,
+  settings,
+  archiveUrl,
+} from "./AcpRegistrySupport.testkit.ts";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 const decodeSettings = Schema.decodeEffect(AcpRegistrySettings);
 
@@ -147,3 +158,66 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
     Effect.scoped,
   ),
 );
+
+it.effect("finds a local executable using lookup PATH while preserving session PATH", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-acp-path-" });
+    const commandPath = `${cacheDir}/dsh`;
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+    const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+      cacheDir,
+      toolsDir: `${cacheDir}/tools`,
+      registryUrl,
+    });
+    const resolved = yield* resolver.resolve(
+      decodeAcpRegistrySettings({ source: "local", commandPath: "dsh" }),
+      "/workspace",
+      { PATH: cacheDir },
+      { spawnEnvironment: { PATH: "bin" } },
+    );
+    assert.strictEqual(resolved.spawn.command, commandPath);
+    assert.strictEqual(resolved.spawn.env?.PATH, "bin");
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(layerResolver(() => Effect.die("unexpected registry request"))),
+  ),
+);
+
+it.effect("combines the session environment with registry distribution overrides", () => {
+  const agent = makeAgent({
+    binary: {
+      "linux-x86_64": { archive: archiveUrl, cmd: "./agent", env: { OVERRIDE: "registry" } },
+    },
+  });
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "goat-acp-registry-path-",
+    });
+    const commandPath = `${cacheDir}/example-agent`;
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+    const catalog = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+      cacheDir,
+      toolsDir: `${cacheDir}/tools`,
+      registryUrl,
+    });
+    const resolved = yield* catalog.resolve(
+      settings({ commandPath: "example-agent" }),
+      "/workspace",
+      { PATH: cacheDir, LOOKUP_ONLY: "lookup" },
+      { spawnEnvironment: { PATH: "bin", OVERRIDE: "session" } },
+    );
+    assert.strictEqual(resolved.spawn.command, commandPath);
+    assert.deepEqual(resolved.spawn.env, { PATH: "bin", OVERRIDE: "registry" });
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      layerResolver((request) =>
+        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+      ),
+    ),
+  );
+});

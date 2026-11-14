@@ -250,16 +250,23 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
         }),
     ...(options.makeRuntime === undefined
       ? {
-          resolveSessionLaunch: (environment: NodeJS.ProcessEnv) =>
-            catalog.resolve(options.settings, process.cwd(), environment).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new EffectAcpErrors.AcpSpawnError({
-                    command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
-                    cause,
-                  }),
+          resolveSessionLaunch: (
+            environment: NodeJS.ProcessEnv,
+            sessionEnvironment = environment,
+          ) =>
+            catalog
+              .resolve(options.settings, process.cwd(), environment, {
+                spawnEnvironment: sessionEnvironment,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EffectAcpErrors.AcpSpawnError({
+                      command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
+                      cause,
+                    }),
+                ),
               ),
-            ),
         }
       : {}),
     makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
