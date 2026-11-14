@@ -235,7 +235,7 @@ const make = Effect.gen(function* () {
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
-  const probe = yield* makeHubProbe(ocx);
+  const { probe, disposableRoute } = yield* makeHubProbe(ocx);
 
   const unreachable = (error: HubOcxError) => ({
     outcome: "failed" as const,
@@ -387,6 +387,7 @@ const make = Effect.gen(function* () {
     readHomeLinks,
     homeUnavailable: (alias, forbidden, steps) => homeUnavailable("move", alias, steps, forbidden),
     probe,
+    disposableRoute,
     phaseMessage,
     request: (caller, input) => consent.request(caller, "move", input),
     approved: (caller, decisionId, binding) =>
@@ -610,6 +611,9 @@ const make = Effect.gen(function* () {
           { parity: verified, transport: "remote-link" },
         );
       }
+      // Both transports: a disposable machine is reached only through its own Pen route.
+      const refused = yield* disposableRoute(alias);
+      if (refused !== undefined) return result("join", alias, "failed", refused, steps);
       const platform = yield* ocx.devicePlatform(alias);
       const pinned = windowsRemoteLinkRelease(releases) !== undefined;
       const preflight = joinPreflight(alias, platform, input.transport, pinned);

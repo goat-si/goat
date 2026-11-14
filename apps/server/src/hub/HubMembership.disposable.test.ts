@@ -68,6 +68,69 @@ it.effect(
 );
 
 it.effect(
+  "a Hub-client join refuses a disposable machine by its Pen alias or the GOAT it runs, before any approval or invite",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        disposable: [record()],
+        identities: { lab: "env-disposable" },
+      });
+      for (const deviceAlias of ["pen-" + node, "lab"]) {
+        const refused = yield* hub.membership.join(scope, { deviceAlias, transport: "hub-client" });
+        expect(refused.state).toBe("failed");
+        expect(refused.message).toContain("disposable machine");
+      }
+      expect((yield* hub.inboxItems).items).toEqual([]);
+      expect(hub.calls.some((call) => call.startsWith("handoff"))).toBe(false);
+    }),
+);
+
+it.effect(
+  "hub.device_move refuses a disposable source by its Pen alias alone, and either alias by the GOAT it runs, before anything is asked",
+  () =>
+    Effect.gen(function* () {
+      const bySource = yield* setup({
+        profile: "hub-admin",
+        linked: ["pen-" + node],
+        offered: OTHER,
+        disposable: [record()],
+      });
+      const fromPen = yield* bySource.membership.move(scope, {
+        fromAlias: "pen-" + node,
+        toAlias: "mini",
+      });
+      expect(fromPen.message).toContain("disposable machine");
+      const byEnvironment = yield* setup({
+        profile: "hub-admin",
+        linked: ["mini"],
+        offered: OTHER,
+        identities: { mini: "env-disposable", "mini-direct": "env-disposable" },
+        disposable: [record()],
+      });
+      const sameMachine = yield* byEnvironment.membership.move(scope, {
+        fromAlias: "mini",
+        toAlias: "mini-direct",
+      });
+      expect(sameMachine.message).toContain("disposable machine");
+      for (const hub of [bySource, byEnvironment]) {
+        expect((yield* hub.inboxItems).items).toEqual([]);
+        expect(changed(hub.calls)).toBe(false);
+      }
+    }),
+);
+
+it.effect(
+  "an offline disposable alias is refused by its name before OpenCodex's probe answers",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ disposable: [record()], deviceDown: ["pen-" + node] });
+      const refused = yield* hub.membership.join(scope, { deviceAlias: "pen-" + node });
+      expect(refused.message).toContain("disposable machine");
+      expect(hub.calls.some((call) => call.includes("link probe"))).toBe(false);
+    }),
+);
+
+it.effect(
   "hub.device_repair's re-link refuses a disposable machine's key before the old link is touched",
   () =>
     Effect.gen(function* () {
