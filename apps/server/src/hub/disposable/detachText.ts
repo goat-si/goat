@@ -25,7 +25,9 @@ const STOPS: Record<string, string> = {
   revoke_unsettled:
     "OpenCodex could not tell what the revoke did to the Child. Check the machine; a person on this hub resolves the operation below with ocx link operations resolve, then forces the detach.",
   link_unsettled:
-    "OpenCodex could not tell what the machine's last link operation left, so GOAT does not remove a link it cannot name. A person resolves the operation below with ocx link operations resolve, or forces the detach: GOAT then removes whatever link OpenCodex lists for the machine.",
+    "OpenCodex could not tell what the machine's last link operation left, so GOAT does not remove a link it cannot name. A person resolves the operation below with ocx link operations resolve and detaches again, or forces the detach: GOAT then removes whatever link OpenCodex lists for the machine.",
+  link_open:
+    "OpenCodex still lists the machine's last link operation as running after 10 quiet minutes, so GOAT does not remove a link it cannot name. A person can force the detach: GOAT then removes whatever link OpenCodex lists for the machine.",
   tombstone_limit:
     "too many links removed without their machines wait for cleanup on this hub; recover or forget some (ocx link recover --list), then force the detach again.",
 };
@@ -100,9 +102,13 @@ export const detachMessage = (
           message:
             name + " is detaching, but " + (STOPS[detach.stop] ?? STOPS.revoke_refused) + operation,
           nextAction:
-            detach.stop === "revoke_unsettled" || detach.stop === "link_unsettled"
+            detach.stop === "revoke_unsettled"
               ? "Resolve the operation on the hub, then force the detach as a person."
-              : "Force the detach as a person, or check the machine and detach again.",
+              : detach.stop === "link_unsettled"
+                ? "Resolve the operation on the hub and detach again, or force the detach as a person."
+                : detach.stop === "link_open" || detach.stop === "tombstone_limit"
+                  ? "Force the detach as a person."
+                  : "Force the detach as a person, or check the machine and detach again.",
         };
       if (detach?.step === "settle")
         return {

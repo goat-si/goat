@@ -434,6 +434,12 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
       case "unsettled":
         return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
+      case "open":
+        // Fenced, the enrollment never repeats the id that would recover a dead entry.
+        if (before.idleSinceMs === undefined)
+          return yield* note(row, withDetach(enroll, { ...before, idleSinceMs: nowMs }));
+        if (nowMs - before.idleSinceMs < STALE_OPEN_MS) return;
+        return yield* halt(row, enroll, { ...before, operationId }, "link_open");
       default:
         return;
     }

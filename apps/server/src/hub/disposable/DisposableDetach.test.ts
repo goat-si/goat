@@ -564,6 +564,35 @@ it.effect(
 );
 
 it.effect(
+  "a detach whose link operation stays open stops after 10 quiet minutes naming it, and a person's force ends it by the link list",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        host.control.openStaysOpen = true;
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the Home stopped mid-add
+        yield* detach(THREAD, attachId, "d-1");
+        yield* detachPass;
+        expect((yield* listed(attachId))?.message).toContain(
+          "reading what its last link operation",
+        );
+        yield* TestClock.adjust(11 * 60 * 1000);
+        yield* detachPass;
+        const stopped = yield* listed(attachId);
+        expect(stopped?.message).toContain("still lists");
+        expect(stopped?.message).toContain(attachId + ".link.1");
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        expect((yield* listed(attachId))?.state).toBe("purged");
+        expect(ocx.sent).toEqual([]);
+      }),
+    ),
+);
+
+it.effect(
   "a link operation a person resolved lets the detach remove the link OpenCodex lists",
   () =>
     world((pen, home, _grant, host) =>
