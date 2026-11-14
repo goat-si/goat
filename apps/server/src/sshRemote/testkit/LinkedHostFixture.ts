@@ -43,7 +43,7 @@ export const withLinkedHost = <A, E, R>(
     readonly method: string;
     readonly tool?: string;
     readonly args?: unknown;
-  }) => Answer,
+  }) => Answer | Promise<Answer>,
   body: Effect.Effect<A, E, R>,
   serverVersion = LINK.host.serverVersion,
   access: LinkedHosts.LinkedHost["access"] = LINK.host.access,
@@ -80,7 +80,7 @@ export const withLinkedHost = <A, E, R>(
         });
       if (request.method === "notifications/initialized")
         return new Response(null, { status: 202 });
-      const reply = answer({
+      const reply = await answer({
         method: request.method,
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
         args: request.params?.arguments,

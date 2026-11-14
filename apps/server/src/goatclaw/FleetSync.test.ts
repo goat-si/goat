@@ -1,12 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
-import { GoatclawFleetPolicy, type GoatclawSettings } from "@goat/contracts";
+import { EnvironmentId, GoatclawFleetPolicy, type GoatclawSettings } from "@goat/contracts";
+import { McpSchema, McpServer } from "effect/ai";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
+import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
+import { mcpClientScopes } from "../auth/mcpClientScopes.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { client, dependencies } from "../mcp/agentSurface.testkit.ts";
+import * as FleetHandlers from "../mcp/toolkits/fleet/handlers.ts";
+import { FleetToolkit } from "../mcp/toolkits/fleet/tools.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { withLinkedHost } from "../sshRemote/testkit/LinkedHostFixture.ts";
@@ -79,6 +88,9 @@ const credential = (token: string): Option.Option<LinkedHosts.LinkedHostCredenti
     token,
   });
 
+const credentialAt = (access: LinkedHosts.LinkedHost["access"]) =>
+  Option.map(credential("a"), (link) => ({ ...link, host: { ...link.host, access } }));
+
 /**
  * Runs one sync whose dispatch evaluates the ceiling three times, as the SSH route does
  * (routing, session, tools/call), and swaps the link to `next` just before evaluation `at`.
@@ -92,9 +104,10 @@ const ceilingsAcrossChange = (
   Effect.gen(function* () {
     let current = initial;
     const granted: Array<string> = [];
-    const reach = yield* Effect.gen(function* () {
+    const { reach, recorded } = yield* Effect.gen(function* () {
       const sync = yield* FleetSync.make;
-      return yield* sync.ensure("box");
+      const reach = yield* sync.ensure("box");
+      return { reach, recorded: yield* sync.hostState("box") };
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -117,7 +130,8 @@ const ceilingsAcrossChange = (
         ),
       ),
     );
-    return { granted, message: reach.sync.message };
+    expect(recorded).toEqual(reach.sync);
+    return { granted, message: recorded.message, state: recorded.state };
   });
 
 describe("GoatclawFleetSync", () => {
@@ -143,6 +157,155 @@ describe("GoatclawFleetSync", () => {
     }),
   );
 
+  it.effect("leaves a downgraded link pending before the remote call", () =>
+    Effect.gen(function* () {
+      for (const at of [0, 1, 2]) {
+        const outcome = yield* ceilingsAcrossChange(credential("a"), at, credentialAt("auto"));
+        expect(outcome.granted).toEqual(Array.from({ length: at }, () => "full-access"));
+        expect(outcome.state).toBe("pending");
+        expect(outcome.message).toBe(
+          "The link to box changed during the goatclaw sync; nothing was sent.",
+        );
+      }
+    }),
+  );
+
+  it.effect("uses the approval-required ceiling for an SSH host", () =>
+    Effect.gen(function* () {
+      const outcome = yield* ceilingsAcrossChange(Option.none(), -1, Option.none());
+      expect(outcome.granted).toEqual([
+        "approval-required",
+        "approval-required",
+        "approval-required",
+      ]);
+    }),
+  );
+
+  it.effect("the remote handler applies full-access policy and refuses lesser link sessions", () =>
+    Effect.gen(function* () {
+      for (const access of [
+        "full-access",
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+      ] as const) {
+        const remote = yield* machine({});
+        const program = Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          const scope: McpInvocationContext.McpInvocationScope = {
+            environmentId: EnvironmentId.make("remote"),
+            requestNamespace: "client:link",
+            thread: undefined,
+            client: { sessionId: "link", label: "linked GOAT", access },
+            capabilities: new Set(["orchestration"]),
+            issuedAt: 0,
+            grantedScopes: mcpClientScopes(access),
+            reauthorize: () => Effect.void,
+          };
+          const calls: unknown[] = [];
+          const ceilings: string[] = [];
+          const incoming = Promise.withResolvers<{
+            args: Record<string, unknown>;
+            reply: (answer: { result: unknown } | { rpcError: string }) => void;
+          }>();
+          const remoteCall = yield* Effect.forkChild(
+            Effect.gen(function* () {
+              const request = yield* Effect.promise(() => incoming.promise);
+              const result = yield* server
+                .callTool({ name: "goat_permission_profile_sync", arguments: request.args })
+                .pipe(
+                  Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+                  Effect.provideService(McpSchema.McpServerClient, client),
+                  Effect.result,
+                );
+              request.reply(
+                result._tag === "Success"
+                  ? { result: result.success }
+                  : { rpcError: String(result.failure) },
+              );
+            }),
+          );
+          const outcome = yield* withLinkedHost(
+            async (request) => {
+              if (request.method !== "tools/call") return { result: {} };
+              calls.push(request.args);
+              return await new Promise<{ result: unknown } | { rpcError: string }>((reply) =>
+                incoming.resolve({ args: request.args as Record<string, unknown>, reply }),
+              );
+            },
+            Effect.gen(function* () {
+              const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+              const sync = yield* FleetSync.make.pipe(
+                Effect.provideService(
+                  SshRemoteDispatch.SshRemoteDispatch,
+                  SshRemoteDispatch.SshRemoteDispatch.of({
+                    ...dispatch,
+                    callHostTool: (call, authorize) =>
+                      dispatch.callHostTool(
+                        call,
+                        Effect.tap(authorize, (ceiling) =>
+                          Effect.sync(() => void ceilings.push(ceiling)),
+                        ),
+                      ),
+                  }),
+                ),
+              );
+              const reach = yield* sync.ensure("box");
+              return { reach, state: yield* sync.hostState("box") };
+            }).pipe(
+              Effect.provide(ServerSettingsService.layerTest({ goatclaw: { enabled: true } })),
+            ),
+            undefined,
+            access,
+          ).pipe(
+            Effect.provide(
+              Layer.mock(CloudMachineService.CloudMachineService)({
+                onAliasInvalidated: () => Effect.void,
+                owns: () => Effect.succeed(false),
+              }),
+            ),
+          );
+          expect(calls).toHaveLength(1);
+          yield* Fiber.join(remoteCall);
+          expect(calls[0]).toMatchObject({ policy: { enabled: true } });
+          expect(ceilings.length).toBeGreaterThan(0);
+          expect(ceilings.every((ceiling) => ceiling === access)).toBe(true);
+          expect(outcome.result).toMatchObject(
+            access === "full-access"
+              ? {
+                  _tag: "Success",
+                  success: { reach: { sync: { state: "applied" } }, state: { state: "applied" } },
+                }
+              : {
+                  _tag: "Success",
+                  success: {
+                    reach: {
+                      sync: {
+                        state: "pending",
+                        message: expect.stringContaining(
+                          "Only a connected GOAT allowed to change this machine's settings syncs goatclaw policy.",
+                        ),
+                      },
+                    },
+                    state: { state: "pending" },
+                  },
+                },
+          );
+          expect((yield* remote.goatclaw).enabled).toBe(access === "full-access");
+        });
+        yield* program.pipe(
+          Effect.provide(
+            McpHttpServer.toolkitRegistration(FleetToolkit, FleetHandlers.layer).pipe(
+              Layer.provideMerge(Layer.succeed(FleetSync.GoatclawFleetSync, remote.sync)),
+              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provideMerge(dependencies),
+            ),
+          ),
+        );
+      }
+    }),
+  );
+
   it.effect(
     "invariant: a ceiling raised for a link is refused once that link changes, on any evaluation",
     () =>
@@ -153,23 +316,28 @@ describe("GoatclawFleetSync", () => {
         expect(yield* ceilingsAcrossChange(credential("a"), 0, Option.none())).toEqual({
           granted: [],
           message: changed,
+          state: "pending",
         });
         expect(yield* ceilingsAcrossChange(credential("a"), 0, credential("b"))).toEqual({
           granted: [],
           message: changed,
+          state: "pending",
         });
         expect(yield* ceilingsAcrossChange(credential("a"), 1, Option.none())).toEqual({
           granted: ["full-access"],
           message: changed,
+          state: "pending",
         });
         expect(yield* ceilingsAcrossChange(credential("a"), 2, credential("b"))).toEqual({
           granted: ["full-access", "full-access"],
           message: changed,
+          state: "pending",
         });
         // A link that appears after the sync looked never raises it.
         expect(yield* ceilingsAcrossChange(Option.none(), 0, credential("a"))).toEqual({
           granted: ["approval-required", "approval-required", "approval-required"],
           message: "box did not answer.",
+          state: "pending",
         });
       }),
   );
