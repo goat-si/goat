@@ -1,3 +1,4 @@
+import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
@@ -715,6 +716,10 @@ export const layer = Layer.effect(
               Option.isNone(parsedNextRunAt) ||
               DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))
           ) {
+            return { task: active, threadId: null, firing: null };
+          }
+          if (yield* hasQueuedOccurrence(threadManagement, active, trigger)) {
+            yield* rescheduleMissedRun(active, startedAt);
             return { task: active, threadId: null, firing: null };
           }
           // A queued delivery must not run a task that was paused, deleted and
