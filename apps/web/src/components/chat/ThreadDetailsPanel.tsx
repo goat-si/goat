@@ -85,6 +85,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
   const project = useProject(scopeProjectRef(props.environmentId, props.projectId));
   const config = useServerConfigs().get(props.environmentId);
+  // A No project thread's folder sits inside the shared scratch root, so it must never get git.
+  // Until the config and project load, a No project thread looks like any other folder.
   const offersGit =
     props.gitCwd !== null &&
     config !== undefined &&
@@ -203,6 +205,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 {offersGit && props.isGitRepo ? (
                   <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
                 ) : null}
+                {/* Without a branch selector, linked pull requests still need somewhere to show. */}
                 {!offersGit || !props.isGitRepo ? (
                   <ThreadDetailsThreadPrRows
                     threadRef={activeThreadRef}

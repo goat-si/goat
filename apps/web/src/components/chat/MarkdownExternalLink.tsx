@@ -51,6 +51,7 @@ const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: 
 function leadingExternalLinkTextLength(text: string): number {
   const protocol = /^(?:https?:\/\/)/i.exec(text)?.[0];
   if (protocol) return protocol.length;
+  // A whole code point, so a surrogate pair is not split across elements.
   return Array.from(text.slice(0, 2))[0]?.length ?? 0;
 }
 

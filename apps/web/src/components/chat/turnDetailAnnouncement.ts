@@ -79,8 +79,8 @@ function stepLabel(work: WorkLogEntry, workspaceRoot: string | undefined): strin
 
 /**
  * What a screen reader can be told about the latest turn beyond its status.
- * It reads the thread's entries before "Tool calls in chat" hides any, so what
- * is spoken follows the announcement setting alone.
+ * It reads the thread's entries directly, so what is spoken follows the
+ * announcement setting alone.
  */
 export function turnDetail(
   entries: ReadonlyArray<TimelineEntry>,

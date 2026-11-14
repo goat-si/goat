@@ -85,7 +85,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   });
   // The host unmounts the dialog outright, so Base UI never runs finalFocus. Without
   // this, focus stays on the removed dialog, and the composer that owned the opener
-  // reads that as a blur and rests.
+  // reads that as a blur and rests. Preserve mouse focus when Escape closes it.
   const close = () => {
     flushSync(onClose);
     const { target, focusVisible } = returnFocus;

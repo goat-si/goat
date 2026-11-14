@@ -110,6 +110,7 @@ export function HistorySwipeNavigation() {
 
   // oxlint-disable-next-line goat/react-effect-budget -- window wheel and desktop gesture listeners track trackpad swipes
   useEffect(() => {
+    // macOS only: on Windows and Linux a mouse tilt wheel is indistinguishable from a trackpad swipe.
     if (!isMacPlatform(navigator.platform)) return;
     let gesture: SwipeGesture | null = null;
     const hideIndicator = () =>

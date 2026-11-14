@@ -39,6 +39,7 @@ type AnswerContextRecord =
   | ReviewCommentContextRecord
   | PreviewAnnotationContextRecord;
 
+// Diff comments and preview annotations land in the thread draft even when their chip is in an answer.
 export function answerContextRecords(
   questionDraft: { threadContexts: ReadonlyArray<ThreadContextRecord> } | null | undefined,
   threadDraft:

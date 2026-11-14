@@ -10,6 +10,7 @@ function terminologyForUrl(url: string) {
     .changeRequest;
 }
 
+// A task added to an existing thread's composer has no checkout prepared for it.
 export function checkoutInstruction(inThisThread: boolean | undefined): string {
   return inThisThread
     ? "Work on its branch, switching to it or checking it out first if this workspace is not on it"

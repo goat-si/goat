@@ -9,8 +9,9 @@ import * as DateTime from "effect/DateTime";
 export type ThreadNotificationKind = "input" | "completion";
 
 export interface ThreadNotificationObservation {
-  /** Run and status key while the thread needs attention, otherwise null. */
+  /** Status and request key, or status and run without a request, while the thread needs attention. */
   readonly attention: string | null;
+  /** The pending request's id, when it has one; null whenever attention is. */
   readonly requestId?: string | null;
   /** The thread is idle and its latest run completed. */
   readonly settled: boolean;
@@ -48,6 +49,7 @@ export function createThreadNotificationGate<Key>(
     clearTimeout(releases.get(key)?.timer);
     releases.delete(key);
   };
+  // Attention keys with a request id seen since the thread last stopped needing attention.
   const attended = new Map<Key, Set<string>>();
   return {
     observe(
@@ -172,6 +174,8 @@ export function notificationAttention(
   requestId: string | null = null,
 ): string | null {
   if (!NOTIFYING_STATUSES.has(status) || (feedOwned && status === "approval")) return null;
+  // Queued messages become the latest run while a request stays pending, so a request
+  // with an id is keyed by that id alone and announces once.
   return requestId === null ? `${runId}:${status}` : `${status}:${requestId}`;
 }
 

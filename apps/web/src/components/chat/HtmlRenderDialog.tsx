@@ -22,12 +22,16 @@ export function HtmlRenderDialog(props: {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
   const [contentHeight, setContentHeight] = useState<number>();
+  // A callback ref, since the popup can mount after this component's first commit.
   const measureBox = (box: HTMLDivElement) => {
     setWidth(box.clientWidth);
     return observeResize(box, ([entry]) => {
+      // Rounded like clientWidth, so the two writes agree at fractional widths.
       if (entry) setWidth(Math.round(entry.contentRect.width));
     });
   };
+  // Zoom divides the page's layout width, so the page reflows to fill the card
+  // at every level, and the frame is as tall as the page so only the card scrolls.
   const height = htmlRenderFrameHeight(props.htmlRender, width / zoom, contentHeight);
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>

@@ -16,6 +16,7 @@ export function selectedTimelineRowIds(viewport: Element): string[] {
   return next;
 }
 
+// Rows between the selected ones are covered too, even if not mounted right now.
 export function timelineRowSpanIndices(
   rows: ReadonlyArray<{ id: string }>,
   rowIds: ReadonlyArray<string>,
@@ -28,6 +29,8 @@ export function timelineRowSpanIndices(
   return Array.from({ length: last - first + 1 }, (_, i) => first + i);
 }
 
+// LegendList recycles a row's container once it leaves the draw buffer, which
+// moves a native selection's ends onto other rows. Pin the selected rows.
 export function useSelectedTimelineRowIndices(
   viewport: HTMLElement | null,
   rows: ReadonlyArray<{ id: string }>,

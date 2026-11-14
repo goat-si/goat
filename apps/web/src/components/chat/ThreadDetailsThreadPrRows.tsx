@@ -55,6 +55,7 @@ export function ThreadDetailsThreadPrRows({
       ? { ...stored, ...(host === undefined ? {} : { host }) }
       : null;
   const projects = useProjects();
+  // Merge settings belong to the project holding the linked repository, the thread's own first.
   const rowProject =
     parsed === undefined || (project !== null && findProjectForChangeRequest([project], parsed))
       ? project
