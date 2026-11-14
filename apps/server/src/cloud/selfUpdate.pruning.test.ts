@@ -96,6 +96,14 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, {
         ...fs,
+        readDirectory: (directory, options) =>
+          input.linuxLookupFailure && directory === "/proc"
+            ? Effect.succeed(["42"])
+            : fs.readDirectory(directory, options),
+        readLink: (file) =>
+          input.linuxLookupFailure && file === "/proc/42/exe"
+            ? Effect.succeed("/usr/bin/unrelated")
+            : fs.readLink(file),
         readFileString: (file, options) =>
           input.unreadableUnit && file.endsWith("si.goat.service.plist")
             ? Effect.fail(
