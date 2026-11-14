@@ -664,11 +664,18 @@ expires.</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> pair</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> orchestration:read</span><span style="color:#79B8FF"> --scope</span><span style="color:#9ECBFF"> relay:read</span></span></code></pre>
 <p>The selected scopes replace the default permissions. The same option works with
 <code>goat auth pairing create</code> and <code>goat auth session issue</code>; each command’s
-<code>--help</code> lists the available scopes. Without <code>--scope</code>, pairing tokens and issued
-bearer sessions get every permission, including managing access.
-A terminal or a full-access agent on the host can reach those as well, so a
+<code>--help</code> lists the available scopes. <code>goat pair</code> prints a link for the running server it finds: the
+one in <code>--base-dir</code> when you pass it, otherwise the one in <code>GOAT_HOME</code> or the default GOAT
+home. <code>goat auth pairing create</code> prints a pairing code, or a link when you add
+<code>--base-url &lt;url&gt;</code>. Without <code>--scope</code>, pairing tokens and issued bearer sessions get the
+full standard permissions, including managing access, which can be more than a
+paired client’s own <strong>Create link</strong> dialog offers.</p>
+<p>A terminal or a full-access agent on the host can reach those as well, so a
 client that should not manage access also needs to go without <code>terminal:operate</code>
 and <code>orchestration:operate</code>.</p>
+<p>A desktop app that shows several environments creates its <strong>Create link</strong> links
+for its own environment. To pair a device with another one, create the link on
+the machine that runs it, as above.</p>
 <p>To change an existing client’s permissions, create a fresh pairing link with the
 scopes it needs. In a browser opened directly on the environment, open that link
 to replace the browser’s current grant. For mobile or a saved remote environment
