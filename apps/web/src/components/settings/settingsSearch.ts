@@ -1,3 +1,4 @@
+import { SCREEN_READER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchScreenReaderItems";
 import { CLONE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchCloneItems";
 import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
 import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
@@ -417,12 +418,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/beta",
     searchTerms: ["beta redesign look style sidebar composer black quieter classic"],
   },
-  {
-    id: "working-shelf",
-    title: "Working section",
-    to: "/settings/beta",
-    searchTerms: ["beta hide fold running monitoring threads inbox sidebar shelf"],
-  },
+  ...SCREEN_READER_SETTINGS_SEARCH_ITEMS,
   {
     id: "guest-links",
     title: "Guest links",

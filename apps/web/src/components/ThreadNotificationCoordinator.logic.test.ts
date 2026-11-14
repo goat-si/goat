@@ -54,6 +54,7 @@ describe("createThreadNotificationGate", () => {
     const request = (id: string) => ({
       attention: notificationAttention("input", "run-1", false, id),
       requestId: id,
+      backgroundWake: false,
       settled: false,
       completedAt: null,
     });

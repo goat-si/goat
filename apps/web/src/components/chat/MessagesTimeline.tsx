@@ -1,4 +1,10 @@
-import { TimelineListFooter } from "./TimelineListFooter";
+import { keyExtractor, getItemType } from "./timelineListItems";
+import {
+  TimelineListFooter,
+  TIMELINE_LIST_HEADER,
+  TIMELINE_LIST_FADE_HEADER,
+} from "./TimelineListFooter";
+import { useClientSettings } from "../../hooks/useSettings";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AudioPreviewUnmountContext } from "../files/AudioPreview";
@@ -157,10 +163,6 @@ function timelineListStateFor(identity: string): {
   };
 }
 
-const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
-const TIMELINE_LIST_FADE_HEADER = (
-  <div className="h-[var(--workspace-titlebar-scroll-fade-height)]" />
-);
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
@@ -172,6 +174,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   },
 } as const satisfies MaintainScrollAtEndOptions;
 const EMPTY_RUN_IDS: ReadonlySet<RunId> = new Set();
+const EMPTY_TIMELINE_ENTRIES: ReadonlyArray<TimelineEntry> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH = {
   ...TIMELINE_MAINTAIN_SCROLL_AT_END,
   animated: true,
@@ -552,6 +555,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     }
   }
 
+  const screenReaderAnnouncements = useClientSettings(
+    (settings) => settings.screenReaderAnnouncements,
+  );
   // Imported turns and post-steer work fold under synthetic keys, not the entries' run ids.
   const findFoldRunIds = findActive
     ? timelineTurnFoldRunIdsByEntryId({
@@ -1087,6 +1093,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
       runId={announcedRun?.runId ?? null}
       runStatus={announcedRun?.status ?? null}
       detailBehind={detailBehindShell}
+      level={screenReaderAnnouncements}
+      entries={screenReaderAnnouncements === "status" ? EMPTY_TIMELINE_ENTRIES : timelineEntries}
+      workspaceRoot={workspaceRoot}
     />
   );
   const listHeaderLeadingContent =
@@ -1368,17 +1377,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     </>
   );
 });
-
-function keyExtractor(item: MessagesTimelineRow) {
-  return item.id;
-}
-
-// LegendList averages by type; length buckets prevent inflated estimates and nested-update loops.
-function getItemType(item: MessagesTimelineRow) {
-  if (item.kind !== "message") return item.kind;
-  const lengthBucket = Math.max(0, Math.floor(Math.log2(item.message.text.length / 1000)));
-  return `message:${item.message.role}:${lengthBucket}`;
-}
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
