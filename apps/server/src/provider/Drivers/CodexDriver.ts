@@ -255,14 +255,12 @@ export const CodexDriver: ProviderDriver<
     const reportUsageFor =
       (identity: string): CodexUsageReporter =>
       (update) =>
-        publishedCheckedAt.pipe(
-          Effect.flatMap((shownAt) => {
-            const shown = homeShownBy(shownAt);
-            return shown === undefined || shown === identity
-              ? snapshot.applyUsageLimits(update)
-              : Effect.void;
-          }),
-        );
+        snapshot.applyUsageLimits(update, {
+          appliesTo: (shown) => {
+            const home = homeShownBy(shown.checkedAt);
+            return home === undefined || home === identity;
+          },
+        });
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,

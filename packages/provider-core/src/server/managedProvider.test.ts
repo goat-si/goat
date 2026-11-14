@@ -770,4 +770,45 @@ describe("makeManagedServerProvider", () => {
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
+
+  it.effect("a usage update lands only in a snapshot its condition accepts when it applies", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probeSnapshot = yield* Ref.make<ServerProvider>(refreshedSnapshot);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.get(probeSnapshot),
+          refreshOnInterval: false,
+        });
+        const accepted = (yield* provider.refresh).checkedAt;
+        // A report judged against the shown snapshot, then a newer check commits before it applies.
+        const appliesTo = (shown: ServerProvider) => shown.checkedAt === accepted;
+        yield* Ref.set(probeSnapshot, {
+          ...refreshedSnapshot,
+          checkedAt: "2026-04-10T00:00:05.000Z",
+        });
+        const newer = yield* provider.refresh;
+        const session = {
+          id: "five_hour",
+          kind: "session",
+          label: "Session",
+          usedPercent: 40,
+        } as const;
+        yield* provider.applyUsageLimits(
+          { checkedAt: "2026-04-10T00:00:06.000Z", windows: [session] },
+          { appliesTo },
+        );
+        assert.strictEqual(yield* provider.getSnapshot, newer);
+        yield* provider.applyUsageLimits(
+          { checkedAt: "2026-04-10T00:00:07.000Z", windows: [session] },
+          { appliesTo: (shown) => shown.checkedAt === newer.checkedAt },
+        );
+        assert.deepStrictEqual((yield* provider.getSnapshot).usageLimits?.windows, [session]);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
 });
