@@ -23,7 +23,11 @@ import {
   platform,
   arch,
 } from "./tunnel.fixture.ts";
-import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import {
+  protocolExecutable,
+  makeProtocolFixture,
+  assertPickedFromReservedPort,
+} from "./tunnel.protocol.fixture.ts";
 import { awaitProtocolStop, synchronizeProtocolStop } from "./tunnel.protocol-stop.fixture.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
@@ -479,7 +483,7 @@ export PATH
           }).pipe(Effect.provide(layer(entry, true)), Effect.scoped);
           const pid = (yield* f.fs.readFileString(`${f.state}/pid`)).trim();
           const port = (yield* f.fs.readFileString(`${f.state}/port`)).trim();
-          assert.equal(port, String(f.pickPort));
+          assertPickedFromReservedPort(f.pickPort, port);
           const identity = `${entry} serve --host 127.0.0.1 --port ${port} --base-dir ${f.home}/.goat\n`;
           assert.equal(yield* f.fs.readFileString(`${f.state}/identity`), identity);
           // Read real ps: the shim execs the native binary, not its own pathname.

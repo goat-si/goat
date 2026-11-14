@@ -26,7 +26,11 @@ import {
   uploadTarget,
   nativeScripts,
 } from "./tunnel.fixture.ts";
-import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import {
+  protocolExecutable,
+  makeProtocolFixture,
+  assertPickedFromReservedPort,
+} from "./tunnel.protocol.fixture.ts";
 
 /** Answers identity reads through a recorded forward from the owner server behind it. */
 const forwardingHttpClient = (forwards: ReadonlyMap<number, number>) =>
@@ -569,9 +573,9 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           );
           assert.equal(Number(output.code), 0, output.stderr);
           if (entry === "launch")
-            assert.equal(
+            assertPickedFromReservedPort(
+              f.pickPort,
               (yield* f.fs.readFileString(`${f.state}/port`)).trim(),
-              String(f.pickPort),
             );
           assert.equal(yield* f.fs.readFileString(`${upstream}/sentinel`), "upstream bytes");
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
