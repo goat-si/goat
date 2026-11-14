@@ -84,11 +84,7 @@ import {
   toolCallsFromConversationSteps,
 } from "./conversationSteps.ts";
 export { cursorSdkModelSelection } from "./sdkModel.ts";
-export {
-  cursorMcpServers,
-  cursorRuntimeAgentPolicy,
-  makeCursorAgentOptions,
-} from "./agentOptions.ts";
+export { cursorMcpServers, makeCursorAgentOptions } from "./agentOptions.ts";
 
 export const CURSOR_DRIVER_KIND = CursorAgentSdk.CURSOR_PROVIDER;
 export const CURSOR_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CURSOR_DRIVER_KIND);
