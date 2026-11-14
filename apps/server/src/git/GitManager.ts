@@ -1,3 +1,4 @@
+import { resolvePullRequestWorktreeLocalBranchName } from "./pullRequestBranchName.ts";
 import { publishedRemoteName, appendUnique } from "./gitPublishedBranch.ts";
 import { resolveLastKnownPr } from "./lastKnownPr.ts";
 import { shippedByMergedPr } from "./shippedByMergedPr.ts";
@@ -49,7 +50,6 @@ import { hasProjectSettingsOverrides, resolveProjectSettings } from "@goat/share
 import {
   mergeGitStatusParts,
   resolveAutoFeatureBranchName,
-  sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@goat/shared/git";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -254,18 +254,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
 /** Null when the host did not name the repository the head lives in. */
 function resolveHeadRepositoryNameWithOwner(pullRequest: PullRequestHeadRemoteInfo): string | null {
   return normalizeOptionalString(pullRequest.headRepositoryNameWithOwner);
-}
-
-function resolvePullRequestWorktreeLocalBranchName(
-  pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-): string {
-  if (!pullRequest.isCrossRepository) {
-    return pullRequest.headBranch;
-  }
-
-  const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
-  const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
-  return `t3code/pr-${pullRequest.number}/${suffix}`;
 }
 
 export function parseRepositoryNameWithOwnerFromRemoteUrl(
@@ -2697,8 +2685,11 @@ export const make = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const localPullRequestBranch =
-        resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      const localPullRequestBranch = yield* resolvePullRequestWorktreeLocalBranchName(
+        input.cwd,
+        pullRequestWithRemoteInfo,
+        gitCore,
+      );
 
       // Git refuses to move checked-out branches; advance reused checkouts from inside their worktree.
       const reuseExistingWorktree = Effect.fn("reuseExistingWorktree")(function* (

@@ -4264,66 +4264,72 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("preserves fork upstream tracking when preparing a worktree PR thread", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("goat-git-manager-");
-      yield* initRepo(repoDir);
-      const originDir = yield* createBareRemote();
-      const forkDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-      yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-fork"]);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "fork.txt"), "fork\n");
-      yield* runGit(repoDir, ["add", "fork.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
-      yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
+  it.effect.each([null, "t3code", "t3code/pr-81"])(
+    "preserves fork upstream with branch prefix %s",
+    (blocker) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("goat-git-manager-");
+        yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        const forkDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-fork"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "fork.txt"), "fork\n");
+        yield* runGit(repoDir, ["add", "fork.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
+        yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        if (blocker !== null) yield* runGit(repoDir, ["branch", blocker]);
 
-      const { manager } = yield* makeManager({
-        providerScenario: {
-          pullRequest: {
-            number: 81,
-            title: "Fork PR",
-            url: "https://github.com/pingdotgg/codething-mvp/pull/81",
-            baseRefName: "main",
-            headRefName: "feature/pr-fork",
-            state: "open",
-            isCrossRepository: true,
-            headRepositoryNameWithOwner: "octocat/codething-mvp",
-            headRepositoryOwnerLogin: "octocat",
-          },
-          repositoryCloneUrls: {
-            "octocat/codething-mvp": {
-              url: forkDir,
-              sshUrl: forkDir,
+        const { manager } = yield* makeManager({
+          providerScenario: {
+            pullRequest: {
+              number: 81,
+              title: "Fork PR",
+              url: "https://github.com/pingdotgg/codething-mvp/pull/81",
+              baseRefName: "main",
+              headRefName: "feature/pr-fork",
+              state: "open",
+              isCrossRepository: true,
+              headRepositoryNameWithOwner: "octocat/codething-mvp",
+              headRepositoryOwnerLogin: "octocat",
+            },
+            repositoryCloneUrls: {
+              "octocat/codething-mvp": {
+                url: forkDir,
+                sshUrl: forkDir,
+              },
             },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "81",
-        mode: "worktree",
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "81",
+          mode: "worktree",
+        });
 
-      expect(result.worktreePath).not.toBeNull();
-      const upstreamRef = (yield* runGit(result.worktreePath as string, [
-        "rev-parse",
-        "--abbrev-ref",
-        "@{upstream}",
-      ])).stdout.trim();
-      expect(upstreamRef).toBe("fork-seed/feature/pr-fork");
-      expect(upstreamRef.startsWith("origin/")).toBe(false);
-      expect(
-        (yield* runGit(result.worktreePath as string, [
-          "config",
-          "--get",
-          "remote.fork-seed.url",
-        ])).stdout.trim(),
-      ).toBe(forkDir);
-    }),
+        expect(result.worktreePath).not.toBeNull();
+        if (blocker !== null)
+          expect((yield* runGit(repoDir, ["rev-parse", blocker])).stdout.trim()).toBe(mainHead);
+        const upstreamRef = (yield* runGit(result.worktreePath as string, [
+          "rev-parse",
+          "--abbrev-ref",
+          "@{upstream}",
+        ])).stdout.trim();
+        expect(upstreamRef).toBe("fork-seed/feature/pr-fork");
+        expect(upstreamRef.startsWith("origin/")).toBe(false);
+        expect(
+          (yield* runGit(result.worktreePath as string, [
+            "config",
+            "--get",
+            "remote.fork-seed.url",
+          ])).stdout.trim(),
+        ).toBe(forkDir);
+      }),
   );
 
   it.effect("refreshes a reused PR worktree onto the updated pull request head", () =>
