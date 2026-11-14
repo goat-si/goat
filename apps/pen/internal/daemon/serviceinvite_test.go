@@ -317,8 +317,15 @@ func TestAListChangeNeverClosesAPairingSessionAndTheRegistrationsEndDoes(t *test
 	}
 	f.h.c.Close()
 	// closedWith's FIN would end the session normally (1000) if it reached the program before the end did.
-	if id := <-f.ended; id != f.h.reply["id"] {
-		t.Fatalf("registration %s ended, want %v", id, f.h.reply["id"])
+	waitCtx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+	defer cancel()
+	select {
+	case id := <-f.ended:
+		if id != f.h.reply["id"] {
+			t.Fatalf("registration %s ended, want %v", id, f.h.reply["id"])
+		}
+	case <-waitCtx.Done():
+		t.Fatalf("registration %v did not end: %v", f.h.reply["id"], waitCtx.Err())
 	}
 	if code := closedWith(f.ctx, psec); code != wire.CodeNotAdmitted {
 		t.Fatalf("the pairing session of an ended registration closed %d, want 4401", code)
