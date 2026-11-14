@@ -365,34 +365,47 @@ describe("ChannelBotThreads pull requests", () => {
   );
 
   it.effect(
-    "a worker thread whose stored payload is not JSON leaves every read to the row's other sources",
+    "a worker thread whose stored payload is not a JSON object leaves every read to the row's other sources",
     () => {
       const log = warnings();
+      const payloads = ["not json", "null", "[]", "42"];
+      const ids = payloads.map((_, index) => "bad-worker-" + index);
       return provide(
         Effect.gen(function* () {
           yield* setup;
-          yield* insertTask("bad-worker", { status: "running", createdAt: at(2) });
-          yield* setWorker("bad-worker", "thread:bad-worker");
           const sql = yield* SqlClient.SqlClient;
-          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES ('thread:bad-worker', 'project:repo', 'Bad', 'codex', 'full-access', 'default', ${at(5)}, ${at(5)}, 'not json')`;
-          yield* setObserved("bad-worker", [{ number: 82, state: "open" }]);
-          yield* localLaunch("bad-worker", "good-launch", "bound");
-          yield* projectThread("thread:good-launch", [link(81, { state: "open" })]);
+          for (const [index, payload] of payloads.entries()) {
+            const taskId = "bad-worker-" + index;
+            yield* insertTask(taskId, { status: "running", createdAt: at(2) });
+            yield* setWorker(taskId, "thread:" + taskId);
+            yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${"thread:" + taskId}, 'project:repo', 'Bad', 'codex', 'full-access', 'default', ${at(5)}, ${at(5)}, ${payload})`;
+            yield* setObserved(taskId, [{ number: 82, state: "open" }]);
+            yield* localLaunch(taskId, "good-launch-" + index, "bound");
+            yield* projectThread("thread:good-launch-" + index, [link(81, { state: "open" })]);
+          }
           const expected = [{ ...item(82, "open"), watching: true }, item(81, "open")];
-          assert.deepStrictEqual(taskRow(yield* current, "bad-worker").pullRequests, expected);
-          assert.deepStrictEqual(taskRow(yield* current, "bad-worker").pullRequests, expected);
-          assert.lengthOf(
-            log.logs.filter((line) => line.includes("thread:bad-worker")),
-            1,
-          );
+          const first = yield* current;
+          const second = yield* current;
+          for (const taskId of ids) {
+            assert.deepStrictEqual(taskRow(first, taskId).pullRequests, expected, taskId);
+            assert.deepStrictEqual(taskRow(second, taskId).pullRequests, expected, taskId);
+            assert.lengthOf(
+              log.logs.filter((line) => line.includes("thread:" + taskId)),
+              1,
+              taskId,
+            );
+          }
           const page = yield* history();
-          assert.deepStrictEqual(taskRow(page, "bad-worker").pullRequests, expected);
+          for (const taskId of ids)
+            assert.deepStrictEqual(taskRow(page, taskId).pullRequests, expected, taskId);
           assert.strictEqual(page.history?.partial, true);
-          const found = yield* lookup("bad-worker");
-          assert.strictEqual(found.partial, true);
-          if (found.task.state === "known")
-            assert.deepStrictEqual(found.task.row.pullRequests, expected);
-          else assert.fail("the lookup lost its row");
+          for (const taskId of ids) {
+            const found = yield* lookup(taskId);
+            assert.strictEqual(found.partial, true, taskId);
+            if (found.task.state === "known")
+              assert.deepStrictEqual(found.task.row.pullRequests, expected, taskId);
+            else assert.fail("the lookup lost its row for " + taskId);
+          }
         }).pipe(Effect.provide(log.layer)),
       );
     },

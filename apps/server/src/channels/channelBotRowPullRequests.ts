@@ -31,11 +31,12 @@ export interface ThreadPullRequestColumns {
 
 /**
  * A projection thread `p`'s links and what decides their refresh, its payload parsed once. A
- * payload that is not JSON yields text no decoder accepts, so it reads as unreadable, not missing.
+ * payload that is not a JSON object yields text no decoder accepts, so it reads as unreadable,
+ * not missing.
  */
 export const threadPullRequestColumns = (sql: SqlClient.SqlClient) =>
   sql`CASE WHEN p.thread_id IS NULL THEN NULL
-      WHEN json_valid(p.payload_json)
+      WHEN json_valid(p.payload_json) AND json_type(p.payload_json) = 'object'
         THEN json_extract(p.payload_json, '$.pullRequests', '$.settledAt', '$.settledOverride', '$.archivedAt')
       ELSE 'invalid' END AS pull_requests_json,
     p.deleted_at AS pull_requests_deleted_at`;
