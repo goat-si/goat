@@ -51,12 +51,7 @@ vi.mock("@effect/atom-react", async (original) => {
     ...actual,
     useAtomValue: (atom: unknown) => {
       useTick();
-      if (atom === "home-work")
-        return {
-          rosterKnown: true,
-          byBot: [{ eligible: state.h2 }, { eligible: state.governed }],
-          links: [],
-        };
+      if (atom === "governed") return state.h2 && state.governed;
       if (atom === "main-unread") return 0;
       if (atom === "main-work")
         return { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
@@ -85,9 +80,9 @@ vi.mock("~/state/server", async (original) => ({
   ...(await original<typeof import("~/state/server")>()),
   environmentServerConfigsAtom: "configs",
 }));
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: {
-    homeCurrentOpenableWorkByEnvironment: () => "home-work",
     homeCurrentOpenableWorkAtom: () => "main-work",
     homeCurrentUnreadAtom: () => "main-unread",
   },

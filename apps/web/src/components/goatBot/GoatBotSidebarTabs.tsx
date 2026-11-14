@@ -4,7 +4,6 @@ import {
   dismissCreatedBot,
   dismissNewBot,
   forgetNewBotIntentsOf,
-  homeWorkGoverns,
   retryNewBot,
   settleListedNewBots,
   startNewBot,
@@ -28,6 +27,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotNeedsYou } from "./GoatBotNeedsYou";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
 import { GoatBotNewBotStatus } from "./GoatBotNewBotStatus";
 import { openNewBotChat } from "./goatBotNewBotOpen";
@@ -110,10 +110,8 @@ export function GoatBotSidebarTabs() {
 }
 
 function LegacyBotChildRows(props: Parameters<typeof GoatBotChildRows>[0]) {
-  const work = useAtomValue(
-    channelEnvironment.homeCurrentOpenableWorkByEnvironment(props.environmentId),
-  );
-  return homeWorkGoverns(work) ? null : <GoatBotChildRows {...props} />;
+  const governed = useAtomValue(goatBotGovernedAtom(props.environmentId));
+  return governed ? null : <GoatBotChildRows {...props} />;
 }
 
 function NewBotButton({

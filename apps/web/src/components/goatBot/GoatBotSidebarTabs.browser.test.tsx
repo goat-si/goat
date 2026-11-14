@@ -27,7 +27,6 @@ const bots = vi.hoisted(() => ({
   rosterKnown: true,
 }));
 const channels = vi.hoisted(() => ({
-  homeCurrentOpenableWorkByEnvironment: () => "home-work",
   homeCurrentOpenableWorkAtom: () => "current-work",
   homeCurrentUnreadAtom: () => "unread-count",
   updateTaskView: { permissionAtom: () => null },
@@ -105,8 +104,8 @@ vi.mock("./GoatBotSidebarRow", () => ({
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: (atom: unknown) =>
-    atom === "home-work"
-      ? { rosterKnown: bots.rosterKnown, byBot: [{ eligible: bots.eligible }] }
+    atom === "governed"
+      ? bots.rosterKnown && bots.eligible
       : atom === "unread-count"
         ? 0
         : atom === "current-work"
@@ -121,6 +120,7 @@ vi.mock("~/localApi", () => {
   const api = () => ({ contextMenu: { show: actions.show } });
   return { readLocalApi: api, ensureLocalApi: api };
 });
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
 vi.mock("../ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,

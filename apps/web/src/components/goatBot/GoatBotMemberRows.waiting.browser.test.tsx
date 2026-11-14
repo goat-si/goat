@@ -50,18 +50,14 @@ vi.mock("@effect/atom-react", async (original) => ({
   useAtomValue: (atom: unknown) => {
     useTick();
     // Home governs an environment only while it is connected and every bot on it is eligible.
-    if (atom === "home-work")
-      return {
-        rosterKnown: true,
-        byBot: [{ eligible: server.connected }, { eligible: server.memberEligible }],
-        links: [],
-      };
+    if (atom === "governed") return server.connected && server.memberEligible;
     if (atom === "unread-count") return 0;
     if (atom === "current-work")
       return { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
     return true;
   },
 }));
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/channels", () => {
   const command = (tag: string) => ({ tag, permissionAtom: () => null });
   return {
@@ -69,7 +65,6 @@ vi.mock("~/state/channels", () => {
       botStatus: () => "status",
       homeCurrentOpenableWorkAtom: () => "current-work",
       homeCurrentUnreadAtom: () => "unread-count",
-      homeCurrentOpenableWorkByEnvironment: () => "home-work",
       setBotHidden: command("hide"),
       deleteBot: command("delete"),
       restoreBot: command("restore"),

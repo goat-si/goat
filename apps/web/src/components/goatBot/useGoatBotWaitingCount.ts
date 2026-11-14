@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { homeWorkGoverns } from "@goat/client-runtime/goatBot";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -11,13 +10,13 @@ import { useEffect, useRef } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
-import { channelEnvironment } from "~/state/channels";
 import { useThreadShell } from "~/state/entities";
 import { environmentServerConfigsAtom } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { GoatBotChannelPort } from "./goatBotChannelPort";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 import { useGoatBotEnabled } from "./useGoatBotSession";
 
 const useCounts = create<{
@@ -200,7 +199,7 @@ export function useGoatBotWaitingCount() {
   return enabled && connected ? count : undefined;
 }
 
-const NOT_GOVERNED = Atom.make({ rosterKnown: false, byBot: [], links: [] });
+const NOT_GOVERNED = Atom.make(false);
 
 /** Visit-aware status where Home governs the environment; elsewhere dev's legacy count. */
 export function useGoatBotSidebarWaiting() {
@@ -210,12 +209,8 @@ export function useGoatBotSidebarWaiting() {
   const environmentId = environment?.environmentId ?? null;
   const capabilities =
     environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
-  const governed = homeWorkGoverns(
-    useAtomValue(
-      environmentId === null
-        ? NOT_GOVERNED
-        : channelEnvironment.homeCurrentOpenableWorkByEnvironment(environmentId),
-    ),
+  const governed = useAtomValue(
+    environmentId === null ? NOT_GOVERNED : goatBotGovernedAtom(environmentId),
   );
   const status = useCounts((values) =>
     environmentId === null ? undefined : values.status.get(environmentId),

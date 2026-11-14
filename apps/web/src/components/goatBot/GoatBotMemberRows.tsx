@@ -5,7 +5,6 @@ import {
   goatBotAccent,
   goatBotMemberPicture,
   goatBotPreviewText,
-  homeWorkGoverns,
 } from "@goat/client-runtime/goatBot";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { BotProfile, EnvironmentId } from "@goat/contracts";
@@ -37,6 +36,7 @@ import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 import { GoatBotRowSignals } from "./GoatBotRowSignals";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 
 const NO_PERMISSION = Atom.make(false);
 
@@ -60,9 +60,7 @@ export function GoatBotMemberRoster({
   const [deleting, setDeleting] = useState<BotProfile | null>(null);
   const [hiddenOpen, setHiddenOpen] = useState(false);
   // One read for the whole list: every row follows the environment's governance by Home.
-  const governed = homeWorkGoverns(
-    useAtomValue(channelEnvironment.homeCurrentOpenableWorkByEnvironment(environmentId)),
-  );
+  const governed = useAtomValue(goatBotGovernedAtom(environmentId));
   const actions = {
     governed,
     canManage: manage.canManage,
