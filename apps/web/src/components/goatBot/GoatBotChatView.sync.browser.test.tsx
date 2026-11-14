@@ -3,6 +3,7 @@ import {
   BotProfile,
   EnvironmentId,
   EventId,
+  ProjectId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
@@ -277,7 +278,11 @@ function MemberChat({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
 
 function TaskChat({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   const [port] = useState<GoatBotChannelPort>(() => ({
-    ensureBot: async () => ({ environmentId, threadId: threadRef.threadId }),
+    ensureBot: async () => ({
+      environmentId,
+      projectId: ProjectId.make("project"),
+      threadId: threadRef.threadId,
+    }),
     getBotStatus: async () => {
       throw new Error("unexpected status read");
     },
@@ -515,6 +520,7 @@ it("does not reannounce older replies when a task card hides and restores the ne
   const spoken = status?.textContent;
   expect(spoken).toMatch(/update/);
   const revise = async (card: OrchestrationV2TurnItem, sequence: number) => {
+    if (card.type !== "notification") throw new Error("expected task notification");
     await act(async () => {
       Queue.offerUnsafe(socket, {
         kind: "event",
@@ -529,7 +535,10 @@ it("does not reannounce older replies when a task card hides and restores the ne
       });
       await nextAtom(details.visibleTurnItemsAtom(threadRef), (items) =>
         items.some(
-          ({ item }) => item.id === card.id && item.ledgerTask?.status === card.ledgerTask?.status,
+          ({ item }) =>
+            item.type === "notification" &&
+            item.id === card.id &&
+            item.ledgerTask?.status === card.ledgerTask?.status,
         ),
       );
     });
