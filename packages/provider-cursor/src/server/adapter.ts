@@ -1664,6 +1664,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           const options = makeCursorAgentOptions({
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
+            models: adapterOptions.getModels?.() ?? [],
             runtimePolicy: openInput.runtimePolicy,
             platform,
             threadId: openInput.threadId,
@@ -1883,7 +1884,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                     ),
                   ),
                 options: {
-                  model: cursorSdkModelSelection(turnInput.modelSelection),
+                  model: cursorSdkModelSelection(
+                    turnInput.modelSelection,
+                    adapterOptions.getModels?.() ?? [],
+                  ),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
                   mcpServers: mcpServers ?? {},
                 },
