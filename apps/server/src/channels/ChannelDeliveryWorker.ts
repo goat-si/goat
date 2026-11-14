@@ -161,6 +161,8 @@ const make = Effect.gen(function* () {
   const pendingSettles = new Map<PendingSettle["deliveryId"], PendingSettle>();
   // When a pass next takes back local rows left delivering with no settle kept for them.
   let orphanScanAt: number | undefined;
+  // Reasons the take-back scan is failing for now: each is logged once, until a scan succeeds.
+  const scanFailures = new Set<string>();
   // One slot: a request made during a run asks for one more run after it.
   const reconcileRequests = yield* Queue.sliding<string>(1);
 
@@ -372,6 +374,15 @@ const make = Effect.gen(function* () {
           limit: RECONCILE_BATCH,
         })
         .pipe(Effect.result);
+      if (released._tag === "Success") scanFailures.clear();
+      else if (!scanFailures.has(released.failure.reason)) {
+        scanFailures.add(released.failure.reason);
+        yield* Effect.logWarning("channel delivery take-back scan failed", {
+          reason: released.failure.reason,
+          error: released.failure,
+          retrying: released.failure.reason !== "ownership_lost",
+        });
+      }
       const again =
         released._tag === "Success"
           ? released.success.remaining

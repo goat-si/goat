@@ -3,20 +3,29 @@ import { ChannelTaskId, type ChannelOutboundMessage } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import * as BotThreads from "./ChannelBotThreads.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as Ledger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as Views from "./channelTaskViews.ts";
 import { timelineIdsFor } from "./channelIds.ts";
 import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { LedgerCallHolds } from "./testkit/dispatchRace.ts";
 import { watchTaskChanges } from "./testkit/taskChanges.ts";
-import { botThreadId, goatInput, owner, rpcContext } from "./testkit/ChannelHarness.ts";
+import {
+  botThreadId,
+  goatInput,
+  makeHarness,
+  owner,
+  rpcContext,
+} from "./testkit/ChannelHarness.ts";
 import { provide, setup } from "./testkit/botThreadHistory.fixture.ts";
 
 import {
@@ -35,6 +44,7 @@ import {
   recordsOf,
   refuseMarks,
   allowMarks,
+  warnings,
   withHolds,
 } from "./testkit/botThreadUnread.fixture.ts";
 
@@ -329,5 +339,51 @@ describe("task unread survives delivery failures", () => {
           assert.isTrue(Option.isSome(yield* Queue.poll(seen)));
         }),
       ),
+  );
+
+  it.effect(
+    "regression #3237: a failing take-back scan is logged once while it keeps failing and still retries until it succeeds",
+    () => {
+      const log = warnings();
+      return Effect.gen(function* () {
+        yield* setup;
+        const ids = Array.from({ length: 101 }, (_, index) =>
+          ChannelTaskId.make("task:fail-" + String(index).padStart(3, "0")),
+        );
+        for (const id of ids) yield* task(id);
+        yield* refuseMarks;
+        yield* queue(...ids.map((id) => message("fail-" + id.slice("task:fail-".length), id)));
+        yield* deliverDue;
+        yield* deliverDue;
+        yield* allowMarks;
+        const holds = yield* LedgerCallHolds;
+        const refused = new Ledger.ChannelLedgerError({ reason: "persistence", detail: "busy" });
+        yield* holds.failNext("releaseUnsentDeliveries", refused);
+        yield* holds.failNext("releaseUnsentDeliveries", refused);
+        for (let pass = 0; pass < 2; pass++) {
+          yield* TestClock.adjust("30 seconds");
+          yield* deliverDue;
+        }
+        const failures = () => log.logs.filter((entry) => entry.includes("take-back scan failed"));
+        assert.lengthOf(failures(), 1);
+        yield* TestClock.adjust("30 seconds");
+        for (let pass = 0; pass < 3; pass++) yield* deliverDue;
+        const sql = yield* SqlClient.SqlClient;
+        const states = yield* sql<{ readonly state: string; readonly n: number }>`SELECT state,
+          count(*) AS n FROM channel_outbox WHERE delivery_id LIKE 'fail-%' GROUP BY state`;
+        assert.deepStrictEqual(states, [{ state: "delivered", n: 101 }]);
+        assert.lengthOf(failures(), 1);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            BotThreads.layer.pipe(
+              Layer.provideMerge(Views.layer),
+              Layer.provideMerge(Layer.provideMerge(LedgerCallHolds.layer, makeHarness().layer)),
+            ),
+            log.layer,
+          ),
+        ),
+      );
+    },
   );
 });
