@@ -33,6 +33,13 @@ it.effect.each([
           cwd: "/workspace with spaces/file.ts:12:4",
           projectRoot: "/workspace with spaces",
         });
+        // A relative root, or one that reads as a flag, never reaches the command line.
+        for (const projectRoot of ["--wait", "workspace with spaces"])
+          yield* launcher.launchEditor({
+            editor,
+            cwd: "/workspace with spaces/file.ts:12:4",
+            projectRoot,
+          });
       }).pipe(
         Effect.provide(
           layerTest({
@@ -62,6 +69,10 @@ it.effect.each([
         "3",
         "/workspace with spaces/file.ts",
       ]);
+      assert.deepEqual(
+        spawned.slice(2).map((command) => command.args),
+        [spawned[0].args, spawned[0].args],
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

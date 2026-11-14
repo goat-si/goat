@@ -497,13 +497,18 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
         Effect.map((info) => info.type === "Directory"),
         Effect.orElseSucceed(() => false),
       ));
+    // The root goes before the editor's flags, so anything but an absolute path could read as one.
+    const projectRoot =
+      input.projectRoot !== undefined && (yield* Path.Path).isAbsolute(input.projectRoot)
+        ? input.projectRoot
+        : undefined;
     return {
       editor: editorDef.id,
       target: input.cwd,
       command,
       args: [
         ...baseArgs,
-        ...resolveCommandEditorArgs(editorDef, input.cwd, isDirectory, input.projectRoot),
+        ...resolveCommandEditorArgs(editorDef, input.cwd, isDirectory, projectRoot),
       ],
     };
   }
