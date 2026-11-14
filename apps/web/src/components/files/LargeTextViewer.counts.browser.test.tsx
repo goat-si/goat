@@ -14,6 +14,7 @@ it.each([
     <AttachmentFilePreview name={name} mimeType={mimeType} sizeBytes={file.size} file={file} />,
   );
   const status = () => screen.container.querySelector('[role="status"]')?.textContent ?? "";
+  // A cold large-text worker can take longer than waitFor's default to boot on CI.
   await vi.waitFor(() => expect(status()).toMatch(/ [KM]?B$/), { timeout: 10_000 });
   expect(status()).toContain(label);
 });
