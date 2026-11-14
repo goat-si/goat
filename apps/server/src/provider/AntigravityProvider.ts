@@ -501,18 +501,10 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     });
   });
 
-  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* (
-    profile?: string,
-  ) {
-    if (!settings.enabled) return;
-    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
-    yield* reconcileProfile();
-    yield* resetUsage;
-    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
-    const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
-    yield* SubscriptionRef.update(metadata, (state) =>
-      state.authProfile !== undefined && state.authProfile !== profile
+  /** Without a profile it applies to every profile and forgets which one was confirmed. */
+  const markSignedOut = (updatedAt: string, profile?: string) =>
+    SubscriptionRef.update(metadata, (state) =>
+      profile !== undefined && state.authProfile !== undefined && state.authProfile !== profile
         ? state
         : ({
             authRevision: state.authRevision + 1,
@@ -534,9 +526,26 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               usageLimits: undefined,
             },
           } satisfies AntigravityProviderState),
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          discoveredSkills.clear();
+          thinkingLevels.clear();
+        }),
+      ),
     );
-    discoveredSkills.clear();
-    thinkingLevels.clear();
+
+  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* (
+    profile?: string,
+  ) {
+    if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* reconcileProfile();
+    yield* resetUsage;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    const updatedAt = DateTime.formatIso(yield* DateTime.now);
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* markSignedOut(updatedAt, profile);
   });
 
   const snapshotForCwd = Effect.fn("AntigravityProvider.snapshotForCwd")(function* (
@@ -589,7 +598,13 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       ),
       Effect.asVoid,
     ),
-    onSignedOut: clearAccountMetadata,
+    // Every runtime home links the same credential profile, so a sign-out from any home
+    // removes the credentials of every profile, whatever the home reads meanwhile.
+    onSignedOut: Effect.fn("AntigravityProvider.onSignedOut")(function* (_profile?: string) {
+      if (!settings.enabled) return;
+      yield* resetUsage;
+      yield* markSignedOut(DateTime.formatIso(yield* DateTime.now));
+    }),
     onAuthRequired: clearAccountMetadata,
     snapshotForCwd,
   };

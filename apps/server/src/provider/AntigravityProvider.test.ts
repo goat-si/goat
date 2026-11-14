@@ -141,6 +141,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly enabled?: boolean;
     readonly safe?: boolean;
     readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
+    readonly currentProfile?: Effect.Effect<string>;
   } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
@@ -156,6 +157,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
       ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
+      ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -396,6 +398,47 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           expectedCommands,
         );
         expect(yield* Ref.get(harness.probeCalls)).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect(
+    "a sign-out from another home clears the current profile, since every home shares the credentials",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ currentProfile: Effect.succeed("/home/b") });
+          yield* harness.initialize;
+          yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("authenticated");
+          // A logout that began under the previous home finishes after this home was confirmed.
+          yield* harness.provider.onSignedOut("/home/a");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe(
+            "unauthenticated",
+          );
+          // A sign-in failure from that old session still leaves the current profile alone.
+          yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+          yield* harness.provider.onAuthRequired("/home/a");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        }),
+      ),
+  );
+
+  it.effect("a sign-out is not lost when the home changes while it is applied", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The home reads B, then C while the sign-out is applied, then B again.
+        const reads = yield* Ref.make(0);
+        const currentProfile = Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+          Effect.map((count) => (count === 2 ? "/home/c" : "/home/b")),
+        );
+        const harness = yield* makeHarness({ currentProfile });
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+        yield* Ref.set(reads, 1);
+        yield* harness.provider.onSignedOut("/home/b");
+        yield* Ref.set(reads, 3);
+        expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
       }),
     ),
   );
