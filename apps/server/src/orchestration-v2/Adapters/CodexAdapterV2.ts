@@ -67,6 +67,7 @@ import {
 } from "./CodexGeneratedImageMarkdown.ts";
 import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
 import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
+import { codexSessionEnvironment, codexSessionUsage } from "./CodexAdapterV2Options.ts";
 export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 import {
   codexProcessStart,
@@ -1548,9 +1549,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
-        const sessionEnvironment =
-          resolvedRuntime?.environment ??
-          (yield* adapterOptions.currentEnvironment ?? Effect.succeed(adapterOptions.environment));
+        const sessionEnvironment = yield* codexSessionEnvironment(adapterOptions, resolvedRuntime);
         const routeInput = yield* HomeRoute.resolveCodexRouteContext({
           settings: launchSettings,
           binaryPath: launchSettings.binaryPath,
@@ -1579,6 +1578,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           detached,
           survivors,
         });
+        const startUsage = yield* codexSessionUsage(adapterOptions, routeInput);
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
@@ -1593,8 +1593,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             routeArgs,
             logThreadFor: (nativeThreadId) =>
               rootProviderThreads.get(nativeThreadId)?.appThreadId ?? undefined,
+            connection: processStart?.connection,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
+        const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
@@ -4559,10 +4561,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
             }
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
-            if (update && adapterOptions.onUsageLimits) {
-              const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
-            }
+            if (update)
+              yield* reportUsage({ ...update, checkedAt: DateTime.formatIso(yield* DateTime.now) });
           }).pipe(Effect.orDie),
         );
 

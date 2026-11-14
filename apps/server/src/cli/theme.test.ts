@@ -6,6 +6,7 @@ import * as NetService from "@goat/shared/Net";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import { Command } from "effect/cli";
 import * as Effect from "effect/Effect";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
 import * as NodeFS from "node:fs";
@@ -83,6 +84,35 @@ describe("goat theme", () => {
       const settings = readSettings(baseDir);
       assert.equal(Object.hasOwn(settings, "defaultTheme"), false);
       assert.equal(settings.enableProviderUpdateChecks, false);
+    }),
+  );
+
+  it.effect("sets the theme of a dev server running in the default home", () =>
+    Effect.gen(function* () {
+      const home = makeBaseDir();
+      const devStateDir = NodePath.join(home, ".goat", "dev");
+      NodeFS.mkdirSync(devStateDir, { recursive: true });
+      NodeFS.writeFileSync(
+        NodePath.join(devStateDir, "server-runtime.json"),
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          port: 4888,
+          origin: "http://127.0.0.1:4888",
+          devUrl: "http://127.0.0.1:5999",
+          startedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      );
+      yield* runCli(["theme", "set", "ocean"]).pipe(
+        Effect.provideService(HostProcess.HomeDirectory, home),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+      );
+      assert.isFalse(NodeFS.existsSync(NodePath.join(home, ".goat", "userdata", "settings.json")));
+      assert.equal(
+        JSON.parse(NodeFS.readFileSync(NodePath.join(devStateDir, "settings.json"), "utf8"))
+          .defaultTheme,
+        "ocean",
+      );
     }),
   );
 

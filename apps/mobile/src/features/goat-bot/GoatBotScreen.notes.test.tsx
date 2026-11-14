@@ -247,6 +247,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",

@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- FileSystem.realPath drops ".." before following links.
 /** Instances sharing a login directory share credits; serialize redemptions on that directory. */
+import * as NodeFSP from "node:fs/promises";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type { ProviderConsumeResetCreditOutcome, ServerProvider } from "@goat/contracts";
@@ -24,6 +26,68 @@ interface AccountRedemptionState {
 /** Accounts tracked at once; an uncertain outcome keeps its entry until a retry settles it. */
 export const MAX_TRACKED_ACCOUNTS = 64;
 const MAX_LINK_HOPS = 40;
+
+/** The OS's answer: it follows a link before the ".." after it. Missing paths are None. */
+const nativeRealPath = (target: string) =>
+  Effect.tryPromise({
+    try: () => NodeFSP.realpath(target),
+    catch: (cause) =>
+      PlatformError.systemError({
+        _tag:
+          cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+            ? "NotFound"
+            : "Unknown",
+        module: "ResetCreditCoordinator",
+        method: "canonical",
+        pathOrDescriptor: target,
+        cause,
+      }),
+  }).pipe(
+    Effect.asSome,
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+  );
+
+/**
+ * One login directory's name, whatever path reaches it: follows links (dangling ones too) before the
+ * ".." after them, as the OS does, and keeps a missing tail below the nearest existing ancestor.
+ */
+export const canonicalLoginDirectory = Effect.fn("ResetCreditCoordinator.canonical")(function* (
+  accountKey: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  let existing = path.isAbsolute(accountKey) ? accountKey : path.resolve(accountKey);
+  const missing: Array<string> = [];
+  let links = 0;
+  while (true) {
+    const real = yield* nativeRealPath(existing);
+    if (Option.isSome(real)) return path.join(real.value, ...missing.toReversed());
+    const target = yield* fileSystem.readLink(existing).pipe(
+      Effect.asSome,
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    );
+    if (Option.isSome(target)) {
+      links += 1;
+      if (links > MAX_LINK_HOPS) {
+        return yield* PlatformError.systemError({
+          _tag: "InvalidData",
+          module: "ResetCreditCoordinator",
+          method: "canonical",
+          description: "Too many symbolic links in the login directory path.",
+          pathOrDescriptor: accountKey,
+        });
+      }
+      existing = path.isAbsolute(target.value)
+        ? target.value
+        : `${path.dirname(existing)}${path.sep}${target.value}`;
+      continue;
+    }
+    const parent = path.dirname(existing);
+    if (parent === existing) return path.resolve(accountKey);
+    missing.push(path.basename(existing));
+    existing = parent;
+  }
+});
 
 export class ResetCreditAccountLimitError extends Schema.TaggedError<ResetCreditAccountLimitError>()(
   "ResetCreditAccountLimitError",
@@ -57,42 +121,12 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   // An entry lives while a redemption holds it or an uncertain outcome keeps its idempotency key.
   const states = new Map<string, AccountRedemptionState>();
-  // Links to one login directory are one account, including one not created yet: follow dangling
-  // links, resolve the nearest existing ancestor and keep the missing tail.
-  const canonical = Effect.fn("ResetCreditCoordinator.canonical")(function* (accountKey: string) {
-    let existing = path.resolve(accountKey);
-    const missing: Array<string> = [];
-    let links = 0;
-    while (true) {
-      const real = yield* fileSystem.realPath(existing).pipe(
-        Effect.asSome,
-        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-      );
-      if (Option.isSome(real)) return path.join(real.value, ...missing.toReversed());
-      const target = yield* fileSystem.readLink(existing).pipe(
-        Effect.asSome,
-        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-      );
-      if (Option.isSome(target)) {
-        links += 1;
-        if (links > MAX_LINK_HOPS) {
-          return yield* PlatformError.systemError({
-            _tag: "InvalidData",
-            module: "ResetCreditCoordinator",
-            method: "canonical",
-            description: "Too many symbolic links in the login directory path.",
-            pathOrDescriptor: accountKey,
-          });
-        }
-        existing = path.resolve(path.dirname(existing), target.value);
-        continue;
-      }
-      const parent = path.dirname(existing);
-      if (parent === existing) return path.resolve(accountKey);
-      missing.push(path.basename(existing));
-      existing = parent;
-    }
-  });
+  // Links to one login directory are one account, including one not created yet.
+  const canonical = (accountKey: string) =>
+    canonicalLoginDirectory(accountKey).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
   const acquire = (accountKey: string) =>
     Effect.suspend(() => {
       const existing = states.get(accountKey);

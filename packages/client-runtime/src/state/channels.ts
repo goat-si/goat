@@ -142,6 +142,8 @@ export function createChannelEnvironmentAtoms<R, E>(
         connection?.[0].phase === "connected" &&
         Option.isSome(connection[1]) &&
         config?.environment.environmentId === environmentId &&
+        // Home lists a bot's work only with goatBotTaskThreads; the flags vary independently.
+        config.environment.capabilities.goatBotTaskThreads === true &&
         config.environment.capabilities.goatBotTaskThreadsPaged === true &&
         config.environment.capabilities.goatBotTaskLookupSearch === true &&
         get(listPermission.permissionAtom(environmentId, input));

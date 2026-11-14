@@ -121,15 +121,13 @@ export function pickGoatBotEnvironment(
 }
 
 /**
- * Whether GOAT Bot can take messages right now. A remembered bot is not
- * enough: the server must support channels and have confirmed the bot on
- * this connection. Running work never makes the bot unavailable.
+ * Everything availability checks before the ensure: either the final answer, or the machine
+ * whose ensure on this connection decides it.
  */
-export function resolveGoatBotAvailability(input: {
+export function resolveGoatBotAvailabilityBeforeEnsure(input: {
   readonly environments: ReadonlyArray<GoatBotEnvironmentInput>;
   readonly botRef: GoatBotRef | null;
-  readonly ensure: GoatBotEnsureState;
-}): GoatBotAvailability {
+}): GoatBotAvailability | { readonly kind: "ensure"; readonly environmentId: EnvironmentId } {
   const { supported, resolution, candidateId } = resolveGoatBotHomeSelection(
     input.environments,
     input.botRef,
@@ -173,6 +171,22 @@ export function resolveGoatBotAvailability(input: {
       : { kind: "offline", environmentId };
   }
   if (!environment.connected) return { kind: "offline", environmentId };
+  return { kind: "ensure", environmentId };
+}
+
+/**
+ * Whether GOAT Bot can take messages right now. A remembered bot is not
+ * enough: the server must support channels and have confirmed the bot on
+ * this connection. Running work never makes the bot unavailable.
+ */
+export function resolveGoatBotAvailability(input: {
+  readonly environments: ReadonlyArray<GoatBotEnvironmentInput>;
+  readonly botRef: GoatBotRef | null;
+  readonly ensure: GoatBotEnsureState;
+}): GoatBotAvailability {
+  const before = resolveGoatBotAvailabilityBeforeEnsure(input);
+  if (before.kind !== "ensure") return before;
+  const { environmentId } = before;
   switch (input.ensure.state) {
     case "legacy_active":
       return { kind: "legacy_active", environmentId };

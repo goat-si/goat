@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   EnvironmentId,
   NodeId,
+  OrchestratorMcpThreadDetail,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   ProjectId,
@@ -16,6 +17,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -40,6 +42,7 @@ const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
 );
 
 const environmentId = EnvironmentId.make("environment-mcp-orchestrator-detail");
+const decodeThreadDetail = Schema.decodeUnknownSync(OrchestratorMcpThreadDetail);
 const projectId = ProjectId.make("project-mcp-orchestrator-detail");
 const parentThreadId = ThreadId.make("thread-mcp-orchestrator-parent");
 const childThreadId = ThreadId.make("thread-mcp-orchestrator-child");
@@ -165,7 +168,19 @@ it("readThread preserves caller access errors and prefers activity-run status ov
               ? Effect.die("A failed caller read must not reach the target")
               : Effect.succeed(
                   threadId === parentThreadId
-                    ? (projection.thread as unknown as OrchestrationV2ThreadShell)
+                    ? ({
+                        ...projection.thread,
+                        blockedOnThreadWait: true,
+                        pendingBackgroundTasks: [
+                          {
+                            taskId: "task-subagent",
+                            kind: "subagent",
+                            parentTaskId: "private",
+                            providerInstanceId: parentInstanceId,
+                            childThreadId,
+                          },
+                        ],
+                      } as unknown as OrchestrationV2ThreadShell)
                     : null,
                 ),
           getProjectThreadRecords: (input) =>
@@ -196,6 +211,16 @@ it("readThread preserves caller access errors and prefers activity-run status ov
     expect(result.thread.status).toBe("running");
     expect(result.thread.latestRunId).toBe(cancelledRunId);
     expect(result.thread.activeRunId).toBe(activeRunId);
+    expect(result.thread.blockedOnThreadWait).toBe(true);
+    expect(result.thread.pendingBackgroundTasks).toEqual([
+      { taskId: "task-subagent", kind: "subagent", childThreadId },
+    ]);
+    const {
+      pendingBackgroundTasks: _pending,
+      blockedOnThreadWait: _blocked,
+      ...older
+    } = result.thread;
+    expect(decodeThreadDetail(older).threadId).toBe(parentThreadId);
 
     callerUnavailable = true;
     const denied = yield* service

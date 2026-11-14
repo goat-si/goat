@@ -1,7 +1,36 @@
 import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 import type { ChannelBotRef, GoatBotHomeClaim } from "@goat/contracts";
+import { AsyncResult } from "effect/reactivity";
 
 export type MobileHomeMode = "thread" | "bot";
+
+/**
+ * The saved bot once this device's preferences have loaded (null when none is saved); undefined
+ * until then, while the Bots switch cannot change mode.
+ */
+export function loadedMobileGoatBotRef(
+  preferences: AsyncResult.AsyncResult<
+    { readonly goatBotRef?: ChannelBotRef | undefined },
+    unknown
+  >,
+): ChannelBotRef | null | undefined {
+  return AsyncResult.isSuccess(preferences) ? (preferences.value.goatBotRef ?? null) : undefined;
+}
+
+/** Whether a bot's Home sheet can show its task list on its computer; a member also needs members. */
+export function mobileBotHomeListShown(input: {
+  readonly connected: boolean;
+  readonly capabilities:
+    | { readonly goatBotTaskThreads?: boolean; readonly goatBotMembers?: boolean }
+    | undefined;
+  readonly member: boolean;
+}): boolean {
+  return (
+    input.connected &&
+    input.capabilities?.goatBotTaskThreads === true &&
+    (!input.member || input.capabilities.goatBotMembers === true)
+  );
+}
 
 export function mobileGoatBotKnown(
   environments: ReadonlyArray<Pick<GoatBotEnvironmentInput, "supportsChannelLedger">>,

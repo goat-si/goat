@@ -372,7 +372,17 @@ const make = Effect.gen(function* () {
     } satisfies Page;
   });
 
-  return ThreadSearchMcpService.of({ search });
+  return ThreadSearchMcpService.of({
+    // The inner search already provides the tracing boundary.
+    search: Effect.fnUntraced(function* (
+      scope: McpInvocationScope,
+      input: OrchestratorMcpThreadSearchInput,
+    ) {
+      return yield* search(scope, input).pipe(
+        Effect.map((result) => ({ ...result, currentThreadId: scope.thread?.threadId ?? null })),
+      );
+    }),
+  });
 });
 
 export const layer = Layer.effect(ThreadSearchMcpService, make);

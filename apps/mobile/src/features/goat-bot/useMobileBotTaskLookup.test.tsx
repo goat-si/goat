@@ -347,3 +347,17 @@ it("an answer belongs to its period: after the capability goes and returns, the 
   expect(asked()).toEqual(["t1", "t1"]);
   expect(state()).toBe("loading");
 });
+
+it("a held answer is forgotten when the screen moves to another task, and coming back reads it again", async () => {
+  setup();
+  await show();
+  await net.calls[0]?.answer(known("t1"));
+  expect(state()).toBe("known");
+  await show({ taskId: "t2" as Props["taskId"] });
+  expect(state()).toBe("loading");
+  expect(asked()).toEqual(["t1", "t2"]);
+  await net.calls[1]?.answer(known("t2"));
+  await show();
+  expect(state()).toBe("loading");
+  expect(asked()).toEqual(["t1", "t2", "t1"]);
+});

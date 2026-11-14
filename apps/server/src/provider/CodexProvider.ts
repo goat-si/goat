@@ -435,9 +435,12 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
     readonly route?: HomeRoute.RouteInput;
     readonly cwd: string;
     readonly environment?: NodeJS.ProcessEnv | undefined;
+    /** False spawns with `environment` alone, so nothing the host adds later reaches the process. */
+    readonly extendEnv?: boolean;
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const environment = yield* codexProcessEnvironment(input);
+    const extendEnv = input.extendEnv ?? true;
     const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
     const routeArgs =
       input.route?.settings.modelRoute === "opencodex"
@@ -454,14 +457,14 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
     const spawnCommand = yield* resolveSpawnCommand(
       input.binaryPath,
       codexAppServerArgs(input.launchArgs, routeArgs),
-      { env: environment, extendEnv: true },
+      { env: environment, extendEnv },
     );
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.cwd,
           env: environment,
-          extendEnv: true,
+          extendEnv,
           forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
