@@ -49,4 +49,28 @@ describe("goatBotRowPullRequests", () => {
     ]);
     expect(spanning.more).toBe(0);
   });
+
+  it("names the full repository when two of a row's repositories share a short name", () => {
+    const row = {
+      pullRequests: [
+        { repository: "alpha/app", number: 42, state: "open", watching: false },
+        { repository: "beta/app", number: 42, state: "merged", watching: false },
+        { repository: "goat-si/goat", number: 7, watching: false },
+      ],
+      pullRequestsOmitted: 1,
+    } as const;
+    expect(goatBotRowPullRequests(row, 3).chips.map((chip) => chip.text)).toEqual([
+      "alpha/app#42",
+      "beta/app#42",
+      "goat#7",
+    ]);
+    expect(goatBotRowPullRequests(row, 0)).toEqual({ chips: [], more: 4, moreLabel: "+4 more" });
+    expect(goatBotRowPullRequests(row, 10).chips).toHaveLength(3);
+    expect(goatBotRowPullRequests(row, 10).more).toBe(1);
+    expect(goatBotRowPullRequests({ pullRequests: [] }, 2)).toEqual({
+      chips: [],
+      more: 0,
+      moreLabel: null,
+    });
+  });
 });

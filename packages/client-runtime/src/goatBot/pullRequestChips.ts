@@ -33,17 +33,24 @@ export function goatBotRowPullRequests(
   readonly moreLabel: string | null;
 } {
   const pullRequests = row.pullRequests ?? [];
-  const spansRepositories = new Set(pullRequests.map((item) => item.repository)).size > 1;
+  const repositories = [...new Set(pullRequests.map((item) => item.repository))];
+  const shortName = (repository: string) => repository.slice(repository.lastIndexOf("/") + 1);
+  // Two repositories sharing a short name keep their full names, so no two chips read alike.
+  const label = (repository: string) =>
+    repositories.length < 2
+      ? ""
+      : repositories.filter((other) => shortName(other) === shortName(repository)).length > 1
+        ? repository
+        : shortName(repository);
   const chips = pullRequests
     .slice(0, Math.max(0, visible))
     .map((item): GoatBotRowPullRequestChip => {
       const state = item.state ?? "unknown";
-      const shortName = item.repository.slice(item.repository.lastIndexOf("/") + 1);
       return {
         key: `${item.repository}#${item.number}`,
         number: item.number,
         state,
-        text: `${spansRepositories ? shortName : ""}#${item.number}`,
+        text: `${label(item.repository)}#${item.number}`,
         stateLabel: STATE_LABEL[state],
         accessibleName: `Pull request ${item.repository}#${item.number}, ${STATE_LABEL[state].toLowerCase()}`,
       };
