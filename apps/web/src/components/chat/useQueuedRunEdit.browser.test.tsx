@@ -27,6 +27,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "../../lib/terminalContext";
+
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { useQueuedRunEdit } from "./useQueuedRunEdit";
@@ -440,6 +442,32 @@ describe("useQueuedRunEdit", () => {
       },
     });
     await expect.element(screen.getByText("On it.")).toBeInTheDocument();
+  });
+
+  it("adds terminal context to the queued message being edited", async () => {
+    const { hook } = setup();
+    await using _screen = await render(view(THREAD_A, "queued", hook));
+    await beginChangedEdit(hook);
+    const target = requireHook(hook).draftTarget;
+    const inserted = useComposerDraftStore.getState().insertTerminalContext(
+      target,
+      `changed${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}`,
+      {
+        id: "terminal-context-1",
+        threadId: THREAD_A.threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        terminalId: "default",
+        terminalLabel: "Terminal 1",
+        lineStart: 3,
+        lineEnd: 3,
+        text: "hello",
+      },
+      0,
+    );
+    expect(inserted).toBe(true);
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(target)?.terminalContexts,
+    ).toHaveLength(1);
   });
 
   it("keeps an open edit when the user leaves the thread and comes back", async () => {

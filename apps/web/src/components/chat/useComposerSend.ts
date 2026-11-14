@@ -82,6 +82,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
+import { useSendWithRouting } from "./useSendWithRouting";
 import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
@@ -152,6 +153,7 @@ import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useSideChatStore } from "../sideChat/sideChatStore";
@@ -245,6 +247,7 @@ interface ComposerSendInput {
   readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
   readonly needsLoadBalancing: boolean;
   readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
+  readonly refreshBeforeSend: DraftEnvironmentRouting["refreshBeforeSend"];
   readonly readPendingEnvironmentChange: DraftEnvironmentRouting["readPendingEnvironmentChange"];
   readonly pendingApprovals: PendingThreadRequests["pendingApprovals"];
   readonly respondingRequestIds: PendingThreadRequests["respondingRequestIds"];
@@ -343,6 +346,7 @@ export function useComposerSend(input: ComposerSendInput) {
     clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
+    refreshBeforeSend,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
@@ -594,7 +598,6 @@ export function useComposerSend(input: ComposerSendInput) {
         sendInFlightRef.current = false;
       });
   };
-
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -636,16 +639,17 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
 
-    const notifyDirectAnnotationAttached = () => {
-      if (!directAnnotation) return;
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Annotation attached to draft",
-          description: "Sending is unavailable right now. Finish the current action, then send.",
-        }),
-      );
-    };
+    const sendCtx = composerRef.current?.getSendContext();
+    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
+      if (directAnnotation) notifyDirectAnnotationAttached(true);
+      else if (
+        activeThread &&
+        !activeEnvironmentUnavailable &&
+        readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+      )
+        onAdvanceActivePendingUserInput();
+      return;
+    }
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
@@ -658,7 +662,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(Boolean(directAnnotation));
       return;
     }
     if (needsLoadBalancing) {
@@ -687,15 +691,6 @@ export function useComposerSend(input: ComposerSendInput) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
-      return;
-    }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
-      if (directAnnotation) {
-        notifyDirectAnnotationAttached();
-        return;
-      }
-      onAdvanceActivePendingUserInput();
       return;
     }
     if (cloudState.composerBlockReason !== null) {
@@ -841,7 +836,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (!sendCtx?.providerAvailable) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(Boolean(directAnnotation));
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
@@ -1803,6 +1798,11 @@ export function useComposerSend(input: ComposerSendInput) {
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
   };
-
-  return { onSend, continueThreadOnSsh, forkCommand };
+  const onSendWithRouting = useSendWithRouting(
+    onSend,
+    sendInFlightRef,
+    readPendingEnvironmentChange,
+    refreshBeforeSend,
+  );
+  return { onSend: onSendWithRouting, continueThreadOnSsh, forkCommand };
 }

@@ -61,6 +61,10 @@ vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("../../state/projectClones", () => ({
   unsilenceProjectCloneToasts: state.unsilenceProjectCloneToasts,
 }));
+vi.mock("./chatViewSend", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { draftFanoutSelectionsAtom: Atom.family(() => Atom.make([])) };
+});
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";

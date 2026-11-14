@@ -37,7 +37,7 @@ export const evaluateWithTimeout = async (
   const params = {
     expression: input.expression,
     awaitPromise: input.awaitPromise ?? true,
-    returnByValue: input.returnByValue ?? true,
+    returnByValue: true,
   };
   let timedOut = false;
   const evaluation = channel.send("Runtime.evaluate", params).then((classic) => {

@@ -1,4 +1,5 @@
 import { describeUserInputResponder, type UserInputAttachmentAnswerPayload } from "@goat/contracts";
+import { composerContextProviderTextForDisplay } from "@goat/shared/composerContextReferences";
 
 /** Additional history detail for recorded agent and client answers. */
 export function getQuestionAnswerAttribution(
@@ -17,7 +18,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 export function getQuestionAnswerText(value: unknown): string {
-  if (typeof value === "string") return value;
+  // Answers holding context chips are stored in provider form.
+  if (typeof value === "string") return composerContextProviderTextForDisplay(value);
   if (Array.isArray(value)) return value.map(getQuestionAnswerText).filter(Boolean).join(", ");
   const nested = record(value);
   return nested ? getQuestionAnswerText(nested.answers) : "";
