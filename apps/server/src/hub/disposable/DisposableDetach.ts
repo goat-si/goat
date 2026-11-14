@@ -280,39 +280,68 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       if (reuse && !pending && (before.sends ?? 0) >= REVOKE_SENDS)
         return yield* halt(row, enroll, before, "revoke_unsettled");
     }
-    const attempt = reuse ? before.attempt : before.attempt + 1;
-    const operationId =
-      reuse && stored !== undefined ? stored : revokeOperationId(row.attach_id, "force", attempt);
-    const admitted: Detach = {
-      step: "revoke",
-      attempt,
-      operationId,
-      sends: reuse ? (before.sends ?? 0) + 1 : 1,
-      force: true,
-      triedAtMs: yield* Clock.currentTimeMillis,
-      ...(supersedes === undefined ? {} : { supersedes }),
-    };
+    const triedAtMs = yield* Clock.currentTimeMillis;
     // The id is stored before ocx starts, so a lost answer is read back, never sent anew.
-    if (!(yield* note(row, withDetach(enroll, admitted)))) return;
-    const sent = yield* host.ocx(
-      [
-        "link",
-        "revoke",
-        "--link-id",
-        linkId,
-        "--force",
-        "--yes",
-        "--operation-id",
+    const send = Effect.fn("DisposableDetach.sendForce")(function* (
+      operationId: string,
+      attempt: number,
+      sends: number,
+    ) {
+      const admitted: Detach = {
+        step: "revoke",
+        attempt,
         operationId,
-        "--json",
-      ],
-      REVOKE_TIMEOUT_MS,
+        sends,
+        force: true,
+        triedAtMs,
+        ...(supersedes === undefined ? {} : { supersedes }),
+      };
+      if (!(yield* note(row, withDetach(enroll, admitted)))) return undefined;
+      const sent = yield* host.ocx(
+        [
+          "link",
+          "revoke",
+          "--link-id",
+          linkId,
+          "--force",
+          "--yes",
+          "--operation-id",
+          operationId,
+          "--json",
+        ],
+        REVOKE_TIMEOUT_MS,
+      );
+      // Gone without a tombstone of GOAT's: someone else removed it, as on the purge path.
+      const elsewhere = sent?.refusal?.code === "link_not_found";
+      const outcome = elsewhere
+        ? ({ kind: "clean" } as const)
+        : yield* readEntry(operationId, linkId, true);
+      return { admitted, sent, elsewhere, outcome };
+    });
+    const limited = (answer: {
+      readonly outcome: { readonly kind: string; readonly code?: string };
+    }) => answer.outcome.kind === "failed_clean" && answer.outcome.code === "tombstone_limit";
+    const attempt = reuse ? before.attempt : before.attempt + 1;
+    let result = yield* send(
+      reuse && stored !== undefined ? stored : revokeOperationId(row.attach_id, "force", attempt),
+      attempt,
+      reuse ? (before.sends ?? 0) + 1 : 1,
     );
-    // Gone without a tombstone of GOAT's: someone else removed it, as on the purge path.
-    const elsewhere = sent?.refusal?.code === "link_not_found";
-    const outcome = elsewhere
-      ? ({ kind: "clean" } as const)
-      : yield* readEntry(operationId, linkId, true);
+    if (result === undefined) return;
+    // OpenCodex's order for tombstone_limit (cli/link.ts): the same id first, which resumes a removal
+    // it still owns and otherwise only replays; then a new id; one refused link_retirement_owned goes
+    // back to the id that owns the removal.
+    if (reuse && stored !== undefined && limited(result)) {
+      const next = before.attempt + 1;
+      const fresh = yield* send(revokeOperationId(row.attach_id, "force", next), next, 1);
+      if (fresh === undefined) return;
+      result =
+        fresh.sent?.refusal?.code === "link_retirement_owned"
+          ? yield* send(stored, before.attempt, 1)
+          : fresh;
+      if (result === undefined) return;
+    }
+    const { admitted, sent, elsewhere, outcome } = result;
     if (outcome.kind === "clean") {
       // After the one resend recover asked for, the next recover keeps its 30-minute wait.
       const settled = pending
