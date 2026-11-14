@@ -69,6 +69,36 @@ it.effect("a released record is kept past 30 days while Pen's list cannot show i
 );
 
 it.effect(
+  "a person forces past a changed host key, then removes the machine from Pen: the record keeps its detach, names its cleanup, and is pruned once settled",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId, linkId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "host_key_changed");
+        ocx.recoverRefusal = "host_key_changed";
+        yield* detachPass;
+        yield* detach(PERSON, attachId, "d-1", true);
+        yield* detachPass;
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+        pen.members.delete(key(1));
+        yield* reconcile;
+        const left = yield* listed(attachId);
+        expect(left?.state).toBe("detaching");
+        expect(left?.message).toContain("ocx link recover --forget --link-id " + linkId);
+        expect(left?.message).not.toContain("ocx link revoke");
+        ocx.forget(linkId);
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        expect(yield* listed(attachId)).toMatchObject({ state: "purged", penMember: false });
+        yield* TestClock.adjust(31 * 24 * HOUR);
+        yield* detachPass;
+        expect(yield* listed(attachId)).toBeUndefined();
+      }),
+    ),
+);
+
+it.effect(
   "the 30 days count from leaving Pen: a purged record that left Pen later stays 30 days after that",
   () =>
     world((pen, home, _grant, host) =>
