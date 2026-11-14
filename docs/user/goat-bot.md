@@ -69,8 +69,8 @@ a task shows its conversation right there, beside the chat, and marks it read; *
 opens it in full. A task's menu pins it, marks it done or marks it read.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
-bot started leaves Threads while its task's **Show work** in Home links it (a finished task past the first five
-appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,
+bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
+the first five appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,
 some of a long task's threads, and work on a machine this device can't open; on an older server
 everything stays as it was. The unread badge on a bot's row counts recent work only; older work may
 be missing. An unavailable mark means its unread or waiting count could not be read; the mark names
