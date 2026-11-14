@@ -271,6 +271,9 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         source,
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE orchestration_v2_projection_threads
+            SET payload_json = ${JSON.stringify({ pullRequests: [{ url: "https://github.com/owner/repo/pull/7", watch: { wakes: 0 } }] })}
+            WHERE thread_id = 'stopped-thread'`;
           for (const [rowid, threadId, role, streaming, createdBy] of [
             [7, "stopped-thread", "user", 0, "user"],
             [42, "fork-thread", "assistant", 0, "agent"],
@@ -326,6 +329,10 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             SELECT stream_id FROM orchestration_events ORDER BY stream_id`;
           const sessions = yield* sql<{ provider_session_id: string }>`
             SELECT provider_session_id FROM orchestration_v2_projection_provider_sessions`;
+          const [pullRequest] = yield* sql<{ url: string | null; watch: string | null }>`
+            SELECT json_extract(payload_json, '$.pullRequests[0].url') AS url,
+              json_extract(payload_json, '$.pullRequests[0].watch') AS watch
+            FROM orchestration_v2_projection_threads WHERE thread_id = 'stopped-thread'`;
           const reports = yield* sql<{ correlation_id: string }>`
             SELECT correlation_id FROM remote_reports ORDER BY correlation_id`;
           const [leftovers] = yield* sql<{
@@ -354,6 +361,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
             threads,
             events,
             sessions,
+            pullRequest,
             reports,
             leftovers,
             pending: roster?.has_pending_background_work,
@@ -373,6 +381,10 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         kept.sessions.map((row) => row.provider_session_id),
         ["session-shared"],
       );
+      assert.deepStrictEqual(kept.pullRequest, {
+        url: "https://github.com/owner/repo/pull/7",
+        watch: null,
+      });
       assert.deepStrictEqual(
         kept.reports.map((row) => row.correlation_id),
         ["corr-settled-thread", "corr-stopped-thread"],
