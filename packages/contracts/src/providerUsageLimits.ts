@@ -119,6 +119,9 @@ export const ServerProviderUsageLimits = Schema.Struct({
       redeemable: Schema.Boolean,
     }),
   ),
+  /** A $0 monthly spend cap has no percentage, so it cannot be a window. */
+  zeroSpendCap: Schema.optional(Schema.Boolean),
+
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(

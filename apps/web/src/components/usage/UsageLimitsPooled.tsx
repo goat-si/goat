@@ -203,6 +203,7 @@ function GroupTable({
               </td>
               <td className="px-2 py-2.5">
                 <StatusCell row={row} now={now} />
+                {row.account?.limits.zeroSpendCap ? <span>Monthly spend: $0 cap</span> : null}
               </td>
               {group.windows.map((window) => {
                 const member = window.columns.find(

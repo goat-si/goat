@@ -682,7 +682,9 @@ export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
     return limits.unavailable.message ?? "Could not read limits.";
   }
   const blocks = limits.availability?.some((block) => block.exhausted) === true;
-  return limits.windows.length === 0 && !blocks ? "No limits reported." : null;
+  return limits.windows.length === 0 && !blocks && !limits.zeroSpendCap
+    ? "No limits reported."
+    : null;
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {
