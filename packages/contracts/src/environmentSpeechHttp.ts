@@ -46,6 +46,13 @@ export function makeEnvironmentSpeechHttpApi(
     )
     .add(
       HttpApiEndpoint.post(
+        "link",
+        "/api/voice/environment/models/link",
+        voiceEndpoint(Speech.SpeechModelLinkRequest, Speech.SpeechMutationResult),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post(
         "remove",
         "/api/voice/environment/models/remove",
         voiceEndpoint(Speech.SpeechModelRequest, Speech.SpeechMutationResult),

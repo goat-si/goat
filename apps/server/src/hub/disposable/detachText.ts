@@ -62,6 +62,9 @@ const unknownRevoke = (operationId: string) =>
       " did to the Child, even after a repeat. A person fixes what stopped it, checks the machine and forces the detach" +
       WHERE +
       ": GOAT repeats it if it still holds the link, then resolves it.";
+/** Another revoke of the link is still open (link_operation_open): OpenCodex refuses every other. */
+const OPEN_ELSEWHERE =
+  "another revoke of its link is still open in OpenCodex (link_operation_open), which refuses every other revoke meanwhile, a plain force too. A person on this hub finds it with ocx link operations --json and fixes what stopped it";
 /** An unfinished removal holds the link (link_retirement_owned): the owner's way out on the Home. */
 const ownerWayOut = (linkId: string) =>
   "A person on this hub repeats the revoke that owns it (see ocx link operations --json) or runs ocx link revoke --link-id " +
@@ -143,18 +146,20 @@ const STOPS: Record<string, Stop> = {
       outcome === "owner_open" && detach.owner !== undefined
         ? "GOAT's earlier revoke " +
           detach.owner +
-          " of its link is still open in OpenCodex, which refuses every other revoke meanwhile. A person fixes what stopped it on this hub (for example the journal's disk), then detaches again" +
+          " of its link is still open in OpenCodex, which refuses every other revoke meanwhile (link_operation_open). A person fixes what stopped it on this hub (such as the journal's disk), then detaches again" +
           WHERE +
           ": GOAT repeats it."
-        : "an unfinished removal holds its link (link_retirement_owned)" +
-          (detach.owner === undefined
-            ? ""
-            : " and GOAT's repeat of its earlier revoke did not end it") +
-          ". " +
-          ownerWayOut(linkId) +
-          ", then detaches again" +
-          WHERE +
-          ".",
+        : detach.refusal === "link_operation_open"
+          ? OPEN_ELSEWHERE + ", then detaches again" + WHERE + "."
+          : "an unfinished removal holds its link (link_retirement_owned)" +
+            (detach.owner === undefined
+              ? ""
+              : " and GOAT's repeat of its earlier revoke did not end it") +
+            ". " +
+            ownerWayOut(linkId) +
+            ", then detaches again" +
+            WHERE +
+            ".",
     // The refused id was never recorded, so it names nothing a person can look up.
     bare: true,
     next:
@@ -244,13 +249,17 @@ const waits = (detach: Detach | undefined) =>
   detach?.outcome !== undefined && RECOVER_WAITS[detach.outcome] !== undefined
     ? "; " + RECOVER_WAITS[detach.outcome]
     : ".";
-/** A forced removal waits on the resolve of the purge it replaced before recover runs. */
+/** A forced removal waits on the resolve of what it replaced (a purge, or GOAT's earlier force). */
 const resolveOwed = (name: string, detach: Detach | undefined, inPen: boolean) =>
   detach?.outcome === "resolve_owed" && detach.supersedes !== undefined
     ? {
         message:
           name +
-          "'s link is gone, and GOAT is marking the purge it replaced resolved before it cleans the machine; it tries every 30 minutes, or a person runs " +
+          "'s link is gone, and GOAT is marking " +
+          (detach.supersedes.includes(".force.")
+            ? "GOAT's earlier forced revoke"
+            : "the purge it replaced") +
+          " resolved before it cleans the machine; it tries every 30 minutes, or a person runs " +
           resolve(detach.supersedes) +
           " on this hub." +
           held(inPen, true),
@@ -311,6 +320,17 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
         nextAction: repeatFirstNext,
       };
     // The read-back could not read the journal: nothing is known to be owed yet.
+    if (detach.refusal === "link_operation_open")
+      return {
+        message:
+          name +
+          " answers again; its earlier removal (operation " +
+          operationId +
+          ") met link_operation_open: another revoke of its link was open, which a plain force cannot pass. A person's Detach" +
+          WHERE +
+          " reads it again first and repeats what OpenCodex still holds.",
+        nextAction: "A person fixes what stopped that removal on the hub, then" + detachIt + ".",
+      };
     return {
       message:
         name +
@@ -332,9 +352,11 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
         detachIt +
         ", which repeats that removal."
       : detach.stop === "link_retirement_owned"
-        ? "an unfinished removal holds its link in OpenCodex (link_retirement_owned). " +
-          ownerWayOut(linkId) +
-          ", then" +
+        ? (detach.refusal === "link_operation_open"
+            ? OPEN_ELSEWHERE + ", then"
+            : "an unfinished removal holds its link in OpenCodex (link_retirement_owned). " +
+              ownerWayOut(linkId) +
+              ", then") +
           detachIt +
           "."
         : outcome === "unsettled"
