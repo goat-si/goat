@@ -1,6 +1,6 @@
-import { Editor, getSchemaByResolvedExtensions, Node, resolveExtensions } from "@tiptap/core";
+import { schema, plainSchema, stubAtom } from "./composer-rich-text-doc.testkit";
+import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
-import { TaskList } from "@tiptap/extension-task-list";
 import { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { EditorState, TextSelection } from "@tiptap/pm/state";
 import { splitBlockKeepMarks } from "@tiptap/pm/commands";
@@ -17,14 +17,11 @@ import {
   buildDocJson,
   buildTiptapContent,
   caretTakesMarksBefore,
-  ComposerBlockExtensions,
   ComposerCodeBlockExtension,
-  ComposerListExtensions,
   ComposerBoldExtension,
   ComposerCodeExtension,
   ComposerItalicExtension,
   ComposerStrikeExtension,
-  ComposerTaskItemExtension,
   flatToMarkdown,
   flatToPm,
   markdownToFlat,
@@ -33,58 +30,8 @@ import {
   serializeSelection,
   skillChipReplacements,
   stepCaretAcrossStyledEdge,
+  surroundSelectionWithMark,
 } from "./composer-rich-text-doc";
-
-function stubAtom(name: string, attrs: Record<string, { default: unknown }>) {
-  return Node.create({
-    name,
-    group: "inline",
-    inline: true,
-    atom: true,
-    addAttributes: () => attrs,
-  });
-}
-
-const schema = getSchemaByResolvedExtensions(
-  resolveExtensions([
-    StarterKit.configure({
-      blockquote: false,
-      bulletList: false,
-      codeBlock: false,
-      heading: false,
-      horizontalRule: false,
-      listItem: false,
-      orderedList: false,
-      dropcursor: false,
-      gapcursor: false,
-      trailingNode: false,
-      code: false,
-    }),
-    ComposerCodeExtension,
-    stubAtom("composer-mention", { path: { default: "" }, source: { default: "" } }),
-    stubAtom("composer-skill", {
-      skillName: { default: "" },
-      skillLabel: { default: "" },
-      skillDescription: { default: null },
-    }),
-    stubAtom("composer-citation", {
-      citation: { default: null },
-      source: { default: "" },
-      citeKey: { default: "" },
-    }),
-    stubAtom("composer-context-reference", {
-      kind: { default: "" },
-      contextId: { default: "" },
-      label: { default: "" },
-      source: { default: "" },
-    }),
-    TaskList,
-    ComposerTaskItemExtension,
-    ComposerCodeBlockExtension,
-    ...ComposerListExtensions,
-    ...ComposerBlockExtensions,
-  ]),
-);
 
 function roundTrip(value: string) {
   const json = buildDocJson(value, (name) => ({ label: name, description: null }));
@@ -161,48 +108,6 @@ describe("editable math source", () => {
     expect(map.runs.some((run) => run.kind === "token")).toBe(false);
   });
 });
-
-// Plain mode: the same engine with the mark extensions off. Markers stay
-// literal characters and task lines stay paragraphs.
-const plainSchema = getSchemaByResolvedExtensions(
-  resolveExtensions([
-    StarterKit.configure({
-      blockquote: false,
-      bulletList: false,
-      codeBlock: false,
-      heading: false,
-      horizontalRule: false,
-      listItem: false,
-      orderedList: false,
-      dropcursor: false,
-      gapcursor: false,
-      trailingNode: false,
-      bold: false,
-      italic: false,
-      strike: false,
-      code: false,
-    }),
-    stubAtom("composer-mention", { path: { default: "" }, source: { default: "" } }),
-    stubAtom("composer-skill", {
-      skillName: { default: "" },
-      skillLabel: { default: "" },
-      skillDescription: { default: null },
-    }),
-    stubAtom("composer-citation", {
-      citation: { default: null },
-      source: { default: "" },
-      citeKey: { default: "" },
-    }),
-    stubAtom("composer-context-reference", {
-      kind: { default: "" },
-      contextId: { default: "" },
-      label: { default: "" },
-      source: { default: "" },
-    }),
-    TaskList,
-    ComposerTaskItemExtension,
-  ]),
-);
 
 function roundTripPlain(value: string) {
   const json = buildDocJson(value, (name) => ({ label: name, description: null }), {
@@ -891,7 +796,7 @@ describe("pasting into a path query", () => {
   });
 
   it("parses markdown when the paste does not continue a path query", () => {
-    expect(boldText(paste("Open ", "src/__test__.tsx"))).toEqual(["test"]);
+    expect(boldText(paste("Open ", "__test__ now"))).toEqual(["test"]);
     expect(boldText(paste("Open @a ", "__b__"))).toEqual(["b"]);
     expect(boldText(paste("Open @", " __b__"))).toEqual(["b"]);
   });
@@ -1295,5 +1200,85 @@ describe("inline code entry", () => {
     type(editor, open);
     expect(serializeEditorDoc(editor.state.doc).value).toBe(`${open}foo${open}`);
     expect(marked(editor, mark)).toEqual(["foo"]);
+  });
+});
+
+describe("surroundSelectionWithMark", () => {
+  it("keeps markers inside math literal across draft restoration", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, schema.text("$x$"))]);
+    const state = EditorState.create({ doc, selection: TextSelection.create(doc, 2, 3) });
+    expect(surroundSelectionWithMark(state, 2, 3, "*")).toBeNull();
+  });
+
+  it.each([
+    ["`", "hello", "say `hello` now"],
+    ["*", "hello", "say *hello* now"],
+    ["_", "hello", "say *hello* now"],
+    ["`", "   ", "say `   ` now"],
+  ])("formats a selection with %s like typed markers (%j)", (marker, selected, expected) => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, schema.text(`say ${selected} now`)),
+    ]);
+    const to = 5 + selected.length;
+    const state = EditorState.create({ doc, selection: TextSelection.create(doc, 5, to) });
+    const tr = surroundSelectionWithMark(state, 5, to, marker);
+    expect(tr).not.toBeNull();
+    const formatted = state.apply(tr!);
+    const typed = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson(`say ${marker}${selected}${marker} now`, (name) => ({
+        label: name,
+        description: null,
+      })),
+    );
+    expect(formatted.doc.eq(typed)).toBe(true);
+    expect(serializeEditorDoc(formatted.doc).value).toBe(expected);
+    expect(formatted.doc.textBetween(formatted.selection.from, formatted.selection.to)).toBe(
+      selected,
+    );
+  });
+
+  it.each([
+    ["*", "   "],
+    ["_", "   "],
+    ["*", "a*b"],
+    ["`", "foo`bar"],
+  ])("leaves %s around %j to literal wrapping when the mark cannot round-trip", (marker, text) => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, schema.text(text))]);
+    const to = 1 + text.length;
+    const state = EditorState.create({ doc, selection: TextSelection.create(doc, 1, to) });
+    expect(surroundSelectionWithMark(state, 1, to, marker)).toBeNull();
+  });
+
+  it.each([
+    [
+      "plain mode",
+      plainSchema.node("doc", null, [plainSchema.node("paragraph", null, plainSchema.text("one"))]),
+    ],
+    [
+      "paragraphs",
+      schema.node("doc", null, [
+        schema.node("paragraph", null, schema.text("one")),
+        schema.node("paragraph", null, schema.text("two")),
+      ]),
+    ],
+    [
+      "a hard break",
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [
+          schema.text("one"),
+          schema.node("hardBreak"),
+          schema.text("two"),
+        ]),
+      ]),
+    ],
+    [
+      "a code block",
+      schema.node("doc", null, [schema.node("codeBlock", null, schema.text("one"))]),
+    ],
+  ])("leaves selections in %s to literal wrapping", (_, doc) => {
+    doc.check();
+    const state = EditorState.create({ doc });
+    expect(surroundSelectionWithMark(state, 1, doc.content.size - 1, "`")).toBeNull();
   });
 });

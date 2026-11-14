@@ -59,6 +59,7 @@ export { state };
 // Browser importActual resolves shared helpers from a URL; root paths keep those mocks resolvable.
 vi.mock("/src/components/ui/toast", () => ({
   toastManager: { add: state.toast },
+  anchoredToastManager: { add: state.toast },
   stackedThreadToast: (v: unknown) => v,
 }));
 vi.mock("@tanstack/react-router", { spy: true });
