@@ -1,3 +1,4 @@
+import { getProviderClient } from "../../lib/providerClients";
 import type { EnvironmentId, UsageLimitsReport } from "@goat/contracts";
 import { availabilityText } from "@goat/shared/usageLimitsOpenCodex";
 import { Pressable, ScrollView, View } from "react-native";
@@ -5,8 +6,6 @@ import { Pressable, ScrollView, View } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { AccountLimits, ResetCredits } from "../usage/UsageLimitsSection";
-
-const DRIVER_LABEL: Partial<Record<string, string>> = { codex: "Codex", claudeAgent: "Claude" };
 
 export function ComposerUsageLimits({
   report,
@@ -42,7 +41,7 @@ export function ComposerUsageLimits({
                 (account.instanceId ? { instanceId: account.instanceId } : undefined));
           const credits = account.limits.resetCredits;
           const blocks = (account.limits.availability ?? []).filter((block) => block.exhausted);
-          const driverLabel = DRIVER_LABEL[account.driver] ?? String(account.driver);
+          const driverLabel = getProviderClient(account.driver)?.label ?? account.driver;
           return (
             <AccountLimits
               key={account.id}
