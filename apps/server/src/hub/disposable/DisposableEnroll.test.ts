@@ -138,11 +138,10 @@ it.effect(
         yield* enroll;
         yield* enroll;
         expect(linkAdds(host.control.calls)).toEqual([]);
-        // No OpenCodex release takes a key with the route yet, so an update cannot help.
+        // OpenCodex 2.100.3 and later take the key with the route, so the text names that release.
         const waiting = yield* listed(attachId);
         expect(waiting).toMatchObject({ state: "attaching" });
-        expect(waiting?.message).toContain("No OpenCodex release");
-        expect(waiting?.message).not.toContain("update OpenCodex");
+        expect(waiting?.message).toContain("update OpenCodex on the hub to 2.100.3 or later");
         // A Home older than explicit routes is told to update.
         home.contracts = new Set(["link.operation/1", "link.recover/1"]);
         yield* enroll;

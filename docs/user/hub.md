@@ -149,8 +149,8 @@ it with the machine key alone, and links it to OpenCodex as a lightweight Child
 on that route only. The machine list says where each machine is and what to do
 next. On web and desktop, a machine GOAT cannot reach yet shows the machine key
 with **Copy machine key**; on mobile its text says where to find the key. The link
-needs an OpenCodex on the hub that can use the machine key, and no OpenCodex
-release can yet; until one can, the machine waits at the link step. OpenCodex
+needs OpenCodex 2.100.3 or later on the hub, the first release that can use the
+machine key; with an older one the machine waits at the link step. OpenCodex
 also refuses the key while a folder on its path can be written by its group or
 others or belongs to another user. GOAT removes group and other write by itself
 only from its state folder, the machine key's folder and its default home
@@ -169,6 +169,9 @@ so finish them first; a background service keeps serving the old home until you
 run `goat service uninstall --base-dir <old>` and then
 `goat service install --base-dir <new>`; and the desktop app's `goat` command
 needs **Remove** and **Install** again in **Settings → General → About**.
+A linked disposable machine's OpenCodex link also keeps the machine key's old
+path and stops working, so do not move the home while a disposable machine is
+linked.
 
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
