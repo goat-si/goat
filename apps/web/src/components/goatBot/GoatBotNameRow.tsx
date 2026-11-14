@@ -114,6 +114,7 @@ function NameForm({
     event.preventDefault();
     if (saving || name === "") return;
     if (name === member.name) {
+      setError(null);
       setUnchanged(true);
       return;
     }

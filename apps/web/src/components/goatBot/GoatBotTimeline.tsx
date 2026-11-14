@@ -11,14 +11,7 @@ import {
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { flushSync } from "react-dom";
-import {
-  ArrowUpLeftIcon,
-  CheckIcon,
-  ChevronDownIcon,
-  CopyIcon,
-  CircleAlertIcon,
-  XIcon,
-} from "~/components/solar";
+import { ArrowUpLeftIcon, ChevronDownIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -31,9 +24,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
-import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
@@ -60,6 +51,7 @@ import { GoatBotStepsContext, GoatBotStepsMark } from "./GoatBotStepsLine";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 import { useGoatBotFollow, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { GoatBotReplyCopy } from "./GoatBotReplyCopy";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
@@ -123,11 +115,13 @@ export function GoatBotTimeline({
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
-  const [copiedRow, setCopiedRow] = useState<string | null>(null);
-  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
-    timeout: 1200,
-    onCopy: setCopiedRow,
-    onError: () => toastManager.add({ type: "error", title: "Could not copy reply" }),
+  const lastCopy = useRef<{ clear: () => void } | null>(null);
+  const selectCopy = useStableCallback((owner: { clear: () => void }) => {
+    lastCopy.current?.clear();
+    lastCopy.current = owner;
+  });
+  const releaseCopy = useStableCallback((owner: { clear: () => void }) => {
+    if (lastCopy.current === owner) lastCopy.current = null;
   });
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
@@ -556,29 +550,7 @@ export function GoatBotTimeline({
                     <TooltipPopup>Reply</TooltipPopup>
                   </Tooltip>
                 ) : null}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={isCopied && copiedRow === row.id ? "Copied" : "Copy"}
-                        onClick={() => copyToClipboard(row.text, row.id)}
-                      />
-                    }
-                  >
-                    {/* The tooltip closes on the click, so the icon is what shows the copy worked. */}
-                    {isCopied && copiedRow === row.id ? (
-                      <CheckIcon className="size-4" />
-                    ) : (
-                      <CopyIcon className="size-4" />
-                    )}
-                  </TooltipTrigger>
-                  <TooltipPopup>
-                    {isCopied && copiedRow === row.id ? "Copied" : "Copy"}
-                  </TooltipPopup>
-                </Tooltip>
+                <GoatBotReplyCopy text={row.text} select={selectCopy} release={releaseCopy} />
               </div>
             </div>
             <GoatBotReplyFiles text={row.text} />

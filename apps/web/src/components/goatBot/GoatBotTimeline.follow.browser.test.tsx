@@ -744,7 +744,7 @@ it("guard: live history and later exposure of a hidden baseline item are silent"
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
 
-it("announces new bot replies once, batches newest and clears on the next activity change", async () => {
+it("announces new bot replies once, batches newest and retains them across one activity change", async () => {
   projection.statuses = { speech: "live" };
   await using screen = await render(<SpeechChat shown={[]} source={[]} />);
   const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
@@ -774,7 +774,9 @@ it("announces new bot replies once, batches newest and clears on the next activi
   await screen.rerender(
     <SpeechChat shown={[first, update, question]} source={[first, update, question]} />,
   );
-  expect(status?.textContent).toBe("GOAT Bot is done");
+  expect(status?.textContent).toBe(
+    questionText?.replace("GOAT Bot is working", "GOAT Bot is done"),
+  );
   await screen.rerender(
     <SpeechChat
       shown={[first, update, question]}

@@ -477,14 +477,14 @@ function GoatBotChatViewContent({
               onClose={closeFile}
             />
           ) : null}
+          {/* Mounted before the first message, so the chat's first status is heard. */}
+          <GoatBotActivityStatus
+            key={timelineIdentity}
+            replyingSince={removed ? null : replyingSince}
+            announcement={announcement}
+          />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
-            {/* Mounted before the first message, so the chat's first status is heard. */}
-            <GoatBotActivityStatus
-              key={timelineIdentity}
-              replyingSince={removed ? null : replyingSince}
-              announcement={announcement}
-            />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
               <GoatBotOpenFileContext value={fileOpening}>

@@ -46,10 +46,18 @@ export function GoatBotActivityStatus({
     setPainted(true);
   }, []);
   const activity = reading ? READING : working;
+  const currentDoneDuring =
+    working !== null
+      ? undefined
+      : workOpen
+        ? readingKey
+        : doneDuring !== undefined && readingKey !== null && readingKey !== doneDuring
+          ? undefined
+          : doneDuring;
   // Words follow what the work waits on, so a wait reworded as more is known is heard once.
   const text =
     activity === null
-      ? doneDuring === undefined
+      ? currentDoneDuring === undefined
         ? ""
         : `${botName} is done`
       : activity.state === "reading"
@@ -64,6 +72,7 @@ export function GoatBotActivityStatus({
     toggle: boolean;
     activity: string;
     clause: string;
+    changes: number;
   } | null>(null);
   if (announcement !== null && announcement.sequence !== reply?.sequence) {
     const toggle = !(reply?.toggle ?? false);
@@ -80,9 +89,14 @@ export function GoatBotActivityStatus({
           : toggle
             ? `${botName} replied.`
             : `New reply from ${botName}.`;
-    setReply({ sequence: announcement.sequence, toggle, activity: text, clause });
+    setReply({ sequence: announcement.sequence, toggle, activity: text, clause, changes: 0 });
   } else if (reply !== null && reply.activity !== text && reply.clause !== "") {
-    setReply({ ...reply, activity: text, clause: "" });
+    setReply({
+      ...reply,
+      activity: text,
+      clause: reading || reply.changes >= 1 ? "" : reply.clause,
+      changes: reply.changes + 1,
+    });
   }
   const output = reply?.clause ? [text, reply.clause].filter(Boolean).join(". ") : text;
   return (
