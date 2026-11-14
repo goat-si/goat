@@ -1,3 +1,4 @@
+import { refusalCases } from "./providerRefusalCases.testkit.ts";
 import { vi } from "vite-plus/test";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -29,12 +30,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import { CommandPolicyCapabilityUnsupportedError } from "../CommandPolicy.ts";
-import {
-  ClaudeAgentSdkQueryRunnerError,
-  ClaudeAppendSystemPromptFileError,
-  ClaudeBackgroundWorkBlocksQueryReplacementError,
-  ClaudeProviderCapabilitiesV2,
-} from "../Adapters/ClaudeAdapterV2.ts";
+import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import {
   CodexProviderCapabilitiesV2,
   canReuseCodexContextUsage,
@@ -95,12 +91,6 @@ const waitForIdle = Effect.fn("ProviderSwitchTest.waitForIdle")(function* (
   }
   return idle;
 });
-
-// Same tag as the adapter's unexported error raised when Claude never answers setMcpServers.
-class ClaudeMcpRegistrationTimeoutError extends Schema.TaggedError<ClaudeMcpRegistrationTimeoutError>()(
-  "ClaudeMcpRegistrationTimeoutError",
-  {},
-) {}
 
 describe("orchestration v2 provider switching", () => {
   it.live.each([
@@ -1183,107 +1173,99 @@ describe("orchestration v2 provider switching", () => {
       ),
   );
 
-  it.live.each([
-    ["background work", new ClaudeBackgroundWorkBlocksQueryReplacementError()],
-    ["an unreadable append file", new ClaudeAppendSystemPromptFileError({ path: "missing.md" })],
-    [
-      "an MCP registration timeout",
-      new ClaudeAgentSdkQueryRunnerError({
-        method: "setMcpServers",
-        cause: new ClaudeMcpRegistrationTimeoutError(),
-      }),
-    ],
-  ] as const)("keeps the native session after turns refused for %s", ([, refusalCause]) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace("refused-start-keeps-native");
-        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-        const refuseStarts = yield* Ref.make(0);
-        const generation = yield* Ref.make(0);
-        const registry = ProviderAdapterRegistry.layerFromAdapters([
-          makeTestAdapter({
-            instanceId: CLAUDE_MODEL_SELECTION.instanceId,
-            driver: CLAUDE_DRIVER,
-            capabilities: ClaudeProviderCapabilitiesV2,
-            modelSelection: CLAUDE_MODEL_SELECTION,
-            responseByRunOrdinal: {},
-            capturedTurns,
-            refuseStarts,
-            refusalCause,
-            nativeThreadGeneration: generation,
-          }),
-        ]);
-        yield* Effect.gen(function* () {
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const run = Effect.fn("run")(function* (ordinal: number) {
+  it.live.each(refusalCases)(
+    "keeps the native session after turns refused for %s",
+    ([, refusalCause]) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace("refused-start-keeps-native");
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const refuseStarts = yield* Ref.make(0);
+          const generation = yield* Ref.make(0);
+          const registry = ProviderAdapterRegistry.layerFromAdapters([
+            makeTestAdapter({
+              instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+              driver: CLAUDE_DRIVER,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              responseByRunOrdinal: {},
+              capturedTurns,
+              refuseStarts,
+              refusalCause,
+              nativeThreadGeneration: generation,
+            }),
+          ]);
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const run = Effect.fn("run")(function* (ordinal: number) {
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make(`refused-start:${ordinal}`),
+                threadId,
+                messageId: MessageId.make(`refused-start:${ordinal}`),
+                createdBy: "user",
+                creationSource: "web",
+                text: `Request ${ordinal}`,
+                attachments: [],
+                modelSelection: CLAUDE_MODEL_SELECTION,
+                dispatchMode: { type: "start_immediately" },
+              });
+              yield* orchestrator.streamStoredEvents.pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "run.updated" &&
+                    event.payload.ordinal === ordinal &&
+                    (event.payload.status === "completed" || event.payload.status === "failed"),
+                ),
+                Stream.runHead,
+              );
+              yield* worker.drain();
+              return (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status;
+            });
             yield* orchestrator.dispatch({
-              type: "message.dispatch",
-              commandId: CommandId.make(`refused-start:${ordinal}`),
+              type: "thread.create",
+              commandId: CommandId.make("refused-start:create"),
               threadId,
-              messageId: MessageId.make(`refused-start:${ordinal}`),
+              projectId,
               createdBy: "user",
               creationSource: "web",
-              text: `Request ${ordinal}`,
-              attachments: [],
+              title: "Refused start",
               modelSelection: CLAUDE_MODEL_SELECTION,
-              dispatchMode: { type: "start_immediately" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
             });
-            yield* orchestrator.streamStoredEvents.pipe(
-              Stream.filter(
-                ({ event }) =>
-                  event.type === "run.updated" &&
-                  event.payload.ordinal === ordinal &&
-                  (event.payload.status === "completed" || event.payload.status === "failed"),
-              ),
-              Stream.runHead,
-            );
-            yield* worker.drain();
-            return (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status;
-          });
-          yield* orchestrator.dispatch({
-            type: "thread.create",
-            commandId: CommandId.make("refused-start:create"),
-            threadId,
-            projectId,
-            createdBy: "user",
-            creationSource: "web",
-            title: "Refused start",
-            modelSelection: CLAUDE_MODEL_SELECTION,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          });
-          assert.equal(yield* run(1), "completed");
-          yield* Ref.set(refuseStarts, 2);
-          assert.equal(yield* run(2), "failed");
-          assert.equal(yield* run(3), "failed");
-          assert.equal(yield* run(4), "completed");
+            assert.equal(yield* run(1), "completed");
+            yield* Ref.set(refuseStarts, 2);
+            assert.equal(yield* run(2), "failed");
+            assert.equal(yield* run(3), "failed");
+            assert.equal(yield* run(4), "completed");
 
-          const turns = yield* Ref.get(capturedTurns);
-          assert.equal(turns.length, 2);
-          assert.equal(yield* Ref.get(generation), 1);
-          assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
-          assert.include(turns[1]?.text, "Request 2");
-          assert.include(turns[1]?.text, "Request 3");
-        }).pipe(
-          Effect.provide(
-            ProviderReplayHarness.layerWithRegistry(
-              {
-                name: "refused-start-keeps-native",
-                runtimePolicyOverride: {
-                  cwd,
-                  approvalPolicy: "never",
-                  sandboxPolicy: { type: "readOnly" },
+            const turns = yield* Ref.get(capturedTurns);
+            assert.equal(turns.length, 2);
+            assert.equal(yield* Ref.get(generation), 1);
+            assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
+            assert.include(turns[1]?.text, "Request 2");
+            assert.include(turns[1]?.text, "Request 3");
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "refused-start-keeps-native",
+                  runtimePolicyOverride: {
+                    cwd,
+                    approvalPolicy: "never",
+                    sandboxPolicy: { type: "readOnly" },
+                  },
                 },
-              },
-              registry,
+                registry,
+              ),
             ),
-          ),
-        );
-      }),
-    ),
+          );
+        }),
+      ),
   );
 
   it.live("checks the queued provider's capability while the current provider stays running", () =>
