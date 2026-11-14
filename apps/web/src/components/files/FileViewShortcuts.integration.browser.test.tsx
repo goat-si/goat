@@ -115,6 +115,7 @@ const READ: ProjectReadFileResult = {
 type Order = "persisted" | "new-install";
 
 function setup(customRules: KeybindingRule[] = [], order: Order = "persisted") {
+  localStorage.removeItem("goat.fileTreeExpandedDirectories");
   // Defaults list files.find before chat.find, which is also how an existing install's
   // backfill stores it. The other order puts the chat rule first.
   const defaults =

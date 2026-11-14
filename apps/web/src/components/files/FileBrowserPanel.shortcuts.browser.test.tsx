@@ -93,6 +93,7 @@ const chord = (modifiers: string[], key: string) =>
     .join("")}`;
 
 function setup(customRules: KeybindingRule[] = []) {
+  localStorage.removeItem("goat.fileTreeExpandedDirectories");
   state.keybindings = [
     ...DEFAULT_RESOLVED_KEYBINDINGS,
     ...customRules.map((rule) => compileResolvedKeybindingRule(rule)!),
