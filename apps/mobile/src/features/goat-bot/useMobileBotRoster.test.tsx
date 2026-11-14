@@ -81,7 +81,7 @@ vi.mock("../../connection/catalog", async () => {
   return { environmentCatalog: { catalogValueAtom: catalog.atom } };
 });
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
-import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
+import { followKeptPerComputerCatalog, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 let value: ReturnType<typeof useMobileBotRoster>;
 function Probe() {
@@ -215,6 +215,8 @@ it("forgets a computer's kept bots when it leaves the app, even removed while co
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
   const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
   const listed = (ids: string[]) => ({
     isReady: true,
     entries: new Map(ids.map((id) => [id, { enabled: true }])),
@@ -236,6 +238,7 @@ it("forgets a computer's kept bots when it leaves the app, even removed while co
   await act(async () => registry.set(catalog.atom!, listed(["env"])));
   await act(async () => root?.render(rendered()));
   expect(memberNames()).toEqual([]);
+  stopFollowing();
 });
 
 it("before a computer's capabilities are read, member support is unknown rather than missing", async () => {
@@ -252,6 +255,8 @@ it("an answer already on its way to the kept list is not kept once its computer 
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
   const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
   const listed = (ids: string[]) => ({
     isReady: true,
     entries: new Map(ids.map((id) => [id, { enabled: true }])),
@@ -284,6 +289,7 @@ it("an answer already on its way to the kept list is not kept once its computer 
     ),
   );
   expect(memberNames()).toEqual([]);
+  stopFollowing();
 });
 
 it("an answer from before its computer was removed and added again is not kept", async () => {
@@ -291,6 +297,8 @@ it("an answer from before its computer was removed and added again is not kept",
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
   const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
   const listed = (ids: string[]) => ({
     isReady: true,
     entries: new Map(ids.map((id) => [id, { enabled: true }])),
@@ -322,4 +330,5 @@ it("an answer from before its computer was removed and added again is not kept",
     ),
   );
   expect(memberNames()).toEqual([]);
+  stopFollowing();
 });

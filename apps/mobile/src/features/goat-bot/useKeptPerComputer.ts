@@ -31,13 +31,15 @@ function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentI
   for (const kind of KINDS) registry.set(keptAtom(keyOf(kind, environmentId)), null);
 }
 
-/** Once per registry: a computer that leaves the catalog loses what was kept for it. */
-function followCatalog(registry: AtomRegistry.AtomRegistry) {
-  if (removals.has(registry)) return;
+/**
+ * Installed once with the app's registry: a computer that leaves the catalog loses what was kept
+ * for it. Returns the way to stop following.
+ */
+export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry): () => void {
   const counts = new Map<EnvironmentId, number>();
   removals.set(registry, counts);
   let known = new Set<EnvironmentId>();
-  registry.subscribe(
+  return registry.subscribe(
     environmentCatalog.catalogValueAtom,
     (catalog) => {
       const now = new Set(catalog.entries.keys());
@@ -54,8 +56,9 @@ function followCatalog(registry: AtomRegistry.AtomRegistry) {
 
 /**
  * The live answer while the computer is connected; offline, the live answer if any, else the last
- * successful one this phone read from that computer. The read's value is its newest answer, also
- * while a refresh is in flight, so a refresh that never answers cannot leave nothing kept.
+ * successful one this phone read from that computer. A success still marked waiting (a refresh in
+ * flight) is written too: its value is the server's last answer, and a refresh that never finishes
+ * before the computer drops must not leave nothing kept.
  */
 export function useKeptPerComputer<A>(
   kind: Kind,
@@ -64,7 +67,6 @@ export function useKeptPerComputer<A>(
   offline: boolean,
 ): A | null {
   const registry = useContext(RegistryContext);
-  followCatalog(registry);
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const listed = environmentId !== null && catalog.entries.has(environmentId);
   const atom = environmentId === null ? NO_KEPT : keptAtom(keyOf(kind, environmentId));
