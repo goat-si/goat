@@ -173,26 +173,23 @@ export const CursorDriver: ProviderDriver<
       instanceId,
       settings: effectiveConfig,
       environment: currentEnvironment,
+      resolveSessionApiKey: auth.requireSessionApiKey,
+      validateSessionApiKey: auth.validateSessionApiKey,
       getModels: () => catalogModels,
     }).pipe(
       Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
         ...sdkRunner,
         open: (input) =>
-          auth.requireApiKey.pipe(
-            Effect.flatMap((apiKey) =>
-              Effect.acquireRelease(
-                sdkRunner
-                  .open({ ...input, options: { ...input.options, apiKey } })
-                  .pipe(
-                    Effect.flatMap((session) =>
-                      Effect.cached(session.close).pipe(
-                        Effect.map((close) => ({ ...session, close })),
-                      ),
-                    ),
-                  ),
-                (session) => session.close.pipe(Effect.ignore),
+          Effect.acquireRelease(
+            sdkRunner
+              .open(input)
+              .pipe(
+                Effect.flatMap((session) =>
+                  Effect.cached(session.close).pipe(Effect.map((close) => ({ ...session, close }))),
+                ),
               ),
-            ),
+            (session) => session.close.pipe(Effect.ignore),
+          ).pipe(
             auth.withAccess,
             Effect.mapError((cause) =>
               isSdkRunnerError(cause)

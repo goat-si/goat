@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -69,6 +70,66 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
 );
 
 it.layer(layerTest)("CursorDriver", (it) => {
+  it.effect("keeps the session key when MCP configuration reopens an agent", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { PATH: "/usr/bin", CURSOR_API_KEY: "old-key" };
+      const openedKeys: Array<string | undefined> = [];
+      const instanceId = ProviderInstanceId.make("cursor-session-key");
+      const threadId = ThreadId.make("cursor-session-key-thread");
+      const instance = yield* CursorDriver.create({
+        instanceId,
+        displayName: undefined,
+        enabled: true,
+        environment: [],
+        config: CursorDriver.defaultConfig(),
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+          assertComplete: Effect.void,
+          open: (request) =>
+            Effect.sync(() => {
+              openedKeys.push(request.options.apiKey);
+              return {
+                agentId: "agent",
+                listMessages: Effect.succeed([]),
+                send: () => Effect.die("unused"),
+                close: Effect.void,
+              };
+            }),
+        }),
+      );
+      const modelSelection = { instanceId, model: "auto" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const open = (id: string) =>
+        instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(id),
+          modelSelection,
+          runtimePolicy,
+        });
+      const first = yield* open("first");
+      const thread = yield* first.ensureThread({ threadId, modelSelection, runtimePolicy });
+      host.CURSOR_API_KEY = "new-key";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("environment"),
+        threadId,
+        providerSessionId: "mcp",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer rotated",
+        browserToolsAvailable: false,
+      });
+      yield* first.resumeThread({ providerThread: thread });
+      const second = yield* open("second");
+      yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+      expect(openedKeys).toEqual(["old-key", "old-key", "new-key"]);
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "regression #3079: Cursor workspace probes use the current host environment and respect instance overrides",
     () =>

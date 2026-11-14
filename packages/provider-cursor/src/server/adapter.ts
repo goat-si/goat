@@ -809,9 +809,7 @@ interface CursorProjectionTarget {
 
 // Cursor results can omit output; retain more streamed fallback than the persisted tail.
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
-// After a turn ends, a retryable stream error can make Cursor's SDK resume from
-// an older checkpoint inside the same run. When those resumes save nothing, it
-// ends the run with this error even though the answer was already delivered.
+// After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
   "Agent turn stopped after repeated resume attempts made no progress";
 
@@ -876,7 +874,7 @@ interface CursorLiveAgent {
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
 
-export interface CursorAdapterV2Options {
+export interface CursorAdapterV2Options extends SessionEnv.SessionAuth {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CursorSettings;
   readonly environment: SessionEnv.Source;
@@ -893,8 +891,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
   const platform = yield* HostProcess.Platform;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
-  // Native history survives transport/session reopening. Unknown IDs stay silent until
-  // this adapter has advertised tools; no conversation or memory body is retained here.
   const memoryToolClaims = new Set<string>();
   const adapterOptions = options;
 
@@ -909,7 +905,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
     }),
     openSession: Effect.fn("CursorAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
-        const { environment: env, apiKey } = yield* SessionEnv.forSession(options.environment);
+        const {
+          environment: env,
+          apiKey,
+          validate,
+        } = yield* SessionEnv.forSession(options.environment, options);
         const sessionScope = yield* Effect.scope;
         const createdAt = yield* DateTime.now;
         const session = providerSession({
@@ -1933,8 +1933,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
           switch (update.type) {
             case "text-delta":
-              // Classify each assistant message on its own, so earlier
-              // commentary does not hide a later standalone transport dump.
+              // Earlier commentary must not hide a later standalone transport dump.
               if (context.assistant.current === null) {
                 context.assistantReply = new CursorTransportFailure();
               }
@@ -2156,7 +2155,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing.cwd === openInput.runtimePolicy.cwd &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
             existing.mcpEndpoint === mcpSession?.endpoint &&
-            // Servers are fixed when the agent opens; computer use changes reopen it.
             existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver) &&
             existing.subagentsDisabled === cursorSubagentsDisabled(mcpSession)
           ) {
@@ -2166,6 +2164,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             yield* existing.session.close.pipe(Effect.ignore);
             yield* Ref.set(liveAgent, null);
           }
+          yield* validate;
           const options = makeCursorAgentOptions({
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,

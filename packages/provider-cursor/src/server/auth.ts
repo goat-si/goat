@@ -33,6 +33,13 @@ export interface CursorAuth {
   readonly controller: ProviderAuthController;
   readonly readApiKey: Effect.Effect<string | undefined, ProviderSetupError>;
   readonly requireApiKey: Effect.Effect<string, ProviderSetupError>;
+  readonly requireSessionApiKey: (
+    key: string | undefined,
+  ) => Effect.Effect<string, ProviderSetupError>;
+  readonly validateSessionApiKey: (
+    key: string | undefined,
+    environmentKey: string | undefined,
+  ) => Effect.Effect<void, ProviderSetupError>;
   readonly usesApiKey: boolean;
   readonly withAccess: <A, E, R>(
     task: Effect.Effect<A, E, R>,
@@ -76,11 +83,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
       state: { ...current.state, ...patch },
     }));
 
-  const readApiKey = Effect.gen(function* () {
-    const environmentKey =
-      options.currentApiKey === undefined
-        ? configuredKey
-        : (yield* options.currentApiKey)?.trim() || undefined;
+  const readKey = Effect.fn("CursorAuth.readKey")(function* (environmentKey: string | undefined) {
     if (environmentKey) return environmentKey;
     const credentials = yield* Effect.tryPromise({
       try: () => options.store.load(),
@@ -98,8 +101,15 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
       ? credentials.apiKey
       : undefined;
   });
+  const readApiKey = Effect.suspend(() =>
+    (options.currentApiKey ?? Effect.succeed(configuredKey)).pipe(
+      Effect.flatMap((key) => readKey(key?.trim() || undefined)),
+    ),
+  );
 
-  const requireApiKey = Effect.gen(function* () {
+  const requireKey = Effect.fn("CursorAuth.requireKey")(function* (
+    key: Effect.Effect<string | undefined, ProviderSetupError>,
+  ) {
     if (operation !== "idle") {
       return yield* new ProviderSetupError({
         instanceId: options.instanceId,
@@ -107,7 +117,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         detail: "Cursor sign-in or sign-out is in progress. Try again after it finishes.",
       });
     }
-    const apiKey = yield* readApiKey;
+    const apiKey = yield* key;
     if (!apiKey) {
       return yield* new ProviderSetupError({
         instanceId: options.instanceId,
@@ -116,6 +126,19 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
       });
     }
     return apiKey;
+  });
+  const requireApiKey = requireKey(readApiKey);
+  const requireSessionApiKey = (key: string | undefined) => requireKey(readKey(key));
+  const validateSessionApiKey = Effect.fn("CursorAuth.validateSessionApiKey")(function* (
+    key: string | undefined,
+    environmentKey: string | undefined,
+  ) {
+    if (environmentKey || (yield* readKey(undefined)) === key) return;
+    return yield* new ProviderSetupError({
+      instanceId: options.instanceId,
+      operation: "session",
+      detail: "The Cursor sign-in changed. Open a new session.",
+    });
   });
 
   // Closing admission before draining these scopes prevents cached credentials surviving sign-out.
@@ -514,6 +537,8 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
     controller,
     readApiKey,
     requireApiKey,
+    requireSessionApiKey,
+    validateSessionApiKey,
     withAccess,
     usesApiKey: configuredKey !== undefined,
   } satisfies CursorAuth;
