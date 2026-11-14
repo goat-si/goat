@@ -1,9 +1,8 @@
 import type { ProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenance";
 import * as Cache from "effect/Cache";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
-import * as Hash from "effect/Hash";
 
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
 
@@ -15,26 +14,12 @@ export interface ProviderMaintenanceLookup {
   readonly install?: string | null;
 }
 
-// Equal by executable, install and an environment hash, so a registry, proxy or credential change
-// with PATH unchanged starts a new lookup. The id holds no environment values.
-class LookupKey implements Equal.Equal {
-  readonly id: string;
-  readonly lookup: ProviderMaintenanceLookup;
-  constructor(lookup: ProviderMaintenanceLookup) {
-    this.lookup = lookup;
-    this.id = [
-      lookup.resolvedCommandPath ?? "missing",
-      lookup.install ?? "",
-      environmentCacheKey(lookup.env),
-    ].join("\0");
-  }
-  [Equal.symbol](that: unknown): boolean {
-    return that instanceof LookupKey && that.id === this.id;
-  }
-  [Hash.symbol](): number {
-    return Hash.string(this.id);
-  }
-}
+// The lookup that missed reaches the resolver through the request, so the cached key holds only
+// the executable, the install and an environment hash, never environment values.
+const PendingLookup = Context.Reference<ProviderMaintenanceLookup | undefined>(
+  "@goat/provider-core/maintenanceCache/PendingLookup",
+  { defaultValue: () => undefined },
+);
 
 export const makeCachedProviderMaintenanceResolution = Effect.fn(
   "makeCachedProviderMaintenanceResolution",
@@ -47,20 +32,31 @@ export const makeCachedProviderMaintenanceResolution = Effect.fn(
     ) => Effect.Effect<ProviderMaintenanceCapabilities>;
   },
 ) {
-  const unkeyed = new LookupKey({ env: {}, resolvedCommandPath: null });
   const cache = yield* Cache.make({
     capacity: 1,
     timeToLive: Duration.hours(1),
-    lookup: (key: LookupKey) => (keyed ? keyed.resolve(key.lookup) : resolve),
+    lookup: (_id: string) =>
+      Effect.flatMap(PendingLookup, (lookup) =>
+        keyed && lookup ? keyed.resolve(lookup) : resolve,
+      ),
   });
-  return (options?: { readonly fresh?: boolean }) =>
-    (keyed
-      ? Effect.map(keyed.lookup, (lookup) => new LookupKey(lookup))
-      : Effect.succeed(unkeyed)
-    ).pipe(
-      Effect.flatMap((key) => {
-        const cached = Cache.get(cache, key);
-        return options?.fresh ? Cache.invalidate(cache, key).pipe(Effect.andThen(cached)) : cached;
-      }),
+  const request = (id: string, lookup: ProviderMaintenanceLookup | undefined, fresh: boolean) => {
+    const cached = Cache.get(cache, id);
+    return (fresh ? Cache.invalidate(cache, id).pipe(Effect.andThen(cached)) : cached).pipe(
+      Effect.provideService(PendingLookup, lookup),
     );
+  };
+  return (options?: { readonly fresh?: boolean }) =>
+    keyed
+      ? Effect.flatMap(keyed.lookup, (found) => {
+          // A copy, so the resolver reads exactly the environment that was hashed.
+          const lookup = { ...found, env: { ...found.env } };
+          const id = [
+            lookup.resolvedCommandPath ?? "missing",
+            lookup.install ?? "",
+            environmentCacheKey(lookup.env),
+          ].join("\0");
+          return request(id, lookup, options?.fresh === true);
+        })
+      : request("", undefined, options?.fresh === true);
 });
