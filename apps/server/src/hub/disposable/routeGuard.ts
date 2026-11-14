@@ -133,7 +133,7 @@ const OWN_LINK = {
   // OpenCodex v2.100.3 retries a failed Home tunnel itself (HOME_TUNNEL_RETRY_POLICY, src/link/tunnel-state.ts),
   // except a changed host key or a link a revoke holds (src/link/supervisor.ts spawnFor).
   repair:
-    "OpenCodex retries its link's dropped tunnel by itself, at least every 5 minutes, unless its host key changed or a removal holds the link, and GOAT checks the machine every 30 minutes, so repair leaves its link alone; a changed host key shows on its row.",
+    "OpenCodex retries its dropped tunnel by itself, at least every 5 minutes, unless its host key changed or a removal holds the link, and GOAT checks it every 30 minutes, so repair leaves it alone; a changed host key shows on its row.",
 } as const;
 
 /** Design sections 1 and 3: a disposable machine's own link changes only through detach. */
@@ -149,4 +149,4 @@ export const ownLinkRefusal = (
   BY[claim.by] +
   "): " +
   OWN_LINK[action] +
-  " Detach it in Settings → Hub on web or desktop to remove it.";
+  " Detach it in Settings → Hub on web or desktop, or from the thread that attached it.";

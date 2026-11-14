@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import type { DisposableRecord } from "./disposable/disposableClass.ts";
-import { OTHER, PINNED, scope, setup, verdict } from "./HubMembership.testkit.ts";
+import { OTHER, owner, PINNED, scope, setup, verdict } from "./HubMembership.testkit.ts";
 
 // Design section 6: a disposable machine is reached only through its own Pen route, so no
 // kept-machine path links it under another alias or moves it to one.
@@ -303,6 +303,29 @@ it.effect(
             expect((yield* hub.inboxItems).items).toEqual([]);
             expect(onlyRead(hub.calls)).toBe(true);
           }
+        }
+      }
+    }),
+);
+
+it.effect(
+  "a trailing-dot Pen alias, and a person's request through the RPC, are refused the same way",
+  () =>
+    Effect.gen(function* () {
+      // The ws RPC passes the session as a person to these same methods.
+      const person = { sessionId: owner.sessionId, scopes: owner.scopes };
+      for (const caller of [undefined, person]) {
+        for (const action of ["leave", "repair"] as const) {
+          const hub = yield* setup({ linked: ["pen-" + node], disposable: [record()] });
+          const input = { deviceAlias: "pen-" + node + "." };
+          const refused =
+            action === "leave"
+              ? yield* hub.membership.leave(scope, input, caller)
+              : yield* hub.membership.repair(scope, input, caller);
+          expect(refused.state).toBe("failed");
+          expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+          expect((yield* hub.inboxItems).items).toEqual([]);
+          expect(onlyRead(hub.calls)).toBe(true);
         }
       }
     }),
