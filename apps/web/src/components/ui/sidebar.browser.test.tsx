@@ -2,8 +2,6 @@ import type { CSSProperties } from "react";
 import { page, userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import "~/index.css";
-
 import { render } from "../../../test/render";
 import "~/index.css";
 import { Sidebar, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar } from "./sidebar";
