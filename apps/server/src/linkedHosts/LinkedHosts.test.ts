@@ -235,6 +235,30 @@ const expectUnavailable = <A>(exit: Exit.Exit<A, LinkedHosts.LinkedHostError>) =
   }
 };
 
+it.effect(
+  "a descriptor the caller refuses stops the link before any registration, pairing-code spend or save",
+  () =>
+    Effect.gen(function* () {
+      const paths: Array<string> = [];
+      const fixture = clientFixture(
+        HttpClient.make((request) => {
+          paths.push(new URL(request.url).pathname);
+          return Effect.succeed(exchangeResponse(request));
+        }),
+      );
+      const refused = yield* LinkedHosts.LinkedHosts.pipe(
+        Effect.flatMap((links) =>
+          links.link({ ...LINK_INPUT, acceptDescriptor: () => Effect.fail("refused" as const) }),
+        ),
+        Effect.flip,
+        Effect.provide(fixture.layer),
+      );
+      expect(refused).toBe("refused");
+      expect(paths).toEqual([GOAT_ENVIRONMENT_PATH]);
+      expect(fixture.writes()).toBe(0);
+    }),
+);
+
 it.effect("explains a refused host discovery without saving a link", () =>
   Effect.gen(function* () {
     const fixture = clientFixture(
