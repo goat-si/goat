@@ -266,6 +266,7 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
           `printf '%s\\n' "\${GOAT_LATE_PROBE-unset}" "\${CODEX_HOME-unset}" > '${report}'\n`,
         );
         const real = yield* freshCoordinator;
+        const original = process.env.GOAT_LATE_PROBE;
         // Between capture and launch: the point where an inherited environment would pick it up.
         const coordinator = ResetCreditCoordinator.ResetCreditCoordinator.of({
           redeem: (accountKey, consume, isSettled) =>
@@ -284,7 +285,8 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
           Effect.exit,
           Effect.ensuring(
             Effect.sync(() => {
-              delete process.env.GOAT_LATE_PROBE;
+              if (original === undefined) delete process.env.GOAT_LATE_PROBE;
+              else process.env.GOAT_LATE_PROBE = original;
             }),
           ),
         );
