@@ -14,7 +14,7 @@ import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
-import { explicitBareRepositoryEnv } from "../vcs/VcsProcess.ts";
+import { explicitBareRepositoryEnv, unsetInheritedRepositoryEnv } from "../vcs/VcsProcess.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
@@ -191,21 +191,8 @@ class RepositoryIdentityCacheKey extends Data.Class<{
   readonly isBare: boolean;
 }> {}
 
-const repositorySelectors = new Set([
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-]);
-
 const gitEnv = (platform: NodeJS.Platform): NodeJS.ProcessEnv => ({
-  ...Object.fromEntries(
-    Object.keys(process.env)
-      .filter((name) => repositorySelectors.has(platform === "win32" ? name.toUpperCase() : name))
-      .map((name) => [name, undefined]),
-  ),
+  ...unsetInheritedRepositoryEnv(process.env, platform),
   ...explicitBareRepositoryEnv(process.env, platform),
 });
 
