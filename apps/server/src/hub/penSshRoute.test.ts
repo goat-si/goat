@@ -8,7 +8,7 @@ import {
   penKnownHostsFile,
   penRunCommand,
   sshSettings,
-} from "./penSshRoute.ts";
+} from "@goat/ssh/penRoute";
 
 const NODE = "abcdefghijklmnopqrstuvwxyz";
 const NOISE = "N".repeat(42) + "_";

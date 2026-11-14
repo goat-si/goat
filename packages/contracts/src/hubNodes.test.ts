@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 
 import {
   HubNode,
+  HubNodeAddedBy,
+  HubNodeRoute,
   HubNodesError,
   HubNodesImportInput,
   HubNodeRouteTarget,
@@ -15,6 +17,15 @@ const encodeTarget = Schema.encodeSync(HubNodeRouteTarget);
 const decodeImport = Schema.decodeUnknownExit(HubNodesImportInput);
 const decodeSnapshot = Schema.decodeUnknownSync(HubNodesSnapshot);
 
+// Today's shipped shapes, copied: an older client drops an unknown key, it never fails on it.
+const { pen: _pen, ...olderRouteFields } = HubNodeRoute.fields;
+const decodeOlderRoute = Schema.decodeUnknownSync(Schema.Struct(olderRouteFields));
+const decodeOlderAddedBy = Schema.decodeUnknownSync(
+  Schema.Struct({ kind: Schema.Literals(["user", "agent", "import"]), at: Schema.String }),
+);
+const decodeAddedBy = Schema.decodeUnknownExit(HubNodeAddedBy);
+const decodeRoute = Schema.decodeUnknownSync(HubNodeRoute);
+
 const route = {
   routeId: "ssh:epyc",
   source: "registered",
@@ -26,6 +37,22 @@ const route = {
 };
 
 describe("HubNode", () => {
+  it("a Pen-owned registration reads as an import on a client that predates the binding", () => {
+    const pen = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "A".repeat(43) };
+    const addedBy = { kind: "import", at: "2026-11-13T00:00:00.000Z", pen };
+    expect(decodeOlderAddedBy(addedBy)).toEqual({ kind: "import", at: addedBy.at });
+    expect(decodeOlderRoute({ ...route, pen })).toEqual(route);
+    expect(decodeAddedBy(addedBy)._tag).toBe("Success");
+    expect(decodeRoute({ ...route, pen }).pen).toEqual(pen);
+    // A malformed binding is rejected, never read as an ordinary person-owned row.
+    for (const bad of [
+      { ...pen, nodeId: "short" },
+      { ...pen, noisePub: "x" },
+      { meshId: pen.meshId },
+    ])
+      expect(decodeAddedBy({ ...addedBy, pen: bad })._tag).toBe("Failure");
+  });
+
   it("requires at least one route", () => {
     const base = {
       nodeId: "env-1",

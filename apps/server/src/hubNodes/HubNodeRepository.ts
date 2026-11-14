@@ -106,7 +106,7 @@ const make = Effect.gen(function* () {
         yield* sql`INSERT INTO hub_node_registrations (route_id, environment_id, label, target_json, added_by_json, created_at, updated_at)
         VALUES (${row.routeId}, ${row.environmentId}, ${row.label}, ${target}, ${addedBy}, ${row.createdAt}, ${row.updatedAt})
         ON CONFLICT(route_id) DO UPDATE SET environment_id = excluded.environment_id, label = excluded.label,
-        target_json = excluded.target_json, updated_at = excluded.updated_at`;
+        target_json = excluded.target_json, added_by_json = excluded.added_by_json, updated_at = excluded.updated_at`;
       }).pipe(Effect.mapError(storageError)),
     deleteRegistration: (id) =>
       sql`DELETE FROM hub_node_registrations WHERE route_id = ${id}`.pipe(

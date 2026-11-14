@@ -6,6 +6,7 @@ import {
   connectionProgressLabel,
   connectionRouteId,
   connectionRoutes,
+  penRouteOwner,
   connectionStatusText,
   reconcileSshConnectionPresentation,
   sshPreparationFailure,
@@ -581,4 +582,10 @@ export function endpointShareHint(endpoint: AdvertisedEndpoint, url: string): st
     case "loopback":
       return "Clients on this machine";
   }
+}
+
+/** The ssh host "Update everything" may update: never a Pen machine, which GOAT only attaches to. */
+export function updatableSshTarget(environment: EnvironmentPresentation) {
+  const route = savedConnectionSshRoute(environment);
+  return route === undefined || penRouteOwner(route.routeId) !== null ? null : route.target;
 }

@@ -45,6 +45,7 @@ import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
+import * as DesktopPenMembers from "../../pen/DesktopPenMembers.ts";
 
 type DesktopSshEnvironmentRequestOperation =
   | "fetch-environment-descriptor"
@@ -183,6 +184,19 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
   ) {
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
     yield* requireReadiedCloudMachine(target.alias);
+    const { penNodeId, ...ensureOptions } = options ?? {};
+    // A Pen route is admitted here, in main, on every ensure: never on the renderer's word.
+    // Only a reconnect that neither installs nor issues a credential may run while Pen is down.
+    if (penNodeId !== undefined) {
+      // A Pen machine is signed in to as a member; a pairing credential would outlive membership.
+      if (ensureOptions.issuePairingToken !== false)
+        return yield* new SshInvalidTargetError({
+          message: "A Pen machine is never paired with; it is signed in to as a Pen member.",
+        });
+      yield* (yield* DesktopPenMembers.DesktopPenMembers).requireTrusted(target, penNodeId, {
+        requireReady: ensureOptions.installation !== "existing-only",
+      });
+    }
     yield* Effect.annotateCurrentSpan({
       senderId: event?.sender.id,
       caller: caller ?? "unknown",
@@ -219,7 +233,7 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
     let answered = false;
     return yield* sshEnvironment
       .ensureEnvironment(target, {
-        ...options,
+        ...ensureOptions,
         onPreparationProgress: (progress) => {
           annotate({
             operationId: progress.operationId,

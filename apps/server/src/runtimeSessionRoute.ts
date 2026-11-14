@@ -60,17 +60,19 @@ export const layer = HttpRouter.add(
     if (ttl === null) return yield* refuse(400, "Invalid runtime session ttl.");
     const auth = yield* EnvironmentAuth.EnvironmentAuth;
     const body =
-      input.kind === "session"
+      input.kind === "session" || input.kind === "pen-member-session"
         ? formatIssuedSession(
             yield* auth.issueSession({
-              subject: input.subject,
+              ...(input.kind === "session"
+                ? { subject: input.subject }
+                : { penMemberNode: input.nodeId }),
               scopes: [...new Set(input.scopes)],
               ...(ttl === undefined ? {} : { ttl }),
               ...(input.label === undefined ? {} : { label: input.label }),
-              ...(input.runtimeModeCeiling === undefined
+              ...(input.kind !== "session" || input.runtimeModeCeiling === undefined
                 ? {}
                 : { runtimeModeCeiling: input.runtimeModeCeiling }),
-              ...(input.childSetupPurpose === undefined
+              ...(input.kind !== "session" || input.childSetupPurpose === undefined
                 ? {}
                 : { childSetupPurpose: input.childSetupPurpose }),
             }),

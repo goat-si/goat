@@ -17,7 +17,7 @@ import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom, serverEnvironment } from "~/state/server";
 import { environmentSessionStatesAtom } from "~/state/session";
 import { sshRuntime } from "~/state/sshRuntime";
-import { savedConnectionSshRoute } from "../settings/ConnectionsSettings.logic";
+import { updatableSshTarget } from "../settings/ConnectionsSettings.logic";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
 import { openCodexSyncNotes } from "../opencodex/openCodexSync.logic";
 import { sshRuntimeUpdateOutcome } from "./sshRuntimeUpdateOutcome";
@@ -142,7 +142,7 @@ export function useUpdateEverything(
     label: environment.label,
     serverConfig: environment.serverConfig,
     connected: environment.connection.phase === "connected",
-    savedSshTarget: isElectron ? (savedConnectionSshRoute(environment)?.target ?? null) : null,
+    savedSshTarget: isElectron ? updatableSshTarget(environment) : null,
     hostedByThisApp:
       isElectron &&
       (environment.entry.target._tag === "PrimaryConnectionTarget" ||

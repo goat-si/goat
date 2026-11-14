@@ -1,5 +1,6 @@
 import {
   type AuthClientPresentationMetadata,
+  type DesktopPenMembersState,
   type DesktopSshEnvironmentBootstrap,
   type DesktopSshPreparationProgress,
   type DesktopSshAttemptContext,
@@ -10,6 +11,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 
 import type { ConnectionAttemptError } from "../connection/model.ts";
 import type { AuthorizedRemoteEnvironment } from "../authorization/service.ts";
@@ -60,6 +62,14 @@ export class AnalyticsDevice extends Context.Reference<{
   defaultValue: () => ({ id: Effect.succeedNone }),
 }) {}
 
+export type PenMembersInput = { readonly kind: "disabled" } | DesktopPenMembersState;
+export class PenMembersGateway extends Context.Reference<{
+  readonly desktop: Stream.Stream<DesktopPenMembersState>;
+  readonly enabled: Stream.Stream<boolean>;
+}>("@goat/client-runtime/platform/capabilities/PenMembersGateway", {
+  defaultValue: () => ({ desktop: Stream.never, enabled: Stream.succeed(false) }),
+}) {}
+
 export class ClientPresentation extends Context.Service<
   ClientPresentation,
   {
@@ -86,6 +96,9 @@ export class SshEnvironmentGateway extends Context.Service<
       expectedEnvironmentId?: EnvironmentId,
       options?: {
         readonly keyOnly?: boolean;
+        readonly installation?: "existing-only";
+        readonly penNodeId?: string;
+        readonly connectionId?: string;
         readonly onPreparationProgress?: (
           progress: DesktopSshPreparationProgress,
         ) => Effect.Effect<void>;
@@ -99,6 +112,8 @@ export class SshEnvironmentGateway extends Context.Service<
      */
     readonly prepare: (input: {
       readonly connectionId: string;
+      readonly installation?: "existing-only";
+      readonly penNodeId?: string;
       readonly expectedEnvironmentId: EnvironmentId;
       readonly target: DesktopSshEnvironmentTarget;
       readonly bearerToken?: string;

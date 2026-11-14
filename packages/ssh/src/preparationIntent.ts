@@ -9,6 +9,7 @@ export const preparationIntent = (
 ) =>
   JSON.stringify({
     background,
+    installation: requestOptions?.installation ?? null,
     keyOnly: requestOptions?.keyOnly === true,
     refreshRuntime: requestOptions?.refreshRuntime === true,
     confirmReplacement: requestOptions?.confirmReplacement === true,

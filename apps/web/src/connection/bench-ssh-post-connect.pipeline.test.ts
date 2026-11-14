@@ -21,6 +21,7 @@ import * as Session from "@goat/client-runtime/rpc/session";
 import type { WsRpcProtocolClient } from "@goat/client-runtime/rpc";
 import * as Driver from "@goat/client-runtime/connection/driver";
 import * as Resolver from "@goat/client-runtime/connection/resolver";
+import { PenMembership } from "@goat/client-runtime/connection";
 import {
   BearerConnectionCredential,
   CredentialStore as Credentials,
@@ -170,6 +171,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
     enabled: true,
   };
   const resolver = yield* Resolver.make.pipe(
+    Effect.provide(PenMembership.layer),
     Effect.provideService(Authorization.RemoteEnvironmentAuthorization, remote),
     Effect.provideService(Profiles.ConnectionProfileStore, {
       get: () => Effect.succeedSome(profile),

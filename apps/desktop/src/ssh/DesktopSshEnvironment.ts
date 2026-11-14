@@ -1,10 +1,12 @@
 import type {
+  AuthEnvironmentScope,
   DesktopDiscoveredSshHost,
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshEnvironmentTarget,
   SshHostResult,
   SshRuntimeUpdateMode,
 } from "@goat/contracts";
+import { AuthStandardClientScopes } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
 import * as SshAuth from "@goat/ssh/auth";
 import { resolveSshTarget, SshHostAnswered } from "@goat/ssh/command";
@@ -57,6 +59,7 @@ export type DesktopSshEnvironmentEnsureOptions = Pick<
   SshTunnel.SshEnvironmentEnsureOptions,
   | "issuePairingToken"
   | "keyOnly"
+  | "installation"
   | "preparedAttachmentId"
   | "onPreparationProgress"
   | "onPreparationAdmission"
@@ -75,6 +78,21 @@ export class DesktopSshEnvironment extends Context.Service<
       target: DesktopSshEnvironmentTarget,
       options?: DesktopSshEnvironmentEnsureOptions,
     ) => Effect.Effect<DesktopSshEnvironmentReadyOrPending, DesktopSshEnvironmentOperationError>;
+    /**
+     * A session on a Pen member for this desktop, named by this desktop's own node id. Attaches
+     * to the GOAT that machine already has; never installs, upgrades or prompts for a password.
+     */
+    readonly issuePenMemberSession: (
+      target: DesktopSshEnvironmentTarget,
+      self: { readonly selfNodeId: string; readonly selfName: string },
+    ) => Effect.Effect<
+      {
+        readonly token: string;
+        readonly expiresAt: string | null;
+        readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+      },
+      DesktopSshEnvironmentOperationError
+    >;
     readonly status: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<SshHostResult, DesktopSshEnvironmentOperationError>;
@@ -93,6 +111,9 @@ export class DesktopSshEnvironment extends Context.Service<
 export interface DesktopSshEnvironmentLayerOptions {
   readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemoteGoatRunnerOptions>;
 }
+
+/** Hygiene only: the member's server refuses the session as soon as this desktop leaves Pen. */
+const PEN_MEMBER_SESSION_TTL = "24h";
 
 function discoverDesktopSshHostsEffect(input?: { readonly homeDir?: string }) {
   return discoverSshHosts(input ?? {});
@@ -272,6 +293,20 @@ export const make = Effect.gen(function* () {
         Effect.provide(runtimeContext),
         Effect.withSpan("desktop.ssh.ensureEnvironment"),
       ),
+    issuePenMemberSession: (target, self) =>
+      manager
+        .issueClientSession(target, {
+          penMember: self.selfNodeId,
+          label: `GOAT desktop on ${self.selfName} (Pen)`,
+          ttl: PEN_MEMBER_SESSION_TTL,
+          scopes: AuthStandardClientScopes,
+          installation: "existing-only",
+        })
+        .pipe(
+          Effect.provideService(SshAuth.SshPasswordPrompt, keyOnlyPasswordPrompt),
+          Effect.provide(runtimeContext),
+          Effect.withSpan("desktop.ssh.issuePenMemberSession"),
+        ),
     status: (target) =>
       withCurrentRequest(target, () => readStatus(target)).pipe(
         Effect.withSpan("desktop.ssh.status"),

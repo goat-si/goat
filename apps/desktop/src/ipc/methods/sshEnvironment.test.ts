@@ -2,11 +2,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
+import * as DesktopPenMembers from "../../pen/DesktopPenMembers.ts";
 import { SshHostAnswered } from "@goat/ssh/command";
 import * as IpcChannels from "../channels.ts";
 import {
   SshEnsureSupersededError,
   SshHttpBridgeError,
+  SshInvalidTargetError,
   SshPasswordPromptError,
   SshPreparationTimeoutError,
 } from "@goat/ssh/errors";
@@ -90,9 +92,123 @@ const unusedSshService = {
   update: () => Effect.die("unexpected update"),
   disconnectEnvironment: () => Effect.die("unexpected disconnect"),
   revalidateTunnels: Effect.die("unexpected revalidation"),
+  issuePenMemberSession: () => Effect.die("unexpected Pen session"),
 } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
 
+const penNode = "a".repeat(26);
+const penTarget = {
+  alias: `pen-${penNode}`,
+  hostname: `pen-${penNode}`,
+  username: "me",
+  port: null,
+};
+const penMembers = (
+  requireTrusted: DesktopPenMembers.DesktopPenMembersShape["requireTrusted"],
+): DesktopPenMembers.DesktopPenMembersShape => ({
+  state: Effect.succeed({ kind: "unavailable", seq: 0, reason: "stale" }),
+  requireTrusted,
+});
+
 describe("SSH runtime IPC", () => {
+  it.effect("without desktop main's Pen watch a managed route is refused, not waved through", () =>
+    Effect.gen(function* () {
+      const exit = yield* ensureSshEnvironment
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, issuePairingToken: false },
+        })
+        .pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+          Effect.provide(desktopAt("/nonexistent-home")),
+          Effect.exit,
+        );
+      assert.isTrue(Exit.isFailure(exit));
+    }),
+  );
+
+  it.effect("a Pen machine is never paired with: asking for a pairing token is refused", () =>
+    Effect.gen(function* () {
+      const exit = yield* ensureSshEnvironment
+        .handler({ target: penTarget, options: { penNodeId: penNode, issuePairingToken: true } })
+        .pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+          Effect.provideService(
+            DesktopPenMembers.DesktopPenMembers,
+            penMembers(() => Effect.die("refused before admission")),
+          ),
+          Effect.provide(desktopAt("/nonexistent-home")),
+          Effect.exit,
+        );
+      assert.isTrue(Exit.isFailure(exit));
+    }),
+  );
+
+  it.effect("an ensure for a Pen machine whose alias no longer passes never reaches ssh", () =>
+    Effect.gen(function* () {
+      const asked: Array<{ readonly requireReady: boolean }> = [];
+      const exit = yield* ensureSshEnvironment
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, issuePairingToken: false, installation: "existing-only" },
+        })
+        .pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+          Effect.provideService(
+            DesktopPenMembers.DesktopPenMembers,
+            penMembers((_target, _nodeId, options) => {
+              asked.push(options);
+              return Effect.fail(new SshInvalidTargetError({ message: "not vouched for" }));
+            }),
+          ),
+          Effect.provide(desktopAt("/nonexistent-home")),
+          Effect.exit,
+        );
+      assert.isTrue(Exit.isFailure(exit));
+      assert.deepEqual(asked, [{ requireReady: false }]);
+    }),
+  );
+
+  it.effect("a Pen ensure that may install GOAT needs a live member list naming the machine", () =>
+    Effect.gen(function* () {
+      let received: unknown;
+      yield* ensureSshEnvironment
+        .handler({
+          target: penTarget,
+          options: { penNodeId: penNode, keyOnly: true, issuePairingToken: false },
+        })
+        .pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+            ...unusedSshService,
+            ensureEnvironment: (_target, options) =>
+              Effect.sync(() => {
+                const {
+                  onPreparationProgress: _a,
+                  onPreparationAdmission: _b,
+                  ...rest
+                } = options ?? {};
+                received = rest;
+                return {
+                  target: penTarget,
+                  httpBaseUrl: "http://127.0.0.1:41773/",
+                  wsBaseUrl: "ws://127.0.0.1:41773/",
+                  pairingToken: null,
+                };
+              }),
+          }),
+          Effect.provideService(
+            DesktopPenMembers.DesktopPenMembers,
+            penMembers((_target, _nodeId, options) =>
+              options.requireReady
+                ? Effect.succeed({ selfNodeId: "s".repeat(26), selfName: "this-mac" })
+                : Effect.die("a new credential must require a live member list"),
+            ),
+          ),
+          Effect.provide(desktopAt("/nonexistent-home")),
+        );
+      assert.deepEqual(received, { keyOnly: true, issuePairingToken: false });
+    }),
+  );
+
   it.effect("sends a cloneable ticket result the renderer must decode (#2341, #2496)", () => {
     const expiresAt = "2026-11-03T12:00:00.000Z";
     const layer = layerHttpClient((request) =>
@@ -401,6 +517,7 @@ describe("SSH environment IPC", () => {
             resolveHost: () => Effect.die("unused"),
             disconnectEnvironment: () => Effect.die("unused"),
             revalidateTunnels: Effect.die("unused"),
+            issuePenMemberSession: () => Effect.die("unused"),
             ensureEnvironment: (receivedTarget, options) =>
               Effect.sync(() => {
                 const { onPreparationProgress, onPreparationAdmission, ...nativeOptions } =

@@ -1,3 +1,18 @@
+import { stopWaitPlaceholders } from "./stopWait.ts";
+import { REMOTE_NODE_ENV_SCRIPT } from "./remoteNodeEnvScript.ts";
+import {
+  EXACT_ARCHIVE_VERSION,
+  SshInvalidArchiveVersionError,
+  SshMissingRunnerError,
+} from "./runnerErrors.ts";
+export { SshInvalidArchiveVersionError, SshMissingRunnerError } from "./runnerErrors.ts";
+import {
+  existingOnly,
+  existingOnlyError,
+  existingRunnerError,
+  launchFlags,
+  restrictedRunner,
+} from "./existingOnly.ts";
 import {
   LEGACY_SSH_ARCHIVE_VERSION_KEY,
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
@@ -266,6 +281,7 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
   readonly authSecret: string | null;
 }
 export interface SshEnvironmentEnsureOptions {
+  readonly installation?: "existing-only";
   readonly preparedAttachmentId?: string;
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
   readonly onPreparationAdmission?: (admission: PreparationAdmission) => void;
@@ -509,104 +525,6 @@ function probe() {
   }
   process.exit(1);
 })().catch(() => process.exit(1));
-`;
-
-const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
-  if [ -d "$1" ]; then
-    case ":$PATH:" in
-      *":$1:"*) ;;
-      *) PATH="$1:$PATH" ;;
-    esac
-  fi
-}
-
-remote_node_satisfies_engine() {
-  GOAT_NODE_ENGINE_RANGE=@@GOAT_NODE_ENGINE_RANGE@@
-  if [ -z "$GOAT_NODE_ENGINE_RANGE" ]; then
-    return 0
-  fi
-  node - "$GOAT_NODE_ENGINE_RANGE" <<'NODE'
-@@GOAT_NODE_ENGINE_CHECK_SCRIPT@@
-NODE
-}
-
-ensure_remote_node_path() {
-  if command -v node >/dev/null 2>&1 && remote_node_satisfies_engine >/dev/null 2>&1; then
-    return 0
-  fi
-
-  prepend_path_if_dir "$HOME/.local/bin"
-  prepend_path_if_dir "$HOME/bin"
-  prepend_path_if_dir "/opt/homebrew/bin"
-  prepend_path_if_dir "/home/linuxbrew/.linuxbrew/bin"
-  prepend_path_if_dir "/usr/local/bin"
-  prepend_path_if_dir "/usr/bin"
-  prepend_path_if_dir "/bin"
-  # lsof lives in sbin on macOS. A login PATH that already has node returns
-  # before these lines, so the launch script also prepends them unconditionally.
-  prepend_path_if_dir "/usr/sbin"
-  prepend_path_if_dir "/sbin"
-
-  if [ -z "\${VOLTA_HOME:-}" ]; then
-    VOLTA_HOME="$HOME/.volta"
-  fi
-  export VOLTA_HOME
-  prepend_path_if_dir "$VOLTA_HOME/bin"
-
-  prepend_path_if_dir "$HOME/.asdf/shims"
-  prepend_path_if_dir "$HOME/.asdf/bin"
-  if [ ! -x "$HOME/.asdf/shims/node" ] && [ -s "$HOME/.asdf/asdf.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$HOME/.asdf/asdf.sh"
-  fi
-
-  prepend_path_if_dir "$HOME/.local/share/mise/shims"
-  prepend_path_if_dir "$HOME/.mise/shims"
-  if ! command -v node >/dev/null 2>&1 && command -v mise >/dev/null 2>&1; then
-    eval "$(mise activate sh)" >/dev/null 2>&1 || true
-  fi
-
-  if [ -z "\${FNM_DIR:-}" ]; then
-    FNM_DIR="$HOME/.local/share/fnm"
-  fi
-  export FNM_DIR
-  prepend_path_if_dir "$FNM_DIR"
-  prepend_path_if_dir "$HOME/.fnm"
-  if ! command -v node >/dev/null 2>&1 && command -v fnm >/dev/null 2>&1; then
-    eval "$(fnm env --shell bash)" >/dev/null 2>&1 || true
-    fnm use --silent-if-unchanged >/dev/null 2>&1 || fnm use default >/dev/null 2>&1 || true
-  fi
-
-  prepend_path_if_dir "$HOME/.nodenv/bin"
-  prepend_path_if_dir "$HOME/.nodenv/shims"
-  if ! command -v node >/dev/null 2>&1 && command -v nodenv >/dev/null 2>&1; then
-    eval "$(nodenv init -)" >/dev/null 2>&1 || true
-  fi
-
-  if [ -z "\${NVM_DIR:-}" ]; then
-    NVM_DIR="$HOME/.nvm"
-  fi
-  export NVM_DIR
-
-  if [ -s "$NVM_DIR/nvm.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$NVM_DIR/nvm.sh"
-    if ! command -v node >/dev/null 2>&1 && command -v nvm >/dev/null 2>&1; then
-      nvm use --silent default >/dev/null 2>&1 || nvm use --silent node >/dev/null 2>&1 || nvm use --silent --lts >/dev/null 2>&1 || true
-    fi
-  fi
-
-  if ! command -v node >/dev/null 2>&1 && [ -d "$NVM_DIR/versions/node" ]; then
-    for GOAT_NODE_BIN in "$NVM_DIR"/versions/node/*/bin; do
-      if [ -x "$GOAT_NODE_BIN/node" ]; then
-        PATH="$GOAT_NODE_BIN:$PATH"
-        export PATH
-      fi
-    done
-  fi
-
-  command -v node >/dev/null 2>&1 && remote_node_satisfies_engine
-}
 `;
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
@@ -1200,27 +1118,6 @@ rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
 printf '{"stopped":true}\\n'
 `;
 
-export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalidArchiveVersionError>()(
-  "SshInvalidArchiveVersionError",
-  { archiveVersion: Schema.String },
-) {
-  override get message(): string {
-    return `'${this.archiveVersion}' is not an exact GOAT version and cannot name a runtime directory.`;
-  }
-}
-
-// The version names a runtime directory, so it must be one exact SemVer segment.
-const EXACT_ARCHIVE_VERSION =
-  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
-  "SshMissingRunnerError",
-  {},
-) {
-  override get message(): string {
-    return "A remote goat runner needs an archive version or a node script path.";
-  }
-}
-
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
   const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
   const archiveVersion = input?.archiveVersion?.trim() || "";
@@ -1314,18 +1211,18 @@ capture_reconnect_baseline() {
     GOAT_EXPECTED_ARCHIVE_VERSION: shellSingleQuote(selection.version ?? ""),
     GOAT_SELECTED_VERSION: shellSingleQuote(selection.version ?? ""),
     GOAT_REQUESTED_VERSION: shellSingleQuote(selection.requestedVersion ?? ""),
-    GOAT_REQUIRE_INSTALLED: selection.requireInstalled ? "1" : "0",
+    GOAT_REQUIRE_INSTALLED: launchFlags(input, selection).requireInstalled ? "1" : "0",
     GOAT_PRESERVE_SELECTED_RUNNER: preserve ? "1" : "0",
     GOAT_ALLOW_OWNED_UPGRADE:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer ? "1" : "0",
+      verifyOwnedBeforePublication && launchFlags(input, selection).upgrade ? "1" : "0",
     GOAT_ALLOW_LEGACY_ADOPTION:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && !isNodeScriptRunner(input)
+      verifyOwnedBeforePublication &&
+      launchFlags(input, selection).upgrade &&
+      !isNodeScriptRunner(input)
         ? "1"
         : "0",
     GOAT_REFRESH_IF_IDLE:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && selection.refreshIfIdle
-        ? "1"
-        : "0",
+      verifyOwnedBeforePublication && launchFlags(input, selection).refresh ? "1" : "0",
     GOAT_REFRESH_LIVE_VERSION: shellSingleQuote(selection.expectedLiveVersion ?? ""),
     GOAT_LIVE_RUNNER_SHA256: shellSingleQuote(selection.expectedLiveRunnerSha256 ?? ""),
     GOAT_CAPTURE_RUNNING_RUNNER: verifyOwnedBeforePublication
@@ -1353,7 +1250,15 @@ capture_reconnect_baseline() {
     GOAT_VERIFY_OWNED_BEFORE_PUBLICATION: verifyOwnedBeforePublication
       ? VERIFY_OWNED_BEFORE_PUBLICATION + "\n"
       : "",
-    GOAT_RUNNER_INSTALL: preserve ? KEEP_EXISTING_RUNNER_INSTALL : REPLACE_RUNNER_INSTALL,
+    GOAT_RUNNER_INSTALL: existingOnly(input)
+      ? KEEP_EXISTING_RUNNER_INSTALL.replace(
+          "Selected retained runner changed before publication; reconnect.",
+          "GOAT_EXISTING_RUNNER_REQUIRED",
+        )
+      : preserve
+        ? KEEP_EXISTING_RUNNER_INSTALL
+        : REPLACE_RUNNER_INSTALL,
+    GOAT_SYNC_RUNNER_ALIAS: existingOnly(input) ? ":" : "sync_runner_alias || :",
   });
 }
 
@@ -1421,37 +1326,6 @@ export type {
   RemoteMcpClientSession,
   RemoteMcpClientSessionOptions,
 } from "./remoteSessions.ts";
-
-const DEFAULT_STOP_WAIT_ATTEMPTS = 20;
-const DEFAULT_STOP_WAIT_INTERVAL_SECONDS = "0.1";
-const STOP_WAIT_INTERVAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
-
-/** Production waits 20×0.1s. Tests pass interval `0` so the loop follows process exit. */
-function stopWaitPlaceholders(options: {
-  readonly stopWaitAttempts?: number;
-  readonly stopWaitIntervalSeconds?: string;
-}): {
-  readonly GOAT_STOP_WAIT_ATTEMPTS: string;
-  readonly GOAT_STOP_WAIT_INTERVAL: string;
-  readonly GOAT_STOP_WAIT_LABEL: string;
-} {
-  const attempts = options.stopWaitAttempts ?? DEFAULT_STOP_WAIT_ATTEMPTS;
-  const interval = options.stopWaitIntervalSeconds ?? DEFAULT_STOP_WAIT_INTERVAL_SECONDS;
-  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 1_000_000) {
-    throw new Error(`stopWaitAttempts must be an integer from 1 to 1000000, got ${attempts}`);
-  }
-  if (!STOP_WAIT_INTERVAL_PATTERN.test(interval)) {
-    throw new Error(`stopWaitIntervalSeconds must be a non-negative decimal, got ${interval}`);
-  }
-  return {
-    GOAT_STOP_WAIT_ATTEMPTS: String(attempts),
-    GOAT_STOP_WAIT_INTERVAL: interval,
-    GOAT_STOP_WAIT_LABEL:
-      attempts === DEFAULT_STOP_WAIT_ATTEMPTS && interval === DEFAULT_STOP_WAIT_INTERVAL_SECONDS
-        ? "2 seconds"
-        : "the stop deadline",
-  };
-}
 
 export function buildRemoteStopScript(
   stateKey: string,
@@ -1619,12 +1493,19 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           previousSelection.runner.archiveCommitTime === runner?.archiveCommitTime &&
           (previousSelection.runner.keepExistingRunner === true) ===
             (runner?.keepExistingRunner === true) &&
+          existingOnly(previousSelection.runner) === existingOnly(runner) &&
           previousSelection.upgradeFailure === undefined &&
           previousSelection.updateBlocked === undefined &&
           !isNodeScriptRunner(runner) &&
           runner?.refreshOwnedRuntimeOnFirstConnection !== true &&
           runner?.confirmReplacement !== true;
-        const launch = (selected: PreparedRemoteRuntime, expectedProbe?: string) => {
+        const launch = (selection: PreparedRemoteRuntime, expectedProbe?: string) => {
+          const selected = existingOnly(runner)
+            ? {
+                ...selection,
+                runner: restrictedRunner(selection.runner),
+              }
+            : selection;
           const command = runSshCommand(target, {
             remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
             stdin:
@@ -1637,7 +1518,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
               : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
             ...input,
           });
-          return onLaunched === undefined ? restore(command) : command;
+          return (onLaunched === undefined ? restore(command) : command).pipe(
+            Effect.mapError((error) =>
+              error._tag === "SshCommandError"
+                ? existingRunnerError(error, runner, target.alias)
+                : error,
+            ),
+          );
         };
         let folded = canFoldProbe
           ? yield* measureSshReconnectStep(
@@ -1661,7 +1548,14 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
         }
         const selected =
           folded !== undefined && previousSelection !== undefined
-            ? { ...previousSelection, uploaded: false, requireInstalled: true }
+            ? {
+                ...previousSelection,
+                runner: existingOnly(runner)
+                  ? restrictedRunner(previousSelection.runner)
+                  : previousSelection.runner,
+                uploaded: false,
+                requireInstalled: true,
+              }
             : yield* restore(
                 prepareRemoteRuntime(
                   target,
@@ -2422,6 +2316,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       runner?.archiveCommitTime,
       runner?.nodeScriptPath,
       runner?.keepExistingRunner === true,
+      runner?.installation,
     ]);
   const { enrichFailure } = makeFailureEnrichment({ managedDirectory, resolvedTargets });
   const setupTerminalFailure = (key: string) => {
@@ -2908,6 +2803,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               Effect.addFinalizer(() =>
                 Effect.gen(function* () {
                   if (
+                    existingOnly(input.runner) ||
                     launchTransferred ||
                     launch.status !== "ready" ||
                     launch.pending !== undefined ||
@@ -2936,12 +2832,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     ).pipe(
       Effect.catchTags({
         SshLaunchError: (error) => {
-          if (error.reason === "runtime-newer") pendingReplacements.delete(input.key);
+          if (!existingOnly(input.runner) && error.reason === "runtime-newer")
+            pendingReplacements.delete(input.key);
           return Effect.fail(error);
         },
         SshCommandError: (error) => {
           // A newer runtime appearing after preparation is refused by the pinned helper's shell guard.
-          if (error.stderr.includes("Remote runtime is newer than this app; update the app."))
+          if (
+            !existingOnly(input.runner) &&
+            error.stderr.includes("Remote runtime is newer than this app; update the app.")
+          )
             pendingReplacements.delete(input.key);
           return Effect.fail(error);
         },
@@ -3018,7 +2918,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const archiveFailure =
       remoteLaunch.status === "ready" ? remoteLaunch.selectedRuntime.upgradeFailure : undefined;
     const needsArchiveRetry = archiveFailure?.reason === "archive_unavailable";
-    if ((remoteLaunch.pending !== undefined || needsArchiveRetry) && input.runner !== undefined) {
+    if (
+      !existingOnly(input.runner) &&
+      (remoteLaunch.pending !== undefined || needsArchiveRetry) &&
+      input.runner !== undefined
+    ) {
       const previousIntent = pendingReplacements.get(input.key);
       const sameIntent =
         previousIntent !== undefined &&
@@ -3067,10 +2971,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.set(input.key, { ...intent, archiveFailure });
       }
     }
-    if (setupTerminalFailure(input.key)) pendingReplacements.delete(input.key);
+    if (!existingOnly(input.runner) && setupTerminalFailure(input.key))
+      pendingReplacements.delete(input.key);
     // The host already runs the requested build (another client, a self-update or a person
     // replaced it), so an intent kept from the older server must not report or retry an update.
     if (
+      !existingOnly(input.runner) &&
       remoteLaunch.status === "ready" &&
       remoteLaunch.pending === undefined &&
       !needsArchiveRetry &&
@@ -3099,7 +3005,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       input.previous.remotePort === remoteLaunch.remotePort &&
       input.previous.selectedRuntime.version === remoteLaunch.selectedRuntime.version
     ) {
-      if (remoteLaunch.pending === undefined && !needsArchiveRetry)
+      if (!existingOnly(input.runner) && remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       // Keep the forward's identity for its finalizer while updating the latest selection.
       input.previous.selectedRuntime = remoteLaunch.selectedRuntime;
@@ -3182,7 +3088,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     yield* Effect.gen(function* () {
       tunnels.set(input.key, tunnelEntry);
       tunnelEntry.reconnectSelection = reconnectSelection;
-      if (remoteLaunch.pending === undefined && !needsArchiveRetry)
+      if (!existingOnly(input.runner) && remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
       const cryptoService = yield* Crypto.Crypto;
@@ -3202,6 +3108,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             })
             .pipe(Effect.ignore);
           if (
+            existingOnly(tunnelEntry.selectedRuntime.runner) ||
             !stopRemote ||
             options.leaveRemoteServerRunning === true ||
             // GOAT never stops the app server it only attached to.
@@ -3383,7 +3290,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   > {
     const entry = tunnels.get(key);
     const retainedSelection = takeReconnectSelection(key);
-    const pendingSelection = takePendingReconnectSelection(key);
+    const pendingSelection = existingOnly(runner) ? undefined : takePendingReconnectSelection(key);
     const selection =
       entry?.reconnectSelection ?? retainedSelection ?? capturedSelection ?? pendingSelection;
     if (entry !== undefined) delete entry.reconnectSelection;
@@ -3458,7 +3365,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const replace =
         entry.attachmentInvalidated === true ||
         entry.uncertainDrain === true ||
-        pendingReplacements.has(key) ||
+        (pendingReplacements.has(key) && !existingOnly(runner)) ||
         runner?.refreshOwnedRuntimeOnFirstConnection === true;
       if (!replace && (yield* keepAnsweringTunnel(key, entry, false, true))) {
         if (
@@ -3752,7 +3659,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               keyOnly: requestOptions?.keyOnly === true || managedAliases.has(entry.target.alias),
               target: entry.target,
               operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
+                issueRemotePairingToken(
+                  entry.target,
+                  authOptions,
+                  requestOptions?.installation === "existing-only"
+                    ? restrictedRunner(runner)
+                    : runner,
+                  requestOptions?.installation === "existing-only"
+                    ? {
+                        ...entry.selectedRuntime,
+                        runner: restrictedRunner(entry.selectedRuntime.runner),
+                      }
+                    : entry.selectedRuntime,
+                ),
             }).pipe(
               // A desktop reconnecting after this lands on the managed server.
               Effect.tapError((error) =>
@@ -3815,13 +3734,26 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext | Scope.Scope
   > {
+    if (
+      requestOptions?.installation === "existing-only" &&
+      (requestOptions.refreshRuntime ||
+        requestOptions.confirmReplacement ||
+        requestOptions.forceReplace)
+    )
+      return yield* existingOnlyError(
+        target.alias,
+        "existing-only contradicts refreshRuntime, confirmReplacement or forceReplace.",
+      );
     const ticket = yield* takeRequestTicket(target, "ensure");
     const requestKey = targetConnectionKey(target);
     const knownKey = targetConnectionKey(resolvedTargets.get(requestKey) ?? target);
     const requestGeneration = generations.get(knownKey) ?? 0;
     const knownEntry = tunnels.get(knownKey);
     const retainedSelection = takeReconnectSelection(knownKey);
-    const pendingSelection = takePendingReconnectSelection(knownKey);
+    const pendingSelection =
+      requestOptions?.installation === "existing-only"
+        ? undefined
+        : takePendingReconnectSelection(knownKey);
     const reconnectSelection =
       knownEntry?.reconnectSelection ?? retainedSelection ?? pendingSelection;
     if (knownEntry !== undefined) delete knownEntry.reconnectSelection;
@@ -3835,7 +3767,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       (generations.get(knownKey) ?? 0) !== requestGeneration
     )
       return yield* supersededPreparation();
-    yield* startRetry;
+    if (requestOptions?.installation !== "existing-only") yield* startRetry;
     const baseResolved = yield* resolveSshTarget(target.alias || target.hostname, target).pipe(
       Effect.tapError((error) =>
         Effect.suspend(() =>
@@ -3902,6 +3834,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     }
     const managedPin = yield* readManagedPin(resolvedTarget);
     const preparationOptions = {
+      ...(requestOptions?.installation === undefined
+        ? {}
+        : { installation: requestOptions.installation }),
       keyOnly: requestOptions?.keyOnly === true || managedPin !== undefined,
       refreshRuntime: requestOptions?.refreshRuntime === true,
       confirmReplacement: requestOptions?.confirmReplacement === true,
@@ -3935,7 +3870,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           if (closed || (generations.get(key) ?? 0) !== admittedGeneration) return Effect.void;
           invalidateReconnectSelection(key);
           return publishFailure(key, resolvedTarget, runner, error).pipe(
-            Effect.andThen(retries.failed(key, generations.get(key), error, target)),
+            Effect.andThen(
+              preparationOptions.installation === "existing-only"
+                ? Effect.void
+                : retries.failed(key, generations.get(key), error, target),
+            ),
           );
         }).pipe(Effect.provide(context)),
       prepare: (report) =>
@@ -3966,16 +3905,20 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             if (preparationOptions.refreshRuntime === true) acquisitionFailures.delete(key);
             const decisionKey = `${key}:${runner?.archiveVersion ?? runner?.nodeScriptPath ?? ""}`;
             const connectionRunner =
-              runner === undefined
+              runner === undefined && preparationOptions.installation === undefined
                 ? undefined
                 : {
                     ...runner,
+                    ...(preparationOptions.installation === undefined
+                      ? {}
+                      : { installation: preparationOptions.installation }),
                     refreshOwnedRuntimeOnFirstConnection:
-                      runner.keepExistingRunner !== true &&
+                      preparationOptions.installation !== "existing-only" &&
+                      runner?.keepExistingRunner !== true &&
                       (preparationOptions.refreshRuntime === true ||
                         (!firstConnectionDecisions.has(decisionKey) &&
                           !pendingReplacements.has(key))) &&
-                      runner.refreshOwnedRuntimeOnFirstConnection === true,
+                      runner?.refreshOwnedRuntimeOnFirstConnection === true,
                     confirmReplacement: preparationOptions.confirmReplacement === true,
                     forceReplace: preparationOptions.forceReplace,
                     ...(preparationOptions.refreshRuntime === true ? { manualRefresh: true } : {}),
@@ -4542,7 +4485,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }),
     );
   });
-
   /**
    * Issues a credential against the target's current attachment. When that is the GOAT app server
    * and it refuses, the target moves to the managed server on the same local port, so the caller's
@@ -4556,6 +4498,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     options: {
       /** Ready-only callers never change which server serves the host. */
       readonly reconnect: boolean;
+      readonly preserveApp?: boolean;
       readonly keyOnly: boolean;
     },
     issue: (selection: PreparedRemoteRuntime | undefined) => Effect.Effect<A, E, R>,
@@ -4567,7 +4510,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       !closed && !forgotten.has(key) && (generations.get(key) ?? 0) === generation;
     return issue(entry.selectedRuntime).pipe(
       Effect.catchIf(
-        (error): error is E & SshPairingError => error instanceof SshPairingError,
+        (error): error is E & SshPairingError =>
+          error instanceof SshPairingError && error.reason !== "pen-member-unsupported",
         (error) =>
           Effect.gen(function* () {
             yield* Effect.logWarning("ssh.appServer.credential.fallback", {
@@ -4575,6 +4519,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               cause: error.message,
               reconnect: options.reconnect,
             });
+            if (options.preserveApp) return yield* error;
             appServerRefusals.set(key, (yield* Clock.currentTimeMillis) + APP_SERVER_REFUSAL_MS);
             entry.attachmentInvalidated = true;
             // A disconnect or forget that arrived meanwhile wins; nothing is started for it.
@@ -4630,7 +4575,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         resolvedTarget,
         runner,
         {
-          reconnect: sessionOptions.requireReady !== true,
+          reconnect:
+            sessionOptions.requireReady !== true && sessionOptions.installation !== "existing-only",
+          preserveApp: sessionOptions.installation === "existing-only",
           keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
         },
         (selection) =>
@@ -4644,8 +4591,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                 resolvedTarget,
                 sessionOptions,
                 authOptions,
-                runner,
-                selection,
+                sessionOptions.installation === "existing-only" ? restrictedRunner(runner) : runner,
+                sessionOptions.installation === "existing-only" && selection !== undefined
+                  ? { ...selection, runner: restrictedRunner(selection.runner) }
+                  : selection !== undefined && existingOnly(selection.runner)
+                    ? undefined
+                    : selection,
               ),
           }),
       );
@@ -4695,7 +4646,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           key,
           resolvedTarget,
           runner,
-          { reconnect: true, keyOnly: managedAliases.has(resolvedTarget.alias) },
+          {
+            reconnect: sessionOptions.installation !== "existing-only",
+            preserveApp: sessionOptions.installation === "existing-only",
+            keyOnly: managedAliases.has(resolvedTarget.alias),
+          },
           (selection) =>
             runWithSshAuth({
               key,
@@ -4706,8 +4661,17 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                   resolvedTarget,
                   sessionOptions,
                   authOptions,
-                  runner,
-                  selection,
+                  sessionOptions.installation === "existing-only"
+                    ? restrictedRunner(runner)
+                    : runner,
+                  sessionOptions.installation === "existing-only" && selection !== undefined
+                    ? {
+                        ...selection,
+                        runner: restrictedRunner(selection.runner),
+                      }
+                    : selection !== undefined && existingOnly(selection.runner)
+                      ? undefined
+                      : selection,
                 ),
             }),
         ),

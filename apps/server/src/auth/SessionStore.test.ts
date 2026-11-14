@@ -119,6 +119,71 @@ const makeDiskSessionStoreLayer = Effect.fn("makeDiskSessionStoreLayer")(functio
 });
 
 it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
+  it.effect(
+    "suspends member sessions without losing their scopes and restores them on admission",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* SessionStore.SessionStore;
+        const nodeId = "a".repeat(26);
+        const issued = yield* sessions.issue({
+          penMemberNode: nodeId,
+          scopes: ["orchestration:read"],
+        });
+        expect((yield* sessions.verify(issued.token, MAIN_LISTENER).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        const forged = yield* sessions.issue({ subject: `pen-member:${nodeId}` });
+        expect((yield* sessions.verify(forged.token, MAIN_LISTENER).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        const ticket = yield* sessions.issueWebSocketToken(issued.sessionId);
+        expect(
+          (yield* sessions.verifyWebSocketToken(ticket.token, MAIN_LISTENER).pipe(Effect.result))
+            ._tag,
+        ).toBe("Failure");
+        yield* sessions.setPenMembersAdmitted(new Set([nodeId]));
+        expect(yield* sessions.readActiveScopes(issued.sessionId)).toEqual(["orchestration:read"]);
+        const late = yield* sessions.issue({ penMemberNode: "b".repeat(26) });
+        expect((yield* sessions.verify(late.token, MAIN_LISTENER).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        const lateTicket = yield* sessions.issueWebSocketToken(late.sessionId);
+        expect(
+          (yield* sessions
+            .verifyWebSocketToken(lateTicket.token, MAIN_LISTENER)
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect((yield* sessions.verify(issued.token, MAIN_LISTENER)).subject).toBe(
+          `pen-member:${nodeId}`,
+        );
+        expect((yield* sessions.verifyWebSocketToken(ticket.token, MAIN_LISTENER)).subject).toBe(
+          `pen-member:${nodeId}`,
+        );
+        const invalidation = yield* sessions
+          .awaitInvalidation(issued.sessionId)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* sessions.setPenMembersAdmitted("closed");
+        yield* Fiber.join(invalidation);
+        expect(
+          (yield* sessions.listActive()).some((session) => session.sessionId === issued.sessionId),
+        ).toBe(false);
+        expect((yield* sessions.readActiveScopes(issued.sessionId).pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        yield* sessions.setPenMembersAdmitted(new Set([nodeId]));
+        expect(yield* sessions.readActiveScopes(issued.sessionId)).toEqual(["orchestration:read"]);
+        expect(
+          (yield* sessions.listActive()).some((session) => session.sessionId === issued.sessionId),
+        ).toBe(true);
+        expect(
+          new Set((yield* sessions.listPenMemberSessions).map((session) => session.sessionId)),
+        ).toEqual(new Set([issued.sessionId, late.sessionId]));
+        expect(yield* sessions.revoke(issued.sessionId)).toBe(true);
+        expect(yield* sessions.listPenMemberSessions).toEqual([
+          { sessionId: late.sessionId, penMemberNode: "b".repeat(26) },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSessionStore(), TestClock.layer()))),
+  );
   it.effect.each(["revoke", "revokeAllExcept", "replace"] as const)(
     "invalidates every connection for a session on %s and leaves other sessions active",
     (operation) =>

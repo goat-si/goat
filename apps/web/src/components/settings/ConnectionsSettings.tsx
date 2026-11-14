@@ -124,7 +124,7 @@ import { CloudLinkRow } from "./SavedEnvironmentRows";
 import { AdvancedSettingsDisclosure } from "./AdvancedSettingsDisclosure";
 import { CloudMachinesSettings } from "./CloudMachinesSettings";
 import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
-import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
+import { EnvironmentsWithPenMachines } from "./PenMachinesSection";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { HostsSettings } from "./HostsSettings";
 import { HubDeviceCard } from "./HubDeviceCard";
@@ -1401,7 +1401,7 @@ export function ConnectionsSettings() {
           />
         </SettingsSection>
       ) : null}
-      <ConnectionEnvironmentsSection />
+      <EnvironmentsWithPenMachines />
       {primarySettings}
       <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
         {primaryEnvironmentId !== null ? (

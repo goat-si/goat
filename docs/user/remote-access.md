@@ -636,6 +636,10 @@ host by its alias from this machine's `~/.ssh/config`, or add another GOAT serve
 with a pairing URL from `goat pair`. A machine reached two ways, for example
 over SSH and as a linked server, is one device with two routes.
 
+A hub that is in a [Pen](./pen.md#see-every-pen-machine-in-goat) mesh also lists the
+other members by itself and removes them when they leave. Those routes only attach
+to a GOAT the machine already has.
+
 **Check** asks each route whether it answers. It never starts or extends a cloud
 machine: a stopped one shows as offline. Cloud machines are removed from
 **Settings → Connections → [Cloud machines](#cloud-machines)**, not from this list. Removing a saved connection in the

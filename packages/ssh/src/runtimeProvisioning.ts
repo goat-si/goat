@@ -1,3 +1,4 @@
+import { existingOnly, existingOnlyError } from "./existingOnly.ts";
 import type { DesktopSshEnvironmentTarget } from "@goat/contracts";
 import {
   CLI_RELEASE_REPOSITORY,
@@ -6,7 +7,8 @@ import {
   isPublishableCliReleaseVersion,
   type CliArchivePlatformKey,
 } from "@goat/shared/cliRelease";
-import { compareRuntimeBuilds, parseSemver, type RuntimeBuild } from "@goat/shared/semver";
+import { compareRuntimeBuilds } from "@goat/shared/semver";
+import { compareHostRuntimeBuilds } from "./hostRuntimeOrder.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -47,30 +49,6 @@ import {
   remoteUploadCommand,
   replaceRunnerAcquisitionBlock,
 } from "./runtimeInstallScripts.ts";
-
-/**
- * `compareRuntimeBuilds` for runtimes found on a host. Between a plain release and a prerelease
- * the commit time decides, and a plain build without one predates stamping, so it is older.
- * GOAT has only published prereleases, so a plain `0.1.1` on a host is a leftover from an older
- * install. It sorts above every `0.1.0-nightly.*` yet lacks their migrations, so starting it
- * against their database fails every launch.
- */
-const compareHostRuntimeBuilds = (left: RuntimeBuild, right: RuntimeBuild): number | undefined => {
-  const leftParsed = parseSemver(left.version);
-  const rightParsed = parseSemver(right.version);
-  const leftPlain = leftParsed?.prerelease.length === 0;
-  if (
-    leftParsed === null ||
-    rightParsed === null ||
-    leftPlain === (rightParsed.prerelease.length === 0)
-  )
-    return compareRuntimeBuilds(left, right);
-  const [plain, prerelease] = leftPlain ? [left, right] : [right, left];
-  if (prerelease.commitTime === undefined) return compareRuntimeBuilds(left, right);
-  const plainNewer = plain.commitTime === undefined ? -1 : plain.commitTime - prerelease.commitTime;
-  if (plainNewer === 0) return compareRuntimeBuilds(left, right);
-  return leftPlain ? plainNewer : -plainNewer;
-};
 
 /**
  * Provisioning code that embeds the upstream-shaped runner script. tunnel.ts owns that builder and
@@ -192,6 +170,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
     Effect.gen(function* () {
       let exact = requestedRuntime(runner);
       if (isNodeScriptRunner(runner)) {
+        if (existingOnly(runner)) return yield* existingOnlyError(target.alias);
         yield* Effect.try({
           try: () => buildRemoteGoatRunnerScript(runner),
           catch: runtimePreparationError,
@@ -203,6 +182,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
       const mirror = runner?.releaseBaseUrl?.trim() ?? "";
       // Observe a compatible installed runtime before any acquisition, including mirrors.
       const version = runner?.archiveVersion?.trim() ?? "";
+      if (existingOnly(runner) && version === "") return yield* existingOnlyError(target.alias);
       yield* Effect.annotateCurrentSpan({
         "ssh.target": target.alias,
         "goat.runtime.version": version,
@@ -262,6 +242,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
         matchesSignals(probe.liveSignals, version) &&
         matchesSignals(probe.liveBinarySignals, version);
       if (
+        !existingOnly(runner) &&
         owningLaunch &&
         probe.liveVersion !== undefined &&
         !liveCompatible &&
@@ -275,6 +256,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
         });
       }
       if (
+        !existingOnly(runner) &&
         owningLaunch &&
         exact.mayUpgradeOwnedServer &&
         probe.liveStatus === "live" &&
@@ -313,6 +295,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
         retainedOrder === undefined && probe.retainedLacksMemoryScopes === true;
       const liveLacksCapability = liveOrder === undefined && probe.liveLacksMemoryScopes === true;
       const upgradeRetained =
+        !existingOnly(runner) &&
         owningLaunch &&
         exact.mayUpgradeOwnedServer &&
         retainedCompatible &&
@@ -321,6 +304,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
           retainedPredatesStamps ||
           retainedLacksCapability);
       const adoptLegacy =
+        !existingOnly(runner) &&
         owningLaunch &&
         exact.mayUpgradeOwnedServer &&
         probe.liveDrain === true &&
@@ -329,6 +313,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
         (probe.liveStatus === "unknown" ||
           (probe.liveStatus === "live" && probe.liveOwned === true));
       const refreshIfIdle =
+        !existingOnly(runner) &&
         owningLaunch &&
         exact.mayUpgradeOwnedServer &&
         runner?.refreshOwnedRuntimeOnFirstConnection === true &&
@@ -662,6 +647,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
         );
       const acquireRequested = acquireVersion(version);
       if (selectedVersion !== undefined) return yield* selectInstalled(selectedVersion);
+      if (existingOnly(runner)) return yield* existingOnlyError(target.alias);
       // Legacy ownership must be adopted through its normal replacement path;
       // attaching without adoption would fail the launch-time identity check.
       const fallbackToLive = probe.liveStatus === "live" && liveCompatible && !adoptLegacy;

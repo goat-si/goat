@@ -6,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import * as ProcessRunner from "../../processRunner.ts";
-import { sshSettings } from "../penSshRoute.ts";
+import { sshSettings } from "@goat/ssh/penRoute";
 import {
   disposableKnownHosts,
   disposableSshExecOptions,

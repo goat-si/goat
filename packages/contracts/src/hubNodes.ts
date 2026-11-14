@@ -12,6 +12,7 @@ import {
 } from "./baseSchemas.ts";
 import { CloudMachineAlias } from "./cloudMachines.ts";
 import { HubNodeMachineClass } from "./disposableMachines.ts";
+import { PenId } from "./penSettings.ts";
 
 /**
  * Hub nodes are the machines this GOAT server (the hub) reaches: registered SSH hosts, linked
@@ -71,6 +72,18 @@ export type HubNodeRouteId = typeof HubNodeRouteId.Type;
 export const HubNodeRouteSource = Schema.Literals(["registered", "linked-host", "cloud-machine"]);
 export type HubNodeRouteSource = typeof HubNodeRouteSource.Type;
 
+/**
+ * The Pen member a route was added for: the hub follows its own Pen membership and keeps one ssh
+ * route per member. Such a route only attaches to a GOAT the machine already has, and leaves
+ * with the member. An optional key, so a client that predates it still reads the node list.
+ */
+export const PenHubBinding = Schema.Struct({
+  meshId: PenId,
+  nodeId: PenId,
+  noisePub: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/u)),
+});
+export type PenHubBinding = typeof PenHubBinding.Type;
+
 export const HubNodeRoute = Schema.Struct({
   routeId: HubNodeRouteId,
   source: HubNodeRouteSource,
@@ -80,6 +93,8 @@ export const HubNodeRoute = Schema.Struct({
   lastSeenAt: Schema.NullOr(IsoDateTime),
   /** Why the last check failed, safe to show. */
   lastError: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
+  /** Set when this route, not the node, is the hub's own Pen membership at work. */
+  pen: Schema.optionalKey(PenHubBinding),
 });
 export type HubNodeRoute = typeof HubNodeRoute.Type;
 
@@ -89,6 +104,8 @@ export const HubNodeAddedBy = Schema.Struct({
   threadId: Schema.optionalKey(ThreadId),
   /** The signed-in outside client's label, for an agent GOAT did not launch. */
   client: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Written only by the hub's Pen reconciler, always with kind "import". Its presence owns the row. */
+  pen: Schema.optionalKey(PenHubBinding),
   at: IsoDateTime,
 });
 export type HubNodeAddedBy = typeof HubNodeAddedBy.Type;

@@ -116,10 +116,11 @@ export const requestNativeRuntimeCredential = async (
   }
   const reply = decodeIssued(raw);
   const expiry = Date.parse(reply.expiresAt);
-  const purpose = request.childSetupPurpose;
+  const purpose = request.kind === "session" ? request.childSetupPurpose : undefined;
+  const subject = request.kind === "session" ? request.subject : `pen-member:${request.nodeId}`;
   if (
     reply.token.trim().length === 0 ||
-    reply.subject !== request.subject ||
+    reply.subject !== subject ||
     !sameScopes(reply.scopes, request.scopes) ||
     !Number.isFinite(expiry) ||
     expiry <= Date.now() ||

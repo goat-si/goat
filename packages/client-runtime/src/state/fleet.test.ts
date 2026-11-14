@@ -219,6 +219,24 @@ describe("remote delegated children", () => {
 });
 
 describe("buildFleet", () => {
+  it("names a machine this client reaches through Pen, and only that one", () => {
+    const fleet = buildFleet({
+      environments: [
+        env(local, "Mac"),
+        env(remote, "Box", ["pen-" + "a".repeat(26)]),
+        env(EnvironmentId.make("named"), "Named", ["pen-box"]),
+      ],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [],
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.subtitle])).toEqual([
+      ["Mac", null],
+      ["Box", "via Pen"],
+      ["Named", null],
+    ]);
+  });
+
   it("draws a disconnected environment without counting its stale threads", () => {
     const fleet = buildFleet({
       environments: [env(local, "Mac"), { ...env(remote, "Box"), connected: false }],

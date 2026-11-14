@@ -19,6 +19,7 @@ import * as RpcHttp from "@goat/client-runtime/rpc";
 import * as Session from "@goat/client-runtime/rpc/session";
 import * as Driver from "@goat/client-runtime/connection/driver";
 import * as Resolver from "@goat/client-runtime/connection/resolver";
+import { PenMembership } from "@goat/client-runtime/connection";
 import {
   BearerConnectionCredential,
   CredentialStore as Credentials,
@@ -188,7 +189,9 @@ export async function run(input: {
       }),
     );
     const authLayer = Authorization.layer.pipe(Layer.provide(dependencies));
-    const resolverLayer = Resolver.layer.pipe(Layer.provide(Layer.merge(dependencies, authLayer)));
+    const resolverLayer = Resolver.layer.pipe(
+      Layer.provide(Layer.mergeAll(dependencies, authLayer, PenMembership.layer)),
+    );
     const sessionLayer = Session.layer({}).pipe(
       Layer.provide(
         Layer.succeed(Socket.WebSocketConstructor, (url) => {

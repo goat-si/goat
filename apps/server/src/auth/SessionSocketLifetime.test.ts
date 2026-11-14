@@ -13,6 +13,7 @@ import * as Access from "./HubConnectAccess.ts";
 import * as Secrets from "./ServerSecretStore.ts";
 import * as Sessions from "./SessionStore.ts";
 import * as Lifetime from "./SessionSocketLifetime.ts";
+import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
 import * as Config from "../config.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -24,6 +25,58 @@ const layer = Auth.layer.pipe(
   Layer.provide(Environment.layerIdentity),
   Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-connect-socket-" })),
   Layer.provide(NodeServices.layer),
+);
+
+it.effect("closing the Pen membership view closes a socket without revoking its session", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Sessions.SessionStore;
+    const auth = yield* Auth.EnvironmentAuth;
+    const node = "a".repeat(26);
+    yield* sessions.setPenMembersAdmitted(new Set([node]));
+    const issued = yield* sessions.issue({ penMemberNode: node });
+    const verified = yield* sessions.verify(issued.token, MAIN_LISTENER);
+    const ticket = yield* auth.issueWebSocketTicket(verified, { use: "rpc" });
+    const admitted = yield* Deferred.make<void>();
+    const routes = HttpRouter.add(
+      "GET",
+      "/ws",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const session = yield* auth.authenticateWebSocketUpgrade(request, "rpc");
+        return yield* Lifetime.run(
+          session,
+          Effect.gen(function* () {
+            const socket = yield* request.upgrade;
+            const reader = yield* socket.reader;
+            yield* Deferred.succeed(admitted, undefined);
+            yield* Stream.fromPull(Effect.succeed(reader.pull)).pipe(Stream.runDrain);
+            return HttpServerResponse.empty();
+          }),
+        );
+      }),
+    );
+    const origin = yield* serve(routes);
+    const closed = Promise.withResolvers<void>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const client = new NodeWS.WebSocket(
+          `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
+        );
+        client.on("close", () => closed.resolve());
+        client.on("error", () => {});
+        return client;
+      }),
+      (client) => Effect.sync(() => client.terminate()),
+    );
+    yield* Deferred.await(admitted);
+    yield* sessions.setPenMembersAdmitted("closed");
+    yield* Effect.promise(() => closed.promise);
+    expect(yield* sessions.listPenMemberSessions).toEqual([
+      { sessionId: issued.sessionId, penMemberNode: node },
+    ]);
+    yield* sessions.setPenMembersAdmitted(new Set([node]));
+    expect((yield* sessions.readActiveScopes(issued.sessionId)).length).toBeGreaterThan(0);
+  }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
 it.effect.each([false, true])(

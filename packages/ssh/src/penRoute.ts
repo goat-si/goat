@@ -197,3 +197,78 @@ export const penRevision = (settings: ReadonlyMap<string, string>, keygen: strin
     .update([...bound, `userknownhostsfile ${knownHostsFile}`, "", ...keys].join("\n"))
     .digest("hex")}`;
 };
+
+export const PEN_EXACT_ALIAS = /^pen-([a-z2-7]{26})$/u;
+const PEN_EXACT_PIPE = new RegExp(
+  `^(?:env PEN_HOME=${QUOTED} )?'(?:[^']|'\\\\'')*/pen' pipe --node ([a-z2-7]{26}) --noise ([A-Za-z0-9_-]{43}) 22$`,
+  "u",
+);
+
+export const penExactAliasRoute = (settings: ReadonlyMap<string, string>) => {
+  const match = PEN_EXACT_PIPE.exec(settings.get("proxycommand") ?? "");
+  const file = settings.get("userknownhostsfile");
+  return match !== null &&
+    unset(settings.get("proxyjump")) &&
+    settings.get("stricthostkeychecking") === "true" &&
+    unset(settings.get("knownhostscommand")) &&
+    settings.get("controlmaster") === "false" &&
+    settings.get("controlpath") === "none" &&
+    file !== undefined &&
+    /^\/\S+$/u.test(file)
+    ? { nodeId: match[1], noisePub: match[2], knownHostsFile: file }
+    : undefined;
+};
+
+export type PenRouteRefusal =
+  | "not-in-pen-config"
+  | "not-pen-route"
+  | "node-mismatch"
+  | "known-hosts-not-pen"
+  | "global-known-hosts"
+  | "no-recorded-key"
+  | "marker-lines";
+export interface PenAliasFacts {
+  readonly alias: string;
+  readonly configHosts: ReadonlyArray<string>;
+  readonly settings: ReadonlyMap<string, string>;
+  readonly penKnownHosts: string;
+  readonly globalKey: boolean;
+  readonly recorded: string;
+}
+
+export const penExactAliasDecision = (
+  facts: PenAliasFacts,
+):
+  | { readonly nodeId: string; readonly noisePub: string; readonly revision: string }
+  | PenRouteRefusal => {
+  if (!facts.configHosts.includes(facts.alias)) return "not-in-pen-config";
+  const alias = PEN_EXACT_ALIAS.exec(facts.alias);
+  const route = penExactAliasRoute(facts.settings);
+  if (
+    !alias ||
+    !route ||
+    !route.nodeId ||
+    !route.noisePub ||
+    facts.settings.get("hostname") !== facts.alias ||
+    facts.settings.get("port") !== "22" ||
+    !unset(facts.settings.get("hostkeyalias"))
+  )
+    return "not-pen-route";
+  if (route.nodeId !== alias[1]) return "node-mismatch";
+  if (route.knownHostsFile !== facts.penKnownHosts) return "known-hosts-not-pen";
+  if (facts.globalKey) return "global-known-hosts";
+  const keys = facts.recorded
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .toSorted();
+  if (keys.length === 0) return "no-recorded-key";
+  if (keys.some((line) => line.startsWith("@"))) return "marker-lines";
+  const bound = [...BOUND, "controlmaster", "controlpath"].map(
+    (key) => `${key} ${facts.settings.get(key) ?? ""}`,
+  );
+  const revision = `pen:${NodeCrypto.createHash("sha256")
+    .update([...bound, `userknownhostsfile ${route.knownHostsFile}`, "", ...keys].join("\n"))
+    .digest("hex")}`;
+  return { nodeId: route.nodeId, noisePub: route.noisePub, revision };
+};

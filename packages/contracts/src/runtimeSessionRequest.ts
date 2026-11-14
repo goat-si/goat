@@ -4,6 +4,7 @@ import { AuthGrantScope } from "./auth.ts";
 import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ChildSetupPurpose } from "./opencodexChildReady.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
+import { PenId } from "./penSettings.ts";
 
 /**
  * Issues a credential from the running server itself, for an SSH client attaching to a server it
@@ -22,6 +23,13 @@ const RuntimeCredentialLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(20
  * Home can withdraw a Child setup bearer it delegated without opening that server's database.
  */
 export const RuntimeSessionRequest = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("pen-member-session"),
+    nodeId: PenId,
+    scopes: Schema.NonEmptyArray(AuthGrantScope),
+    ttl: RuntimeCredentialTtl,
+    label: Schema.optionalKey(RuntimeCredentialLabel),
+  }),
   Schema.Struct({
     kind: Schema.Literal("session"),
     subject: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),

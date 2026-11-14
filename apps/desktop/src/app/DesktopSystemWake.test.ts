@@ -86,6 +86,7 @@ describe("DesktopSystemWake", () => {
                 status: () => Effect.die("unused"),
                 update: () => Effect.die("unused"),
                 disconnectEnvironment: () => Effect.die("unused"),
+                issuePenMemberSession: () => Effect.die("unused"),
                 revalidateTunnels: Effect.sync(() => {
                   tunnelRevalidations += 1;
                 }),

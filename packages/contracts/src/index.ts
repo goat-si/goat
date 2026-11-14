@@ -32,6 +32,7 @@ export * from "./desktopAppActivation.ts";
 export * from "./remoteAccess.ts";
 export * from "./sshHost.ts";
 export * from "./ipc.ts";
+export * from "./penMembers.ts";
 export * from "./desktopPermissions.ts";
 export * from "./desktopWindowMaterial.ts";
 export * from "./snoozePresets.ts";

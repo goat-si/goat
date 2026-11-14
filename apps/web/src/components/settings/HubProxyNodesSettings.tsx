@@ -17,6 +17,7 @@ import {
   canShowHubProxySettings,
   hubProxyFailureMessage,
   hubProxyNodeActions,
+  hubProxyPenNotice,
 } from "./HubProxyNodesSettings.logic";
 
 const hubProxyEnvironment = createHubProxyEnvironmentAtoms(connectionAtomRuntime);
@@ -59,6 +60,7 @@ function HubProxyNodeRow({
   const [scopes, setScopes] = useState<readonly AuthEnvironmentScope[] | null>(null);
   const [removed, setRemoved] = useState(false);
   const actions = hubProxyNodeActions(node);
+  const penNotice = hubProxyPenNotice(node);
   const target = { environmentId, input: { nodeId: node.nodeId } };
   const setup = async () => {
     setBusy("prepare");
@@ -128,6 +130,7 @@ function HubProxyNodeRow({
       {actions.reachable ? (
         <p className="text-xs text-muted-foreground">Reachable from paired phones</p>
       ) : null}
+      {penNotice !== null ? <p className="text-xs text-muted-foreground">{penNotice}</p> : null}
       {actions.linked ? (
         <div className="space-y-2">
           <Input

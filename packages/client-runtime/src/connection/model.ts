@@ -146,6 +146,7 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
     ...ConnectionFailureFields,
 
     serverUpdateRequired: Schema.optionalKey(Schema.Boolean),
+    existingRuntimeRequired: Schema.optionalKey(Schema.Boolean),
     localProxyUnavailable: Schema.optionalKey(Schema.Boolean),
   },
 ) {

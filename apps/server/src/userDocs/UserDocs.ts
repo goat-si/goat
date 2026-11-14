@@ -172,7 +172,8 @@ function window(text: string, offset: number) {
   if (text.length - offset <= USER_GUIDE_READ_LIMIT)
     return { markdown: text.slice(offset), next: null };
   const hardEnd = offset + USER_GUIDE_READ_LIMIT;
-  const lineEnd = text.lastIndexOf("\n", hardEnd);
+  // The newline is kept in the part, so it may sit no later than the last allowed character.
+  const lineEnd = text.lastIndexOf("\n", hardEnd - 1);
   const end = lineEnd > offset + USER_GUIDE_READ_LIMIT / 2 ? lineEnd + 1 : hardEnd;
   return { markdown: text.slice(offset, end), next: end };
 }

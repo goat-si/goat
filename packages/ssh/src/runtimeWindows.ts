@@ -1,3 +1,4 @@
+import { existingOnly, existingOnlyError } from "./existingOnly.ts";
 import {
   AuthSessionId,
   type DesktopSshEnvironmentTarget,
@@ -266,6 +267,7 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
   notifyRuntimePhase(target, "checking", onPhase);
   let state = yield* inspectWindowsRuntime(target, auth, version);
   if (state.selection === null) {
+    if (existingOnly(runner)) return yield* existingOnlyError(target.alias);
     if (runner?.keepExistingRunner === true)
       return yield* failure(`GOAT is not installed on ${target.alias}.`);
     // The same bundle, cache, HTTPS and gh sources as POSIX, with their integrity checks.
