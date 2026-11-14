@@ -23,7 +23,7 @@ export type PenAliases = ReadonlyMap<
 >;
 
 /** An alias as ssh compares it: case-insensitive, and a trailing dot names the same host. */
-export const normalAlias = (alias: string) => alias.trim().toLowerCase().replace(/\.$/u, "");
+const normalAlias = (alias: string) => alias.trim().toLowerCase().replace(/\.$/u, "");
 
 const ed25519Fingerprint = (key: string) =>
   "SHA256:" +
