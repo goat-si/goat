@@ -5,6 +5,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
 import type {
+  ReviewCommentContextRecord,
   ThreadContextRecord,
   UserInputQuestion as ProviderUserInputQuestion,
 } from "@goat/contracts";
@@ -29,13 +30,15 @@ type UserInputQuestion = ProviderUserInputQuestion & { readonly required?: boole
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
   answer: unknown,
-  threadContexts: ReadonlyArray<ThreadContextRecord>,
+  records: ReadonlyArray<ThreadContextRecord | ReviewCommentContextRecord>,
 ) {
-  if (typeof answer !== "string" || threadContexts.length === 0) return answer;
-  const recordsById = new Map(threadContexts.map((record) => [record.contextId, record]));
+  if (typeof answer !== "string" || records.length === 0) return answer;
+  const recordsById = new Map(records.map((record) => [record.contextId, record]));
   return replaceComposerContextReferences(answer, (reference) => {
-    const record = reference.kind === "thread" ? recordsById.get(reference.contextId) : undefined;
-    if (!record) return reference.source;
+    const record = recordsById.get(reference.contextId);
+    if (record?.kind !== reference.kind) return reference.source;
+    if (record.kind === "review-comment")
+      return projectComposerContextForProvider({ text: reference.source, records: [record] });
     // Remote thread tools need the SSH alias as well as the ID; a local-only link loses it.
     return record.host === undefined
       ? formatThreadLink(record.threadId, reference.label)
