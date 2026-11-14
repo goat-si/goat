@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
@@ -36,6 +38,10 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
     readonly legacyUnit?: boolean;
     readonly servicePlistThroughLink?: boolean;
     readonly linuxLookupFailure?: boolean;
+    readonly linuxNoSystemd?: boolean;
+    readonly staleUsedBy?: "process" | "path";
+    readonly linuxUnit?: "current" | "legacy" | "unreadable";
+    readonly customConfig?: boolean;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -53,7 +59,23 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
       yield* fs.utimes(sentinel, 0, 0);
     }
     if (input.symlinkedHome) yield* fs.symlink(realHome, baseDir);
+    const binDir = path.join(tempDir, "bin");
+    if (input.staleUsedBy === "path") {
+      yield* fs.makeDirectory(binDir);
+      yield* fs.symlink(path.join(versionsDir, staleVersion, "goat"), path.join(binDir, "goat"));
+    }
     const userHome = path.join(tempDir, "user");
+    const configDir = input.customConfig
+      ? path.join(tempDir, "custom-config")
+      : path.join(userHome, ".config");
+    const linuxUnitDir = path.join(configDir, "systemd", "user");
+    if (input.linuxUnit === "current" || input.linuxUnit === "legacy") {
+      yield* fs.makeDirectory(linuxUnitDir, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(linuxUnitDir, input.linuxUnit === "current" ? "goat.service" : "t3code.service"),
+        `[Service]\nExecStart=${path.join(versionsDir, staleVersion, "goat")} __service-launcher\n`,
+      );
+    }
     if (input.servicePlistStarts !== undefined) {
       const agentsDir = path.join(userHome, "Library", "LaunchAgents");
       yield* fs.makeDirectory(agentsDir, { recursive: true });
@@ -90,14 +112,45 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
       input.executable === "own runtime"
         ? yield* fs.realPath(path.join(versionsDir, packageJson.version, "goat"))
         : "/usr/local/bin/node";
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ message, logLevel }) => {
+      if (logLevel === "Warn") warnings.push(...(Array.isArray(message) ? message : [message]));
+    });
     const removed = yield* ServerSelfUpdate.pruneRuntimesOnStart({
       baseDir,
       managed: input.managed ?? false,
     }).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
       Effect.provideService(FileSystem.FileSystem, {
         ...fs,
+        stat: (file) =>
+          file === "/run/systemd/system" && input.linuxLookupFailure
+            ? fs.stat(tempDir)
+            : file === "/run/systemd/system" && input.linuxNoSystemd
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "stat",
+                    pathOrDescriptor: file,
+                  }),
+                )
+              : fs.stat(file),
+        readDirectory: (directory, options) =>
+          (input.linuxLookupFailure || input.linuxNoSystemd) && directory === "/proc"
+            ? Effect.succeed(["42"])
+            : fs.readDirectory(directory, options),
+        readLink: (file) =>
+          (input.linuxLookupFailure || input.linuxNoSystemd) && file === "/proc/42/exe"
+            ? Effect.succeed(
+                input.staleUsedBy === "process"
+                  ? path.join(versionsDir, staleVersion, "goat")
+                  : "/usr/bin/unrelated",
+              )
+            : fs.readLink(file),
         readFileString: (file, options) =>
-          input.unreadableUnit && file.endsWith("si.goat.service.plist")
+          (input.unreadableUnit && file.endsWith("si.goat.service.plist")) ||
+          (input.linuxUnit === "unreadable" && file === path.join(linuxUnitDir, "goat.service"))
             ? Effect.fail(
                 PlatformError.systemError({
                   _tag: "PermissionDenied",
@@ -109,12 +162,26 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
             : fs.readFileString(file, options),
       }),
       Effect.provideService(HostProcess.ExecutablePath, executablePath),
-      Effect.provideService(HostProcess.Platform, input.linuxLookupFailure ? "linux" : "darwin"),
+      Effect.provideService(
+        HostProcess.Platform,
+        input.linuxLookupFailure || input.linuxNoSystemd ? "linux" : "darwin",
+      ),
       Effect.provideService(
         HostProcess.Environment,
-        input.linuxLookupFailure ? { XDG_CONFIG_HOME: path.join(userHome, "other-config") } : {},
+        input.linuxLookupFailure
+          ? { XDG_CONFIG_HOME: path.join(userHome, "other-config") }
+          : input.staleUsedBy === "path"
+            ? { PATH: binDir }
+            : {},
       ),
       Effect.provideService(HostProcess.HomeDirectory, userHome),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { HOME: userHome, ...(input.customConfig ? { XDG_CONFIG_HOME: configDir } : {}) },
+          }),
+        ),
+      ),
       Effect.provideService(
         ProcessRunner.ProcessRunner,
         input.linuxLookupFailure
@@ -136,7 +203,7 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
           : otherProcesses,
       ),
     );
-    return { removed, remaining: (yield* fs.readDirectory(versionsDir)).toSorted() };
+    return { removed, remaining: (yield* fs.readDirectory(versionsDir)).toSorted(), warnings };
   });
 
   // The SSH launcher runs `goat serve` straight from the pinned runtime, with no boot service.
@@ -188,6 +255,51 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
       expect(removed).toEqual([]);
       expect(remaining).toEqual([staleVersion, packageJson.version].toSorted());
     }),
+  );
+
+  it.effect("prunes on Linux without systemd while protecting the running runtime", () =>
+    Effect.gen(function* () {
+      const { removed, remaining } = yield* pruneOnStart({
+        executable: "own runtime",
+        linuxNoSystemd: true,
+      });
+      expect(removed).toEqual([staleVersion]);
+      expect(remaining).toEqual([packageJson.version]);
+    }),
+  );
+
+  it.effect.each([
+    { unit: "current", customConfig: false },
+    { unit: "current", customConfig: true },
+    { unit: "legacy", customConfig: false },
+    { unit: "unreadable", customConfig: false },
+  ] as const)("protects a $unit unit without systemd", ({ unit, customConfig }) =>
+    Effect.gen(function* () {
+      const { removed, remaining, warnings } = yield* pruneOnStart({
+        executable: "own runtime",
+        linuxNoSystemd: true,
+        linuxUnit: unit,
+        customConfig,
+      });
+      expect(removed).toEqual([]);
+      expect(remaining).toEqual([staleVersion, packageJson.version].toSorted());
+      if (unit === "unreadable")
+        expect(warnings).toContain("Could not inspect the service unit; skipping runtime pruning");
+    }),
+  );
+
+  it.effect.each(["process", "path"] as const)(
+    "keeps a runtime referenced by a %s without systemd",
+    (staleUsedBy) =>
+      Effect.gen(function* () {
+        const { removed, remaining } = yield* pruneOnStart({
+          executable: "own runtime",
+          linuxNoSystemd: true,
+          staleUsedBy,
+        });
+        expect(removed).toEqual([]);
+        expect(remaining).toEqual([staleVersion, packageJson.version].toSorted());
+      }),
   );
 
   it.effect("does not prune when a service unit cannot be inspected", () =>

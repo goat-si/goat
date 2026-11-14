@@ -8,6 +8,14 @@ const decodeSystemdUnitPaths = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ data: Schema.Array(Schema.String) })),
 );
 
+export function defaultSystemdUnitDirectory(path: Path.Path, home: string, xdgConfigHome: string) {
+  return path.join(
+    path.isAbsolute(xdgConfigHome) ? xdgConfigHome : path.join(home, ".config"),
+    "systemd",
+    "user",
+  );
+}
+
 // The manager may not share the installer's environment; JSON preserves spaces in its paths.
 export const readSystemdUnitDirectory = Effect.fn("cloud.boot_service.read_systemd_unit_directory")(
   function* () {
