@@ -133,6 +133,17 @@ export const fakeEnrollHost = () => {
     holdRevoke: undefined as Hold | undefined,
     journal,
     links,
+    /** The link row an add left residual, unknown or open would commit. */
+    pendingLinks: new Map<string, Record<string, unknown>>(),
+    /** A Home that kept running an open or unsettled add commits it now. */
+    commit: (operationId: string) => {
+      const operation = journal.get(operationId);
+      const row = operation === undefined ? undefined : control.pendingLinks.get(operation.linkId);
+      if (operation === undefined || row === undefined)
+        throw new Error("no pending add " + operationId);
+      operation.state = "committed";
+      links.set(operation.linkId, row);
+    },
     /** The Home pruned this settled entry, as it may after 2 hours. */
     forget: (operationId: string) => journal.delete(operationId),
   };
@@ -172,16 +183,7 @@ export const fakeEnrollHost = () => {
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);
-    if (typeof script === "object" && "failedClean" in script) {
-      operation.state = "failed_clean";
-      operation.code = script.failedClean;
-      return output(1);
-    }
-    if (script === "residual" || script === "unknown" || script === "open") {
-      operation.state = script;
-      return output(1);
-    }
-    links.set(linkId, {
+    const linkRow = {
       id: linkId,
       alias,
       childKind: "ephemeral",
@@ -191,7 +193,18 @@ export const fakeEnrollHost = () => {
         user: args[args.indexOf("--ssh-user") + 1],
         port: Number(args[args.indexOf("--ssh-port") + 1]),
       },
-    });
+    };
+    if (typeof script === "object" && "failedClean" in script) {
+      operation.state = "failed_clean";
+      operation.code = script.failedClean;
+      return output(1);
+    }
+    if (script === "residual" || script === "unknown" || script === "open") {
+      operation.state = script;
+      control.pendingLinks.set(linkId, linkRow);
+      return output(1);
+    }
+    links.set(linkId, linkRow);
     return output(script === "commit" ? 0 : 1, json({ linkId, alias }));
   };
   const service = EnrollHost.of({
