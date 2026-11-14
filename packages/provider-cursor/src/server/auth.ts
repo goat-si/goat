@@ -22,6 +22,7 @@ import { loadCursorSdk } from "./sdk.ts";
 import type { ProviderAuthController } from "@goat/provider-core/server/auth";
 
 const AUTH_TIMEOUT_MS = 300_000;
+const VERIFY_TIMEOUT_MS = 30_000;
 
 interface AuthFlow {
   readonly id: string;
@@ -269,7 +270,20 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 cause,
               }),
           });
-          yield* options.verifyKey(credentials.apiKey, credentials.backendUrl);
+          yield* options.verifyKey(credentials.apiKey, credentials.backendUrl).pipe(
+            Effect.timeoutOrElse({
+              duration: VERIFY_TIMEOUT_MS,
+              orElse: () =>
+                Effect.fail(
+                  new ProviderSetupError({
+                    instanceId: options.instanceId,
+                    operation: "start",
+                    detail: "Could not verify the Cursor browser sign-in. Try again.",
+                  }),
+                ),
+            }),
+            Effect.interruptible,
+          );
           yield* Effect.tryPromise({
             try: () => options.store.save(credentials),
             catch: (cause) =>

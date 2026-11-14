@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { makeCursorAuth, type CursorAuthOptions } from "./auth.ts";
 import { loadCursorSdk } from "./sdk.ts";
@@ -81,6 +82,30 @@ const phase = (auth: Auth, phase: ProviderAuthState["phase"], session = owner) =
   );
 
 it.layer(NodeServices.layer)("CursorAuth", (it) => {
+  it.effect("fails stalled verification and permits sign-out after the verification deadline", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          verifyKey: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        });
+        yield* harness.auth.controller.start(owner);
+        yield* phase(harness.auth, "waiting");
+        harness.complete.resolve();
+        yield* Deferred.await(entered);
+        const failed = yield* phase(harness.auth, "failed").pipe(Effect.forkScoped);
+        yield* TestClock.adjust("31 seconds");
+        const result = failed.pollUnsafe();
+        expect(result, "verification should fail by the deadline").toBeDefined();
+        const state = yield* Fiber.join(failed);
+        expect(state.message).toContain("verify");
+        expect(yield* Effect.promise(() => harness.store.load())).toBeUndefined();
+        expect((yield* harness.auth.controller.logout(Effect.void)).phase).toBe("idle");
+      }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+    }).pipe(Effect.scoped),
+  );
   it.effect("refuses admission when sign-out follows validation of a captured key", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
