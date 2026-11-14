@@ -24,9 +24,15 @@ export interface ThreadPullRequestColumns {
   readonly pull_requests_deleted_at: string | null;
 }
 
-/** A projection thread `p`'s links and what decides their refresh, its payload parsed once. */
+/**
+ * A projection thread `p`'s links and what decides their refresh, its payload parsed once. A
+ * payload that is not JSON yields text no decoder accepts, so it reads as unreadable, not missing.
+ */
 export const threadPullRequestColumns = (sql: SqlClient.SqlClient) =>
-  sql`json_extract(p.payload_json, '$.pullRequests', '$.settledAt', '$.settledOverride', '$.archivedAt') AS pull_requests_json,
+  sql`CASE WHEN p.thread_id IS NULL THEN NULL
+      WHEN json_valid(p.payload_json)
+        THEN json_extract(p.payload_json, '$.pullRequests', '$.settledAt', '$.settledOverride', '$.archivedAt')
+      ELSE 'invalid' END AS pull_requests_json,
     p.deleted_at AS pull_requests_deleted_at`;
 
 // Only what a row shows; a link's snapshot and watch details are not decoded.
