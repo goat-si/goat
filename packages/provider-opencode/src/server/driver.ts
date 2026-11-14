@@ -61,7 +61,12 @@ import {
 } from "@goat/provider-core/server/driver";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
-import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
+import {
+  classifySpawnFailure,
+  isCommandMissingCause,
+  providerProbeEnvironment,
+} from "@goat/provider-core/server/snapshotProbe";
+import { findSpawnFailure } from "./spawnFailure.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -161,6 +166,7 @@ function selectOpenCodeRuntimeTextGeneration(
   currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>,
   memoryContext: MemoryGenerationRunnerContext,
   external: boolean,
+  binaryPath: string,
   v1: ProviderTextGeneration,
   v2: ProviderTextGeneration,
 ): ProviderTextGeneration {
@@ -189,18 +195,35 @@ function selectOpenCodeRuntimeTextGeneration(
     operation: string,
     probe: Effect.Effect<ProbedOpenCode | undefined, PE>,
     paths: { readonly v1: Effect.Effect<A, E, R>; readonly v2: Effect.Effect<A, E, R> },
+    memory = false,
   ) =>
     currentEnvironment.pipe(
       Effect.flatMap((environment) =>
         probe.pipe(
-          Effect.mapError(
-            (cause) =>
-              new TextGenerationError({
-                operation,
-                detail: "Could not determine the OpenCode runtime version.",
-                cause,
-              }),
-          ),
+          Effect.mapError((cause) => {
+            const spawn = findSpawnFailure(cause);
+            const failure =
+              spawn === undefined
+                ? undefined
+                : classifySpawnFailure(cause, spawn.cwd, undefined, {
+                    binary: binaryPath,
+                    env: { PATH: spawn.path },
+                  });
+            const unavailable =
+              !external &&
+              memory &&
+              (failure === "missing" ||
+                failure === "permission_denied" ||
+                failure === "exec_failed" ||
+                (spawn === undefined &&
+                  OpenCodeRuntime.isOpenCodeRuntimeError(cause) &&
+                  isCommandMissingCause(cause.cause)));
+            return new TextGenerationError({
+              operation,
+              detail: "Could not determine the OpenCode runtime version.",
+              cause: unavailable ? new MemoryGenerationRunnerError({ code: "unavailable" }) : cause,
+            });
+          }),
           Effect.flatMap((result) => (result?.generation === "v2" ? paths.v2 : paths.v1)),
           Effect.provideService(LaunchEnvironment, environment),
         ),
@@ -218,31 +241,41 @@ function selectOpenCodeRuntimeTextGeneration(
     resolveMemoryConflict: (input) =>
       memoryPreflight("resolveMemoryConflict", input.modelSelection).pipe(
         Effect.andThen(
-          select("resolveMemoryConflict", resolve, {
-            v1:
-              v1.resolveMemoryConflict === undefined
-                ? unsupportedMemory("resolveMemoryConflict")
-                : v1.resolveMemoryConflict(input),
-            v2:
-              v2.resolveMemoryConflict === undefined
-                ? unsupportedMemory("resolveMemoryConflict")
-                : v2.resolveMemoryConflict(input),
-          }),
+          select(
+            "resolveMemoryConflict",
+            resolve,
+            {
+              v1:
+                v1.resolveMemoryConflict === undefined
+                  ? unsupportedMemory("resolveMemoryConflict")
+                  : v1.resolveMemoryConflict(input),
+              v2:
+                v2.resolveMemoryConflict === undefined
+                  ? unsupportedMemory("resolveMemoryConflict")
+                  : v2.resolveMemoryConflict(input),
+            },
+            true,
+          ),
         ),
       ),
     generateMemorySummary: (input) =>
       memoryPreflight("generateMemorySummary", input.modelSelection).pipe(
         Effect.andThen(
-          select("generateMemorySummary", resolve, {
-            v1:
-              v1.generateMemorySummary === undefined
-                ? unsupportedMemory("generateMemorySummary")
-                : v1.generateMemorySummary(input),
-            v2:
-              v2.generateMemorySummary === undefined
-                ? unsupportedMemory("generateMemorySummary")
-                : v2.generateMemorySummary(input),
-          }),
+          select(
+            "generateMemorySummary",
+            resolve,
+            {
+              v1:
+                v1.generateMemorySummary === undefined
+                  ? unsupportedMemory("generateMemorySummary")
+                  : v1.generateMemorySummary(input),
+              v2:
+                v2.generateMemorySummary === undefined
+                  ? unsupportedMemory("generateMemorySummary")
+                  : v2.generateMemorySummary(input),
+            },
+            true,
+          ),
         ),
       ),
     generateCommitMessage: (input) =>
@@ -574,6 +607,7 @@ export const OpenCodeDriver: ProviderDriver<
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
       effectiveConfig.serverUrl.trim().length > 0,
+      effectiveConfig.binaryPath,
       yield* makeOpenCodeTextGeneration(effectiveConfig, {
         environment: processEnv,
         currentEnvironment,
