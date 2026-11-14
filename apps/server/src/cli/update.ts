@@ -682,18 +682,21 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
 
   // A handed-off service install rewrites the unit later, while the old launcher may be stopped.
-  if (servicePlan?.handedOff !== true) {
-    const references = yield* bootServiceRuntimeReferences();
-    if (references !== undefined) {
-      yield* prunePinnedRuntimes({
-        baseDir: input.baseDir,
-        keep: [currentVersion, targetVersion],
-        references,
-      });
-    }
+  const references = servicePlan?.handedOff === true ? null : yield* bootServiceRuntimeReferences();
+  if (references !== null && references !== undefined) {
+    yield* prunePinnedRuntimes({
+      baseDir: input.baseDir,
+      keep: [currentVersion, targetVersion],
+      references,
+    });
   }
 
   progress.success(`Installed GOAT ${targetVersion}`);
+  if (references === undefined) {
+    yield* Console.log(
+      "  Kept older GOAT versions: which one the background service starts could not be checked.\n",
+    );
+  }
   const npmUpdate = yield* resolveNpmUpdateCommand(targetVersion);
   if (npmUpdate !== undefined) {
     yield* Console.log(

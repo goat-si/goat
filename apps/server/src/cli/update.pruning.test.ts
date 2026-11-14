@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -86,6 +87,13 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
       const logger = Logger.make(({ message, logLevel }) => {
         if (logLevel === "Warn") warnings.push(...(Array.isArray(message) ? message : [message]));
       });
+      const printed: string[] = [];
+      const testConsole = {
+        ...globalThis.console,
+        log: (...args: ReadonlyArray<unknown>) => {
+          printed.push(args.join(" "));
+        },
+      } satisfies Console.Console;
       try {
         yield* Command.runWith(updateCommand, { version: "0.1.0" })([
           target,
@@ -132,6 +140,7 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
           Effect.provideService(HostProcess.HomeDirectory, h.home),
           Effect.provideService(HostProcess.UserId, 501),
           Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(Console.Console, testConsole),
           Effect.provide(
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
@@ -141,6 +150,9 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
           ),
         );
         expect(yield* fs.exists(staleDir)).toBe(keep);
+        expect(printed.some((line) => line.includes("Kept older GOAT versions"))).toBe(
+          lookupFails || unit.startsWith("unreadable"),
+        );
         if (scenario === "systemd absent unreadable unit") {
           expect(warnings).toContain(
             "Could not inspect the service unit; skipping runtime pruning",
