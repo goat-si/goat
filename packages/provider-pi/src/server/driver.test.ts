@@ -156,7 +156,6 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
       const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
       const first = yield* instance.snapshot.resolveMaintenance();
       assert.strictEqual(first.update?.executable, `${oldDir}/custom-pi`);
-      yield* fs.remove(`${oldDir}/custom-pi`);
       assert.strictEqual(
         (yield* instance.snapshot.resolveMaintenance()).update?.executable,
         first.update?.executable,
@@ -165,6 +164,22 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
       assert.strictEqual(
         (yield* instance.snapshot.resolveMaintenance()).update?.executable,
         `${newDir}/custom-pi`,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("maintenance notices an executable installed into an unchanged PATH", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const host = { PATH: root, HOME: root };
+      const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+      assert.isNull((yield* instance.snapshot.resolveMaintenance()).update);
+      yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+      yield* fs.chmod(`${root}/custom-pi`, 0o755);
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        `${root}/custom-pi`,
       );
     }).pipe(Effect.scoped),
   );

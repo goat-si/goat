@@ -4,6 +4,7 @@ import { PiSettings } from "../settings.ts";
 import { OmoSettings } from "../omoSettings.ts";
 import { OMO_PROFILE, PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -121,9 +122,12 @@ const makePiFamilyDriver = (
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
-      const maintenanceForEnvironment = (env: NodeJS.ProcessEnv) =>
+      const maintenanceForEnvironment = (
+        env: NodeJS.ProcessEnv,
+        binaryPath = effectiveConfig.binaryPath,
+      ) =>
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
+          binaryPath,
           env,
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -134,29 +138,42 @@ const makePiFamilyDriver = (
         currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
         {
           key: currentEnvironment.pipe(
-            Effect.map((env) =>
-              JSON.stringify({
-                binaryPath: effectiveConfig.binaryPath,
-                PATH: env.PATH,
-                Path: env.Path,
-                path: env.path,
-                PATHEXT: env.PATHEXT,
-                Pathext: env.Pathext,
-              }),
+            Effect.flatMap((env) =>
+              Effect.suspend(() =>
+                resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+                  Effect.provideService(CommandResolutionCache, new Map()),
+                ),
+              ).pipe(
+                Effect.map((resolved) =>
+                  JSON.stringify({
+                    binaryPath: resolved ?? "missing",
+                    PATH: env.PATH,
+                    Path: env.Path,
+                    path: env.path,
+                    PATHEXT: env.PATHEXT,
+                    Pathext: env.Pathext,
+                  }),
+                ),
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, pathService),
+              ),
             ),
           ),
           resolve: (key) => {
             const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
             return currentEnvironment.pipe(
               Effect.flatMap((env) =>
-                maintenanceForEnvironment({
-                  ...env,
-                  PATH: lookupEnv.PATH,
-                  Path: lookupEnv.Path,
-                  path: lookupEnv.path,
-                  PATHEXT: lookupEnv.PATHEXT,
-                  Pathext: lookupEnv.Pathext,
-                }),
+                maintenanceForEnvironment(
+                  {
+                    ...env,
+                    PATH: lookupEnv.PATH,
+                    Path: lookupEnv.Path,
+                    path: lookupEnv.path,
+                    PATHEXT: lookupEnv.PATHEXT,
+                    Pathext: lookupEnv.Pathext,
+                  },
+                  lookupEnv.binaryPath === "missing" ? "" : lookupEnv.binaryPath,
+                ),
               ),
             );
           },
