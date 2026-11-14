@@ -1,5 +1,14 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, EventId, MessageId, NodeId, ProjectId, RunId, ThreadId } from "@goat/contracts";
+import {
+  CommandId,
+  EventId,
+  MessageId,
+  NodeId,
+  ProjectId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2Run,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

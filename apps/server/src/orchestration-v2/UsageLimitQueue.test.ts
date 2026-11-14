@@ -63,7 +63,6 @@ it.layer(layerTest)("limited provider queue", (it) => {
           projectId: ProjectId.make(`${threadId}:project`),
           title: "Limit switch",
           modelSelection,
-          alternateInstanceId,
           runtimeMode: "full-access",
           interactionMode: "default",
           branch: null,
