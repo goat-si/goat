@@ -97,10 +97,18 @@ function stripStringTerminator(value: string): string {
   return value;
 }
 
-function findStringTerminatorIndex(input: string, start: number): number | null {
+function findStringTerminatorIndex(
+  input: string,
+  start: number,
+  belTerminates: boolean,
+): number | null {
   for (let index = start; index < input.length; index += 1) {
     const codePoint = input.charCodeAt(index);
-    if (codePoint === 0x07 || codePoint === 0x9c || isControlSequenceCancel(codePoint)) {
+    if (
+      (belTerminates && codePoint === 0x07) ||
+      codePoint === 0x9c ||
+      isControlSequenceCancel(codePoint)
+    ) {
       return index + 1;
     }
     if (codePoint === 0x1b) {
@@ -191,6 +199,7 @@ export function sanitizeTerminalHistoryChunk(
         const terminatorIndex = findStringTerminatorIndex(
           input,
           Math.max(index + 2, pendingScanStart),
+          nextCodePoint === 0x5d,
         );
         if (terminatorIndex === null) {
           return { visibleText, pendingControlSequence: input.slice(index) };
