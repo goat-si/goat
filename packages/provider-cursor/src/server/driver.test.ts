@@ -391,7 +391,7 @@ it.layer(layerTest)("CursorDriver", (it) => {
   );
 
   it.effect(
-    "regression #3079: verifies browser credentials at their issuer when the backend changes during login",
+    "regression #3079: refuses browser verification when the backend changes during login",
     () =>
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
@@ -448,8 +448,8 @@ it.layer(layerTest)("CursorDriver", (it) => {
           Stream.runHead,
           Effect.map(Option.getOrThrow),
         );
-        expect(authorizations).toContain("Bearer invalid-browser");
-        expect(verificationUrls).toEqual(["https://api2.cursor.sh/v1/me"]);
+        expect(authorizations).not.toContain("Bearer invalid-browser");
+        expect(verificationUrls).toEqual([]);
         expect(state.phase).toBe("failed");
       }).pipe(Effect.scoped),
   );
@@ -527,7 +527,9 @@ it.layer(layerTest)("CursorDriver", (it) => {
           Stream.runHead,
           Effect.map(Option.getOrThrow),
         );
-        expect(requests).toContainEqual({
+        expect(
+          requests.find((request) => request.authorization === "Bearer instance-browser-key"),
+        ).toEqual({
           url: "https://api.cursor.com/v1/me",
           authorization: "Bearer instance-browser-key",
         });
