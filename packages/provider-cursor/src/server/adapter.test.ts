@@ -37,8 +37,8 @@ import {
   cursorRuntimeAgentPolicy,
   makeCursorAgentOptions,
   makeCursorAdapterV2,
-  nestedToolCallFromEnvelope,
 } from "./adapter.ts";
+import { nestedToolCallFromEnvelope } from "./conversationSteps.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
 
