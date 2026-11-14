@@ -1,4 +1,5 @@
 import { describeUserInputResponder, type UserInputAttachmentAnswerPayload } from "@goat/contracts";
+import { composerContextProviderTextForDisplay } from "@goat/shared/composerContextReferences";
 
 /** Additional history detail for recorded agent and client answers. */
 export function getQuestionAnswerAttribution(
@@ -9,7 +10,6 @@ export function getQuestionAnswerAttribution(
     ? null
     : `Answered by ${describeUserInputResponder({ respondedBy: responder })}: ${responder.reason}`;
 }
-import { composerContextProviderTextForDisplay } from "@goat/shared/composerContextReferences";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
