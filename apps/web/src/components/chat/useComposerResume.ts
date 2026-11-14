@@ -1,4 +1,4 @@
-import { canResumeThread } from "@goat/client-runtime/state/threadExecution";
+import { canResumeThread } from "@goat/client-runtime/state/thread-execution";
 import {
   type EnvironmentId,
   type ProviderInteractionMode,
