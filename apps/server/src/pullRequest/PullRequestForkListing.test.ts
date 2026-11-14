@@ -156,14 +156,14 @@ function forkProject(id: string, workspaceRoot: string): OrchestrationProjectShe
   return {
     ...base,
     repositoryIdentity: {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/sample-tools/upstream",
       locator: {
         source: "git-remote",
         remoteName: "upstream",
-        remoteUrl: "https://github.com/pingdotgg/t3code.git",
+        remoteUrl: "https://github.com/sample-tools/upstream.git",
       },
       provider: SourceControlProviderKind.make("github"),
-      displayName: "pingdotgg/t3code",
+      displayName: "sample-tools/upstream",
       origin: {
         canonicalKey: "github.com/goat-si/goat",
         remoteUrl: "https://github.com/goat-si/goat.git",
@@ -214,13 +214,17 @@ it.effect("lists a fork's own repository and leaves its upstream out unless aske
 
     listed.length = 0;
     const withUpstream = yield* service.list({ state: "open", includeUpstream: true });
-    assert.deepStrictEqual(listed.toSorted(), ["acme/web", "goat-si/goat", "pingdotgg/t3code"]);
+    assert.deepStrictEqual(listed.toSorted(), [
+      "acme/web",
+      "goat-si/goat",
+      "sample-tools/upstream",
+    ]);
     assert.deepStrictEqual(
       withUpstream.entries
         .filter((entry) => entry.projectId === "p1")
         .map((entry) => entry.repository)
         .toSorted(),
-      ["goat-si/goat", "pingdotgg/t3code"],
+      ["goat-si/goat", "sample-tools/upstream"],
     );
   }),
 );
@@ -233,7 +237,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
           id: "p2",
           title: "t3code",
           workspaceRoot: "/t3",
-          repository: "pingdotgg/t3code",
+          repository: "sample-tools/upstream",
         }),
         forkProject("p1", "/goat"),
       ],
@@ -255,7 +259,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
     const { stats } = yield* service.listStats({
       refs: [
         { projectId: "p1" as ProjectId, repository: "goat-si/goat", number: 1 },
-        { projectId: "p1" as ProjectId, repository: "pingdotgg/t3code", number: 1 },
+        { projectId: "p1" as ProjectId, repository: "sample-tools/upstream", number: 1 },
       ],
     });
 
@@ -263,7 +267,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
       stats.map((stat) => [stat.projectId, stat.repository, stat.additions]).toSorted(),
       [
         ["p1", "goat-si/goat", 10],
-        ["p1", "pingdotgg/t3code", 20],
+        ["p1", "sample-tools/upstream", 20],
       ],
     );
   }),

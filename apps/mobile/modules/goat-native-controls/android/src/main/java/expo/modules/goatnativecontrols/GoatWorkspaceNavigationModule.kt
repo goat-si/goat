@@ -73,7 +73,9 @@ class GoatWorkspaceNavigationModule : Module() {
       }
       Prop("rail") { view: GoatWorkspaceNavigationView, value: Boolean -> view.rail = value }
       Prop("dark") { view: GoatWorkspaceNavigationView, value: Boolean -> view.dark = value }
-      Prop("textScale") { view: GoatWorkspaceNavigationView, value: Float -> view.textScale = value }
+      Prop("textScale") { view: GoatWorkspaceNavigationView, value: Float ->
+        view.textScale = value
+      }
       Prop("newEnabled") { view: GoatWorkspaceNavigationView, value: Boolean ->
         view.newEnabled = value
       }

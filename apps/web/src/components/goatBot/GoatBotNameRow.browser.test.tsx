@@ -119,6 +119,47 @@ function Chat({ bot }: { readonly bot: BotProfile | null }) {
 
 const nameField = () => page.getByRole("textbox", { name: "Name this bot" });
 
+it("clears an earlier rename error when the unchanged name is submitted", async () => {
+  const { update } = setup();
+  update.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Not allowed.")) });
+  await using screen = await render(<Chat bot={member("New bot")} />);
+  await userEvent.fill(nameField(), "Scout");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Not allowed.");
+  await userEvent.fill(nameField(), "New bot");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+  expect(screen.getByRole("alert").query()).toBeNull();
+});
+
+it("explains an unchanged name and clears the note when the draft changes", async () => {
+  const { update } = setup();
+  await using screen = await render(<Chat bot={member("New bot")} />);
+  const status = screen.getByRole("status");
+  await expect.element(status).toHaveTextContent("");
+  await userEvent.click(page.getByRole("button", { name: "Done" }));
+  await expect
+    .element(status)
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+  expect(update).not.toHaveBeenCalled();
+  await expect.element(nameField()).toHaveValue("New bot");
+  await userEvent.fill(nameField(), "Scout");
+  await expect.element(status).toHaveTextContent("");
+  await userEvent.fill(nameField(), "New bot");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(status)
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+});
+
 it("New bot 2 shows Name this bot; Ada, the main bot, a deleted member and a read-only viewer do not", async () => {
   setup();
   {

@@ -192,6 +192,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "task",
     listChildWork: () => "child",
     listBotArtifacts: () => "artifacts",
@@ -241,7 +243,8 @@ vi.mock("../../state/environments", () => ({
   }),
 }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
   pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: state.connected }),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({

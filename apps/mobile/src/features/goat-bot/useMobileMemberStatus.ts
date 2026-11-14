@@ -16,6 +16,11 @@ import { useEnvironmentQuery } from "../../state/query";
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
+  /**
+   * Whether the waiting count is known: pending before an answer, unavailable after a failed read
+   * or from a server that cannot count by visit. Only rows Home governs read it.
+   */
+  readonly waitingState: "ready" | "pending" | "unavailable";
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
@@ -50,8 +55,21 @@ export function useMobileMemberStatus(bot: BotProfile): {
     latest?.author === "bot" &&
     (lastVisitedAt === null || Date.parse(latest.at) > Date.parse(lastVisitedAt));
   const data = status.data ?? null;
+  const capabilities = presentation?.serverConfig?.environment.capabilities;
+  // A count that ignores visits never clears when the person reads the member's chat.
+  const visitAware =
+    capabilities?.goatBotStatus === true &&
+    capabilities.goatBotWaitingRead === true &&
+    capabilities.threadVisitedTracking === true;
   return {
     waitingCount: data?.waitingCount ?? 0,
+    // A failed refresh keeps its earlier answer beside the error; that answer is no longer known.
+    waitingState:
+      supported && (!visitAware || status.error !== null)
+        ? "unavailable"
+        : data !== null
+          ? "ready"
+          : "pending",
     latest,
     unread,
     status:

@@ -36,7 +36,7 @@ vi.mock("~/state/entities", async (original) => ({
   },
 }));
 
-import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotChatView } from "./GoatBotChatView";
 
 const rows: ReadonlyArray<GoatBotRow> = Array.from({ length: 40 }, (_, index) => ({
@@ -696,6 +696,204 @@ const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>
         item: { id: row.id, type: "assistant_message" },
       }) as unknown as OrchestrationV2ProjectedTurnItem,
   );
+
+function SpeechChat({
+  shown,
+  source,
+  thread = "speech",
+  working = false,
+}: {
+  readonly shown: ReadonlyArray<GoatBotRow>;
+  readonly source: ReadonlyArray<GoatBotRow>;
+  readonly thread?: string;
+  readonly working?: boolean;
+}) {
+  const environmentId = EnvironmentId.make("env");
+  return (
+    <GoatBotActivityContext value={working ? { state: "working", text: "Working" } : null}>
+      <div style={{ display: "flex", height: 400, width: 360 }}>
+        <GoatBotChatView
+          projectionRef={{ environmentId, threadId: ThreadId.make(thread) }}
+          visibleTurnItems={projectedItems(source)}
+          environmentId={environmentId}
+          availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(thread) } }}
+          canOperate
+          rows={shown}
+          onSend={() => true}
+          onRetryInput={() => {}}
+          legacyAgentRoute={null}
+        />
+      </div>
+    </GoatBotActivityContext>
+  );
+}
+
+it("guard: live history and later exposure of a hidden baseline item are silent", async () => {
+  projection.statuses = { speech: "live" };
+  const hidden = reply("hidden-history");
+  await using screen = await render(<SpeechChat shown={rows} source={[...rows, hidden]} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  expect(status?.textContent).toBe("");
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={[...rows, hidden]} source={[...rows, hidden]} />);
+  expect(status?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("announces new bot replies once, batches the newest and keeps it through activity changes", async () => {
+  projection.statuses = { speech: "live" };
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  expect(status?.textContent).toBe("");
+  const first = reply("first");
+  await screen.rerender(<SpeechChat shown={[first]} source={[first]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const firstText = status?.textContent;
+  await screen.rerender(<SpeechChat shown={[first]} source={[first]} />);
+  expect(status?.textContent).toBe(firstText);
+  const update = { ...reply("update"), proactive: true, tone: "status" as const };
+  const question = { ...reply("question"), proactive: true, tone: "question" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toMatch(/question/);
+  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
+    "GOAT Bot is working",
+  );
+  const questionText = status?.textContent;
+  await screen.rerender(
+    <SpeechChat shown={[first, update]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toBe(questionText);
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toBe(questionText);
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} />,
+  );
+  expect(status?.textContent).toBe(questionText);
+  await screen.rerender(
+    <SpeechChat
+      shown={[first, update, question]}
+      source={[first, update, question]}
+      thread="other"
+    />,
+  );
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
+});
+
+it("announces and cues a filtered new reply only when first exposed", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("filtered-new");
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  expect(status?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  expect(screen.container.textContent).toContain("Jump to latest");
+  const text = status?.textContent;
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toBe(text);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("consumes replies exposed during synchronization and announces only the newest on live", async () => {
+  projection.statuses = { speech: "live" };
+  // Distinct categories, so the wording shows which reply was announced.
+  const older = { ...reply("sync-older"), proactive: true, tone: "status" as const };
+  const newer = { ...reply("sync-newer"), proactive: true, tone: "question" as const };
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(
+    <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
+  );
+  expect(status?.textContent).toBe("");
+  await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
+  expect(status?.textContent).toBe("GOAT Bot asked a question.");
+  const text = status?.textContent;
+  await screen.rerender(
+    <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
+  );
+  expect(status?.textContent).toBe(text);
+  const ghost = reply("sync-ghost");
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(
+    <SpeechChat shown={[...rows, ghost]} source={[...rows, older, newer, ghost]} />,
+  );
+  projection.statuses.other = "synchronizing";
+  await screen.rerender(<SpeechChat thread="other" shown={[]} source={[]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, older, newer, ghost]} />);
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
+});
+
+it("announces a synchronized reply even if filtering removes the last timeline row", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("sync-last");
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(<SpeechChat shown={[fresh]} source={[fresh]} />);
+  expect(status?.textContent).toBe("");
+  await screen.rerender(<SpeechChat shown={[]} source={[fresh]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={[]} source={[fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+});
+
+it("announces exposure while following and never revives its cue after scrolling up", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("following-reply");
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("announces replies after a newer send and alternates successive categories", async () => {
+  projection.statuses = { speech: "live" };
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  const first = reply("earlier-reply");
+  const send = rows[0]!;
+  await screen.rerender(<SpeechChat shown={[first, send]} source={[first, send]} />);
+  expect(status?.textContent).toBe("GOAT Bot replied.");
+  const update = { ...reply("an-update"), proactive: true, tone: "status" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, send, update]} source={[first, send, update]} />,
+  );
+  expect(status?.textContent).toBe("New update from GOAT Bot.");
+  const question = { ...reply("a-question"), proactive: true, tone: "question" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, send, update, question]} source={[first, send, update, question]} />,
+  );
+  expect(status?.textContent).toBe("GOAT Bot asked a question.");
+});
 
 it("failing-first: the viewed thread, not the current bot, owns the live baseline", async () => {
   projection.reads = [];

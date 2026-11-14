@@ -111,6 +111,7 @@ import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
+import { advertisedModel } from "./ModelSelectionValidation.ts";
 import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
 
 import {
@@ -123,7 +124,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import { runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
+import { delegatedTaskResultRun, runOutcome } from "../orchestration-v2/RestartBackgroundNote.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
@@ -1299,9 +1300,7 @@ const make = Effect.gen(function* () {
     const target = yield* records.pipe(Effect.mapError(threadManagementFailure));
     return { parent, target, shell } as const;
   });
-
   const loadProviders = providerRegistry.getProviders;
-
   const loadOrchestrationCapableInstanceIds = () =>
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
@@ -1329,7 +1328,7 @@ const make = Effect.gen(function* () {
     if (instanceId === undefined) return resolved;
     return resolved.pipe(
       Effect.catchIf(
-        (error) => error.code === "provider_unavailable",
+        (error) => error.code === "provider_unavailable" || error.code === "model_unavailable",
         () =>
           providerRegistry
             .refreshInstance(instanceId)
@@ -1456,16 +1455,15 @@ const make = Effect.gen(function* () {
       requestedModel !== undefined &&
       provider !== undefined &&
       provider.models.length > 0 &&
-      !provider.models.some((candidate) => candidate.slug === requestedModel)
+      advertisedModel(provider, requestedModel) === undefined
     ) {
       return yield* failure(
         "model_unavailable",
         `Model ${requestedModel} is not advertised by provider ${instanceId}.`,
       );
     }
-
-    const descriptors = provider.models.find((candidate) => candidate.slug === model)?.capabilities
-      ?.optionDescriptors;
+    const advertised = advertisedModel(provider, model);
+    const descriptors = advertised?.capabilities?.optionDescriptors;
     const requestedOptions = withLegacyUltracodeEffort(descriptors, input.target?.options);
     if (requestedOptions !== undefined) {
       const invalid = invalidOptionSelections(requestedOptions, descriptors);
@@ -1476,9 +1474,10 @@ const make = Effect.gen(function* () {
         );
       }
     }
-
     const inheritsOptions =
-      instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
+      instanceId === inheritedSelection.instanceId &&
+      (advertised?.slug ?? model) ===
+        (advertisedModel(provider, inheritedSelection.model)?.slug ?? inheritedSelection.model);
     const options = overrideOptionSelections(
       inheritsOptions
         ? knownOptions(
@@ -1610,9 +1609,7 @@ const make = Effect.gen(function* () {
     const progress = delegatedTaskProgress(childControls);
     const taskResultRun =
       childRun?.delegatedTaskId === task.id
-        ? childControls.runs
-            .filter((run) => run.delegatedTaskId === task.id)
-            .toSorted((a, b) => b.ordinal - a.ordinal)[0]
+        ? delegatedTaskResultRun(childControls.runs, task.id)
         : progress.resultRun;
     const taskWorkState =
       childRun?.delegatedTaskId === task.id
@@ -1944,16 +1941,9 @@ const make = Effect.gen(function* () {
       }
       const timeoutMs = Math.min(
         MAX_WAIT_TIMEOUT_MS,
-        Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
+        Math.max(1, input.timeoutMs ?? 4 * 60 * 1_000),
       );
-      const waited = yield* waitForTask(scope, taskId, timeoutMs);
-      if (Option.isSome(waited) && isTerminalTaskStatus(waited.value.status)) {
-        return waited.value;
-      }
-      // An incomplete wait gives up delivery: upgrade so a later terminal
-      // wakes the parent even mid-turn. Best effort; settled_only still
-      // wakes a settled parent if the upgrade fails.
-      yield* threadManagement
+      const upgradeWake = threadManagement
         .dispatch({
           type: "delegated_task.wake-policy",
           commandId: stableCommandId({
@@ -1988,6 +1978,15 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      const waited = yield* waitForTask(scope, taskId, timeoutMs).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) &&
+          Option.isSome(exit.value) &&
+          isTerminalTaskStatus(exit.value.value.status)
+            ? Effect.void
+            : upgradeWake,
+        ),
+      );
       if (Option.isSome(waited)) return waited.value;
       const final = yield* readTask(scope, taskId, false, true);
       return {
@@ -2241,9 +2240,9 @@ const make = Effect.gen(function* () {
       // follow: unbinding a root-strategy task would otherwise run loose
       // prompts in the shared project checkout.
       const workspaceStrategy =
-        input.bindToCurrentThread === undefined
+        (threadId === null) === (existing.threadId === null)
           ? existing.workspaceStrategy
-          : input.bindToCurrentThread
+          : threadId !== null
             ? { type: "root" as const }
             : {
                 type: "worktree" as const,
@@ -3550,6 +3549,8 @@ const make = Effect.gen(function* () {
         (View.hasLineageFilter(lineage) && input.projectId === undefined)
           ? undefined
           : yield* resolveProjectTarget(parent, input.projectId);
+      if (!input.allProjects && input.projectId !== undefined)
+        yield* requireProject(input.projectId);
       const listFailure = (error: unknown) =>
         failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`);
       const edges = yield* threadManagement.listLaunchEdges().pipe(Effect.mapError(listFailure));
@@ -3573,9 +3574,7 @@ const make = Effect.gen(function* () {
           : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const filtered = projectThreads
-        .filter(
-          (thread) => statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),
-        )
+        .filter((thread) => statuses === null || statuses.has(View.listedThreadStatus(thread)))
         .filter(
           (thread) =>
             input.settled === undefined || View.threadSettlement(thread).settled === input.settled,

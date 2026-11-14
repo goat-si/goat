@@ -63,3 +63,35 @@ describe("UsageLimitsPooled ChatGPT usage card", () => {
       .toBeVisible();
   });
 });
+
+it("presents a duplicate Cursor total as general usage", async () => {
+  const cursor: ServerProvider = {
+    ...managedChatGpt("cursor", "Cursor"),
+    driver: ProviderDriverKind.make("cursor"),
+    usageLimits: {
+      checkedAt,
+      windows: ["totalPercentUsed", "autoPercentUsed"].map((id) => ({
+        id,
+        kind: "monthly" as const,
+        label: id === "autoPercentUsed" ? "Cursor Models" : "Overall",
+        usedPercent: 14,
+      })),
+    },
+  };
+  const presentations = new Map([
+    [
+      EnvironmentId.make("desk"),
+      {
+        entry: { target: { label: "Desk" } },
+        serverConfig: { providers: [cursor] },
+      },
+    ],
+  ]);
+  await using screen = await render(
+    <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
+  );
+  await expect
+    .element(screen.getByRole("columnheader", { name: /Usage\s*86% left/ }))
+    .toBeVisible();
+  await expect.element(screen.getByText("Cursor Models")).not.toBeInTheDocument();
+});

@@ -214,7 +214,12 @@ export function mobileBotTaskListItems(props: {
           />
         ),
       });
-      if (history?.launchesTruncated.has(row.task.taskId))
+      // Only older work's note is true: a current task's omitted threads have no Home link, so
+      // Threads keeps them, and the note goes once the task is current again.
+      if (
+        history?.launchesTruncated.has(row.task.taskId) &&
+        !(history.currentEligible === true && history.currentTaskIds.has(row.task.taskId))
+      )
         items.push({
           key: JSON.stringify(["task-truncated", row.task.taskId]),
           render: () => (
@@ -285,6 +290,8 @@ export interface MobileBotHomeHistory {
   readonly supported: boolean;
   readonly currentTaskIds: ReadonlySet<ChannelTaskId>;
   readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  /** The bot's current list is read through Home's shared value, which links its tasks' threads. */
+  readonly currentEligible?: boolean;
   readonly hasMore: boolean;
   readonly loading: boolean;
   readonly incomplete: boolean;

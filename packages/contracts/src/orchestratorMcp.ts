@@ -231,7 +231,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
     }),
   ),
   timeoutMs: Schema.optional(Schema.Finite).annotate({
-    description: "Mode 'wait' only. Default 10 min. A timeout does not cancel the child.",
+    description: "Mode 'wait' only. Default 4 min. A timeout does not cancel the child.",
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(
@@ -553,6 +553,14 @@ export const OrchestratorMcpThreadPullRequest = Schema.Struct({
 });
 export type OrchestratorMcpThreadPullRequest = typeof OrchestratorMcpThreadPullRequest.Type;
 
+export const OrchestratorMcpThreadBackgroundTask = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  kind: Schema.Literals(["subagent", "command", "monitor", "background_task"]),
+  description: Schema.optional(TrimmedNonEmptyString),
+  awaited: Schema.optional(Schema.Literal(true)),
+  childThreadId: Schema.optional(ThreadId),
+});
+
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
@@ -573,6 +581,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -661,6 +671,7 @@ export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
 export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
 
 export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
   nextCursor: Schema.NullOr(Schema.String),
   /** Whether an environment had more matching threads than one search scans. */
@@ -742,6 +753,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   ...OrchestratorMcpReconcileFields.thread,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1095,7 +1108,7 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Default true: runs post in this thread. False: new thread per run.",
+      description: "Post here, else new thread per run. Unset: true in own project, else false.",
     }),
   ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),

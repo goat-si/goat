@@ -541,8 +541,8 @@ export const layer = Layer.effect(
             OR (l.host IS NOT NULL AND (
               (l.pending = 1 AND NOT EXISTS (SELECT 1 FROM remote_dispatches d
                 WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
-                AND d.remote_thread_id IS NOT NULL
-                AND (d.end_reason IS NOT NULL OR d.state IN ('idle','settled','cancelled'))))
+                AND (d.end_reason IS NOT NULL OR d.state = 'cancelled'
+                  OR (d.remote_thread_id IS NOT NULL AND d.state IN ('idle','settled')))))
               OR EXISTS (SELECT 1 FROM remote_dispatches d
                 WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
                 AND d.state IN ('launching','running','lost') AND d.end_reason IS NULL))))`;

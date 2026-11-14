@@ -44,6 +44,7 @@ import {
   HubMachineList,
   HubMachineListInput,
   HubMachineReissueInput,
+  HubMachineDetachInput,
   HubMachineStatus,
 } from "@goat/contracts";
 
@@ -229,6 +230,20 @@ const MachineReissueTool = Tool.make(agentSurfaceRegistry["hub.machine_reissue"]
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.machine_reissue"]));
 
+const MachineDetachTool = Tool.make(agentSurfaceRegistry["hub.machine_detach"].name, {
+  description: agentSurfaceRegistry["hub.machine_detach"].description,
+  parameters: HubMachineDetachInput,
+  success: HubMachineStatus,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    ThreadManagementService.ThreadManagementService,
+    DisposableAttach.DisposableAttach,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.machine_detach"]));
+
 const MachineListTool = Tool.make(agentSurfaceRegistry["hub.machine_list"].name, {
   description: agentSurfaceRegistry["hub.machine_list"].description,
   parameters: HubMachineListInput,
@@ -260,5 +275,6 @@ export const HostStatusToolkit = Toolkit.make(
   OpenCodexSyncTool,
   MachineAttachTool,
   MachineReissueTool,
+  MachineDetachTool,
   MachineListTool,
 );

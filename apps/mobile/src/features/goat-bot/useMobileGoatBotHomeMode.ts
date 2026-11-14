@@ -13,7 +13,12 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { resolveGoatBotHomeSelection } from "@goat/client-runtime/goatBot";
 import { useMobileGoatBotEnvironments } from "./useMobileGoatBotEnvironments";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { effectiveHomeMode, mobileGoatBotKnown, mobileGoatBotDetailOpen } from "./goatBotHomeMode";
+import {
+  effectiveHomeMode,
+  loadedMobileGoatBotRef,
+  mobileGoatBotKnown,
+  mobileGoatBotDetailOpen,
+} from "./goatBotHomeMode";
 
 let advertised: ReadonlySet<EnvironmentId> = new Set();
 const listeners = new Set<() => void>();
@@ -43,9 +48,10 @@ export function useMobileGoatBotHomeMode() {
       for (const listener of listeners) listener();
     }
   }, [environments]);
-  const loaded = AsyncResult.isSuccess(result);
-  const preferences = loaded ? result.value : null;
-  const botRef = preferences?.goatBotRef ?? null;
+  const savedRef = loadedMobileGoatBotRef(result);
+  const loaded = savedRef !== undefined;
+  const preferences = AsyncResult.isSuccess(result) ? result.value : null;
+  const botRef = savedRef ?? null;
   const home = resolveGoatBotHomeSelection(environments, botRef);
   const known =
     mobileGoatBotKnown(

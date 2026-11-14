@@ -831,11 +831,20 @@ goat pair --scope orchestration:read --scope relay:read
 
 The selected scopes replace the default permissions. The same option works with
 `goat auth pairing create` and `goat auth session issue`; each command's
-`--help` lists the available scopes. Without `--scope`, pairing tokens and issued
-bearer sessions get every permission, including managing access.
+`--help` lists the available scopes. `goat pair` prints a link for the running server it finds: the
+one in `--base-dir` when you pass it, otherwise the one in `GOAT_HOME` or the default GOAT
+home. `goat auth pairing create` prints a pairing code, or a link when you add
+`--base-url <url>`. Without `--scope`, pairing tokens and issued bearer sessions get the
+full standard permissions, including managing access, which can be more than a
+paired client's own **Create link** dialog offers.
+
 A terminal or a full-access agent on the host can reach those as well, so a
 client that should not manage access also needs to go without `terminal:operate`
 and `orchestration:operate`.
+
+A desktop app that shows several environments creates its **Create link** links
+for its own environment. To pair a device with another one, create the link on
+the machine that runs it, as above.
 
 To change an existing client's permissions, create a fresh pairing link with the
 scopes it needs. In a browser opened directly on the environment, open that link

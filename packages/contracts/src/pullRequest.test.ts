@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   PullRequestDetail,
+  PullRequestLabel,
   PullRequestListResult,
   PullRequestFilterOptions,
   resolvePullRequestAuthorFilter,
@@ -157,4 +158,10 @@ it("decodes filter options from a server without reference completion", () => {
     truncated: false,
   });
   expect(result.references).toEqual([]);
+});
+
+it("accepts labels from older servers and rejects invalid descriptions", () => {
+  const decode = Schema.decodeUnknownSync(PullRequestLabel);
+  expect(decode({ name: "bug", color: null })).toEqual({ name: "bug", color: null });
+  expect(() => decode({ name: "bug", color: null, description: 42 })).toThrow();
 });

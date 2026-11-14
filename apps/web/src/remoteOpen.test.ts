@@ -144,10 +144,40 @@ describe("resolveRemoteOpenState", () => {
 });
 
 describe("buildRemoteOpenUrl", () => {
+  it("does not generate a remote URL for an unsupported editor", () => {
+    expect(
+      buildRemoteOpenUrl({ editor: "file-manager", host: "ssh.example.com", absolutePath: "/tmp" }),
+    ).toBeUndefined();
+  });
+
   it("roots Windows paths", () => {
     expect(
       buildRemoteOpenUrl({ editor: "vscode", host: "sol", absolutePath: "C:\\Users\\sam" }),
     ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/sam");
+  });
+
+  it("keeps a plus in the SSH username through Remote-SSH's authority parsing", () => {
+    const url = buildRemoteOpenUrl({
+      editor: "vscode",
+      host: "ssh.example.com",
+      username: "vm+demo",
+      absolutePath: "/workspace/project",
+    });
+    // VS Code decodes the authority, then Remote-SSH (0.129) takes `authority.split("+")[1]` and
+    // reads it as hex-encoded JSON `{ hostName, user }` or as `user@host`.
+    const authority = decodeURIComponent(new URL(url ?? "").pathname.split("/")[1] ?? "");
+    const destination = authority.split("+")[1] ?? "";
+    const hexBytes = /^(?:[0-9a-f]{2})+$/i.test(destination)
+      ? destination.match(/../g)?.map((byte) => Number.parseInt(byte, 16))
+      : undefined;
+    const resolved =
+      hexBytes === undefined
+        ? destination.match(/^(?:(?<user>.*)@)?(?<hostName>.+?)$/)?.groups
+        : JSON.parse(new TextDecoder().decode(new Uint8Array(hexBytes)));
+    expect({ user: resolved?.user, hostName: resolved?.hostName }).toEqual({
+      user: "vm+demo",
+      hostName: "ssh.example.com",
+    });
   });
 
   it("drops the Windows drive letter for Zed", () => {

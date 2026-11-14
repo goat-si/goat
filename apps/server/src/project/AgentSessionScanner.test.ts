@@ -7,136 +7,32 @@ import * as NodeOS from "node:os";
 import { describe, expect, it } from "@effect/vitest";
 import {
   AgentSessionImportSource,
-  type OrchestrationProjectShell,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ServerSettings as ContractServerSettings,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
-import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ServerConfig from "../config.ts";
-import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
-const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
-  id: ProjectId.make("project-1"),
-  title: "Imported",
-  workspaceRoot,
-  defaultModelSelection: null,
-  scripts: [],
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
-});
-
-const layerProjectStore = (importedWorkspaceRoots: ReadonlyArray<string>) =>
-  Layer.mock(ProjectStore.ProjectStoreV2)({
-    listShells: () =>
-      Effect.succeed(
-        importedWorkspaceRoots.map((workspaceRoot) => makeProjectShell(workspaceRoot)),
-      ),
-  });
-
-interface ScannerTestInput {
-  readonly claudeHomePath: string;
-  readonly codexHomePath: string;
-  readonly piAgentDir?: string;
-  readonly importedWorkspaceRoots?: ReadonlyArray<string>;
-  readonly configBaseDir?: string;
-  readonly providerInstances?: ContractServerSettings["providerInstances"];
-}
-
-const layerScannerTest = (input: ScannerTestInput) =>
-  AgentSessionScanner.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        ServerSettings.layerTest({
-          providerInstances: {
-            [ProviderInstanceId.make("claudeAgent")]: {
-              driver: ProviderDriverKind.make("claudeAgent"),
-              config: { homePath: input.claudeHomePath },
-            },
-            [ProviderInstanceId.make("codex")]: {
-              driver: ProviderDriverKind.make("codex"),
-              config: { homePath: input.codexHomePath },
-            },
-            // Keeps the default Pi instance off the developer's real ~/.pi.
-            [ProviderInstanceId.make("pi")]: {
-              driver: ProviderDriverKind.make("pi"),
-              enabled: true,
-              environment: [
-                {
-                  name: "PI_CODING_AGENT_DIR",
-                  value: input.piAgentDir ?? `${input.claudeHomePath}/pi-agent`,
-                  sensitive: false,
-                },
-                { name: "PI_CODING_AGENT_SESSION_DIR", value: "", sensitive: false },
-              ],
-              config: {},
-            },
-            ...input.providerInstances,
-          },
-        }),
-        ServerConfig.layerTest(
-          input.claudeHomePath,
-          input.configBaseDir ?? { prefix: "goat-scanner-config-" },
-        ),
-        layerProjectStore(input.importedWorkspaceRoots ?? []),
-      ),
-    ),
-  );
-const runScan = (input: ScannerTestInput & { readonly windowDays?: number }) =>
-  Effect.gen(function* () {
-    const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    const nowMs = yield* Clock.currentTimeMillis;
-    yield* TestClock.setTime(nowMs === 0 ? Date.parse("2026-12-31T12:00:00.000Z") : nowMs);
-    return yield* scanner.scan({ includePi: true, windowDays: input.windowDays ?? 3650 });
-  }).pipe(Effect.provide(layerScannerTest(input)));
-const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
-  Effect.gen(function* () {
-    const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.recentThreads(input.workspaceRoot, [], { includePi: true }).pipe(
-      Stream.runCollect,
-      Effect.map((outcomes) => Array.from(outcomes)),
-    );
-  }).pipe(Effect.provide(layerScannerTest(input)));
-const runRecentThreads = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
-  runRecentThreadOutcomes(input).pipe(
-    Effect.map((outcomes) =>
-      outcomes.flatMap((outcome) => (outcome._tag === "Importable" ? [outcome.thread] : [])),
-    ),
-  );
-
-const makeTempDir = Effect.fn("AgentSessionScanner.test.makeTempDir")(function* (prefix: string) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  return yield* fileSystem.makeTempDirectoryScoped({ prefix });
-});
-
-const writeTranscript = Effect.fn("AgentSessionScanner.test.writeTranscript")(function* (input: {
-  readonly filePath: string;
-  readonly contents: string;
-  readonly mtimeMs: number;
-}) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fileSystem.makeDirectory(path.dirname(input.filePath), { recursive: true });
-  yield* fileSystem.writeFileString(input.filePath, input.contents);
-  const seconds = input.mtimeMs / 1000;
-  yield* fileSystem.utimes(input.filePath, seconds, seconds);
-});
+import {
+  layerScannerTest,
+  runScan,
+  runRecentThreadOutcomes,
+  runRecentThreads,
+  makeTempDir,
+  writeTranscript,
+} from "./AgentSessionScanner.testkit.ts";
 
 const claudeSessionLine = (cwd: string) =>
   `${JSON.stringify({ type: "user", cwd, sessionId: "s1" })}\n${JSON.stringify({ type: "assistant" })}\n`;
@@ -1506,9 +1402,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const path = yield* Path.Path;
         const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
         yield* TestClock.setTime(nowMs);
-        const claudeHomePath = yield* makeTempDir("t3code-shared-records-claude-");
-        const codexHomePath = yield* makeTempDir("t3code-shared-records-codex-");
-        const workspace = yield* makeTempDir("t3code-shared-records-workspace-");
+        const claudeHomePath = yield* makeTempDir("goat-shared-records-claude-");
+        const codexHomePath = yield* makeTempDir("goat-shared-records-codex-");
+        const workspace = yield* makeTempDir("goat-shared-records-workspace-");
         // Together these exceed 100,000 records, but each one is individually valid.
         const recordCounts = [20_000, 20_000, 20_000, 58_000];
         for (const [index, recordCount] of recordCounts.entries()) {
@@ -1794,6 +1690,95 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("imports long Claude history beyond the selected-history and record limits", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("goat-long-conversation-claude-");
+        const codexHomePath = yield* makeTempDir("goat-long-conversation-codex-");
+        const workspace = yield* makeTempDir("goat-long-conversation-workspace-");
+        const record = (fields: Record<string, unknown>) =>
+          encodeTranscriptRecord({ sessionId: "claude-long", ...fields });
+        const longText = "x".repeat(64 * 1024);
+        const middleCount = 600;
+        yield* writeTranscript({
+          filePath: path.join(claudeHomePath, "projects", "-slug", "claude-long.jsonl"),
+          contents: [
+            record({
+              type: "user",
+              cwd: workspace,
+              message: { role: "user", content: "First prompt" },
+            }),
+            // 600 x 64 KiB exceeds the 32 MiB selected-history budget; the shown window fits.
+            ...Array.from({ length: middleCount }, (_, index) => {
+              const role = index % 2 === 0 ? "assistant" : "user";
+              return record({ type: role, message: { role, content: longText } });
+            }),
+            // Tool and progress records push the file past the 100,000-record limit.
+            ...Array.from({ length: 100_000 }, () => "{}"),
+            record({ type: "user", message: { role: "user", content: "Latest prompt" } }),
+          ].join("\n"),
+          mtimeMs: nowMs - 60_000,
+        });
+
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(outcomes.map((outcome) => outcome._tag)).toEqual(["Importable"]);
+        const thread = outcomes[0]?._tag === "Importable" ? outcomes[0].thread : undefined;
+        expect(thread?.messages[0]).toMatchObject({ role: "user", text: "First prompt" });
+        expect(thread?.messages.at(-1)).toMatchObject({ role: "user", text: "Latest prompt" });
+        expect(thread?.messages).toHaveLength(200);
+        expect(thread?.omittedMessageCount).toBe(middleCount + 2 - 200);
+      }),
+    );
+
+    it.effect("imports a late first Claude prompt once when older replies are dropped", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("goat-late-prompt-claude-");
+        const codexHomePath = yield* makeTempDir("goat-late-prompt-codex-");
+        const workspace = yield* makeTempDir("goat-late-prompt-workspace-");
+        const contents = [
+          encodeTranscriptRecord({ type: "attachment", sessionId: "late-prompt", cwd: workspace }),
+          // The first prompt is still among the latest 200 messages after older replies drop out.
+          ...Array.from({ length: 250 }, (_, index) => {
+            const role = index < 60 || index % 2 === 1 ? "assistant" : "user";
+            return encodeTranscriptRecord({
+              type: role,
+              sessionId: "late-prompt",
+              message: { role, content: `${role} ${index}` },
+            });
+          }),
+        ].join("\n");
+        const filePath = path.join(claudeHomePath, "projects", "-slug", "late-prompt.jsonl");
+        yield* writeTranscript({ filePath, contents, mtimeMs: nowMs - 60_000 });
+
+        const [thread] = yield* runRecentThreads({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(thread?.messages[0]).toMatchObject({ role: "assistant", text: "assistant 50" });
+        expect(thread).toEqual(
+          AgentSessionScanner.parseAgentSessionTranscript({
+            source: "claudeAgent",
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            fallbackSessionId: "late-prompt",
+            lastActiveAtMs: nowMs - 60_000,
+            contents,
+          }),
+        );
+      }),
+    );
+
     it.effect("skips growth during reading without exceeding the reserved bytes", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -1921,9 +1906,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const fileSystem = yield* FileSystem.FileSystem;
-          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-          const repo = yield* makeTempDir("t3code-workspace-fifo-config-");
+          const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+          const codexHomePath = yield* makeTempDir("goat-codex-home-");
+          const repo = yield* makeTempDir("goat-workspace-fifo-config-");
           yield* fileSystem.makeDirectory(path.join(repo, ".git"));
           yield* makeOpenGate(path.join(repo, ".git", "config"));
           const transcriptPath = path.join(claudeHomePath, "projects", "-fifo", "a.jsonl");
@@ -1956,9 +1941,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const root = yield* makeTempDir("t3code-workspace-blocked-configs-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const root = yield* makeTempDir("goat-workspace-blocked-configs-");
         const repos = [path.join(root, "repo-a"), path.join(root, "repo-b")];
         for (const repo of repos) {
           yield* fileSystem.makeDirectory(path.join(repo, ".git"), { recursive: true });
@@ -2005,9 +1990,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const root = yield* makeTempDir("t3code-workspace-blocked-pointers-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const root = yield* makeTempDir("goat-workspace-blocked-pointers-");
         const pointerCheckout = path.join(root, "pointer");
         yield* fileSystem.makeDirectory(pointerCheckout);
         yield* makeOpenGate(path.join(pointerCheckout, ".git"));
@@ -2061,9 +2046,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const fileSystem = yield* FileSystem.FileSystem;
-        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        const repo = yield* makeTempDir("t3code-workspace-unblocked-config-");
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const repo = yield* makeTempDir("goat-workspace-unblocked-config-");
         yield* fileSystem.makeDirectory(path.join(repo, ".git"));
         const configPath = path.join(repo, ".git", "config");
         yield* makeOpenGate(configPath);

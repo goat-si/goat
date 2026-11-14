@@ -3,7 +3,7 @@ import type { EnvironmentId } from "@goat/contracts";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { readEnvironments, readPrimaryEnvironmentId } from "~/state/environments";
-import { goatBotEnvironmentInputs } from "./goatBotHooks";
+import { goatBotEnvironmentInputs } from "./goatBotEnvironmentInputs";
 
 /** The environment GOAT Bot runs on now, chosen as the roster chooses it, for answer-time checks. */
 export function readGoatBotEnvironmentId(): EnvironmentId | null {
