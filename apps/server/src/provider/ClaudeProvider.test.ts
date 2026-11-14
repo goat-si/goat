@@ -160,3 +160,50 @@ it.effect(
       assert.equal((yield* check).message, notFound);
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.live("names the configured Claude directory in signed-out instructions", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-auth-" });
+      const executable = path.join(directory, "claude");
+      yield* fs.writeFileString(executable, "#!/bin/sh\necho '2.1.0 (Claude Code)'\n", {
+        mode: 0o755,
+      });
+      const capabilities = () =>
+        Effect.succeed({
+          tokenSource: "none",
+          apiKeySource: "none",
+          apiProvider: "firstParty",
+          email: undefined,
+          subscriptionType: undefined,
+          slashCommands: [],
+        });
+      for (const [homePath, environment, expected] of [
+        ["/srv/claude-personal", {}, "/srv/claude-personal"],
+        ["", { CLAUDE_CONFIG_DIR: "/srv/claude-work" }, "/srv/claude-work"],
+        ["", {}, undefined],
+      ] as const) {
+        const settings = decodeClaudeSettings({ enabled: true, binaryPath: executable, homePath });
+        const status = yield* checkClaudeProviderStatus(settings, capabilities, {
+          ANTHROPIC_BASE_URL: "",
+          ...environment,
+        });
+        assert.strictEqual(status.auth.status, "unauthenticated");
+        if (expected === undefined) {
+          assert.strictEqual(
+            status.message,
+            "Claude Code is not authenticated. Run `claude auth login` and try again.",
+          );
+        } else {
+          assert.include(
+            status.message ?? "",
+            `CLAUDE_CONFIG_DIR set to ${JSON.stringify(expected)}`,
+          );
+        }
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  ),
+);
