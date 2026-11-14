@@ -35,6 +35,8 @@ import { GoatBotProfileDialog } from "./GoatBotProfileDialog";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { useBotManage } from "./useBotManage";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
+import { GoatBotRowSignals } from "./GoatBotRowSignals";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 
 const NO_PERMISSION = Atom.make(false);
 
@@ -57,7 +59,10 @@ export function GoatBotMemberRoster({
   const [editing, setEditing] = useState<BotProfile | null>(null);
   const [deleting, setDeleting] = useState<BotProfile | null>(null);
   const [hiddenOpen, setHiddenOpen] = useState(false);
+  // One read for the whole list: every row follows the environment's governance by Home.
+  const governed = useAtomValue(goatBotGovernedAtom(environmentId));
   const actions = {
+    governed,
     canManage: manage.canManage,
     canEdit,
     onEdit: setEditing,
@@ -149,6 +154,7 @@ export function GoatBotMemberRoster({
 
 function GoatBotMemberRow({
   bot,
+  governed,
   canManage,
   canEdit,
   onEdit,
@@ -156,6 +162,7 @@ function GoatBotMemberRow({
   onDelete,
 }: {
   readonly bot: BotProfile;
+  readonly governed: boolean;
   readonly canManage: boolean;
   readonly canEdit: boolean;
   readonly onEdit: (bot: BotProfile) => void;
@@ -163,7 +170,8 @@ function GoatBotMemberRow({
   readonly onDelete: (bot: BotProfile) => void;
 }) {
   const status = useGoatBotMemberStatus(bot);
-  const { waitingCount: count, latest } = status;
+  const { latest } = status;
+  const count = governed ? status.sidebarWaitingCount : status.waitingCount;
   // The row's second line is what the bot last said or was asked; a new bot shows its purpose.
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -196,9 +204,9 @@ function GoatBotMemberRow({
           size="md"
           place="list"
           surface="sidebar"
-          waitingCount={count}
+          waitingCount={count ?? 0}
           row={status}
-          countInLabel
+          countInLabel={count !== undefined}
           emoji={goatBotMemberPicture(bot)}
           accent={goatBotAccent(bot)}
           threadRef={scopeThreadRef(bot.environmentId, bot.sessionThreadId)}
@@ -206,7 +214,14 @@ function GoatBotMemberRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate">{bot.name}</span>
-            {count > 0 ? (
+            <GoatBotRowSignals
+              environmentId={bot.environmentId}
+              botId={bot.botId}
+              governed={governed}
+              waiting={count}
+              waitingState={status.sidebarWaitingState}
+            />
+            {count !== undefined && count > 0 ? (
               <Badge size="sm" variant="secondary" aria-hidden>
                 {count}
               </Badge>

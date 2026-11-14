@@ -49,9 +49,14 @@ export const codexProcessStart = Effect.fn("CodexModelArrivals.codexProcessStart
         ? undefined
         : (yield* input.survivors.value.get(input.instanceId, input.threadId))?.recordName);
     if (kept === undefined)
-      return { offered, atStart: yield* offered, startedAtMs: yield* Clock.currentTimeMillis };
+      return {
+        offered,
+        atStart: yield* offered,
+        startedAtMs: yield* Clock.currentTimeMillis,
+        retained: false,
+      };
     const startedAtMs = detached === undefined ? undefined : yield* detached.keptStartedAt(kept);
-    return { offered, atStart: [], startedAtMs: startedAtMs ?? 0 };
+    return { offered, atStart: [], startedAtMs: startedAtMs ?? 0, retained: true };
   },
 );
 
@@ -95,13 +100,19 @@ export const makeCodexModelArrivals = <E>(input: {
   readonly listServed: Effect.Effect<ReadonlyArray<string>, E>;
   /** When the process started; with `catalog`, models whose catalog entry changed since are outdated. */
   readonly startedAtMs?: number;
+  /** A kept process may run under an older home than this session's, so `~` in its catalog path stays unresolved. */
+  readonly retained?: boolean;
   readonly catalog?: Omit<Parameters<typeof makeCodexCatalogFreshness>[0], "startedAtMs">;
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
   const outdated =
     input.catalog &&
     input.startedAtMs !== undefined &&
-    makeCodexCatalogFreshness({ ...input.catalog, startedAtMs: input.startedAtMs });
+    makeCodexCatalogFreshness({
+      ...input.catalog,
+      ...(input.retained === true ? { home: undefined } : {}),
+      startedAtMs: input.startedAtMs,
+    });
   let served: ReadonlySet<string> | undefined;
   /** The last listing: when it ended, whether the process answered, and GOAT's catalog then. */
   let asked:

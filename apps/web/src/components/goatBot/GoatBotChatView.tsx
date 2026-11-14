@@ -8,7 +8,7 @@ import {
   type ScopedThreadRef,
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { useContext, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
@@ -48,9 +48,11 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
+import { useGoatBotReplyAnnouncement } from "./useGoatBotReplyAnnouncement";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -71,8 +73,16 @@ export interface GoatBotChatViewProps {
   readonly projectionRef?: ScopedThreadRef | null | undefined;
   readonly visibleTurnItems?: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
   readonly unreadSince?: string | null | undefined;
+  readonly onHomeHandled?: (() => void) | undefined;
   /** History state naming a Home to open, with its entry's key; each entry opens Home once. */
-  readonly openHome?: { readonly key: string; readonly entry: string } | null | undefined;
+  readonly openHome?:
+    | {
+        readonly key: string;
+        readonly entry: string;
+        readonly taskId?: import("@goat/contracts").ChannelTaskId;
+      }
+    | null
+    | undefined;
   /** The bot's server supports task threads, so task chips render as task-thread pills. */
   readonly supportsTaskThreads?: boolean | undefined;
   /** The bot's server runs failed or stopped work again when a person asks. */
@@ -169,6 +179,7 @@ function GoatBotChatViewContent({
   onRestore,
   onCheckAgain,
   openHome = null,
+  onHomeHandled,
 }: GoatBotChatViewProps & { readonly source: ReturnType<typeof useGoatBotSource> }) {
   const member = useGoatBotMember();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -202,10 +213,23 @@ function GoatBotChatViewContent({
   // A bot or environment switch remounts Home, so its history walk starts over.
   const homeKey = goatBotHomeKey(bot?.environmentId ?? null, member?.botId ?? null);
   const [openedHomeEntry, setOpenedHomeEntry] = useState<string | null>(null);
+  const [homeReturn, setHomeReturn] = useState<{
+    taskId: import("@goat/contracts").ChannelTaskId;
+    focusFrom: Element | null;
+  } | null>(null);
   if (bot && openHome?.key === homeKey && openHome.entry !== openedHomeEntry) {
     setOpenedHomeEntry(openHome.entry);
+    setHomeReturn(
+      openHome.taskId === undefined
+        ? null
+        : { taskId: openHome.taskId, focusFrom: document.activeElement },
+    );
     setPanelOpen(true);
   }
+  // oxlint-disable-next-line goat/react-effect-budget -- Release the consumed history request after Home receives it.
+  useEffect(() => {
+    if (openHome !== null && openHome.entry === openedHomeEntry) onHomeHandled?.();
+  }, [openHome, openedHomeEntry, onHomeHandled]);
   const sourceBotId = member?.botId ?? "main";
   const [lastSource, setLastSource] = useState<{
     identity: string;
@@ -235,21 +259,28 @@ function GoatBotChatViewContent({
       ? lastSource.identity
       : null) ??
     botIdentity;
+  const { announcement, onExposure } = useGoatBotReplyAnnouncement(timelineIdentity, source);
   const [local, setLocal] = useState<{
     identity: string;
     submissions: ReadonlyArray<GoatBotLocalSubmission>;
-  }>({ identity: timelineIdentity, submissions: [] });
+    sends: number;
+  }>({ identity: timelineIdentity, submissions: [], sends: 0 });
   if (local.identity !== timelineIdentity)
-    setLocal({ identity: timelineIdentity, submissions: [] });
+    setLocal({ identity: timelineIdentity, submissions: [], sends: 0 });
   const recordSubmission = (result: boolean | string | void) => {
-    if (typeof result === "string") {
-      const submission = { key: result };
+    if (result !== false) {
       setLocal((previous) => ({
         identity: timelineIdentity,
-        submissions: [
-          ...(previous.identity === timelineIdentity ? previous.submissions : []),
-          submission,
-        ],
+        submissions:
+          typeof result === "string"
+            ? [
+                ...(previous.identity === timelineIdentity ? previous.submissions : []),
+                { key: result },
+              ]
+            : previous.identity === timelineIdentity
+              ? previous.submissions
+              : [],
+        sends: previous.identity === timelineIdentity ? previous.sends + 1 : 1,
       }));
     }
     return result !== false;
@@ -358,7 +389,10 @@ function GoatBotChatViewContent({
                 aria-label={`${title} home`}
                 aria-expanded={panelOpen}
                 disabled={!bot}
-                onClick={() => setPanelOpen((open) => !open)}
+                onClick={() => {
+                  if (panelOpen) setHomeReturn(null);
+                  setPanelOpen(!panelOpen);
+                }}
                 className="goat-name-capsule max-w-full min-w-0 text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               >
                 <span className="goat-name-avatar flex shrink-0">
@@ -450,13 +484,18 @@ function GoatBotChatViewContent({
               onClose={closeFile}
             />
           ) : null}
+          {/* Mounted before the first message, so the chat's first status is heard. */}
+          <GoatBotActivityStatus
+            key={`${timelineIdentity}:activity`}
+            replyingSince={removed ? null : replyingSince}
+          />
+          <GoatBotReplyStatus
+            key={`${timelineIdentity}:reply`}
+            announcement={announcement}
+            sends={local.identity === timelineIdentity ? local.sends : 0}
+          />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
-            {/* Mounted before the first message, so the chat's first status is heard. */}
-            <GoatBotActivityStatus
-              key={timelineIdentity}
-              replyingSince={removed ? null : replyingSince}
-            />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
               <GoatBotOpenFileContext value={fileOpening}>
@@ -467,6 +506,7 @@ function GoatBotChatViewContent({
                     rows={rows}
                     baselineIds={source.baselineIds}
                     sourceIds={source.sourceIds}
+                    onExposure={onExposure}
                     committedSends={source.committedSends}
                     submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}
@@ -575,6 +615,7 @@ function GoatBotChatViewContent({
             onDraft={onDraft}
             notesRefreshKey={notesRefreshKey}
             onClose={() => {
+              setHomeReturn(null);
               setPanelOpen(false);
               // The chip says whether the panel is open, so closing hands control back to it.
               homeRef.current?.focus();
@@ -585,11 +626,19 @@ function GoatBotChatViewContent({
             openFile={shownFile?.file.relativePath ?? null}
             onOpenFile={openFile}
             routineLanding={routineLanding.landing}
+            homeReturn={homeReturn}
+            onHomeReturnConsumed={() => setHomeReturn(null)}
           />
         </aside>
       )}
       {bot && narrow && (
-        <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+        <Sheet
+          open={panelOpen}
+          onOpenChange={(open) => {
+            if (!open) setHomeReturn(null);
+            setPanelOpen(open);
+          }}
+        >
           {/* A phone-width window gives the home the whole screen; wider, the chat stays beside it. */}
           <SheetPopup
             finalFocus={sheetFinalFocus}
@@ -603,13 +652,18 @@ function GoatBotChatViewContent({
               threadId={bot.threadId}
               onDraft={onDraft}
               notesRefreshKey={notesRefreshKey}
-              onShowChat={() => setPanelOpen(false)}
+              onShowChat={() => {
+                setHomeReturn(null);
+                setPanelOpen(false);
+              }}
               peekRows={rowsForTask}
               peekSource={source}
               onRetryInput={onRetryInput}
               openFile={shownFile?.file.relativePath ?? null}
               onOpenFile={openFile}
               routineLanding={routineLanding.landing}
+              homeReturn={homeReturn}
+              onHomeReturnConsumed={() => setHomeReturn(null)}
             />
           </SheetPopup>
         </Sheet>

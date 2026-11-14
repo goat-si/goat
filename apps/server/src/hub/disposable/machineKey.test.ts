@@ -9,7 +9,8 @@ import * as Path from "effect/Path";
 import * as ProcessRunner from "../../processRunner.ts";
 import { make } from "./machineKey.ts";
 
-// POSIX modes; a Windows hub keeps the key under its profile's ACL.
+// it.live: these run the real ssh-keygen and read real file modes, which only wall-clock fixtures can.
+// POSIX modes; a Windows hub cannot hold a disposable machine key (its modes always show group bits).
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -116,5 +117,25 @@ it.live.skipIf(WINDOWS)(
         "machine_ed25519",
         "machine_ed25519.pub",
       ]);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live.skipIf(WINDOWS)(
+  "a key folder that is a symlink is refused and its target never changed",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      // disposable -> elsewhere, a folder GOAT never made.
+      const elsewhere = path.join(root, "elsewhere");
+      yield* fs.makeDirectory(elsewhere);
+      yield* fs.chmod(elsewhere, 0o755);
+      const directory = path.join(root, "disposable");
+      yield* fs.symlink(elsewhere, directory);
+      const refused = yield* (yield* make(directory)).identity.pipe(Effect.flip);
+      expect(refused.message).toContain("symlink");
+      expect((yield* fs.stat(elsewhere)).mode & 0o777).toBe(0o755);
+      expect(yield* fs.readDirectory(elsewhere)).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(services)),
 );

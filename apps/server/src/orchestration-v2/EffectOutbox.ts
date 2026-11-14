@@ -401,6 +401,7 @@ export const layer = Layer.effect(
         AND candidate.status = 'pending'
         AND (candidate.effect_type != 'provider-turn.start' OR candidate.thread_id NOT IN (SELECT value FROM json_each(${encodeIds(guard.blockedThreads)})) OR ${allowedSurvivor})
         AND ${effectTypes === undefined ? sql`1 = 1` : effectTypes.length === 0 ? sql`0 = 1` : sql`candidate.effect_type IN ${sql.in(effectTypes)}`}
+        AND ${occupancy.titleAtCapacity ? sql`candidate.effect_type != 'thread-title.generate'` : sql`1 = 1`}
         AND ${occupancy.titleThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type != 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.titleThreads)})`}
         AND ${occupancy.mainThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type = 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.mainThreads)})`}
         AND ${occupancy.fullLanes.length === 0 ? sql`1 = 1` : sql`candidate.effect_type NOT IN ${sql.in(occupancy.fullLanes.flatMap(effectTypesForLane))}`}

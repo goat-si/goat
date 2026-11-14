@@ -138,11 +138,10 @@ it.effect(
         yield* enroll;
         yield* enroll;
         expect(linkAdds(host.control.calls)).toEqual([]);
-        // No OpenCodex release takes a key with the route yet, so an update cannot help.
+        // OpenCodex 2.100.3 and later take the key with the route, so the text names that release.
         const waiting = yield* listed(attachId);
         expect(waiting).toMatchObject({ state: "attaching" });
-        expect(waiting?.message).toContain("No OpenCodex release");
-        expect(waiting?.message).not.toContain("update OpenCodex");
+        expect(waiting?.message).toContain("update OpenCodex on the hub to 2.100.3 or later");
         // A Home older than explicit routes is told to update.
         home.contracts = new Set(["link.operation/1", "link.recover/1"]);
         yield* enroll;
@@ -425,6 +424,11 @@ it.effect(
           state: "paused",
           message: expect.stringContaining("before recording it"),
         });
+        // OpenCodex refuses a key file it cannot use before its journal opens, and its CLI prints no
+        // code for it, so the stop names that cause too.
+        expect(yield* listed(attachId)).toMatchObject({
+          message: expect.stringContaining("machine key file"),
+        });
       }),
     ),
 );
@@ -538,6 +542,7 @@ it.effect("reach tells a refused key, a changed host key and an unusable key apa
           /refused this hub's machine key.*authorized_keys.*Settings → Hub/su,
         ),
       });
+      expect((yield* listed(first.attachId))?.message).not.toMatch(/machineKey|goat_hub/u);
       host.control.reachAnswers.set(first.nodeId, "unreachable");
       yield* enroll;
       expect(yield* listed(first.attachId)).toMatchObject({
@@ -631,6 +636,7 @@ it.effect("an attach that loses its authority after the machine joined says so i
       const machine = yield* listed(attachId);
       expect(machine).toMatchObject({ state: "paused" });
       expect(machine?.message).toContain("then lost its authority");
+      expect(machine?.message).toContain("pen revoke");
       expect(machine?.message).not.toContain("joined Pen after");
     }),
   ),
@@ -741,11 +747,9 @@ it.effect("a machine key path OpenCodex would refuse stops the link before any o
       withIdentity(home);
       const { attachId } = yield* joined(pen, host, 1);
       // OpenCodex takes an identity file of letters, digits and ._+/- only.
-      host.control.keyFile = "/Users/a person/.goat/userdata/disposable/machine_ed25519";
+      host.control.keyPath = { kind: "form" };
       yield* enroll;
-      host.control.keyFile = MACHINE_KEY_FILE;
       yield* enroll;
-      host.control.keyFile = "/srv/goat~x/disposable/machine_ed25519";
       yield* enroll;
       expect(linkAdds(host.control.calls)).toEqual([]);
       expect(yield* listed(attachId)).toMatchObject({
@@ -776,4 +780,196 @@ it.effect("an entry that stays open through three sends of its id stops for a pe
       });
     }),
   ),
+);
+
+it.effect(
+  "one failed journal read after a long gap waits; only 2 hours of failed reads stop the record",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the add left its entry open
+        // The hub was off overnight; the first read after it fails once.
+        yield* TestClock.adjust(8 * HOUR);
+        host.control.journalUnreadable = true;
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+        yield* TestClock.adjust(2 * HOUR);
+        yield* enroll;
+        // People see only the message: it names the operation and the way out of Pen.
+        const stopped = yield* listed(attachId);
+        expect(stopped).toMatchObject({ state: "unknown" });
+        expect(stopped?.message).toContain("for two hours");
+        expect(stopped?.message).toContain(attachId + ".link.1");
+        expect(stopped?.message).toContain("pen revoke");
+      }),
+    ),
+);
+
+it.effect(
+  "a removal more than 2 hours after the id was stored keeps naming the operation the journal pruned",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        yield* TestClock.adjust(3 * HOUR);
+        host.control.forget(attachId + ".link.1");
+        pen.members.delete(key(1));
+        yield* listed(attachId);
+        yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({
+          state: "failed",
+          message: expect.stringContaining(attachId + ".link.1"),
+        });
+      }),
+    ),
+);
+
+it.effect(
+  "a known_hosts file that no longer holds the pinned line at reach stops with its own text, not as Pen's change",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        yield* enroll; // route
+        host.control.knownHosts.set(attachId, "edited by hand\n");
+        yield* enroll;
+        const machine = yield* listed(attachId);
+        expect(machine).toMatchObject({ state: "paused", class: "disposable" });
+        expect(machine?.message).toContain("known_hosts");
+        expect(machine?.message).not.toContain("Pen now advertises");
+      }),
+    ),
+);
+
+it.effect(
+  "OpenCodex refusing the key file stops the attach at once with GOAT's text for its hint",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push({ identityRefused: "identity_file_permissions" });
+        for (let pass = 0; pass < 6; pass += 1) yield* enroll;
+        expect(linkAdds(host.control.calls)).toHaveLength(1);
+        const machine = yield* listed(attachId);
+        expect(machine).toMatchObject({ state: "paused" });
+        expect(machine?.message).toContain("OpenCodex refused this hub's machine key file");
+        expect(machine?.message).toContain("another user");
+      }),
+    ),
+);
+
+it.effect("an answer from the journal between failed reads restarts the 2 hours", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.adds.push("open");
+      for (let pass = 0; pass < 3; pass += 1) yield* enroll; // open, first seen now
+      yield* TestClock.adjust(60_000);
+      host.control.journalUnreadable = true;
+      yield* enroll; // a failed read
+      yield* TestClock.adjust(60_000);
+      host.control.journalUnreadable = false;
+      yield* enroll; // the journal answers: still open
+      yield* TestClock.adjust(2 * HOUR);
+      host.control.journalUnreadable = true;
+      yield* enroll; // failing again, for the first time since that answer
+      expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+    }),
+  ),
+);
+
+it.effect(
+  "a key-file refusal is read against the journal first; a recorded operation is kept",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        // ocx printed a refusal line, yet the Home recorded the operation (an earlier send of the id).
+        host.control.adds.push({ identityRefused: "identity_file_missing", journalled: true });
+        for (let pass = 0; pass < 4; pass += 1) yield* enroll;
+        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
+      }),
+    ),
+);
+
+it.effect(
+  "a resend after a journal answer starts a new run of failed reads; one failed read right after it waits",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("open");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the add left its entry open
+        yield* TestClock.adjust(HOUR);
+        host.control.journalUnreadable = true;
+        yield* enroll; // a failed read starts a run
+        // Two hours on the journal answers "open", long stale, so the id is sent again...
+        yield* TestClock.adjust(2 * HOUR);
+        host.control.journalUnreadable = false;
+        host.control.onAdd = () => {
+          host.control.journalUnreadable = true;
+        };
+        yield* enroll;
+        expect(linkAdds(host.control.calls)).toHaveLength(2);
+        // ...and the read right after that send fails: the old run is over, so it waits.
+        expect(yield* listed(attachId)).toMatchObject({ state: "attaching" });
+      }),
+    ),
+);
+
+it.effect("a key answer without a folder drops the old folder and stops writing every pass", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      withIdentity(home);
+      const { attachId } = yield* joined(pen, host, 1);
+      host.control.keyPath = {
+        kind: "directory",
+        directory: "/srv/team",
+        problem: "writable",
+        owner: 0,
+        chmod: false,
+      };
+      for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+      host.control.keyPath = { kind: "key", problem: "unreadable" };
+      yield* enroll;
+      const updatedAt = (yield* rows).find((row) => row.attach_id === attachId)?.updated_at;
+      yield* TestClock.adjust(60 * 1000);
+      yield* enroll;
+      yield* enroll;
+      const row = (yield* rows).find((one) => one.attach_id === attachId);
+      expect(row?.updated_at).toBe(updatedAt);
+      expect(String(row?.enroll_json)).not.toContain("/srv/team");
+    }),
+  ),
+);
+
+it.effect(
+  "after GOAT's home moves, reach uses the known_hosts file written at the current path",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        yield* enroll; // route: the known_hosts path is stored under the old home
+        host.control.knownHostsDir = "/home/me/goat-new/userdata/disposable/known_hosts/";
+        yield* enroll; // reach
+        expect(host.control.reached.at(-1)?.knownHostsFile).toBe(
+          "/home/me/goat-new/userdata/disposable/known_hosts/" + attachId,
+        );
+        yield* enroll; // link
+        yield* enroll; // verify
+        expect(yield* listed(attachId)).toMatchObject({ state: "linked" });
+      }),
+    ),
 );

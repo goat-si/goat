@@ -230,9 +230,12 @@ export interface GoatBotShownFace {
 export function useGoatBotMainFace(
   activity: { readonly state: "reading" | "working" } | null,
   chatOpen: boolean,
+  waitingOverride?: number | null,
 ): GoatBotShownFace {
   const botRef = useGlobalAgentStore((state) => state.botRef);
-  const waitingCount = useGoatBotWaitingCount() ?? 0;
+  const legacyWaiting = useGoatBotWaitingCount();
+  const waitingCount =
+    waitingOverride === undefined ? (legacyWaiting ?? 0) : (waitingOverride ?? 0);
   const threadRef = botRef === null ? null : scopeThreadRef(botRef.environmentId, botRef.threadId);
   const shell = useThreadShell(threadRef);
   // The bot-mode sidebar row loads the conversation exactly when the server tracks visits
@@ -250,6 +253,7 @@ export function GoatBotMainAvatar({
   surface = "screen",
   emoji = null,
   countInLabel = false,
+  waitingOverride,
 }: {
   readonly size?: keyof typeof CIRCLE;
   readonly activity?: { readonly state: "reading" | "working" } | null;
@@ -262,8 +266,9 @@ export function GoatBotMainAvatar({
   readonly emoji?: string | null | undefined;
   /** The row hides its own waiting badge from assistive technology; the label says the count. */
   readonly countInLabel?: boolean;
+  readonly waitingOverride?: number | null | undefined;
 }) {
-  const face = useGoatBotMainFace(activity, chatOpen);
+  const face = useGoatBotMainFace(activity, chatOpen, waitingOverride);
   return (
     <GoatBotAvatar
       size={size}

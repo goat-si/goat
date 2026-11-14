@@ -23,6 +23,7 @@ export type AcpMcpBridgeErrorKind = "transport" | "http" | "protocol" | "rpc";
 export class AcpMcpBridgeError extends Error {
   readonly _tag = "AcpMcpBridgeError";
   readonly kind: AcpMcpBridgeErrorKind;
+  readonly stage?: "initialize" | undefined;
   readonly status: number | undefined;
   /** The JSON-RPC error code, for an rpc error that has one. */
   readonly rpcCode: number | undefined;
@@ -35,6 +36,7 @@ export class AcpMcpBridgeError extends Error {
     options?: {
       readonly cause?: unknown;
       readonly kind?: AcpMcpBridgeErrorKind;
+      readonly stage?: "initialize" | undefined;
       readonly status?: number;
       readonly rpcCode?: number;
       readonly rpcMessage?: string;
@@ -43,6 +45,7 @@ export class AcpMcpBridgeError extends Error {
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.kind = options?.kind ?? "transport";
+    this.stage = options?.stage;
     this.status = options?.status;
     this.rpcCode = options?.rpcCode;
     this.rpcMessage = options?.rpcMessage;
@@ -177,7 +180,10 @@ const initializeAcpMcpSession = Effect.fn("AcpMcpStdioBridge.initialize")(functi
   const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
   if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
     return yield* Effect.fail(
-      new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", { kind: "protocol" }),
+      new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", {
+        kind: "protocol",
+        stage: "initialize",
+      }),
     );
   }
   yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });

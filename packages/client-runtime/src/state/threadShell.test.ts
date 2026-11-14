@@ -471,3 +471,110 @@ describe("child thread requests", () => {
     registry.dispose();
   });
 });
+
+it("switches each environment between Home links and legacy listed work", () => {
+  const harness = makeHarness([environmentId, remoteEnvironmentId]);
+  const main = ThreadId.make("current");
+  const legacy = ThreadId.make("legacy");
+  const current = Atom.make({
+    rosterKnown: true,
+    byBot: [{ botId: "main" as never, eligible: true, list: "ready" as const }],
+    links: [{ taskId: "task" as never, environmentId, threadId: main, kind: "coding" as const }],
+  });
+  const old = Atom.make({
+    rosterKnown: true,
+    byBot: [{ botId: "main" as never, eligible: false, list: "ready" as const }],
+    links: [],
+  });
+  harness.registry.set(harness.snapshotAtom(environmentId), {
+    ...v2ShellSnapshot,
+    threads: [{ ...v2ThreadShell, id: main }],
+  });
+  harness.registry.set(harness.snapshotAtom(remoteEnvironmentId), {
+    ...v2ShellSnapshot,
+    threads: [{ ...v2ThreadShell, id: legacy }],
+  });
+  const shells = createEnvironmentThreadShellAtoms({
+    catalogValueAtom: harness.catalogValueAtom,
+    snapshotAtom: harness.snapshotAtom,
+    goatBotHomeWork: (id) => (id === environmentId ? current : old),
+    goatBotListedWork: ({ environmentIdsAtom }) =>
+      Atom.make((get) =>
+        get(environmentIdsAtom).map((id) => ({
+          environmentId: id,
+          threadId: id === environmentId ? main : legacy,
+        })),
+      ),
+  });
+  harness.registry.mount(shells.goatBotObservationThreadKeysAtom);
+  const hidden = () => harness.registry.get(shells.goatBotObservationThreadKeysAtom);
+  expect(hidden().has(`${environmentId}:${main}`)).toBe(true);
+  expect(hidden().has(`${remoteEnvironmentId}:${legacy}`)).toBe(true);
+  harness.registry.set(current, {
+    rosterKnown: true,
+    byBot: [{ botId: "main" as never, eligible: true, list: "ready" }],
+    links: [],
+  });
+  expect(hidden().has(`${environmentId}:${main}`)).toBe(false);
+  expect(hidden().has(`${remoteEnvironmentId}:${legacy}`)).toBe(true);
+  harness.registry.dispose();
+});
+
+it("lists a deleted member's work again and falls back to listed work while a bot is not eligible", () => {
+  const harness = makeHarness([environmentId]);
+  const mainThread = ThreadId.make("main-work");
+  const memberThread = ThreadId.make("member-work");
+  const link = (threadId: ThreadId) => ({
+    taskId: "task" as never,
+    environmentId,
+    threadId,
+    kind: "coding" as const,
+  });
+  const work = Atom.make({
+    rosterKnown: true,
+    byBot: [
+      { botId: "main" as never, eligible: true, list: "ready" as const },
+      { botId: "member" as never, eligible: true, list: "ready" as const },
+    ],
+    links: [link(mainThread), link(memberThread)],
+  });
+  harness.registry.set(harness.snapshotAtom(environmentId), {
+    ...v2ShellSnapshot,
+    threads: [
+      { ...v2ThreadShell, id: mainThread },
+      { ...v2ThreadShell, id: memberThread },
+    ],
+  });
+  const shells = createEnvironmentThreadShellAtoms({
+    catalogValueAtom: harness.catalogValueAtom,
+    snapshotAtom: harness.snapshotAtom,
+    goatBotHomeWork: () => work,
+    goatBotListedWork: ({ environmentIdsAtom }) =>
+      Atom.make((get) =>
+        get(environmentIdsAtom).map((id) => ({ environmentId: id, threadId: mainThread })),
+      ),
+  });
+  harness.registry.mount(shells.goatBotObservationThreadKeysAtom);
+  const hidden = () => harness.registry.get(shells.goatBotObservationThreadKeysAtom);
+  expect(hidden().has(`${environmentId}:${memberThread}`)).toBe(true);
+  // The member is deleted: the roster no longer names it, so its link goes with it.
+  harness.registry.set(work, {
+    rosterKnown: true,
+    byBot: [{ botId: "main" as never, eligible: true, list: "ready" }],
+    links: [link(mainThread)],
+  });
+  expect(hidden().has(`${environmentId}:${memberThread}`)).toBe(false);
+  expect(hidden().has(`${environmentId}:${mainThread}`)).toBe(true);
+  // One bot not eligible: Home's links stop governing and the legacy listed work decides.
+  harness.registry.set(work, {
+    rosterKnown: true,
+    byBot: [
+      { botId: "main" as never, eligible: true, list: "ready" },
+      { botId: "member" as never, eligible: false, list: "ready" },
+    ],
+    links: [link(memberThread)],
+  });
+  expect(hidden().has(`${environmentId}:${memberThread}`)).toBe(false);
+  expect(hidden().has(`${environmentId}:${mainThread}`)).toBe(true);
+  harness.registry.dispose();
+});

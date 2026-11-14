@@ -1,3 +1,22 @@
+import {
+  BOOT_SERVICE_NAMES,
+  LEGACY_BOOT_SERVICE_NAMES,
+  type BootServiceNames,
+} from "./bootServiceNames.ts";
+import { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
+export {
+  BOOT_SERVICE_NAMES,
+  LEGACY_BOOT_SERVICE_NAMES,
+  type BootServiceNames,
+} from "./bootServiceNames.ts";
+import { systemdManager } from "./systemdManager.ts";
+import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
+import {
+  escapeSystemdSpecifiers,
+  unescapeXmlText,
+  quoteSystemdValue,
+  unquoteSystemdValue,
+} from "./systemdValues.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -10,15 +29,11 @@ import * as FileSystem from "effect/FileSystem";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import {
-  GOAT_ENVIRONMENT_PATH,
-  LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
-  LEGACY_BOOT_SERVICE_UNIT_FILE,
-  legacyEnvName,
-} from "@goat/contracts/legacyT3Names";
+import { GOAT_ENVIRONMENT_PATH, legacyEnvName } from "@goat/contracts/legacyT3Names";
 import { CLI_RELEASE_BASE_URL_ENV } from "@goat/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -42,29 +57,6 @@ import {
   type ServiceState,
 } from "./serviceProtocol.ts";
 
-/** The names a service manager knows one install by. */
-export interface BootServiceNames {
-  readonly unitFile: string;
-  readonly launchdLabel: string;
-}
-
-export const BOOT_SERVICE_NAMES: BootServiceNames = {
-  unitFile: "goat.service",
-  // Distinct from the desktop app's bundle id (si.goat.desktop), so launchd
-  // and TCC records never collide.
-  launchdLabel: "si.goat.service",
-};
-
-/**
- * Installed by builds before the GOAT rename, and by upstream T3 Code. Install
- * and restart move a legacy unit that serves this GOAT home to the current
- * names; a legacy unit serving another home belongs to someone else.
- */
-export const LEGACY_BOOT_SERVICE_NAMES: BootServiceNames = {
-  unitFile: LEGACY_BOOT_SERVICE_UNIT_FILE,
-  launchdLabel: LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
-};
-
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
 const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
@@ -76,27 +68,6 @@ const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 const bootServiceEnvNames = (name: string) => [name, legacyEnvName(name) ?? name] as const;
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 
-/** systemd expands `%` specifiers, including in unquoted append-log paths. */
-function escapeSystemdSpecifiers(value: string): string {
-  return value.replaceAll("%", "%%");
-}
-
-function quoteSystemdValue(value: string): string {
-  const escaped = escapeSystemdSpecifiers(value);
-  return /[\s"'\\]/.test(escaped)
-    ? `"${escaped.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
-    : escaped;
-}
-
-const unquoteSystemdValue = (raw: string) =>
-  (raw.startsWith('"') && raw.endsWith('"')
-    ? raw.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
-    : raw
-  ).replaceAll("%%", "%");
-
-const unescapeXmlText = (value: string) =>
-  value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
-
 export function bootServiceBaseDirOf(contents: string): string | undefined {
   const homeNames = bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).join("|");
   const systemd = new RegExp(`^Environment=(?:${homeNames})=(.*)$`, "m").exec(contents)?.[1];
@@ -107,15 +78,7 @@ export function bootServiceBaseDirOf(contents: string): string | undefined {
   return plist === undefined ? undefined : unescapeXmlText(plist);
 }
 
-/** The executable an installed unit or plist starts: the launcher's runtime. */
-export function bootServiceProgramOf(contents: string): string | undefined {
-  const systemd = /^ExecStart=("(?:\\.|[^"\\])*"|\S+)/m.exec(contents)?.[1];
-  if (systemd !== undefined) return unquoteSystemdValue(systemd);
-  const plist = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(
-    contents,
-  )?.[1];
-  return plist === undefined ? undefined : unescapeXmlText(plist);
-}
+export { bootServiceProgramOf } from "./systemdValues.ts";
 
 export interface BootServicePlan {
   readonly program: ReadonlyArray<string>;
@@ -131,6 +94,8 @@ export function renderBootServiceUnit(
   plan: BootServicePlan,
   names: BootServiceNames = BOOT_SERVICE_NAMES,
 ): string {
+  if (systemdUnsafeValue(plan))
+    throw new BootServiceBaseDirUnsupportedError({ baseDir: plan.baseDir });
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
@@ -309,77 +274,6 @@ interface OwnedLegacyUnit {
   readonly contents: string;
 }
 
-function systemdManager(input: {
-  readonly path: Path.Path;
-  readonly unitDir: string;
-  readonly names: BootServiceNames;
-}): BootServiceManager {
-  const unitPath = input.path.join(input.unitDir, input.names.unitFile);
-  const prepareActivation = [
-    {
-      step: "reloading systemd user units",
-      command: "systemctl",
-      args: ["--user", "daemon-reload"],
-    },
-    {
-      step: "enabling the service",
-      command: "systemctl",
-      args: ["--user", "enable", input.names.unitFile],
-    },
-  ];
-  return {
-    kind: "systemd",
-    unitPath,
-    render: (plan) => renderBootServiceUnit(plan, input.names),
-    stop: [
-      {
-        step: "stopping the installed service",
-        command: "systemctl",
-        args: ["--user", "stop", input.names.unitFile],
-        timeout: STOP_STEP_TIMEOUT,
-      },
-    ],
-    activate: [
-      ...prepareActivation,
-      {
-        step: "starting the service",
-        command: "systemctl",
-        args: ["--user", "restart", input.names.unitFile],
-      },
-    ],
-    restart: [
-      {
-        step: "restarting the service after a failed update",
-        command: "systemctl",
-        args: ["--user", "restart", input.names.unitFile],
-      },
-    ],
-    handoff: [
-      ...prepareActivation,
-      {
-        step: "restarting the service",
-        command: "systemctl",
-        args: ["--user", "restart", "--no-block", input.names.unitFile],
-      },
-    ],
-    deactivate: [
-      {
-        step: "stopping the service",
-        command: "systemctl",
-        args: ["--user", "disable", "--now", input.names.unitFile],
-        timeout: STOP_STEP_TIMEOUT,
-      },
-    ],
-    finalize: [
-      {
-        step: "reloading systemd user units",
-        command: "systemctl",
-        args: ["--user", "daemon-reload"],
-      },
-    ],
-  };
-}
-
 function launchdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
@@ -470,6 +364,8 @@ function selectBootServiceManager(input: {
   }
   if (input.platform === "linux") {
     return systemdManager({
+      render: renderBootServiceUnit,
+      stopTimeout: STOP_STEP_TIMEOUT,
       path: input.path,
       names: input.names,
       unitDir:
@@ -494,42 +390,6 @@ function selectBootServiceManager(input: {
   }
   return undefined;
 }
-
-const decodeSystemdUnitPaths = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ data: Schema.Array(Schema.String) })),
-);
-
-// The manager may not share the installer's environment; JSON preserves spaces in its paths.
-const readSystemdUnitDirectory = Effect.fn("cloud.boot_service.read_systemd_unit_directory")(
-  function* () {
-    const runner = yield* ProcessRunner.ProcessRunner;
-    const path = yield* Path.Path;
-    const result = yield* runner.run({
-      command: "busctl",
-      args: [
-        "--user",
-        "--json=short",
-        "get-property",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
-        "UnitPath",
-      ],
-      timeout: Duration.seconds(5),
-    });
-    if (result.code !== 0) return undefined;
-    const { data } = yield* decodeSystemdUnitPaths(result.stdout);
-    // The persistent control directory identifies the manager's config root despite UnitPath overrides.
-    const controlDirectory = data.find(
-      (directory) =>
-        path.isAbsolute(directory) &&
-        directory.endsWith("/systemd/user.control") &&
-        data.includes(directory.slice(0, -".control".length)),
-    );
-    return controlDirectory?.slice(0, -".control".length);
-  },
-  Effect.orElseSucceed(() => undefined),
-);
 
 export class BootServiceUnsupportedError extends Schema.TaggedError<BootServiceUnsupportedError>()(
   "BootServiceUnsupportedError",
@@ -625,6 +485,7 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootSer
 
 export type BootServiceError =
   | BootServiceUnsupportedError
+  | BootServiceBaseDirUnsupportedError
   | BootServiceCommandError
   | BootServiceInstallError
   | BootServicePrerequisiteError
@@ -690,6 +551,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const homeDir = yield* Config.String("HOME").pipe(Config.withDefault(""));
   const xdgConfigHome = yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""));
   const installerPath = yield* Config.String("PATH").pipe(Config.withDefault(""));
+  const xdgRuntimeDir = yield* Config.String("XDG_RUNTIME_DIR").pipe(Config.withDefault(""));
+  const rootUnderSudo =
+    uid === 0 && (yield* Config.String("SUDO_USER").pipe(Config.withDefault(""))) !== "";
   const inheritedServiceUnit = yield* Config.String(BOOT_SERVICE_UNIT_ENV).pipe(
     Config.withDefault(""),
   );
@@ -699,7 +563,18 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   ].includes(inheritedServiceUnit);
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const runner = yield* ProcessRunner.ProcessRunner;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const userManagerEnv =
+    platform === "linux" && xdgRuntimeDir === "" && uid !== undefined && !rootUnderSudo
+      ? { XDG_RUNTIME_DIR: `/run/user/${uid}` }
+      : undefined;
+  const runner: ProcessRunner.ProcessRunner["Service"] =
+    userManagerEnv === undefined
+      ? processRunner
+      : {
+          run: (request) =>
+            processRunner.run({ ...request, env: { ...userManagerEnv, ...request.env } }),
+        };
   const host = input.host ?? { execPath: hostExecPath };
   const runtimePaths = pinnedRuntimePaths(path, input.baseDir, input.cliVersion, platform);
   const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
@@ -730,8 +605,14 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     ),
   ).join(":");
 
-  const systemdUnitDir = platform === "linux" ? yield* readSystemdUnitDirectory() : undefined;
-  const detectedManager = selectBootServiceManager({
+  let systemdUnitDir =
+    platform === "linux"
+      ? yield* readSystemdUnitDirectory().pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provideService(Path.Path, path),
+        )
+      : undefined;
+  let detectedManager = selectBootServiceManager({
     platform,
     homeDir,
     xdgConfigHome,
@@ -741,7 +622,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     environmentPath,
     names: BOOT_SERVICE_NAMES,
   });
-  const legacyManager = selectBootServiceManager({
+  let legacyManager = selectBootServiceManager({
     platform,
     homeDir,
     xdgConfigHome,
@@ -751,7 +632,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     environmentPath,
     names: LEGACY_BOOT_SERVICE_NAMES,
   });
-  const unitPath = detectedManager?.unitPath ?? "";
+  let unitPath = detectedManager?.unitPath ?? "";
   const logPath = path.join(input.logsDir, BOOT_SERVICE_LOG_FILE);
   const statePath = path.join(input.baseDir, "runtime", SERVICE_STATE_FILE);
   const restartPendingPath = path.join(input.baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
@@ -774,7 +655,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         );
       }),
     ).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-  const plan: BootServicePlan = {
+  let plan: BootServicePlan = {
     program: [runtimePaths.entryPath, "__service-launcher"],
     baseDir: input.baseDir,
     logPath,
@@ -877,19 +758,33 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const requireSystemdPrerequisites = Effect.gen(function* () {
     const problems = yield* readSystemdProblems(false);
-    const unavailable = problems.find((problem) => problem !== "linger-disabled");
-    if (unavailable) return yield* new BootServicePrerequisiteError({ problem: unavailable });
-    if (!problems.includes("linger-disabled")) return;
+    const firstProblem = problems[0];
+    if (firstProblem === undefined) return;
+    const withoutSession =
+      problems.includes("linger-unavailable") && problems.includes("user-manager-unavailable");
+    const lingerDisabled = problems.includes("linger-disabled");
+    if (rootUnderSudo || (!lingerDisabled && !withoutSession))
+      return yield* new BootServicePrerequisiteError({ problem: firstProblem });
     yield* runStep("enabling lingering for this user", "loginctl", [
       "enable-linger",
       "--no-ask-password",
       ...(uid === undefined ? [] : [String(uid)]),
     ]).pipe(
       Effect.mapError(
-        (cause) => new BootServicePrerequisiteError({ problem: "linger-disabled", cause }),
+        (cause) =>
+          new BootServicePrerequisiteError({
+            problem: lingerDisabled ? "linger-disabled" : firstProblem,
+            cause,
+          }),
       ),
     );
-    const remaining = yield* readSystemdProblems(false);
+    const remaining = yield* readSystemdProblems(false).pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("500 millis"),
+        times: 10,
+        while: (current) => current.includes("user-manager-unavailable"),
+      }),
+    );
     if (remaining[0]) return yield* new BootServicePrerequisiteError({ problem: remaining[0] });
   });
 
@@ -1021,20 +916,57 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     readonly allowDowngrade?: boolean;
     readonly start?: boolean;
   }) {
-    const manager = yield* requireManager;
-    const current = yield* readCurrentUnit;
+    let manager = yield* requireManager;
+    if (manager.kind === "systemd" && systemdUnsafeValue(plan))
+      return yield* new BootServiceBaseDirUnsupportedError({ baseDir: input.baseDir });
+    let current = yield* readCurrentUnit;
     if (current._tag === "Foreign") {
       return yield* new BootServiceCommandError({
         step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
       });
     }
-    const currentInstalled = current._tag === "Owned";
+    let currentInstalled = current._tag === "Owned";
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
     if (manager.kind === "systemd") {
       yield* requireSystemdPrerequisites.pipe(Effect.tapError(logFailure));
+      if (systemdUnitDir === undefined) {
+        systemdUnitDir = yield* readSystemdUnitDirectory().pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provideService(Path.Path, path),
+        );
+        detectedManager = selectBootServiceManager({
+          platform,
+          homeDir,
+          xdgConfigHome,
+          systemdUnitDir,
+          uid,
+          path,
+          environmentPath,
+          names: BOOT_SERVICE_NAMES,
+        });
+        legacyManager = selectBootServiceManager({
+          platform,
+          homeDir,
+          xdgConfigHome,
+          systemdUnitDir,
+          uid,
+          path,
+          environmentPath,
+          names: LEGACY_BOOT_SERVICE_NAMES,
+        });
+        manager = yield* requireManager;
+        unitPath = manager.unitPath;
+        plan = { ...plan, unitPath };
+        current = yield* readCurrentUnit;
+        if (current._tag === "Foreign")
+          return yield* new BootServiceCommandError({
+            step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
+          });
+        currentInstalled = current._tag === "Owned";
+      }
     }
 
     yield* ensurePinnedRuntimeInstalled({
@@ -1338,7 +1270,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   }).pipe(Effect.withSpan("cloud.boot_service.uninstall"));
 
   const status: BootService["Service"]["status"] = Effect.gen(function* () {
-    if (detectedManager === undefined) {
+    const manager = detectedManager;
+    if (manager === undefined) {
       return { supported: false, installed: false, current: false, unitPath, logPath };
     }
     if (!(yield* fs.exists(unitPath))) {
@@ -1352,7 +1285,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         ? serviceStateActiveVersion(stateText.value)
         : undefined;
       const problems: BootServiceProblem[] =
-        detectedManager.kind === "systemd"
+        manager.kind === "systemd"
           ? [...(yield* readSystemdProblems(true, LEGACY_BOOT_SERVICE_NAMES.unitFile))]
           : [];
       // The goat.service branch reports this; skipping it here makes `goat update`
@@ -1391,11 +1324,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       };
     }
     const normalizeUnit = (contents: string) =>
-      detectedManager.kind === "launchd"
+      manager.kind === "launchd"
         ? contents.replace(/(<key>PATH<\/key>\n\s*<string>)[^<]*(<\/string>)/, "$1$2")
         : contents;
     const problems: BootServiceProblem[] =
-      detectedManager.kind === "systemd" ? [...(yield* readSystemdProblems(true))] : [];
+      manager.kind === "systemd" ? [...(yield* readSystemdProblems(true))] : [];
     if (yield* fs.exists(restartPendingPath)) problems.push("restart-pending");
     return {
       supported: true,
@@ -1405,7 +1338,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       problems,
       current:
         problems.length === 0 &&
-        normalizeUnit(unit) === normalizeUnit(detectedManager.render(plan)) &&
+        !(manager.kind === "systemd" && systemdUnsafeValue(plan)) &&
+        normalizeUnit(unit) === normalizeUnit(manager.render(plan)) &&
         runtimeEntryExists &&
         Option.isSome(runtimeSentinel) &&
         runtimeSentinel.value.trim() === input.cliVersion &&

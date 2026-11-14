@@ -23,7 +23,11 @@ import {
   platform,
   arch,
 } from "./tunnel.fixture.ts";
-import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import {
+  protocolExecutable,
+  makeProtocolFixture,
+  assertPickedFromReservedPort,
+} from "./tunnel.protocol.fixture.ts";
 import { awaitProtocolStop, synchronizeProtocolStop } from "./tunnel.protocol-stop.fixture.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
@@ -435,6 +439,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 if [ "$1" = - ] && [ "\${2:-}" = '${f.state}/port' ]; then
   printf 'pick-port\\n' >> "$HOME/.test/discovered-helpers"
   a=$1; b=$2; shift 3; set -- "$a" "$b" '${f.pickPort}' "$@"
+  picked="$('${process.execPath.replaceAll("'", "'\\''")}' "$@")" || exit $?
+  printf '%s\\n' "$picked" >> "$HOME/.test/pick-port-results"
+  printf '%s\\n' "$picked"
+  exit 0
 fi
 exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `,
@@ -479,8 +487,13 @@ export PATH
           }).pipe(Effect.provide(layer(entry, true)), Effect.scoped);
           const pid = (yield* f.fs.readFileString(`${f.state}/pid`)).trim();
           const port = (yield* f.fs.readFileString(`${f.state}/port`)).trim();
-          assert.equal(port, String(f.pickPort));
-          const identity = `${entry} serve --host 127.0.0.1 --port ${port} --base-dir ${f.home}/.goat\n`;
+          const picks = (yield* f.fs.readFileString(`${f.test}/pick-port-results`))
+            .trim()
+            .split("\n");
+          const picked = picks[picks.length - 1] ?? "";
+          assertPickedFromReservedPort(f.pickPort, picked);
+          assert.equal(port, picked);
+          const identity = `${entry} serve --host 127.0.0.1 --port ${picked} --base-dir ${f.home}/.goat\n`;
           assert.equal(yield* f.fs.readFileString(`${f.state}/identity`), identity);
           // Read real ps: the shim execs the native binary, not its own pathname.
           const ps = yield* f.realSpawner.spawn(
@@ -490,7 +503,10 @@ export PATH
           assert.equal(Number(yield* ps.exitCode), 0);
           assert.equal(command, `${shim ? process.execPath : "node"} ${identity.trim()}`);
           if (shim)
-            assert.equal(yield* f.fs.readFileString(`${f.test}/discovered-helpers`), "pick-port\n");
+            assert.equal(
+              yield* f.fs.readFileString(`${f.test}/discovered-helpers`),
+              "pick-port\n".repeat(picks.length),
+            );
           yield* Effect.gen(function* () {
             const manager = yield* SshTunnel.SshEnvironmentManager;
             yield* manager.ensureEnvironment(uploadTarget);

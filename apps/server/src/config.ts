@@ -54,6 +54,8 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  /** The base folder came from GOAT_HOME or --base-dir, not GOAT's default. */
+  readonly baseDirIsExplicit?: boolean;
 }
 
 export interface DeriveServerPathsOptions {
@@ -175,6 +177,7 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    ...(options.baseDirIsExplicit === true ? { baseDirIsExplicit: true } : {}),
   };
 });
 

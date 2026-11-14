@@ -345,6 +345,15 @@ else if (!${JSON.stringify((signals.nodeReadiness ?? false) || signals.contested
 `;
 };
 
+/** pick-port scans up from the reserved start, so a port another process took first moves it higher. */
+export const assertPickedFromReservedPort = (pickPort: number, port: string) => {
+  assert.match(port, /^[1-9]\d*$/);
+  const picked = Number(port);
+  assert.isAtMost(picked, 65_535);
+  assert.isAtLeast(picked, pickPort);
+  assert.isBelow(picked, pickPort + 200); // REMOTE_PORT_SCAN_WINDOW in tunnel.ts and the shim's "$4" check.
+};
+
 export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* (input: {
   live: boolean;
   /**
@@ -437,6 +446,10 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
 if [ "$#" -eq 4 ] && [ "$1" = - ] && [ "\${2##*/}" = port ] && [ "$3" = 3773 ] && [ "$4" = 200 ]; then
   printf '%s\\n' "$3" >> "$HOME/.test/pick-port-defaults"
   set -- "$1" "$2" ${pickPort} "$4"
+  picked="$('${process.execPath.replaceAll("'", "'\\''")}' "$@")" || exit $?
+  printf '%s\\n' "$picked" >> "$HOME/.test/pick-port-results"
+  printf '%s\\n' "$picked"
+  exit 0
 fi
 exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `,

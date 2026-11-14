@@ -62,6 +62,8 @@ export function GoatBotWorkPanel({
   openFile = null,
   onOpenFile,
   routineLanding = null,
+  homeReturn = null,
+  onHomeReturnConsumed,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -83,10 +85,19 @@ export function GoatBotWorkPanel({
   onOpenFile: (file: ChannelBotArtifact) => void;
   /** A routine chip in the chat: Home shows with that routine's row focused. */
   routineLanding?: GoatBotRoutineLanding | null | undefined;
+  homeReturn?:
+    | { readonly taskId: ChannelTaskId; readonly focusFrom: Element | null }
+    | null
+    | undefined;
+  /** Back's return has had its one focus attempt; the parent forgets it. */
+  onHomeReturnConsumed?: (() => void) | undefined;
 }) {
   const [tab, setTab] = useState<Tab>("Home");
+  // Back's return applies once; the row stays marked until a peek opens.
+  const [pendingReturn, setPendingReturn] = useState(homeReturn);
+  const [returnedTask, setReturnedTask] = useState(homeReturn?.taskId ?? null);
   // Work's tail stays open across a peek, which replaces the whole Home scroll while it shows.
-  const [showAllWork, setShowAllWork] = useState(false);
+  const [showAllWork, setShowAllWork] = useState(homeReturn !== null);
   const [peek, setPeek] = useState<{
     readonly taskId: ChannelTaskId;
     readonly title: string;
@@ -94,7 +105,9 @@ export function GoatBotWorkPanel({
   // Where focus lands once Home shows again: the row Back returns to, or the Home tab when the
   // peek held focus and closed because its task left the list. It applies once, so later tab
   // switches keep focus.
-  const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(null);
+  const [focusTarget, setFocusTarget] = useState<ChannelTaskId | "home" | null>(
+    homeReturn?.taskId ?? null,
+  );
   // A peek removed while focused fires no blur, so this still says it held focus as it closes.
   const [peekHasFocus, setPeekHasFocus] = useState(false);
   // The routine row a chip asked for; it takes focus once it shows, and nothing else moves it.
@@ -116,8 +129,18 @@ export function GoatBotWorkPanel({
     // Only focus that the closed peek dropped moves; someone typing elsewhere keeps theirs.
     const active = document.activeElement;
     // Home restores its own scroll, so the row it returns to does not drag the panel with it.
-    if (active === null || active === document.body) element.focus({ preventScroll: true });
+    // Back's return lands only where focus still is what Back left; a closed peek's, on the body.
+    const returning = pendingReturn !== null && focusTarget === pendingReturn.taskId;
+    if (returning) element.scrollIntoView({ block: "nearest" });
+    const settled = returning
+      ? (active ?? document.body) === (pendingReturn.focusFrom ?? document.body)
+      : active === null || active === document.body;
+    if (settled) element.focus({ preventScroll: true });
     setFocusTarget(null);
+    if (pendingReturn !== null) {
+      setPendingReturn(null);
+      onHomeReturnConsumed?.();
+    }
   };
   // Back also returns Home to where it was scrolled, once per mount; a routine landing scrolls it.
   const homeScroll = useRef(0);
@@ -344,8 +367,10 @@ export function GoatBotWorkPanel({
                 onOpenTask={(row) => {
                   if (peekRows === undefined) return;
                   setRoutineFocus(null);
+                  setReturnedTask(null);
                   setPeek({ taskId: row.task.taskId, title: row.task.title });
                 }}
+                returnTaskId={returnedTask}
                 focusTaskId={focusTarget === "home" ? null : focusTarget}
                 focusRef={focusOnce}
                 notice={

@@ -12,66 +12,28 @@ import { onTestFinished } from "vite-plus/test";
 import {
   isCorepackLauncherMissing,
   pinnedNodeRunners,
-  pinnedVitePlusVersion,
   worktreeInstallCandidates,
+  vpSupportsVerifiedNodeDownload,
 } from "./setup-worktree.ts";
 
 describe("worktreeInstallCandidates", () => {
-  it("prefers vp, then pnpm, then npx vite-plus, without the --yes pnpm 12 can reject (#1001)", () => {
+  it("prefers vp, then pnpm and never adds an installer", () => {
     const vp = { command: "vp i --frozen-lockfile", tool: "vp" };
     const pnpm = { command: "pnpm install --frozen-lockfile", tool: "pnpm" };
-    const npx = {
-      command: "npx --yes --package=vite-plus@1.4.0 -- vp i --frozen-lockfile",
-      tool: "npx vite-plus",
-    };
-    const pinned = { vitePlusVersion: "1.4.0" };
-    assert.deepEqual(worktreeInstallCandidates({ vp: true, pnpm: true, ...pinned }), [
-      vp,
-      pnpm,
-      npx,
-    ]);
-    assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: true, ...pinned }), [pnpm, npx]);
-    assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: false, ...pinned }), [npx]);
-    // Without the workspace's pin npx would run an unpinned release, so it is not offered.
+    assert.deepEqual(worktreeInstallCandidates({ vp: true, pnpm: true }), [vp, pnpm]);
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: true }), [pnpm]);
     assert.deepEqual(worktreeInstallCandidates({ vp: false, pnpm: false }), []);
   });
 });
 
-it("reruns setup under the pinned Node with the global vp, else with Node from npm", () => {
+it("only offers a verified vp runner when downloads are enabled", () => {
   const vp = {
     command: "vp env exec --node 26.12.1 -- node scripts/setup-worktree.ts",
     tool: "vp",
   };
-  const npx = {
-    command: "npx --yes --package=node@26.12.1 -- node scripts/setup-worktree.ts",
-    tool: "npx node@26.12.1",
-  };
-  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, npx: true }), [vp, npx]);
-  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, npx: true }), [npx]);
-  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, npx: false }), []);
-});
-
-it("reads the vite-plus release the workspace catalog pins, and nothing else", () => {
-  assert.equal(
-    pinnedVitePlusVersion(
-      'catalog:\n  vite: npm:x@1.4.0\n  vite-plus: 1.4.0\noverrides:\n  vite-plus: "catalog:"\n',
-    ),
-    "1.4.0",
-  );
-  assert.equal(pinnedVitePlusVersion('catalog:\n  vite-plus: "1.4.0" # pinned\n'), "1.4.0");
-  assert.isUndefined(pinnedVitePlusVersion('overrides:\n  vite-plus: "catalog:"\n'));
-  assert.isUndefined(pinnedVitePlusVersion("catalog:\n  vite-plus: ^1.4.0\n"));
-  // An exact override must not stand in for a catalog entry that is not exact.
-  assert.isUndefined(
-    pinnedVitePlusVersion("catalog:\n  vite-plus: ^1.4.0\noverrides:\n  vite-plus: 2.0.0\n"),
-  );
-  assert.isUndefined(pinnedVitePlusVersion("overrides:\n  vite-plus: 2.0.0\n"));
-  // Comments on the heading and between entries are ordinary YAML.
-  assert.equal(
-    pinnedVitePlusVersion("catalog: # shared pins\n  vite: 1.0.0\n# tooling\n  vite-plus: 1.4.0\n"),
-    "1.4.0",
-  );
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, autoDownload: true }), [vp]);
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: false, autoDownload: true }), []);
+  assert.deepEqual(pinnedNodeRunners({ pinned: "26.12.1", vp: true, autoDownload: false }), []);
 });
 
 it("recognizes only missing corepack pnpm launchers", () => {
@@ -89,7 +51,7 @@ function setupFixture(
   pinned: string,
   pnpmOutput: string,
   trailingLines = 0,
-  npx: "installer" | "runs-node" | "hangs" = "installer",
+  runnerMode: "installer" | "runs-node" | "hangs" = "installer",
   vp: "absent" | "wrong-node" | "partial-result" = "absent",
 ) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
@@ -108,39 +70,42 @@ function setupFixture(
   );
   NodeFS.writeFileSync(
     NodePath.join(root, "package.json"),
-    JSON.stringify({ type: "module", engines: { node: pinned } }),
+    JSON.stringify({ type: "module", engines: { node: pinned }, packageManager: "pnpm@12.14.0" }),
   );
   NodeFS.writeFileSync(
     NodePath.join(root, "pnpm-workspace.yaml"),
     "catalog:\n  vite-plus: 1.4.0\n",
   );
   const windows = HostProcess.Platform.defaultValue() === "win32";
-  // Stands in for `npx --package=node@<pin> -- node <script>`: the pin becomes this Node.
-  const nodeRunner = `if [ "$3" = "--" ] && [ "$4" = "node" ]; then printf '%s' "$SETUP_TEST_PIN" > package.json; export SETUP_TEST_RERUN_PID=$$; exec "$SETUP_TEST_NODE" "$5"; fi\n`;
-  // A runner whose own child outlives it unless the whole group is signalled. The child
-  // says it is ready only once its trap is set, so a signal cannot arrive before it.
-  const hangingRunner = `"$(dirname "$0")/npx-child" &\nwait\n`;
-  if (npx === "hangs") {
+  const nodeRunner = `printf '%s' "$SETUP_TEST_PIN" > package.json; export SETUP_TEST_RERUN_PID=$$; exec "$SETUP_TEST_NODE" "$7"`;
+  const hangingRunner = `"$(dirname "$0")/vp-child" &\nwait`;
+  if (runnerMode === "hangs") {
     NodeFS.writeFileSync(
-      NodePath.join(bin, "npx-child"),
+      NodePath.join(bin, "vp-child"),
       `#!/bin/sh\ntrap 'printf "%s\\n" grandchild-signalled >> "$SETUP_TEST_LOG"; exit 0' TERM\nprintf 'ready %s\\n' "$$"\nwhile :; do sleep 1; done\n`,
       { mode: 0o755 },
     );
   }
-  const npxBody = npx === "runs-node" ? nodeRunner : npx === "hangs" ? hangingRunner : "";
-  if (vp !== "absent") {
-    // Stands in for a global vp whose env exec starts setup under a Node that is still not the pin.
+  if (vp !== "absent" || runnerMode !== "installer") {
+    const runner =
+      vp === "wrong-node"
+        ? `"$SETUP_TEST_NODE" "$7"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code`
+        : vp === "partial-result"
+          ? `printf 'fai' > ".goat/setup-rerun-$GOAT_SETUP_PINNED_NODE"; exit 1`
+          : runnerMode === "hangs"
+            ? hangingRunner
+            : nodeRunner;
     NodeFS.writeFileSync(
       NodePath.join(bin, "vp"),
-      `#!/bin/sh\nprintf '%s\\n' 'vp' >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${vp === "wrong-node" ? `"$SETUP_TEST_NODE" "$7"; code=$?; ls .goat | tr '\\n' ' ' >> "$SETUP_TEST_LOG.markers"; exit $code` : `printf 'fai' > ".goat/setup-rerun-$GOAT_SETUP_PINNED_NODE"; exit 1`}; fi\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_USE_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
       { mode: 0o755 },
     );
   }
   for (const name of ["pnpm", "npx"] as const) {
     const noise = "x".repeat(60);
     const contents = windows
-      ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nfor /L %%i in (1,1,${trailingLines}) do echo ${noise} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
-      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `if [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nprintf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit \${SETUP_TEST_PNPM_EXIT:-1}` : `${npxBody}exit 0`}\n`;
+      ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\necho ${pnpmOutput} 1>&2\r\nexit /b 1\r\n`
+      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\nprintf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit \${SETUP_TEST_PNPM_EXIT:-1}\n`;
     NodeFS.writeFileSync(NodePath.join(bin, `${name}${windows ? ".cmd" : ""}`), contents, {
       mode: 0o755,
     });
@@ -155,7 +120,11 @@ function setupFixture(
     GOAT_PROJECT_ROOT: root,
     SETUP_TEST_LOG: log,
     SETUP_TEST_NODE: process.execPath,
-    SETUP_TEST_PIN: JSON.stringify({ type: "module", engines: { node: process.versions.node } }),
+    SETUP_TEST_PIN: JSON.stringify({
+      type: "module",
+      engines: { node: process.versions.node },
+      packageManager: "pnpm@12.14.0",
+    }),
   };
   return {
     root,
@@ -171,6 +140,73 @@ function setupFixture(
     cleanup: () => NodeFS.rmSync(root, { recursive: true, force: true }),
   };
 }
+
+it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "kills a timed-out probe and its descendant holding stdout open",
+  async () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-probe-"));
+    const executable = NodePath.join(root, "vp");
+    const parentFile = NodePath.join(root, "parent");
+    const childFile = NodePath.join(root, "child");
+    const fifo = NodePath.join(root, "exit-pipe");
+    NodeChildProcess.execFileSync("mkfifo", [fifo]);
+    const reader = NodeChildProcess.spawn("cat", [fifo], { stdio: "ignore" });
+    const readerExited = new Promise<number | null>((resolve) => reader.on("exit", resolve));
+    let writer: number | undefined = NodeFS.openSync(fifo, "w");
+    const childScript = NodePath.join(root, "child.sh");
+    NodeFS.writeFileSync(
+      childScript,
+      `#!/bin/sh
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(childFile)}
+sleep 60 &
+wait
+`,
+      { mode: 0o755 },
+    );
+    NodeFS.writeFileSync(
+      executable,
+      `#!/bin/sh
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(parentFile)}
+exec 3> ${JSON.stringify(fifo)}
+${JSON.stringify(childScript)} &
+printf 'vp v0.2.2\\n'
+sleep 60 &
+wait
+`,
+      { mode: 0o755 },
+    );
+    const pidFiles = [parentFile, childFile];
+    try {
+      const result = vpSupportsVerifiedNodeDownload(2_000, executable);
+      for (const file of pidFiles)
+        assert.isTrue(NodeFS.existsSync(file), `stand-in PID file missing: ${file}`);
+      const pids = pidFiles.map((file) => Number(NodeFS.readFileSync(file, "utf8")));
+      assert.isFalse(result.supported);
+      assert.isTrue(result.timedOut);
+      NodeFS.closeSync(writer);
+      writer = undefined;
+      assert.equal(await readerExited, 0);
+      for (const pid of pids)
+        assert.throws(() => process.kill(pid, 0), undefined, undefined, `process ${pid} survived`);
+    } finally {
+      if (writer !== undefined) NodeFS.closeSync(writer);
+      for (const file of pidFiles) {
+        if (!NodeFS.existsSync(file)) continue;
+        const pid = Number(NodeFS.readFileSync(file, "utf8"));
+        if (!Number.isInteger(pid) || pid <= 0) continue;
+        for (const target of file === parentFile ? [-pid, pid] : [pid]) {
+          try {
+            process.kill(target, "SIGKILL");
+          } catch {}
+        }
+      }
+      await readerExited;
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 describe("worktree setup contract", () => {
   it("#2178 refuses an unsupported Node it cannot replace, before running any installer", () => {
@@ -192,17 +228,8 @@ describe("worktree setup contract", () => {
         "utf8",
       );
       assert.include(failed, "GOAT development uses Node.js");
-      if (HostProcess.Platform.defaultValue() === "win32") {
-        // Windows never reruns setup under another Node, so nothing at all ran.
-        assert.isFalse(NodeFS.existsSync(fixture.log));
-      } else {
-        assert.include(
-          failed,
-          `could not start itself under Node.js ${major + 1}.0.0. Tried:\nnpx node@${major + 1}.0.0: no output`,
-        );
-        // npx was asked for the pinned Node and did not start setup; pnpm, the installer, never ran.
-        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["npx"]);
-      }
+      assert.include(failed, `Install Node.js ${major + 1}.0.0`);
+      assert.isFalse(NodeFS.existsSync(fixture.log));
       assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
     } finally {
       fixture.cleanup();
@@ -210,7 +237,7 @@ describe("worktree setup contract", () => {
   });
 
   it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "sets up under the pinned Node when PATH's Node is another release and vp is absent",
+    "sets up under the pinned Node using vp",
     () => {
       const [major = 0] = process.versions.node.split(".").map(Number);
       const fixture = setupFixture(
@@ -225,11 +252,9 @@ describe("worktree setup contract", () => {
         assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
         assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-failed")));
         assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
-        // npx supplies Node, then the rerun installs: pnpm's launcher is missing, so npx installs.
         assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-          "npx",
-          "pnpm",
-          "npx",
+          "vp env",
+          "vp i",
         ]);
       } finally {
         fixture.cleanup();
@@ -238,7 +263,7 @@ describe("worktree setup contract", () => {
   );
 
   it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "tries npx for the pinned Node when vp ran setup under a Node that is still not the pin",
+    "refuses when vp runs setup under a Node that is still not supported",
     () => {
       const [major = 0] = process.versions.node.split(".").map(Number);
       const fixture = setupFixture(
@@ -250,19 +275,15 @@ describe("worktree setup contract", () => {
       );
       try {
         const result = fixture.run();
-        assert.equal(result.status, 0, result.stderr);
-        assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
-        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-failed")));
-        // Between vp's rerun ending and npx starting, agents still saw one live setup and no end.
+        assert.equal(result.status, 1, result.stderr);
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-failed")));
         const between = NodeFS.readFileSync(`${fixture.log}.markers`, "utf8");
         assert.include(between, "setup-running");
         assert.notInclude(between, "setup-failed");
         assert.notInclude(between, "setup-done");
-        // vp is asked for Node first and does not supply it, npx supplies it, then vp installs.
         assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-          "vp",
-          "npx",
-          "vp",
+          "vp env",
         ]);
       } finally {
         fixture.cleanup();
@@ -280,7 +301,7 @@ describe("worktree setup contract", () => {
         0,
         "runs-node",
       );
-      fixture.env.SETUP_TEST_PNPM_EXIT = "3";
+      fixture.env.SETUP_TEST_VP_FAIL = "ERR_PNPM_OUTDATED_LOCKFILE";
       try {
         const result = fixture.run();
         assert.equal(result.status, 3, result.stderr);
@@ -293,10 +314,9 @@ describe("worktree setup contract", () => {
           NodeFS.readdirSync(state).filter((name) => name.startsWith("setup-rerun-")),
           [],
         );
-        // npx supplied Node and pnpm failed under it: no second runner, no second install.
         assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-          "npx",
-          "pnpm",
+          "vp env",
+          "vp i",
         ]);
       } finally {
         fixture.cleanup();
@@ -325,8 +345,8 @@ describe("worktree setup contract", () => {
           [],
         );
         assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-          "npx",
-          "pnpm",
+          "vp env",
+          "vp i",
         ]);
       } finally {
         fixture.cleanup();
@@ -358,8 +378,9 @@ describe("worktree setup contract", () => {
           NodeFS.readdirSync(state).filter((name) => name.startsWith("setup-rerun-")),
           [],
         );
-        // npx could have supplied Node, but a rerun that may have installed is never retried.
-        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["vp"]);
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+          "vp env",
+        ]);
       } finally {
         fixture.cleanup();
       }
@@ -434,31 +455,28 @@ describe("worktree setup contract", () => {
       assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-done")));
       assert.isFalse(NodeFS.existsSync(NodePath.join(state, "setup-running")));
       assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-        "npx",
+        "vp env",
         "grandchild-signalled",
       ]);
     },
   );
 
-  it("#2178 steps past corepack's missing pnpm launcher to the next installer", () => {
+  it("#2178 diagnoses corepack's missing pnpm launcher", () => {
     const fixture = setupFixture(
       process.versions.node,
       "Error: Cannot find module '/x/.cache/node/corepack/v1/pnpm/12.14.0/bin/pnpm.cjs'",
     );
     try {
       const result = fixture.run();
-      assert.equal(result.status, 0, result.stderr);
-      assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
-      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-        "pnpm",
-        "npx",
-      ]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.include(result.stderr, "Corepack shim whose launcher is missing");
+      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["pnpm"]);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("#2178 still steps past the missing launcher when more output follows it than the marker keeps", () => {
+  it("#2178 diagnoses a missing launcher even when later output fills the marker tail", () => {
     const fixture = setupFixture(
       process.versions.node,
       "Error: Cannot find module '/x/.cache/node/corepack/v1/pnpm/12.14.0/bin/pnpm.cjs'",
@@ -466,15 +484,176 @@ describe("worktree setup contract", () => {
     );
     try {
       const result = fixture.run();
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
-        "pnpm",
-        "npx",
-      ]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.include(result.stderr, "Corepack shim whose launcher is missing");
+      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["pnpm"]);
     } finally {
       fixture.cleanup();
     }
   });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a timed-out version probe leaves failure guidance and clears the running marker",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+      const preload = NodePath.join(fixture.root, "probe.cjs");
+      NodeFS.writeFileSync(
+        preload,
+        `const cp = require("node:child_process");
+const original = cp.spawnSync;
+cp.spawnSync = function (command, args, options) {
+  if (command === "vp" && args[0] === "--version") {
+    require("node:fs").writeFileSync(process.env.SETUP_TEST_LOG + ".timeout", String(options.timeout));
+    require("node:fs").writeSync(options.stdio[1], "vp v0.2.2\\n");
+    return { status: 0, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) };
+  }
+  return original.apply(this, arguments);
+};
+require("node:module").syncBuiltinESMExports();`,
+      );
+      fixture.env.NODE_OPTIONS = `--require=${preload}`;
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 1);
+        const failed = NodeFS.readFileSync(
+          NodePath.join(fixture.root, ".goat", "setup-failed"),
+          "utf8",
+        );
+        assert.include(failed, "vp did not answer");
+        assert.match(failed, /update vite-plus/i);
+        assert.isAbove(Number(NodeFS.readFileSync(`${fixture.log}.timeout`, "utf8")), 0);
+        assert.isFalse(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-running")));
+        assert.isFalse(NodeFS.existsSync(fixture.log));
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "accepts only a stable vp version in the exact expected format",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      for (const [output, accepted, exit] of [
+        ["vp v0.2.2", true, 0],
+        ["vp v0.2.2\n", true, 0],
+        ["vp v0.2.10\r\n", true, 0],
+        ["vp v1.0.0\n", true, 0],
+        ["vp v0.2.1\n", false, 0],
+        ["vp v0.2.2-beta.1\n", false, 0],
+        ["vp v0.3.0-rc.1\n", false, 0],
+        ["vp v0.3.0 rc.1\n", false, 0],
+        ["vp v0.2.2 unexpected\n", false, 0],
+        ["v0.2.2\n", false, 0],
+        ["vp 0.2.2\n", false, 0],
+        ["", false, 0],
+        ["vp v1.0.0\n", false, 1],
+      ] as const) {
+        const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+        fixture.env.SETUP_TEST_CUSTOM_VERSION = output;
+        fixture.env.SETUP_TEST_USE_CUSTOM_VERSION = "1";
+        fixture.env.SETUP_TEST_VERSION_EXIT = String(exit);
+        try {
+          const result = fixture.run();
+          assert.equal(result.status, accepted ? 0 : 1, JSON.stringify(output));
+          if (!accepted) assert.match(result.stderr, /update vite-plus/i);
+        } finally {
+          fixture.cleanup();
+        }
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "refuses Node download when signature verification is bypassed",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      for (const value of ["1", "0"]) {
+        const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+        fixture.env.VP_NODE_SKIP_SIGNATURE_VERIFY = value;
+        try {
+          const result = fixture.run();
+          assert.equal(result.status, 1);
+          assert.include(
+            NodeFS.readFileSync(NodePath.join(fixture.root, ".goat", "setup-failed"), "utf8"),
+            "VP_NODE_SKIP_SIGNATURE_VERIFY",
+          );
+          assert.isFalse(NodeFS.existsSync(fixture.log));
+        } finally {
+          fixture.cleanup();
+        }
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "refuses old vp and explains the update",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+      fixture.env.SETUP_TEST_VP_VERSION = "0.2.1";
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /update vite-plus/i);
+        assert.isFalse(NodeFS.existsSync(fixture.log));
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "opt-out refuses without invoking vp",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+      fixture.env.GOAT_SETUP_NO_NODE_DOWNLOAD = "1";
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 1);
+        assert.include(result.stderr, "GOAT_SETUP_NO_NODE_DOWNLOAD");
+        assert.isFalse(NodeFS.existsSync(fixture.log));
+        assert.isFalse(NodeFS.existsSync(`${fixture.log}.version`));
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
+
+  it("refuses when no installer is present", () => {
+    const fixture = setupFixture(process.versions.node, "unexpected");
+    NodeFS.unlinkSync(
+      NodePath.join(
+        fixture.root,
+        "bin",
+        HostProcess.Platform.defaultValue() === "win32" ? "pnpm.cmd" : "pnpm",
+      ),
+    );
+    try {
+      const result = fixture.run();
+      assert.equal(result.status, 1);
+      assert.include(result.stderr, "pnpm 12.14.0");
+      assert.isFalse(NodeFS.existsSync(fixture.log));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "supported Node runs only vp install",
+    () => {
+      const fixture = setupFixture(process.versions.node, "unexpected", 0, "runs-node");
+      try {
+        const result = fixture.run();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), ["vp i"]);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("#2178 fails on an ordinary install error without trying another installer", () => {
     const fixture = setupFixture(process.versions.node, "ERR_PNPM_OUTDATED_LOCKFILE");

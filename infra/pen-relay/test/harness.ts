@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Test fixtures drive wrangler and raw sockets directly.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
@@ -27,41 +26,18 @@ export interface Relay {
   stop(): Promise<void>;
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = NodeNet.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() =>
-        typeof address === "object" && address
-          ? resolve(address.port)
-          : reject(new Error("no port")),
-      );
-    });
-  });
-}
-
 /**
  * Runs `wrangler dev` in its own process group and resolves on its "Ready on" line. A given
  * persist directory is reused and kept on stop (a restart); otherwise a new one is removed.
+ * Ports are 0, so wrangler binds ones the system assigns and no other suite can take them first.
  */
 export async function startRelay(
   vars: Record<string, string> = {},
   options: { persist?: string } = {},
 ): Promise<Relay> {
-  const [port, inspectorPort] = [await freePort(), await freePort()];
   const persist =
     options.persist ?? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pen-relay-"));
-  const args = [
-    "dev",
-    "--ip",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--inspector-port",
-    String(inspectorPort),
-  ];
+  const args = ["dev", "--ip", "127.0.0.1", "--port", "0", "--inspector-port", "0"];
   args.push(
     "--persist-to",
     persist,
