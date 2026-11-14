@@ -639,22 +639,25 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(Crypto.Crypto, crypto),
     );
-    const checkProvider = Effect.all(
-      {
-        provider: checkOpenCodeProviderStatus(
-          effectiveConfig,
-          host.paths.cwd,
-          runtimeProbe.refresh,
-          loadOpenCode2Models,
-          loadOpenCode2Skills,
-        ).pipe(
-          Effect.annotateLogs({ providerInstanceId: instanceId }),
-          Effect.annotateSpans({ providerInstanceId: instanceId }),
-        ),
-        usageLimits: checkUsageLimits,
-      },
-      { concurrency: "unbounded" },
-    ).pipe(
+    const checkProvider = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        Effect.all(
+          {
+            provider: checkOpenCodeProviderStatus(
+              effectiveConfig,
+              host.paths.cwd,
+              runtimeProbe.refresh,
+              loadOpenCode2Models,
+              loadOpenCode2Skills,
+            ).pipe(
+              Effect.annotateLogs({ providerInstanceId: instanceId }),
+              Effect.annotateSpans({ providerInstanceId: instanceId }),
+            ),
+            usageLimits: checkUsageLimits,
+          },
+          { concurrency: "unbounded" },
+        ).pipe(Effect.provideService(LaunchEnvironment, environment)),
+      ),
       Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
       Effect.map(stampIdentity),
       Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, probeServerOwner),

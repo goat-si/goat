@@ -41,6 +41,55 @@ const layer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 it.layer(layer)("OpenCode workspace environment", (it) => {
+  it.effect("status probing and inventory launch share an environment when PATH changes", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const hostEnvironment = { PATH: "/old", HOME: "/fixture/opencode-test" };
+      const launched: string[] = [];
+      let armed = false;
+      let probeCount = 0;
+      const runtime = {
+        ...openCode2Runtime,
+        runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
+          !armed
+            ? reachedServer("initial probe")
+            : Effect.gen(function* () {
+                launched.push(environment?.PATH ?? "");
+                probeCount++;
+                if (probeCount === 2) {
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(resume);
+                }
+                return { stdout: "1.18.32", stderr: "", code: 0 };
+              }),
+        startOpenCodeServerProcess: ({
+          environment,
+        }: {
+          readonly environment?: NodeJS.ProcessEnv;
+        }) =>
+          Effect.sync(() => launched.push(environment?.PATH ?? "")).pipe(
+            Effect.andThen(reachedServer("inventory")),
+          ),
+      };
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+        Effect.provideService(HostProcess.Environment, hostEnvironment),
+        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+      );
+      yield* instance.snapshot.refresh;
+      yield* instance.snapshot.resolveMaintenance();
+      armed = true;
+      const work = yield* instance.snapshot.refresh.pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      hostEnvironment.PATH = "/new";
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.join(work);
+      assert.isAbove(launched.length, 1);
+      assert.deepStrictEqual([...new Set(launched)], ["/old"]);
+    }),
+  );
+
   it.effect("workspace probing and launch share an environment when PATH changes", () =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
