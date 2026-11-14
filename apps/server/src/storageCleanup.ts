@@ -40,6 +40,7 @@ import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
 import { otherHomeReason, ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
+import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { makeWorktreeShipping } from "./storageCleanupShipping.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -613,13 +614,18 @@ const make = Effect.gen(function* () {
     let waiting = false;
     const kept: string[] = [];
     const roots: Array<string> = [];
-    for (const directory of managedWorktreesDirectories(
-      serverSettings,
-      config.worktreesDir,
-      path,
-      yield* HostProcess.HomeDirectory,
-      yield* HostProcess.Platform,
-    )) {
+    const isWorktreeDevHome =
+      (yield* resolveWorktreeHome(config.baseDir)) === path.resolve(config.baseDir);
+    const directories = isWorktreeDevHome
+      ? [config.worktreesDir]
+      : managedWorktreesDirectories(
+          serverSettings,
+          config.worktreesDir,
+          path,
+          yield* HostProcess.HomeDirectory,
+          yield* HostProcess.Platform,
+        );
+    for (const directory of directories) {
       const root = yield* fs.exists(directory).pipe(
         Effect.flatMap((exists) => (exists ? fs.realPath(directory) : Effect.succeed(null))),
         Effect.orElseSucceed(() => null),
