@@ -90,6 +90,24 @@ export function startThreadNotifications(
 ): () => void {
   const pending = new Map<string, { environmentId: EnvironmentId; notification: Notification }>();
   const watched = new Map<EnvironmentId, WatchedEnvironment>();
+  const toasts = new Map<ReturnType<typeof toastManager.add>, string>();
+  const closeToasts = (key?: string) => {
+    for (const [id, threadKey] of toasts) {
+      if (key !== undefined && key !== threadKey) continue;
+      toasts.delete(id);
+      toastManager.close(id);
+    }
+  };
+  const trackToast = (id: ReturnType<typeof toastManager.add>, key: string) => {
+    toasts.set(id, key);
+    if (toasts.size > 1000) {
+      const oldest = toasts.keys().next().value;
+      if (oldest !== undefined) {
+        toasts.delete(oldest);
+        toastManager.close(oldest);
+      }
+    }
+  };
 
   const trackNotification = (environmentId: EnvironmentId, notification: Notification) => {
     pending.get(notification.tag)?.notification.close();
@@ -266,6 +284,9 @@ export function startThreadNotifications(
       )
         return;
       const toastId = toastManager.add({
+        onRemove: () => {
+          toasts.delete(toastId);
+        },
         type: "warning",
         title,
         description: body,
@@ -283,6 +304,7 @@ export function startThreadNotifications(
           },
         },
       });
+      trackToast(toastId, scopedThreadKey(scopeThreadRef(environmentId, threadId)));
       return;
     }
     if (
@@ -356,6 +378,9 @@ export function startThreadNotifications(
       (active.environmentId !== environmentId || active.threadId !== thread.id)
     ) {
       const toastId = toastManager.add({
+        onRemove: () => {
+          toasts.delete(toastId);
+        },
         type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
         title,
         description: approvalTitle ? `${approvalTitle} · ${thread.title}` : thread.title,
@@ -383,6 +408,7 @@ export function startThreadNotifications(
           },
         },
       });
+      trackToast(toastId, scopedThreadKey(scopeThreadRef(environmentId, thread.id)));
       return;
     }
     if (
@@ -564,6 +590,7 @@ export function startThreadNotifications(
   const syncEnvironments = () => {
     const { notificationMode, inAppNotificationsEnabled } = getClientSettings();
     const enabled = notificationMode !== "off" || inAppNotificationsEnabled;
+    if (!enabled) closeToasts();
     const environmentIds = enabled ? registry.get(environmentSummaries.environmentIdsAtom) : [];
     const activeIds = new Set(environmentIds);
     for (const [environmentId, entry] of watched) {
@@ -624,6 +651,15 @@ export function startThreadNotifications(
     syncEnvironments();
   };
   const unsubscribeSettings = subscribeClientSettings(onSettings);
+  const unsubscribeRoute = router.subscribe("onResolved", () => {
+    const active = (router.state.matches.at(-1)?.params ?? {}) as {
+      environmentId?: EnvironmentId;
+      threadId?: ThreadId;
+    };
+    if (active.environmentId !== undefined && active.threadId !== undefined) {
+      closeToasts(scopedThreadKey(scopeThreadRef(active.environmentId, active.threadId)));
+    }
+  });
   const unsubscribeEnvironmentIds = registry.subscribe(
     environmentSummaries.environmentIdsAtom,
     () => {
@@ -635,9 +671,11 @@ export function startThreadNotifications(
 
   return () => {
     unsubscribeSettings();
+    unsubscribeRoute();
     unsubscribeEnvironmentIds();
     for (const entry of watched.values()) entry.unsubscribe();
     watched.clear();
     stopModeListeners();
+    closeToasts();
   };
 }
