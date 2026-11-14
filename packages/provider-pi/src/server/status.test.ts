@@ -74,6 +74,7 @@ const piDiscoverySpawner = (
     readonly state?: unknown;
     readonly authCheck?: string | undefined;
     readonly versionOutput?: string;
+    readonly observe?: (command: ChildProcess.StandardCommand) => void;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -108,6 +109,7 @@ const piDiscoverySpawner = (
     );
     return lazyChildProcessSpawner((command) => {
       const args = ChildProcess.isStandardCommand(command) ? command.args : [];
+      if (ChildProcess.isStandardCommand(command)) options.observe?.(command);
       if (args.includes("--version")) {
         return Effect.succeed(
           processHandle({ stdout: options.versionOutput ?? `pi ${options.version ?? "0.84.3"}\n` }),
@@ -139,6 +141,44 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("does not pass inherited GOAT session credentials to Pi or OmO probes", () =>
+    Effect.gen(function* () {
+      for (const profile of [undefined, OMO_PROFILE]) {
+        const observed: ChildProcess.StandardCommand[] = [];
+        const spawner = yield* piDiscoverySpawner(
+          { models: [{ provider: "anthropic", id: "sonnet" }] },
+          {
+            version: "1.4.0",
+            state: { model: { provider: "openai", id: "gpt-5" } },
+            authCheck: '{"reason":"credentials_not_configured"}',
+            ...(profile === OMO_PROFILE
+              ? { versionOutput: "omo 5.1.40 (engine: senpi 2026.10.19-2)\n" }
+              : {}),
+            observe: (command) => observed.push(command),
+          },
+        );
+        yield* checkPiProviderStatus(
+          settings,
+          {
+            GOAT_MCP_BEARER_TOKEN: "stale",
+            T3_MCP_BEARER_TOKEN: "stale",
+            GOAT_ACP_MCP_AUTHORIZATION: "stale",
+          },
+          undefined,
+          profile,
+        ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+        const probes = observed.filter(
+          (command) => command.args.includes("--version") || command.args[0] === "auth",
+        );
+        assert.equal(probes.length, 2);
+        for (const probe of probes) {
+          assert.isUndefined(probe.options.env?.GOAT_MCP_BEARER_TOKEN);
+          assert.isUndefined(probe.options.env?.T3_MCP_BEARER_TOKEN);
+          assert.equal(probe.options.env?.GOAT_ACP_MCP_AUTHORIZATION, "");
+        }
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("probes OmO's version and checks its active model credentials", () =>
     Effect.gen(function* () {
       const spawner = yield* piDiscoverySpawner(
