@@ -69,6 +69,34 @@ export function registerCodexLoadKeyCheck({
             runtimePolicy,
           });
           assert.equal((yield* Ref.get(state)).resumeCount, normalizeCodexLoad ? 2 : 4);
+          const reloadCases = [
+            {
+              name: "other model options",
+              selection: { ...modelSelection, options: [{ id: "serviceTier", value: "priority" }] },
+              policy: runtimePolicy,
+            },
+            {
+              name: "runtime policy",
+              selection: modelSelection,
+              policy: { ...runtimePolicy, interactionMode: "plan" as const },
+            },
+          ];
+          for (const { name, selection, policy } of reloadCases) {
+            yield* runtime.resumeThread({
+              providerThread,
+              threadId,
+              modelSelection,
+              runtimePolicy,
+            });
+            const before = (yield* Ref.get(state)).resumeCount;
+            yield* runtime.resumeThread({
+              providerThread,
+              threadId,
+              modelSelection: selection,
+              runtimePolicy: policy,
+            });
+            assert.equal((yield* Ref.get(state)).resumeCount, before + 1, `${name} did not reload`);
+          }
         }).pipe(
           Effect.provide(layerTest({ state, idleTimeoutMs: 1000, normalizeCodexLoad })),
           Effect.scoped,
