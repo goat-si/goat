@@ -462,6 +462,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Reissue", "Reissuing", "Reissued", "a disposable machine invite"],
     "environment-update",
   ),
+  goat_hub_machine_detach: tool(
+    ["Detach", "Detaching", "Detached", "a disposable machine"],
+    "environment-update",
+  ),
   goat_hub_machine_list: tool(["List", "Listing", "Listed", "disposable machines"], "host-status"),
   goat_hub_device_setup: tool(["Set up", "Setting up", "Set up", "a Child"], "environment-update"),
   goat_hub_child_prepare: tool(

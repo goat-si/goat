@@ -349,6 +349,8 @@ export const HUB_NODES_RPC_REQUIRED_SCOPES = {
   [WS_METHODS.hubNodesDismissNotice]: "settings:write",
   [WS_METHODS.hubMachinesAttach]: "settings:write",
   [WS_METHODS.hubMachinesReissue]: "settings:write",
+  [WS_METHODS.hubMachinesDetach]: "settings:write",
+  [WS_METHODS.hubMachinesRelease]: "settings:write",
   [WS_METHODS.hubMachinesList]: "orchestration:read",
 } as const satisfies Record<RpcGroup.Rpcs<typeof WsHubNodesRpcGroup>["_tag"], AuthEnvironmentScope>;
 
