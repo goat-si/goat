@@ -4,7 +4,6 @@ import {
   createGoatBotSendQueue,
   goatBotItemReaders,
   goatBotHomeReadBack,
-  pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   canSendToGoatBot,
   goatBotActivity,
@@ -71,7 +70,7 @@ import { useReplying } from "./useReplying";
 import { goatBotWorkRevision } from "./goatBotWorkRevision";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import {
   settleMobileGoatBotEnsure,
   goatBotSessionKey,
@@ -387,9 +386,7 @@ export function useMobileGoatBotSession(
   member: BotProfile | null = null,
 ) {
   const home = useMobileGoatBotHomeMode();
-  const environment = home.home.supported
-    ? pickGoatBotEnvironment(home.environments, home.botRef)
-    : pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const environment = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
   const configs = useServerConfigs();
   const capabilities =

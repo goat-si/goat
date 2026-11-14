@@ -2,7 +2,7 @@ import { Atom } from "effect/reactivity";
 
 import {
   loadedMobileGoatBotRef,
-  pickMobileGoatBotEnvironment,
+  pickMobileGoatBotHomeEnvironment,
 } from "../features/goat-bot/goatBotHomeMode";
 import { mobileGoatBotEnvironmentInput } from "../features/goat-bot/mobileGoatBotEnvironments";
 import { mobilePreferencesAtom } from "./preferences";
@@ -25,5 +25,5 @@ export const mobileGoatBotHomeEnvironmentIdAtom = Atom.make((get) => {
         serverConfig: presentation.serverConfig,
       }),
   );
-  return pickMobileGoatBotEnvironment(environments, botRef)?.environmentId ?? null;
+  return pickMobileGoatBotHomeEnvironment(environments, botRef)?.environmentId ?? null;
 }).pipe(Atom.withLabel("mobile-goat-bot-home-environment"));
