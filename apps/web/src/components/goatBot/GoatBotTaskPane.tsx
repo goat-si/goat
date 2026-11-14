@@ -2,8 +2,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   acknowledgeTaskRead,
+  botTaskWait,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
+  goatBotTaskWait,
   isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
@@ -62,7 +64,7 @@ export function GoatBotTaskPane({
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh, established, pending } = useBotThreads(
+  const { rows, remoteWork, refresh, established, pending, chips } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -78,6 +80,18 @@ export function GoatBotTaskPane({
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
   const taskSummary =
     task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
+  const chip = chips.get(taskId);
+  // What Home's row and the bot's face say this task waits for; an unlisted task has no view.
+  const wait =
+    task?.kind === "task"
+      ? botTaskWait(task, chip)
+      : taskSummary
+        ? goatBotTaskWait({
+            status: taskSummary.status,
+            openQuestionCount: chip?.openQuestionCount ?? 0,
+            observed: chip?.observed,
+          })
+        : null;
   const sentFor = lookup.key;
   /** A completion counts only for the task it was sent for; another task's is dropped. */
   const finish = (sent: string) => {
@@ -180,12 +194,13 @@ export function GoatBotTaskPane({
           </Tooltip>
           {taskSummary && (
             <p className="shrink-0 text-xs text-muted-foreground">
-              {found?.state === "unavailable" && taskSummary.status === "completed"
-                ? "Completed"
-                : presentTaskStatus(
-                    taskSummary.status,
-                    task?.kind === "task" ? task.view.doneAt : null,
-                  ).label}
+              {wait ??
+                (found?.state === "unavailable" && taskSummary.status === "completed"
+                  ? "Completed"
+                  : presentTaskStatus(
+                      taskSummary.status,
+                      task?.kind === "task" ? task.view.doneAt : null,
+                    ).label)}
               {taskAttemptLabel(taskSummary.generation)
                 ? ` · ${taskAttemptLabel(taskSummary.generation)}`
                 : ""}

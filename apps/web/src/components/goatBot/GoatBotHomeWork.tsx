@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   accessDenied,
   botHomeWork,
+  botTaskWait,
   COLLAPSED_FINISHED,
   presentTaskStatus,
   type BotWorkTask,
@@ -12,6 +13,7 @@ import type {
   BotRemoteWork,
   BotThreadRow,
   ChannelTaskId,
+  ChannelTaskChip,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
@@ -49,6 +51,7 @@ export type HomeHistory = {
 };
 
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
+const NO_CHIPS: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = new Map();
 
 const MARK = {
   running: "bg-info",
@@ -66,6 +69,7 @@ export function GoatBotHomeWork({
   botName,
   rows,
   remoteWork = NO_REMOTE,
+  chips = NO_CHIPS,
   loaded,
   failed,
   failure = null,
@@ -88,6 +92,8 @@ export function GoatBotHomeWork({
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
+  /** Each task's newest chip in the conversation, which says what its worker asks the person. */
+  readonly chips?: ReadonlyMap<ChannelTaskId, ChannelTaskChip> | undefined;
   readonly loaded: boolean;
   readonly failed: boolean;
   /** Why the read failed; an authorization refusal gets no Retry. */
@@ -121,7 +127,7 @@ export function GoatBotHomeWork({
   );
   const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
-  const work = botHomeWork(rows, [], environmentId, remoteWork);
+  const work = botHomeWork(rows, [], environmentId, remoteWork, chips);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
@@ -158,6 +164,7 @@ export function GoatBotHomeWork({
       key={task.row.task.taskId}
       task={task}
       mark={mark}
+      wait={botTaskWait(task.row, chips.get(task.row.task.taskId))}
       returned={task.row.task.taskId === returnTaskId}
       rows={rows}
       remoteWork={remoteWork}
@@ -280,6 +287,7 @@ function MarkIcon({ mark }: { readonly mark: Mark }) {
 function WorkRow({
   task,
   mark,
+  wait,
   returned,
   rows,
   remoteWork,
@@ -295,6 +303,8 @@ function WorkRow({
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
+  /** What the task waits on the person for, which its row says instead of its status. */
+  readonly wait: string | null;
   readonly returned: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly remoteWork: ReadonlyArray<BotRemoteWork>;
@@ -327,7 +337,7 @@ function WorkRow({
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const [expanded, setExpanded] = useState(false);
-  const status = presentTaskStatus(row.task.status, row.view.doneAt);
+  const status = wait ?? presentTaskStatus(row.task.status, row.view.doneAt).label;
   async function menu(position: { readonly x: number; readonly y: number }) {
     const api = readLocalApi();
     if (api == null) return;
@@ -398,12 +408,7 @@ function WorkRow({
             onClick={() => onOpenTask(row)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText
-              title={title}
-              status={status.label}
-              unread={row.unread}
-              returned={returned}
-            />
+            <WorkRowText title={title} status={status} unread={row.unread} returned={returned} />
           </button>
         ) : (
           <Link
@@ -413,12 +418,7 @@ function WorkRow({
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText
-              title={title}
-              status={status.label}
-              unread={row.unread}
-              returned={returned}
-            />
+            <WorkRowText title={title} status={status} unread={row.unread} returned={returned} />
           </Link>
         )}
         {row.view.pinnedAt !== null && (

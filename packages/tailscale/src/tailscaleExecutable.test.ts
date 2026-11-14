@@ -116,7 +116,7 @@ describe("tailscale executable on macOS", () => {
         const ran = spawned.filter((entry) => entry.command === APP_CLI);
         assert.deepEqual(
           ran.map((entry) => entry.args[0]),
-          ["status", "debug", "serve", "serve"],
+          ["status", "debug", "status", "serve", "serve"],
         );
         for (const entry of ran) {
           assert.equal(entry.env?.["TAILSCALE_BE_CLI"], "1");
@@ -176,9 +176,21 @@ describe("tailscale executable on macOS", () => {
     const layer = layerHost({ platform: "darwin", installed: [APP_CLI], hang: true, spawned });
 
     return Effect.gen(function* () {
-      for (const run of [readTailscaleStatus, ensureTailscaleServe({ localPort: 13773 })]) {
+      for (const [run, seconds] of [
+        [
+          readTailscaleStatus.pipe(
+            Effect.asVoid,
+            Effect.mapError((error): Error => error),
+          ),
+          11,
+        ],
+        [
+          ensureTailscaleServe({ localPort: 13773 }).pipe(Effect.mapError((error): Error => error)),
+          21,
+        ],
+      ] as const) {
         const fiber = yield* run.pipe(Effect.flip, Effect.forkChild);
-        yield* TestClock.adjust("11 seconds");
+        yield* TestClock.adjust(`${seconds} seconds`);
         const error = yield* Fiber.join(fiber);
         assert.instanceOf(error, TailscaleCommandTimeoutError);
         assert.equal(error.executable, APP_CLI);
@@ -196,7 +208,13 @@ describe("tailscale executable on macOS", () => {
     });
 
     return Effect.gen(function* () {
-      for (const run of [readTailscaleStatus, ensureTailscaleServe({ localPort: 13773 })]) {
+      for (const run of [
+        readTailscaleStatus.pipe(
+          Effect.asVoid,
+          Effect.mapError((error): Error => error),
+        ),
+        ensureTailscaleServe({ localPort: 13773 }).pipe(Effect.mapError((error): Error => error)),
+      ]) {
         const error = yield* run.pipe(Effect.flip);
         assert.instanceOf(error, TailscaleCommandSpawnError);
         assert.equal(error.executable, HOMEBREW_CLI);

@@ -3,7 +3,7 @@ import {
   LEGACY_BOOT_SERVICE_NAMES,
   type BootServiceNames,
 } from "./bootServiceNames.ts";
-import { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
+import { defaultSystemdUnitDirectory, readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
 export {
   BOOT_SERVICE_NAMES,
   LEGACY_BOOT_SERVICE_NAMES,
@@ -370,13 +370,7 @@ function selectBootServiceManager(input: {
       names: input.names,
       unitDir:
         input.systemdUnitDir ??
-        input.path.join(
-          input.path.isAbsolute(input.xdgConfigHome)
-            ? input.xdgConfigHome
-            : input.path.join(input.homeDir, ".config"),
-          "systemd",
-          "user",
-        ),
+        defaultSystemdUnitDirectory(input.path, input.homeDir, input.xdgConfigHome),
     });
   }
   if (input.platform === "darwin" && input.uid !== undefined) {

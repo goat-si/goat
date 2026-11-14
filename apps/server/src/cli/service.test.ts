@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { BootServiceBaseDirUnsupportedError } from "../cloud/systemdPath.ts";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -312,6 +313,15 @@ it.effect.each([
 
     expect(ready).toBe("skipped");
     expect(installOptions).toEqual([]);
+  }),
+);
+
+it.effect("keeps the manual-server fallback for an unsupported service home", () =>
+  Effect.gen(function* () {
+    const ready = yield* recoverServiceOnboardingOffer(
+      Effect.fail(new BootServiceBaseDirUnsupportedError({ baseDir: '/bad"home' })),
+    );
+    expect(ready).toBe("skipped");
   }),
 );
 

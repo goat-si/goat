@@ -844,11 +844,17 @@ export default function ChatView(props: ChatViewProps) {
       globalAgentRef,
     );
   const serverLatestRun =
-    serverProjection === null ? null : deriveLatestThreadRun(serverProjection);
+    serverProjection === null
+      ? null
+      : deriveLatestThreadRun(serverProjection, providersByEnvironment.get(environmentId));
   const serverActivityRun =
-    serverProjection === null ? null : deriveThreadActivityRun(serverProjection);
+    serverProjection === null
+      ? null
+      : deriveThreadActivityRun(serverProjection, providersByEnvironment.get(environmentId));
   const serverRuntime =
-    serverProjection === null ? null : deriveThreadStructureRuntime(serverProjection);
+    serverProjection === null
+      ? null
+      : deriveThreadStructureRuntime(serverProjection, providersByEnvironment.get(environmentId));
   const runlessWorkStartedAt =
     serverProjection === null ? null : deriveRunlessWorkStartedAt(serverProjection);
   const providerSubagentStatus =
@@ -3026,13 +3032,14 @@ export default function ChatView(props: ChatViewProps) {
     });
     scheduleComposerFocusStable();
   };
-  const { onResume, isResuming } = useComposerResume({
+  const { onResume, isResuming, canResume } = useComposerResume({
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
     activeThread,
     resumableRunId,
     hasHeldQueuedRuns,
+    projection: serverProjection,
     isSendBusy,
     isConnecting,
     isRevertingCheckpoint,
@@ -3832,7 +3839,7 @@ export default function ChatView(props: ChatViewProps) {
                                   queuedRunEdit.isSaving ||
                                   isResuming
                                 }
-                                canResume={resumableRunId !== null || hasHeldQueuedRuns}
+                                canResume={canResume}
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sshWorktreeSelected={sshDestination !== null}
                                 sideChatAvailable={sideChatAvailable}
