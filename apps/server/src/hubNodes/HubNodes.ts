@@ -326,10 +326,11 @@ export const make = Effect.gen(function* () {
         reason: "refused",
         detail: "The hub cannot add itself as a node.",
       });
-    // The ED25519 key it negotiates (at the hostname given, as identify), only while a pin is open.
+    // The ED25519 key negotiated at the alias, which the hub dials whatever hostname it is given;
+    // read, trusted or not, only while an open record has a pin.
     yield* refuseDisposable(alias, {
       environmentId: identity,
-      probe: { alias: target.hostname ?? alias, username: target.username, port: target.port },
+      probe: { alias, username: target.username, port: target.port },
     });
     if (identity === null && options.requireIdentity)
       return yield* new HubNodesError({

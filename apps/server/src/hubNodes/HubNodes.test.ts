@@ -462,14 +462,15 @@ describe("HubNodes", () => {
           state.disposable = [
             { ...disposableRecord("e".repeat(26), remote), sshdPin: "SHA256:pinned" },
           ];
-          state.hostKeys = { "lab.example": "SHA256:pinned" };
-          const viaHost = { ...sshInput("lab"), hostname: "lab.example" };
-          const refused = yield* service.add(viaHost, options).pipe(Effect.flip);
+          state.hostKeys = { lab: "SHA256:pinned" };
+          const refused = yield* service.add(sshInput("lab"), options).pipe(Effect.flip);
           expect(refused.detail).toContain("disposable machine");
+          // The hub dials the alias whatever hostname it is given, and the probe reads it there.
+          const other = { ...sshInput("lab"), hostname: "lab.example" };
+          expect(yield* service.add(other, options).pipe(Effect.flip)).toEqual(refused);
           expect((yield* repository.listRegistrations).map((row) => row.routeId)).toEqual([
             "ssh:cc-01",
           ]);
-          state.hostKeys = { lab: "SHA256:pinned" };
           expect(yield* service.disposableRoute({ alias: "lab" })).toContain("disposable machine");
           state.keyProbes = [];
           expect(yield* service.disposableRoute({ alias: "lab", identify: false })).toBeUndefined();
