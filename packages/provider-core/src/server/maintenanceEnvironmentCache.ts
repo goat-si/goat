@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- cache keys are computed synchronously.
 import * as NodeCrypto from "node:crypto";
 
 export function environmentCacheKey(env: NodeJS.ProcessEnv): string {
