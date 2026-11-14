@@ -53,6 +53,7 @@ import {
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
+import { codexHomeFor } from "./codexRedemptionHome.ts";
 import { codexUsageReader } from "./codexUsage.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
@@ -448,18 +449,14 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
-    // Keyed on the redemption's own home: CODEX_HOME as written, else .codex under its HOME.
-    const accountKeyFor = (env: NodeJS.ProcessEnv) =>
-      Effect.succeed(
+    // Keyed on the redemption's home as written, from its cwd; the coordinator follows links.
+    const accountKeyFor = (env: NodeJS.ProcessEnv) => {
+      const home = codexHomeFor(env, { platform, homeDirectory, sep: pathService.sep });
+      return Effect.succeed(
         pinnedHome ??
-          pathService.resolve(
-            env.CODEX_HOME ||
-              pathService.join(
-                (platform === "win32" ? env.USERPROFILE : env.HOME) || homeDirectory,
-                ".codex",
-              ),
-          ),
+          (pathService.isAbsolute(home) ? home : `${process.cwd()}${pathService.sep}${home}`),
       );
+    };
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
       currentEnvironment.pipe(
         Effect.flatMap((processEnv) =>
@@ -469,11 +466,12 @@ export const CodexDriver: ProviderDriver<
                 Effect.gen(function* () {
                   const { client } = yield* withCodexAppServerClient({
                     binaryPath: effectiveConfig.binaryPath,
-                    // Explicit, so a variable the host adds later cannot move it off the locked home.
-                    homePath: accountKey,
+                    homePath: effectiveConfig.homePath,
                     launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
                     cwd: process.cwd(),
                     environment: processEnv,
+                    // The captured environment alone: the key above was computed from it.
+                    extendEnv: false,
                   });
                   const response = yield* client.request("account/rateLimitResetCredit/consume", {
                     idempotencyKey,

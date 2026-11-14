@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- FileSystem.realPath drops ".." before following links.
 /** Instances sharing a login directory share credits; serialize redemptions on that directory. */
+import * as NodeFSP from "node:fs/promises";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type { ProviderConsumeResetCreditOutcome, ServerProvider } from "@goat/contracts";
@@ -24,6 +26,26 @@ interface AccountRedemptionState {
 /** Accounts tracked at once; an uncertain outcome keeps its entry until a retry settles it. */
 export const MAX_TRACKED_ACCOUNTS = 64;
 const MAX_LINK_HOPS = 40;
+
+/** The OS's answer: it follows a link before the ".." after it. Missing paths are None. */
+const nativeRealPath = (target: string) =>
+  Effect.tryPromise({
+    try: () => NodeFSP.realpath(target),
+    catch: (cause) =>
+      PlatformError.systemError({
+        _tag:
+          cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+            ? "NotFound"
+            : "Unknown",
+        module: "ResetCreditCoordinator",
+        method: "canonical",
+        pathOrDescriptor: target,
+        cause,
+      }),
+  }).pipe(
+    Effect.asSome,
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+  );
 
 export class ResetCreditAccountLimitError extends Schema.TaggedError<ResetCreditAccountLimitError>()(
   "ResetCreditAccountLimitError",
@@ -58,16 +80,14 @@ export const make = Effect.gen(function* () {
   // An entry lives while a redemption holds it or an uncertain outcome keeps its idempotency key.
   const states = new Map<string, AccountRedemptionState>();
   // Links to one login directory are one account, including one not created yet: follow dangling
-  // links, resolve the nearest existing ancestor and keep the missing tail.
+  // links, resolve the nearest existing ancestor and keep the missing tail. The path stays as
+  // written (no lexical "..") because the OS follows a link before the ".." after it.
   const canonical = Effect.fn("ResetCreditCoordinator.canonical")(function* (accountKey: string) {
-    let existing = path.resolve(accountKey);
+    let existing = path.isAbsolute(accountKey) ? accountKey : path.resolve(accountKey);
     const missing: Array<string> = [];
     let links = 0;
     while (true) {
-      const real = yield* fileSystem.realPath(existing).pipe(
-        Effect.asSome,
-        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-      );
+      const real = yield* nativeRealPath(existing);
       if (Option.isSome(real)) return path.join(real.value, ...missing.toReversed());
       const target = yield* fileSystem.readLink(existing).pipe(
         Effect.asSome,
@@ -84,7 +104,9 @@ export const make = Effect.gen(function* () {
             pathOrDescriptor: accountKey,
           });
         }
-        existing = path.resolve(path.dirname(existing), target.value);
+        existing = path.isAbsolute(target.value)
+          ? target.value
+          : `${path.dirname(existing)}${path.sep}${target.value}`;
         continue;
       }
       const parent = path.dirname(existing);
