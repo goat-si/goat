@@ -2,6 +2,7 @@ import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { EnvironmentId, ThreadId, TurnItemId } from "@goat/contracts";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 vi.mock("./useGoatBotFace", async (original) => ({
@@ -120,4 +121,18 @@ it("does not mutate the reply text when the bot finishes working", async () => {
   } finally {
     observer.disconnect();
   }
+});
+
+it("clears the reply as soon as the composer accepts a send", async () => {
+  await using screen = await render(view([old], true));
+  const first = reply("first");
+  await screen.rerender(view([old, first], true));
+  const status =
+    screen.container.querySelector<HTMLElement>('[role="status"][aria-label="New bot reply"]') ??
+    screen.container.querySelector<HTMLElement>('[role="status"][aria-atomic="true"]');
+  if (!status) throw new Error("missing status");
+  expect(status.textContent).toContain("GOAT Bot replied.");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "Next message");
+  await userEvent.keyboard("{Enter}");
+  expect(status.textContent).not.toContain("GOAT Bot replied.");
 });
