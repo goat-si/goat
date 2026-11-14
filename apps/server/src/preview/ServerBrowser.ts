@@ -105,7 +105,7 @@ import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewpor
 import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRendering.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
-import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
+import { recordCopies, recordFrameCopies, dispatchViewerKey } from "./ServerBrowserClipboard.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
@@ -277,6 +277,9 @@ interface ServerTab {
   readonly page: Page;
   readonly cdp: CDPSession;
   readonly frameSessions: Map<Frame, CDPSession>;
+  copyReads: Promise<void>;
+  copyKeyedUntil: number;
+  pendingCopyReads: number;
   readonly createdAt: number;
   usedAt: number;
   readonly viewers: Set<ViewerState>;
@@ -662,6 +665,9 @@ const make = Effect.gen(function* () {
         page,
         cdp,
         frameSessions: new Map(),
+        copyReads: Promise.resolve(),
+        copyKeyedUntil: 0,
+        pendingCopyReads: 0,
         createdAt: Date.now(),
         usedAt: Date.now(),
         viewers: new Set(),
@@ -2261,39 +2267,8 @@ const make = Effect.gen(function* () {
           modifiers,
         });
         return;
-      case "key": {
-        const key = typeof message.key === "string" ? message.key : "";
-        const code = typeof message.code === "string" ? message.code : "";
-        const text = typeof message.text === "string" ? message.text : undefined;
-        if (message.action === "up") {
-          await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, modifiers });
-          viewer.pressedKeys.delete(code || key);
-          return;
-        }
-        const command = ViewerInput.editingCommand(key, modifiers);
-        const copying =
-          !tab.desktop && (command?.commands[0] === "copy" || command?.commands[0] === "cut");
-
-        if (copying) await takeCopiedText(tab);
-        await session.send("Input.dispatchKeyEvent", {
-          type: text ? "keyDown" : "rawKeyDown",
-          key,
-          code,
-          modifiers,
-          ...(text ? { text, unmodifiedText: text } : {}),
-          ...command,
-          windowsVirtualKeyCode: ViewerInput.num(
-            message.keyCode,
-            key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
-          ),
-        });
-        viewer.pressedKeys.set(code || key, { key, code });
-        if (copying) {
-          const copied = await takeCopiedText(tab);
-          if (copied) viewer.push({ _tag: "clipboard", text: copied });
-        }
-        return;
-      }
+      case "key":
+        return dispatchViewerKey(tab, session, viewer, message, modifiers);
       case "text":
         if (typeof message.text === "string" && message.text.length > 0) {
           await session.send("Input.insertText", { text: message.text.slice(0, 10_000) });
@@ -2555,8 +2530,9 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              const dispatch = (input: Record<string, unknown>) =>
-                dispatchViewerInput(tab, session, viewer, input);
+              const dispatch = async (input: Record<string, unknown>) => {
+                await dispatchViewerInput(tab, session, viewer, input);
+              };
               if (
                 message.type === "mouse" &&
                 message.action === "move" &&
@@ -2582,7 +2558,10 @@ const make = Effect.gen(function* () {
                   }),
                 );
               } else {
-                await tab.control.human(viewer.id, () => dispatch(message));
+                const copyRead = await tab.control.human(viewer.id, () =>
+                  dispatchViewerInput(tab, session, viewer, message),
+                );
+                await copyRead?.();
               }
             }
           } catch {

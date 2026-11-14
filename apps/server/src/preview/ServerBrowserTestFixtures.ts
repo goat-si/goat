@@ -101,10 +101,12 @@ export function makeSession(
         return { result: { value: { ratio: 1, width: 1280, height: 800 } } };
       }
       if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
-      if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (mockCopy.focusedFrame)
-          mockCopy.focusedFrame.copy = mockCopy.key || mockCopy.focusedFrame.copy;
-        else mockCopy.page = mockCopy.key || mockCopy.page;
+      if (
+        method === "Input.dispatchKeyEvent" &&
+        ["copy", "cut"].includes((input as { commands?: string[] }).commands?.[0] ?? "")
+      ) {
+        if (mockCopy.focusedFrame) mockCopy.focusedFrame.copy = mockCopy.key;
+        else mockCopy.page = mockCopy.key;
       }
       if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
         const value = frame ? frame.copy : mockCopy.page;

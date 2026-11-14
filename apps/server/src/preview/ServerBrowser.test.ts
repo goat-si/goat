@@ -1,3 +1,4 @@
+import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.testkit.ts";
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
@@ -1686,32 +1687,24 @@ it.live("only the controlling viewer's copy and cut keys reach its clipboard", (
       const watcher = yield* browser.attachViewer(viewerInput(tabId, false));
       const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
       yield* viewer.input({ type: "takeControl" });
-      const clipboard = (queue: typeof viewer.output) =>
-        Queue.clear(queue).pipe(
-          Effect.map((items) => items.filter((item) => item._tag === "clipboard")),
-        );
-      mockCopy.page = "unprompted";
-      yield* viewer.input({ type: "mouse", action: "move", x: 10, y: 10 });
-      yield* viewer.input({ type: "wheel", x: 10, y: 10, deltaY: 40 });
-      yield* viewer.input({ type: "key", action: "down", key: "v", code: "KeyV", modifiers: 4 });
-      yield* viewer.input({ type: "unknown" });
-      expect(yield* clipboard(viewer.output)).toEqual([]);
-      mockCopy.key = "copied";
-      yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
-      const cdp = contexts[0]!.sessions.at(-1)!;
-      expect(cdp.send).toHaveBeenCalledWith(
-        "Input.dispatchKeyEvent",
-        expect.objectContaining({ key: "c", commands: ["copy"] }),
-      );
-      expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "copied" }]);
-      mockCopy.key = "cut";
-      yield* viewer.input({ type: "key", action: "down", key: "x", code: "KeyX", modifiers: 2 });
-      expect(yield* clipboard(viewer.output)).toEqual([{ _tag: "clipboard", text: "cut" }]);
-      mockCopy.page = "left over";
-      mockCopy.key = "";
-      yield* viewer.input({ type: "key", action: "down", key: "c", code: "KeyC", modifiers: 4 });
-      expect(yield* clipboard(viewer.output)).toEqual([]);
-      expect(yield* clipboard(watcher.output)).toEqual([]);
+      yield* assertClipboardAccess(viewer, watcher, () => contexts[0]!.sessions.at(-1)!);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a busy frame does not hold a copy key back", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const context = contexts[0]!;
+      const pageSession = context.sessions.at(-1)!;
+      const frame = makeFrame();
+      context.page.emit("framenavigated", frame);
+      yield* Effect.promise(() => frame.recording.promise);
+      const frameSession = context.sessions.at(-1)!;
+      yield* assertBusyCopy(viewer, pageSession, frameSession);
     }),
   ).pipe(Effect.provide(layer)),
 );
