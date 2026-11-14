@@ -122,6 +122,7 @@ import {
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
 import { appendToolContentText, textFromUnknown } from "./toolOutputText.ts";
 import { parseElicitationForm } from "./elicitationForm.ts";
+import * as AdvertisedCommands from "./advertisedCommands.ts";
 import {
   appendToolCallContentChunk,
   applyInterruptedToolStatus,
@@ -1009,7 +1010,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
-        const advertisedCommandNames = yield* Ref.make(new Map<string, ReadonlySet<string>>());
+        const latestAdvertisedCommands = yield* Ref.make<AdvertisedCommands.Latest | null>(null);
         const compactsContext =
           flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -5402,14 +5403,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (notification.update.sessionUpdate === "available_commands_update") {
                 const sessionId = rawNotification.sessionId;
                 const advertisedCommands = notification.update.availableCommands;
-                yield* Ref.update(advertisedCommandNames, (current) => {
-                  const updated = new Map(current);
-                  updated.set(
-                    sessionId,
-                    new Set(advertisedCommands.map((command) => command.name.trim().toLowerCase())),
-                  );
-                  return updated;
-                });
+                yield* Ref.set(
+                  latestAdvertisedCommands,
+                  AdvertisedCommands.remember(sessionId, advertisedCommands),
+                );
                 yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
               }
               if (
@@ -7231,8 +7228,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               flavor.compactViaAdvertisedCommand === true &&
               turnInput.message.text.trim() === "/compact" &&
               turnInput.message.attachments.length === 0 &&
-              (yield* Ref.get(advertisedCommandNames)).get(requestedSessionId)?.has("compact") !==
-                true
+              !AdvertisedCommands.advertises(
+                yield* Ref.get(latestAdvertisedCommands),
+                requestedSessionId,
+                "compact",
+              )
             ) {
               return yield* new ProviderAdapter.ProviderCompactionUnsupportedError({
                 driver,
