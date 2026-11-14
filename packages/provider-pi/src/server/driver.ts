@@ -3,6 +3,9 @@ import { ProviderDriverKind, type ServerProvider } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
 import { OmoSettings } from "../omoSettings.ts";
 import { OMO_PROFILE, PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -103,7 +106,11 @@ const makePiFamilyDriver = (
       const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const host = yield* ProviderHost.ProviderHost;
       const { cwd } = host.paths;
-      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+      const hostEnvironment = yield* HostProcess.Environment;
+      const home = yield* HostProcess.HomeDirectory;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -116,16 +123,57 @@ const makePiFamilyDriver = (
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      const maintenanceForEnvironment = (
+        env: NodeJS.ProcessEnv,
+        binaryPath = effectiveConfig.binaryPath,
+        resolvedCommandPath?: string | null,
+      ) =>
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
+          binaryPath,
+          env,
+          ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, pathService),
-        ),
+        );
+      const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
+        currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
+        {
+          // Everything derives from the host snapshot resolveMaintenance provides: a merged copy made
+          // before resolving, and the host's hash, because native and manual installs' npm advisory
+          // reads the host environment, where an instance override can mask a change.
+          lookup: Effect.flatMap(HostProcess.Environment, (snapshot) =>
+            mergeProviderInstanceEnvironment(environment, snapshot).pipe(
+              Effect.provideService(HostProcess.HomeDirectory, home),
+              Effect.map((merged) => ({
+                env: { ...merged },
+                host: hostEnvironmentHash(snapshot),
+              })),
+            ),
+          ).pipe(
+            Effect.flatMap(({ env, host }) =>
+              Effect.suspend(() =>
+                resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+                  Effect.provideService(CommandResolutionCache, new Map()),
+                ),
+              ).pipe(
+                Effect.map((resolvedCommandPath) => ({ env, resolvedCommandPath, install: host })),
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, pathService),
+              ),
+            ),
+          ),
+          resolve: ({ env, resolvedCommandPath }) =>
+            maintenanceForEnvironment(env, resolvedCommandPath ?? "", resolvedCommandPath),
+        },
       );
+      const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
+        Effect.suspend(() =>
+          cachedMaintenance(options).pipe(
+            Effect.provideService(HostProcess.Environment, { ...hostEnvironment }),
+          ),
+        );
 
       const orchestrationAdapter = yield* adapterDriver
         .create({
@@ -147,9 +195,15 @@ const makePiFamilyDriver = (
               }),
           ),
         );
-      const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv, profile);
+      const textGeneration = yield* makePiTextGeneration(
+        effectiveConfig,
+        undefined,
+        profile,
+        currentEnvironment,
+      );
 
-      const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv, cwd, profile).pipe(
+      const checkProvider = currentEnvironment.pipe(
+        Effect.flatMap((env) => checkPiProviderStatus(effectiveConfig, env, cwd, profile)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
@@ -203,7 +257,10 @@ const makePiFamilyDriver = (
             ? snapshot.getSnapshot
             : Effect.all([
                 snapshot.getSnapshot,
-                discoverPiCommandsForCwd(effectiveConfig, processEnv, workspaceCwd, profile).pipe(
+                currentEnvironment.pipe(
+                  Effect.flatMap((env) =>
+                    discoverPiCommandsForCwd(effectiveConfig, env, workspaceCwd, profile),
+                  ),
                   Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                   Effect.mapError(
                     (cause) =>

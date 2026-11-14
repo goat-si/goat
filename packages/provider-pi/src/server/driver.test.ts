@@ -1,13 +1,21 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -16,6 +24,7 @@ import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSp
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import type { PiSettings } from "../settings.ts";
 import { OmoDriver, PiDriver } from "./driver.ts";
@@ -133,6 +142,326 @@ const create = (config: Partial<PiSettings> = {}, enabled = true) =>
   });
 
 it.layer(layerTest)("PiDriver workspace discovery", (it) => {
+  it.effect("maintenance resolves the executable once per uncached lookup", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const executable = `${root}/custom-pi`;
+      yield* fs.writeFileString(executable, "#!/bin/sh\n");
+      yield* fs.chmod(executable, 0o755);
+      let checks = 0;
+      const countingFs: FileSystem.FileSystem = {
+        ...fs,
+        stat: (path) => {
+          if (path === executable) checks++;
+          return fs.stat(path);
+        },
+      };
+      // A disabled instance never starts snapshot enrichment and its status check returns before
+      // resolving the executable, so the lookup below is the only work that checks it.
+      const instance = yield* create({}, false).pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: root, HOME: root }),
+        Effect.provideService(FileSystem.FileSystem, countingFs),
+      );
+      const before = checks;
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance({ fresh: true })).update?.executable,
+        executable,
+      );
+      assert.strictEqual(checks - before, 2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const oldDir = `${root}/old`;
+      const newDir = `${root}/new`;
+      for (const dir of [oldDir, newDir]) {
+        yield* fs.makeDirectory(dir);
+        yield* fs.writeFileString(`${dir}/custom-pi`, "#!/bin/sh\n");
+        yield* fs.chmod(`${dir}/custom-pi`, 0o755);
+      }
+      const host = { PATH: oldDir, HOME: root };
+      const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+      const first = yield* instance.snapshot.resolveMaintenance();
+      assert.strictEqual(first.update?.executable, `${oldDir}/custom-pi`);
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        first.update?.executable,
+      );
+      host.PATH = newDir;
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        `${newDir}/custom-pi`,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  // The npm fixture is a POSIX shell script, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a registry change with PATH unchanged reaches the next update advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+        // npm answers with the latest version the configured registry offers.
+        yield* fs.writeFileString(
+          `${root}/npm`,
+          `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *b.example*) echo '"2.0.0"';; *) echo '"1.0.0"';; esac\n`,
+        );
+        for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${root}/${name}`, 0o755);
+        const host = { PATH: root, HOME: root, NPM_CONFIG_REGISTRY: "https://a.example" };
+        const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        assert.strictEqual(yield* advisory, "1.0.0");
+        host.NPM_CONFIG_REGISTRY = "https://b.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
+  // The npm fixtures are POSIX shell scripts, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host registry change an instance override masks reaches the next native advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const dirs = [`${root}/first`, `${root}/second`];
+        for (const dir of dirs) {
+          yield* fs.makeDirectory(dir);
+          yield* fs.writeFileString(`${dir}/custom-pi`, "#!/bin/sh\n");
+          // npm answers with the latest version the registry it is given offers.
+          yield* fs.writeFileString(
+            `${dir}/npm`,
+            `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *instance*) echo '"9.0.0"';; *) echo '"1.0.0"';; esac\n`,
+          );
+          for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${dir}/${name}`, 0o755);
+        }
+        const host = { PATH: dirs[0]!, HOME: root, NPM_CONFIG_REGISTRY: "https://x.example" };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-masked-registry"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(Effect.provideService(HostProcess.Environment, host));
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // A native install's advisory reads the host registry; the instance's own one masks it.
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("50 minutes");
+        host.PATH = dirs[1]!;
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("5 minutes");
+        host.NPM_CONFIG_REGISTRY = "https://y.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
+  // The fixtures are POSIX shell scripts behind symlinks, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host PATH change while a check resolves the executable keeps that check on one environment",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const prefixes = [`${root}/first`, `${root}/second`];
+        for (const prefix of prefixes) {
+          const packageDir = `${prefix}/lib/node_modules/@earendil-works/pi-coding-agent`;
+          yield* fs.makeDirectory(packageDir, { recursive: true });
+          yield* fs.makeDirectory(`${prefix}/bin`);
+          yield* fs.writeFileString(`${packageDir}/cli.js`, "#!/bin/sh\n");
+          yield* fs.chmod(`${packageDir}/cli.js`, 0o755);
+          yield* fs.symlink(`${packageDir}/cli.js`, `${prefix}/bin/custom-pi`);
+        }
+        // No instance variables, so the merged environment is the live host object.
+        const host = { PATH: `${prefixes[0]}/bin`, HOME: root };
+        const first = `${prefixes[0]}/bin/custom-pi`;
+        let moved = false;
+        // The host moves to the second install while the check is looking at the first.
+        const movingFs: FileSystem.FileSystem = {
+          ...fs,
+          stat: (target) => {
+            if (target === first && !moved) {
+              moved = true;
+              host.PATH = `${prefixes[1]}/bin`;
+            }
+            return fs.stat(target);
+          },
+        };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-path-race"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(FileSystem.FileSystem, movingFs),
+        );
+        const maintenance = yield* instance.snapshot.resolveMaintenance();
+        assert.isTrue(moved);
+        // The npm update runs with the environment of the check that found the first install.
+        assert.strictEqual(maintenance.update?.env?.PATH, `${prefixes[0]}/bin`);
+      }).pipe(Effect.scoped),
+  );
+
+  // The fixtures are POSIX shell scripts, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host registry change while a check resolves the executable stays out of that check's advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+        yield* fs.writeFileString(
+          `${root}/npm`,
+          `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *) echo '"1.0.0"';; esac\n`,
+        );
+        for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${root}/${name}`, 0o755);
+        const host = { PATH: root, HOME: root, NPM_CONFIG_REGISTRY: "https://x.example" };
+        let moved = false;
+        const movingFs: FileSystem.FileSystem = {
+          ...fs,
+          stat: (target) => {
+            if (target === `${root}/custom-pi` && !moved) {
+              moved = true;
+              host.NPM_CONFIG_REGISTRY = "https://y.example";
+            }
+            return fs.stat(target);
+          },
+        };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-registry-race"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(FileSystem.FileSystem, movingFs),
+        );
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // The check hashed registry x, so its cached advisory must ask x, not the later y.
+        assert.strictEqual(yield* advisory, "1.0.0");
+        assert.isTrue(moved);
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("maintenance notices an executable installed into an unchanged PATH", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const host = { PATH: root, HOME: root };
+      const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+      assert.isNull((yield* instance.snapshot.resolveMaintenance()).update);
+      yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+      yield* fs.chmod(`${root}/custom-pi`, 0o755);
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        `${root}/custom-pi`,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "regression #3079: Pi and OmO probes use the current host PATH and respect instance PATH",
+    () =>
+      Effect.gen(function* () {
+        const host = { PATH: "/old/bin", HOME: "/fixture" };
+        const { spawner, launches } = yield* makePiSpawner();
+        for (const driver of [PiDriver, OmoDriver]) {
+          const make = (override: boolean) =>
+            driver
+              .create({
+                instanceId: ProviderInstanceId.make(`${driver.driverKind}-${override}`),
+                displayName: undefined,
+                enabled: true,
+                environment: [
+                  { name: "FIXTURE", value: "1", sensitive: false },
+                  ...(override ? [{ name: "PATH", value: "/old/bin", sensitive: false }] : []),
+                ],
+                config: driver.defaultConfig(),
+              })
+              .pipe(
+                Effect.provideService(HostProcess.Environment, host),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              );
+          host.PATH = "/old/bin";
+          const inherited = yield* make(false);
+          const overridden = yield* make(true);
+          const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/machine",
+          });
+          const sessionInput = {
+            threadId: ThreadId.make(`${driver.driverKind}-thread`),
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-session`),
+            modelSelection: { instanceId: inherited.instanceId, model: "default" },
+            runtimePolicy,
+          };
+          yield* inherited.orchestrationAdapter.openSession(sessionInput);
+          const oldLaunch = launches.at(-1);
+          assert.equal(oldLaunch?.options.env?.PATH, "/old/bin");
+          host.PATH = "/new/bin";
+          yield* inherited.orchestrationAdapter.openSession({
+            ...sessionInput,
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-new-session`),
+          });
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/new/bin");
+          assert.equal(oldLaunch?.options.env?.PATH, "/old/bin");
+          const beforeInheritedRefresh = launches.length;
+          yield* inherited.snapshot.refresh;
+          assert.isAbove(launches.length, beforeInheritedRefresh);
+          assert.equal(launches[beforeInheritedRefresh]?.options.env?.PATH, "/new/bin");
+          yield* inherited.snapshotForCwd!("/first");
+          assert.equal(
+            launches.findLast((launch) => launch.options.cwd === "/first")?.options.env?.PATH,
+            "/new/bin",
+          );
+          yield* overridden.orchestrationAdapter.openSession({
+            ...sessionInput,
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-override-session`),
+            modelSelection: { ...sessionInput.modelSelection, instanceId: overridden.instanceId },
+          });
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/old/bin");
+          const beforeOverriddenRefresh = launches.length;
+          yield* overridden.snapshot.refresh;
+          assert.isAbove(launches.length, beforeOverriddenRefresh);
+          assert.equal(launches[beforeOverriddenRefresh]?.options.env?.PATH, "/old/bin");
+        }
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps each workspace's skills and commands separate from the machine catalog", () =>
     Effect.gen(function* () {
       const { spawner, launches } = yield* makePiSpawner();

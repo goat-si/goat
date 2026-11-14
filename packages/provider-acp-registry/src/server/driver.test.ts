@@ -1,7 +1,19 @@
-import { AcpRegistryOperationError, ProviderInstanceId } from "@goat/contracts";
+import {
+  AcpRegistryOperationError,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@goat/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { AcpRegistrySettings } from "../settings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -12,6 +24,7 @@ import {
   buildCheckedAcpRegistrySnapshot,
   checkAcpRegistryProviderReadiness,
   checkAcpRegistryProviderStatus,
+  AcpRegistryDriver,
 } from "./driver.ts";
 
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -29,6 +42,82 @@ const noSessionManagement = {
   canDelete: false,
   canConfigureProviders: false,
 } as const;
+
+it.effect(
+  "regression #3079: ACP Registry status and new sessions read current PATH while instance PATH wins",
+  () =>
+    Effect.gen(function* () {
+      const host = { HOME: "/fixture/acp-path", PATH: "/old" };
+      const inspected: (string | undefined)[] = [];
+      const resolved: (string | undefined)[] = [];
+      const catalog = {
+        ...catalogWithInspection({ status: "not_found", agentId: "test-agent" }),
+        inspect: (_settings: unknown, env?: NodeJS.ProcessEnv) =>
+          Effect.sync(() => {
+            inspected.push(env?.PATH);
+            return { status: "not_found" as const, agentId: "test-agent" };
+          }),
+        resolve: (_settings: unknown, _cwd: string, env?: NodeJS.ProcessEnv) =>
+          Effect.gen(function* () {
+            resolved.push(env?.PATH);
+            return yield* new AcpRegistrySupport.AcpRegistryError({
+              reason: "runner_unavailable",
+              detail: "fixture",
+            });
+          }),
+      };
+      const make = (override: boolean) =>
+        AcpRegistryDriver.create({
+          instanceId: ProviderInstanceId.make(override ? "acp-override" : "acp-inherited"),
+          displayName: undefined,
+          environment: override
+            ? [{ name: "PATH", value: "/old", sensitive: false }]
+            : [{ name: "MARKER", value: "yes", sensitive: false }],
+          enabled: true,
+          config: decodeSettings({ agentId: "test-agent" }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HostProcess.HomeDirectory, host.HOME),
+        );
+      const inherited = yield* make(false);
+      const overridden = yield* make(true);
+      host.PATH = "/new";
+      yield* inherited.snapshot.refresh;
+      expect(inspected.at(-1)).toBe("/new");
+      const open = (instance: typeof inherited) =>
+        instance.orchestrationAdapter
+          .openSession({
+            threadId: ThreadId.make("acp-path-thread"),
+            providerSessionId: ProviderSessionId.make("acp-path-session"),
+            modelSelection: { instanceId: instance.instanceId, model: "default" },
+            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          })
+          .pipe(Effect.scoped, Effect.flip);
+      yield* open(inherited);
+      expect(resolved.at(-1)).toBe("/new");
+      yield* overridden.snapshot.refresh;
+      expect(inspected.at(-1)).toBe("/old");
+      yield* open(overridden);
+      expect(resolved.at(-1)).toBe("/old");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          TestProviderHost.layer({ runBackgroundWork: false }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+          NodeServices.layer,
+        ),
+      ),
+    ),
+);
 
 function catalogWithInspection(
   inspection: AcpRegistrySupport.AcpRegistryInspection,

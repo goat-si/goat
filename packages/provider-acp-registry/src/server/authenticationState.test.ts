@@ -3,6 +3,8 @@ import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 
@@ -69,6 +71,58 @@ it.layer(NodeServices.layer)("ACP sign-in confirmation", (it) => {
           assert.isFalse(contents.includes("different-token"));
         }
       }),
+  );
+
+  it.effect("does not reuse a confirmation after the active profile changes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const host = { HOME: "/home/test", XDG_CONFIG_HOME: "/profile/one" };
+      const state = yield* makeAcpRegistryAuthenticationState({
+        cacheDir,
+        instanceId: ProviderInstanceId.make("acp_profile_change"),
+        settings,
+        environment: [],
+        processEnvironment: host,
+      });
+      yield* state.set(true);
+      assert.isTrue(yield* state.get);
+      host.XDG_CONFIG_HOME = "/profile/two";
+      assert.isFalse(yield* state.get);
+      yield* state.set(true, { HOME: "/home/test", XDG_CONFIG_HOME: "/profile/one" });
+      assert.isFalse(yield* state.get);
+      yield* state.set(true);
+      assert.isTrue(yield* state.get);
+    }),
+  );
+
+  it.effect("does not let an earlier profile's failed probe clear the current confirmation", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const host = { HOME: "/profile/a" };
+      const profileA = { ...host };
+      const state = yield* makeAcpRegistryAuthenticationState({
+        cacheDir,
+        instanceId: ProviderInstanceId.make("acp_stale_probe"),
+        settings,
+        environment: [],
+        processEnvironment: host,
+      });
+      const release = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const probe = yield* Effect.gen(function* () {
+        yield* Deferred.succeed(started, undefined);
+        yield* Deferred.await(release);
+        yield* state.set(false, profileA);
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      host.HOME = "/profile/b";
+      yield* state.set(true);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(probe);
+      assert.isTrue(yield* state.get);
+    }),
   );
 
   it.effect("ignores damaged confirmation and keeps another instance independent", () =>

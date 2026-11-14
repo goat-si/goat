@@ -506,15 +506,27 @@ const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
     .join("\n");
 
 /** A cold server can list a partial catalog; two agreeing reads reduce that startup race. */
-export const makeOpenCode2ModelLoader = <E>(
-  list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
+export const makeOpenCode2ModelLoader = <E, Identity = undefined>(
+  list:
+    | Effect.Effect<ReadonlyArray<OpenCode2Model>, E>
+    | ((identity: Identity) => Effect.Effect<ReadonlyArray<OpenCode2Model>, E>),
+  identity?: Effect.Effect<Identity>,
+  sameIdentity: (left: Identity, right: Identity) => boolean = Object.is,
 ) =>
   Effect.sync(() => {
     let lastLoaded: ReadonlyArray<OpenCode2Model> = [];
-    return Effect.suspend(() => {
+    let lastIdentity: Identity | undefined;
+    let hasIdentity = false;
+    return Effect.gen(function* () {
+      const currentIdentity = identity === undefined ? (undefined as Identity) : yield* identity;
+      if (!hasIdentity || !sameIdentity(lastIdentity as Identity, currentIdentity)) {
+        lastLoaded = [];
+        lastIdentity = currentIdentity;
+        hasIdentity = true;
+      }
       let previous: string | undefined;
       let latest: ReadonlyArray<OpenCode2Model> = [];
-      return list.pipe(
+      return yield* (typeof list === "function" ? list(currentIdentity) : list).pipe(
         Effect.repeat({
           until: (models) => {
             if (models.length > 0) latest = models;
@@ -529,9 +541,12 @@ export const makeOpenCode2ModelLoader = <E>(
         Effect.timeoutOption("5 seconds"),
         Effect.map((loaded) => {
           // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
-          if (loaded._tag === "Some") lastLoaded = loaded.value;
-          else if (latest.length > 0) lastLoaded = latest;
-          return lastLoaded;
+          if (sameIdentity(lastIdentity as Identity, currentIdentity)) {
+            if (loaded._tag === "Some") lastLoaded = loaded.value;
+            else if (latest.length > 0) lastLoaded = latest;
+            return lastLoaded;
+          }
+          return loaded._tag === "Some" ? loaded.value : latest;
         }),
       );
     });

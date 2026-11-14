@@ -29,36 +29,36 @@ export const makeAcpRegistryAuthenticationState = Effect.fn("makeAcpRegistryAuth
     readonly settings: AcpRegistrySettings;
     readonly environment: ProviderInstanceEnvironment;
     readonly processEnvironment: NodeJS.ProcessEnv;
+    readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   }) {
+    const crypto = yield* Crypto.Crypto;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const filePath = path.join(input.cacheDir, `acp-auth-${yield* hash(input.instanceId)}.json`);
     // Cosmetic settings and model discovery do not change the account binding.
-    const binding = yield* hash({
-      ...(input.settings.source === "local"
-        ? { source: "local", commandArgs: input.settings.commandArgs }
-        : {}),
-      agentId: input.settings.agentId,
-      commandPath: input.settings.commandPath,
-      distribution: input.settings.distribution,
-      authMethodId: input.settings.authMethodId,
-      environment: [...input.environment].toSorted((a, b) => a.name.localeCompare(b.name)),
-      profiles: [
-        "HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "XDG_STATE_HOME",
-        "APPDATA",
-        "LOCALAPPDATA",
-      ].map((name) => input.processEnvironment[name] ?? null),
-    });
+    const bindingFor = (processEnvironment: NodeJS.ProcessEnv) =>
+      hash({
+        ...(input.settings.source === "local"
+          ? { source: "local", commandArgs: input.settings.commandArgs }
+          : {}),
+        agentId: input.settings.agentId,
+        commandPath: input.settings.commandPath,
+        distribution: input.settings.distribution,
+        authMethodId: input.settings.authMethodId,
+        environment: [...input.environment].toSorted((a, b) => a.name.localeCompare(b.name)),
+        processEnvironment: Object.entries(processEnvironment).toSorted(([a], [b]) =>
+          a.localeCompare(b),
+        ),
+      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
     const saved = yield* fs.readFileString(filePath).pipe(
       Effect.flatMap(decodeState),
       Effect.orElseSucceed(() => undefined),
     );
-    const confirmed = yield* Ref.make(saved?.binding === binding && saved.authenticated);
+    const confirmed = yield* Ref.make(saved);
     const lock = yield* Semaphore.make(1);
-    const persist = (authenticated: boolean) =>
+    const currentEnvironment =
+      input.currentEnvironment ?? Effect.sync(() => input.processEnvironment);
+    const persist = (binding: string, authenticated: boolean) =>
       writeFileStringAtomically({
         filePath,
         contents: JSON.stringify({ binding, authenticated }),
@@ -68,13 +68,29 @@ export const makeAcpRegistryAuthenticationState = Effect.fn("makeAcpRegistryAuth
         Effect.tapError(() => Effect.logWarning("Could not save ACP sign-in confirmation.")),
         Effect.ignore,
       );
-    if (saved && saved.binding !== binding) yield* persist(false);
-    return {
-      get: Ref.get(confirmed),
-      set: (authenticated: boolean) =>
-        lock.withPermit(
-          Ref.set(confirmed, authenticated).pipe(Effect.andThen(persist(authenticated))),
-        ),
-    };
+    const get = lock.withPermit(
+      Effect.gen(function* () {
+        const binding = yield* bindingFor(yield* currentEnvironment);
+        const state = yield* Ref.get(confirmed);
+        if (state?.binding === binding) return state.authenticated;
+        yield* Ref.set(confirmed, { binding, authenticated: false });
+        if (state !== undefined) yield* persist(binding, false);
+        return false;
+      }),
+    );
+    const set = (authenticated: boolean, environment?: NodeJS.ProcessEnv) =>
+      lock.withPermit(
+        Effect.gen(function* () {
+          const currentBinding = yield* bindingFor(yield* currentEnvironment);
+          const binding =
+            environment === undefined ? currentBinding : yield* bindingFor(environment);
+          if (binding !== currentBinding) return;
+          yield* Ref.set(confirmed, { binding, authenticated });
+          yield* persist(binding, authenticated);
+        }),
+      );
+    // Preserve invalidation when a driver is recreated with another profile.
+    yield* get;
+    return { get, set };
   },
 );
