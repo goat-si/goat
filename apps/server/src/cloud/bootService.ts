@@ -1,3 +1,15 @@
+import {
+  BOOT_SERVICE_NAMES,
+  LEGACY_BOOT_SERVICE_NAMES,
+  type BootServiceNames,
+} from "./bootServiceNames.ts";
+import { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
+export {
+  BOOT_SERVICE_NAMES,
+  LEGACY_BOOT_SERVICE_NAMES,
+  type BootServiceNames,
+} from "./bootServiceNames.ts";
+export { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
 import { systemdManager } from "./systemdManager.ts";
 import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
 import {
@@ -22,12 +34,7 @@ import * as Schedule from "effect/Schedule";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import {
-  GOAT_ENVIRONMENT_PATH,
-  LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
-  LEGACY_BOOT_SERVICE_UNIT_FILE,
-  legacyEnvName,
-} from "@goat/contracts/legacyT3Names";
+import { GOAT_ENVIRONMENT_PATH, legacyEnvName } from "@goat/contracts/legacyT3Names";
 import { CLI_RELEASE_BASE_URL_ENV } from "@goat/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -50,29 +57,6 @@ import {
   serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
-
-/** The names a service manager knows one install by. */
-export interface BootServiceNames {
-  readonly unitFile: string;
-  readonly launchdLabel: string;
-}
-
-export const BOOT_SERVICE_NAMES: BootServiceNames = {
-  unitFile: "goat.service",
-  // Distinct from the desktop app's bundle id (si.goat.desktop), so launchd
-  // and TCC records never collide.
-  launchdLabel: "si.goat.service",
-};
-
-/**
- * Installed by builds before the GOAT rename, and by upstream T3 Code. Install
- * and restart move a legacy unit that serves this GOAT home to the current
- * names; a legacy unit serving another home belongs to someone else.
- */
-export const LEGACY_BOOT_SERVICE_NAMES: BootServiceNames = {
-  unitFile: LEGACY_BOOT_SERVICE_UNIT_FILE,
-  launchdLabel: LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
-};
 
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
@@ -407,42 +391,6 @@ function selectBootServiceManager(input: {
   }
   return undefined;
 }
-
-const decodeSystemdUnitPaths = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ data: Schema.Array(Schema.String) })),
-);
-
-// The manager may not share the installer's environment; JSON preserves spaces in its paths.
-export const readSystemdUnitDirectory = Effect.fn("cloud.boot_service.read_systemd_unit_directory")(
-  function* () {
-    const runner = yield* ProcessRunner.ProcessRunner;
-    const path = yield* Path.Path;
-    const result = yield* runner.run({
-      command: "busctl",
-      args: [
-        "--user",
-        "--json=short",
-        "get-property",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
-        "UnitPath",
-      ],
-      timeout: Duration.seconds(5),
-    });
-    if (result.code !== 0) return undefined;
-    const { data } = yield* decodeSystemdUnitPaths(result.stdout);
-    // The persistent control directory identifies the manager's config root despite UnitPath overrides.
-    const controlDirectory = data.find(
-      (directory) =>
-        path.isAbsolute(directory) &&
-        directory.endsWith("/systemd/user.control") &&
-        data.includes(directory.slice(0, -".control".length)),
-    );
-    return controlDirectory?.slice(0, -".control".length);
-  },
-  Effect.orElseSucceed(() => undefined),
-);
 
 export class BootServiceUnsupportedError extends Schema.TaggedError<BootServiceUnsupportedError>()(
   "BootServiceUnsupportedError",

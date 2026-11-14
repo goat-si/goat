@@ -211,7 +211,14 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
       return [];
     }
     const references: string[] = [];
-    for (const unitPath of yield* bootServiceUnitPaths()) {
+    const unitPaths = yield* bootServiceUnitPaths();
+    if (unitPaths === undefined) {
+      yield* Effect.logWarning(
+        "Could not determine the systemd unit directory; skipping runtime pruning",
+      );
+      return [];
+    }
+    for (const unitPath of unitPaths) {
       const unit = yield* fs.readFileString(unitPath).pipe(
         Effect.asSome,
         Effect.catchIf(
