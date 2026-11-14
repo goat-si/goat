@@ -44,7 +44,7 @@ const serve = Effect.fn("test.speech.serve")(function* (
     ]),
   );
   const download = vi.fn(() => Effect.void);
-  const link = vi.fn(() => Effect.void);
+  const link = vi.fn<SpeechManagement.SpeechManagement["Service"]["link"]>(() => Effect.void);
   const remove = vi.fn(() => Effect.void);
   const configure = vi.fn(() => Effect.void);
   const transcribe = vi.fn(() => transcription);
@@ -197,5 +197,25 @@ it.effect("serves authorized model operations and transcription", () =>
     expect(h.remove).toHaveBeenCalledWith("model");
     expect(h.configure).toHaveBeenCalledWith(DEFAULT_SPEECH_CONFIGURATION);
     expect(h.transcribe).toHaveBeenCalledOnce();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a link that finds no model says so without asking for a retry", () =>
+  Effect.gen(function* () {
+    const h = yield* serve([AuthVoiceManageScope, AuthFilesystemReadScope]);
+    h.link.mockImplementation(() =>
+      Effect.fail(
+        new SpeechManagement.SpeechManagementError({
+          operation: "link",
+          cause: SpeechManagement.NO_LINKABLE_MODEL,
+        }),
+      ),
+    );
+    const response = yield* h.send("models/link", { path: "/empty" });
+    expect(response.status).not.toBe(200);
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({
+      message: SpeechManagement.NO_LINKABLE_MODEL,
+      retryable: false,
+    });
   }).pipe(Effect.scoped),
 );

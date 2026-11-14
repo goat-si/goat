@@ -14,6 +14,7 @@ export class SpeechManagementError extends Schema.TaggedError<SpeechManagementEr
   { operation: Schema.String, cause: Schema.Defect() },
 ) {}
 const isManagementError = Schema.is(SpeechManagementError);
+export const NO_LINKABLE_MODEL = "No voice model file was found at that path.";
 
 export class SpeechManagement extends Context.Service<
   SpeechManagement,
@@ -83,7 +84,8 @@ const make = Effect.gen(function* () {
               size: model.size,
               installed,
               selected: model.id === current.speech.modelId,
-              ...(linkedFrom === undefined ? {} : { linkedFrom }),
+              // A dangling link still names its origin, so only a ready model shows it.
+              ...(installed && linkedFrom !== undefined ? { linkedFrom } : {}),
               recommended: model.recommended,
               benchmark: model.benchmark.secondsPer30s,
             })),
@@ -104,11 +106,12 @@ const make = Effect.gen(function* () {
       exclusive(
         "link",
         Effect.gen(function* () {
-          const ids = yield* store.link(SPEECH_MODELS, path);
-          if (ids[0]) {
-            const current = yield* settings.getSettings;
-            yield* settings.updateSettings({ speech: { ...current.speech, modelId: ids[0] } });
-          }
+          const [first] = yield* store.link(SPEECH_MODELS, path);
+          if (first === undefined) return yield* failure("link", NO_LINKABLE_MODEL);
+          const current = yield* settings.getSettings;
+          const selected = getSpeechModel(current.speech.modelId);
+          if (selected === undefined || !(yield* store.isReady(selected)))
+            yield* settings.updateSettings({ speech: { ...current.speech, modelId: first } });
         }),
       ),
     ),

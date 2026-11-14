@@ -23,15 +23,19 @@ import * as SpeechInference from "./SpeechInference.ts";
 import * as SpeechManagement from "./SpeechManagement.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
 
+const KNOWN_FAILURES: ReadonlyArray<unknown> = [
+  "The selected speech model is not installed.",
+  "Speech is busy.",
+  "Unknown model.",
+  SpeechManagement.NO_LINKABLE_MODEL,
+];
 const decodeLink = Schema.decodeEffect(Schema.fromJsonString(SpeechModelLinkRequest));
 const decodeModel = Schema.decodeEffect(Schema.fromJsonString(SpeechModelRequest));
 const decodeConfig = Schema.decodeEffect(Schema.fromJsonString(SpeechConfiguration));
 const decodeAudio = Schema.decodeEffect(Schema.fromJsonString(VoiceTranscriptionInput));
 const unavailable = (error: SpeechManagement.SpeechManagementError) => {
   const message =
-    error.cause === "The selected speech model is not installed." ||
-    error.cause === "Speech is busy." ||
-    error.cause === "Unknown model."
+    typeof error.cause === "string" && KNOWN_FAILURES.includes(error.cause)
       ? error.cause
       : "Environment speech could not be completed.";
   return new VoiceTranscriptionUpstreamError({
