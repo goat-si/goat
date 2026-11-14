@@ -5,7 +5,8 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({ toasts: [] as Array<{ type?: string; title?: string }> }));
-vi.mock("../ui/toast", () => ({
+vi.mock("../ui/toast", async (original) => ({
+  ...(await original<typeof import("../ui/toast")>()),
   toastManager: { add: (toast: { type?: string; title?: string }) => state.toasts.push(toast) },
 }));
 vi.mock("~/hooks/useSettings", async (original) => ({
