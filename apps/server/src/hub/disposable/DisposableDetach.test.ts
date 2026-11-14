@@ -1,9 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Attach from "./DisposableAttach.ts";
-import { attach, listed, reconcile, rows, world } from "./DisposableAttach.testkit.ts";
+import { attach, key, listed, reconcile, rows, world } from "./DisposableAttach.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
 
@@ -314,6 +315,37 @@ it.effect(
         expect(released.state).toBe("failed");
         expect(released.message).toContain("pen revoke");
         expect((yield* attach(3)).state).toBe("invited");
+      }),
+    ),
+);
+
+it.effect(
+  "a final record whose key left Pen is pruned with its request keys 30 days after it ended; one still in Pen stays",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        fakeDetachHome(host);
+        const gone = yield* linked(pen, home, host, 1);
+        const kept = yield* linked(pen, home, host, 2);
+        yield* detach(THREAD, gone.attachId, "d-1");
+        yield* detach(THREAD, kept.attachId, "d-2");
+        yield* detachPass;
+        pen.members.delete(key(1));
+        yield* reconcile;
+        expect(yield* listed(gone.attachId)).toMatchObject({ state: "purged", penMember: false });
+        const requests = Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) =>
+            sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machine_requests`,
+        );
+        yield* TestClock.adjust(29 * 24 * HOUR);
+        yield* detachPass;
+        expect(yield* listed(gone.attachId)).toBeDefined();
+        yield* TestClock.adjust(2 * 24 * HOUR);
+        yield* detachPass;
+        expect(yield* listed(gone.attachId)).toBeUndefined();
+        expect((yield* requests).map((row) => row.attach_id)).not.toContain(gone.attachId);
+        expect((yield* listed(kept.attachId))?.state).toBe("purged");
       }),
     ),
 );

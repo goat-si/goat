@@ -19,6 +19,7 @@ import {
   type Columns,
   digest,
   fail,
+  OWES_ACK,
   provisionerOf,
   type Row,
   sameProvisioner,
@@ -55,6 +56,8 @@ const REVOKE_TIMEOUT_MS = 400_000;
 const READ_TIMEOUT_MS = 30_000;
 const DETACH_LIMIT = 100;
 const DETACH_CONCURRENCY = 4;
+const RETENTION_DAYS = 30;
+const PRUNE_LIMIT = 100;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const RELEASABLE = new Set(["unknown", "paused"]);
 /** Answers that leave the revoke's own id to be sent again, as OpenCodex asks. */
@@ -474,6 +477,37 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
   });
 
+  /**
+   * Design section 3, Retention: a final record whose key is out of Pen, that names no link or link
+   * operation and owes Pen no acknowledgement, goes with its request keys 30 days after it ended.
+   */
+  const prune = Effect.gen(function* () {
+    const cutoff = DateTime.formatIso(
+      DateTime.subtract(yield* DateTime.now, { days: RETENTION_DAYS }),
+    );
+    const ended = yield* sql<{
+      readonly attach_id: string;
+    }>`SELECT attach_id FROM disposable_machines
+      WHERE final_at IS NOT NULL AND final_at < ${cutoff}
+        AND (pen_admitted_at IS NULL OR pen_removed_at IS NOT NULL)
+        AND link_id IS NULL AND link_operation_id IS NULL AND NOT ${sql.unsafe(OWES_ACK)}
+      ORDER BY final_at LIMIT ${PRUNE_LIMIT}`;
+    if (ended.length === 0) return;
+    yield* exclusive(
+      sql.withTransaction(
+        Effect.forEach(
+          ended,
+          ({ attach_id }) =>
+            Effect.andThen(
+              sql`DELETE FROM disposable_machine_requests WHERE attach_id = ${attach_id}`,
+              sql`DELETE FROM disposable_machines WHERE attach_id = ${attach_id} AND final_at IS NOT NULL`,
+            ),
+          { discard: true },
+        ),
+      ),
+    );
+  }).pipe(Effect.withSpan("DisposableDetach.prune"));
+
   /** One pass over linked, detaching and retired records; one record's failure never stops the rest. */
   const pass = Effect.gen(function* () {
     const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
@@ -491,6 +525,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         ),
       { concurrency: DETACH_CONCURRENCY, discard: true },
     );
+    yield* prune;
   }).pipe(Effect.withSpan("DisposableDetach.pass"));
 
   /**
