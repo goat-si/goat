@@ -316,7 +316,9 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   });
   const logout = Effect.scoped(
     Effect.gen(function* () {
-      const environment = yield* options.currentEnvironment ?? Effect.succeed(options.environment);
+      const environment = {
+        ...(yield* options.currentEnvironment ?? Effect.succeed(options.environment)),
+      };
       const resolved = yield* resolve(environment);
       const runtime = yield* makeRuntime(resolved.spawn);
       yield* runtime.logout.pipe(
@@ -328,6 +330,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
           ),
         ),
       );
+      return environment;
     }),
   ).pipe(
     Effect.timeoutOrElse({
@@ -338,7 +341,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   );
   const signOut = (
     Option.isSome(coordinator) ? coordinator.value.withForegroundStartup(agentKey, logout) : logout
-  ).pipe(Effect.andThen(options.onChanged(false)));
+  ).pipe(Effect.flatMap((environment) => options.onChanged(false, environment)));
   return yield* ProviderAuthFlow.make({
     instanceId: options.instanceId,
     // ACP omits credential scope; assume an agent's instances share credentials in this environment.

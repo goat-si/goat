@@ -4,6 +4,7 @@ import { ProviderInstanceId, type ProviderAuthState } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -61,10 +62,12 @@ const makeHarness = (
   providerInstanceId = instanceId,
   authenticateError?: AcpRequestError,
   currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>,
+  logoutEffect: Effect.Effect<void> = Effect.void,
 ) =>
   Effect.gen(function* () {
     const verify = yield* Deferred.make<void>();
     const changed: boolean[] = [];
+    const changedEnvironments: Array<NodeJS.ProcessEnv | undefined> = [];
     const closed: number[] = [];
     const authenticated: string[] = [];
     const started: number[] = [];
@@ -85,9 +88,10 @@ const makeHarness = (
       cwd: "/workspace",
       environment: { PATH: "/tools", OVERRIDE: "base" },
       ...(currentEnvironment ? { currentEnvironment } : {}),
-      onChanged: (value) =>
+      onChanged: (value, environment) =>
         Effect.sync(() => {
           changed.push(value);
+          changedEnvironments.push(environment);
         }),
       makeRuntime: () =>
         Effect.gen(function* () {
@@ -144,7 +148,7 @@ const makeHarness = (
                   modelConfigId: undefined,
                 };
               }),
-            logout: Effect.succeed({}),
+            logout: logoutEffect.pipe(Effect.as({})),
           };
         }),
     }).pipe(
@@ -207,6 +211,7 @@ const makeHarness = (
       controller,
       verify,
       changed,
+      changedEnvironments,
       closed,
       authenticated,
       started,
@@ -227,6 +232,29 @@ const makeHarness = (
       },
     };
   }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+
+it.effect("logout reports the profile captured before the operation started", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const host = { HOME: "/profile/a" };
+    const h = yield* makeHarness(
+      browserMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    );
+    const logout = yield* h.controller.logout(Effect.void).pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    host.HOME = "/profile/b";
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(logout);
+    assert.deepEqual(h.changedEnvironments, [{ HOME: "/profile/a" }]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("regression #3079: ACP authentication discovers and launches with the current PATH", () =>
   Effect.gen(function* () {

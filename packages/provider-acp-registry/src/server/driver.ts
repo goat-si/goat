@@ -940,12 +940,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 settings: effectiveConfig,
                 cwd,
                 environment,
-              }),
+              }).pipe(Effect.andThen(confirmedAuthentication.set(false, environment))),
             ),
             Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Effect.provideService(Crypto.Crypto, crypto),
-            Effect.tap(() => confirmedAuthentication.set(false)),
             Effect.tap(() =>
               liveSnapshotSemaphore.withPermit(
                 invalidateEnrichmentCache.pipe(
