@@ -384,7 +384,7 @@ export function DisposableMachinesSettings({
                   return (
                     <span key={action} className="flex items-center gap-1">
                       {confirming === key && (
-                        <span className="text-muted-foreground">
+                        <span className="max-w-80 text-muted-foreground">
                           {effectOf(action, machine.penMember)}
                         </span>
                       )}
