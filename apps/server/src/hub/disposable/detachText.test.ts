@@ -30,6 +30,7 @@ const STOPS = [
   "revoke_unsettled",
   "link_unsettled",
   "link_lost",
+  "link_foreign",
   "link_open",
   "tombstone_limit",
 ];

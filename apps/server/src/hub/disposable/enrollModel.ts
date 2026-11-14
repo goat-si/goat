@@ -145,8 +145,10 @@ export type LinkOutcome =
       readonly kind: "unsettled";
       readonly state: "residual" | "unknown";
       readonly resolved?: true;
+      /** The link id the operation reserved: the only link a later removal may take as this attach's. */
+      readonly reservedLinkId?: string;
     }
-  | { readonly kind: "open" }
+  | { readonly kind: "open"; readonly reservedLinkId?: string }
   | { readonly kind: "not_found" }
   | { readonly kind: "unreadable" };
 
@@ -168,6 +170,9 @@ export const readOperation = (
     operation.alias.toLowerCase() !== expected.alias.toLowerCase()
   )
     return { kind: "unreadable" };
+  const reserved = operation.reserved?.linkId;
+  const reservedLinkId =
+    reserved !== undefined && LINK_ID.test(reserved) ? { reservedLinkId: reserved } : {};
   switch (operation.state) {
     case "committed": {
       const linkId = operation.reserved?.linkId;
@@ -176,7 +181,8 @@ export const readOperation = (
         : { kind: "unreadable" };
     }
     case "failed_clean": {
-      if (operation.childResidual === true) return { kind: "unsettled", state: "residual" };
+      if (operation.childResidual === true)
+        return { kind: "unsettled", state: "residual", ...reservedLinkId };
       const code = operation.error?.code;
       return {
         kind: "failed_clean",
@@ -189,9 +195,10 @@ export const readOperation = (
         kind: "unsettled",
         state: operation.state,
         ...(operation.resolvedAt === undefined ? {} : { resolved: true as const }),
+        ...reservedLinkId,
       };
     case "open":
-      return { kind: "open" };
+      return { kind: "open", ...reservedLinkId };
     default:
       return { kind: "unreadable" };
   }
@@ -209,7 +216,9 @@ const LinkRow = Schema.Struct({
   childKind: Schema.optionalKey(Schema.String),
   exclusive: Schema.optionalKey(Schema.Boolean),
   explicitRoute: Schema.optionalKey(
-    Schema.Struct({ proxyCommand: Schema.String, user: Schema.String, port: Schema.Number }),
+    Schema.NullOr(
+      Schema.Struct({ proxyCommand: Schema.String, user: Schema.String, port: Schema.Number }),
+    ),
   ),
 });
 const decodeStatus = Schema.decodeUnknownOption(
@@ -237,6 +246,42 @@ export const verifyLink = (
     route.port === SSH_PORT
     ? "verified"
     : "mismatch";
+};
+
+export type ListedLink =
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "none" }
+  | { readonly kind: "ours"; readonly linkId: string }
+  | { readonly kind: "foreign" };
+/**
+ * The link OpenCodex lists for a machine whose last link operation it cannot settle: the id that
+ * operation reserved, or without one an exclusive ephemeral Child on the record's route. A link
+ * that only shares the alias is foreign, and no removal takes it.
+ */
+export const listedLink = (
+  output: { readonly code: number; readonly stdout: string } | undefined,
+  expected: {
+    readonly alias: string;
+    readonly reservedLinkId: string | undefined;
+    readonly route: StoredRoute | undefined;
+  },
+): ListedLink => {
+  if (output === undefined || output.code !== 0) return { kind: "unreadable" };
+  const status = Option.getOrUndefined(decodeStatus(output.stdout));
+  if (status === undefined) return { kind: "unreadable" };
+  const named = status.links.filter(
+    (link) => link.alias.toLowerCase() === expected.alias.toLowerCase(),
+  );
+  const ours = named.find((link) =>
+    expected.reservedLinkId !== undefined
+      ? link.id === expected.reservedLinkId
+      : expected.route !== undefined &&
+        link.childKind === "ephemeral" &&
+        link.exclusive === true &&
+        link.explicitRoute?.proxyCommand === expected.route.proxyCommand,
+  );
+  if (ours !== undefined && LINK_ID.test(ours.id)) return { kind: "ours", linkId: ours.id };
+  return named.length > 0 ? { kind: "foreign" } : { kind: "none" };
 };
 
 /** The steps after admission, for the status a caller sees. */

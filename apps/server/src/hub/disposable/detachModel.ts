@@ -183,15 +183,6 @@ export const linkKeyState = (output: OcxOutput | undefined, linkId: string, keyF
   return identity === keyFile ? ("same" as const) : ("moved" as const);
 };
 
-/** The link OpenCodex lists for this alias: its id, null for none, or undefined when unreadable. */
-export const linkByAlias = (output: OcxOutput | undefined, alias: string) => {
-  if (output === undefined || output.code !== 0) return undefined;
-  const status = Option.getOrUndefined(decodeStatusLinks(output.stdout));
-  if (status === undefined) return undefined;
-  const link = status.links.find((one) => one.alias?.toLowerCase() === alias.toLowerCase());
-  return link !== undefined && LINK_ID.test(link.id) ? link.id : null;
-};
-
 const decodeConflicts = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );

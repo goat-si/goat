@@ -130,6 +130,11 @@ const STOPS: Record<string, Stop> = {
       ", which removes the link OpenCodex lists for this machine.",
     next: FORCE_NEXT,
   },
+  link_foreign: {
+    text: () =>
+      "OpenCodex lists a link under this machine's alias that GOAT cannot tie to this attach, so GOAT leaves it. A person checks it with ocx link status on this hub, removes it there if it is this machine's, then detaches again.",
+    next: "A person checks the link on the hub, removes it there if it is this machine's, then detaches again.",
+  },
   tombstone_limit: {
     text: () =>
       "too many links removed without their machines wait for cleanup on this hub; a person recovers or forgets some (ocx link recover --list), then forces the detach again" +

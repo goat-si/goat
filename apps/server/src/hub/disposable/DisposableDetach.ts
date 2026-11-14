@@ -14,7 +14,6 @@ import {
   type Detach,
   type Health,
   linkKeyState,
-  linkByAlias,
   readRevoke,
   recoverAnswer,
   retires,
@@ -28,6 +27,7 @@ import {
   detachRuns,
   type Enroll,
   encodeEnroll,
+  listedLink,
   OPERATION_REPLAY_MS,
   readOperation,
   STALE_OPEN_MS,
@@ -414,21 +414,37 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         ? ({ kind: "unreadable" } as const)
         : readOperation(answer, { operationId, alias: `pen-${row.node_id}` });
     const fresh = nowMs - (enroll.link?.intentAtMs ?? 0) < OPERATION_REPLAY_MS;
-    // A person's force, or an entry a person resolved: the link OpenCodex lists for the machine
+    // GOAT's own add may still run until 10 quiet minutes pass; only then can the list decide.
+    const quiet = before.idleSinceMs !== undefined && nowMs - before.idleSinceMs >= STALE_OPEN_MS;
+    // A person's force, or an entry a person resolved: the link OpenCodex lists for this attach
     // decides, since the journal no longer can.
     const byList =
-      before.force === true || (outcome.kind === "unsettled" && outcome.resolved === true);
-    if (byList && outcome.kind !== "committed" && outcome.kind !== "failed_clean") {
-      const listed = linkByAlias(
-        yield* host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS),
-        `pen-${row.node_id}`,
-      );
-      if (listed === undefined) return;
-      if (listed !== null)
-        return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }), {
-          link_id: listed,
-        });
-      return yield* finish(row, withDetach(enroll, { ...before, operationId }), "unproven");
+      outcome.kind === "unsettled"
+        ? before.force === true || outcome.resolved === true
+        : before.force === true &&
+          quiet &&
+          (outcome.kind === "open" || outcome.kind === "not_found");
+    if (byList) {
+      const listed = listedLink(yield* host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS), {
+        alias: `pen-${row.node_id}`,
+        reservedLinkId:
+          outcome.kind === "unsettled" || outcome.kind === "open"
+            ? outcome.reservedLinkId
+            : undefined,
+        route: decodeRoute(row.route_json),
+      });
+      switch (listed.kind) {
+        case "unreadable":
+          return;
+        case "ours":
+          return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }), {
+            link_id: listed.linkId,
+          });
+        case "foreign":
+          return yield* halt(row, enroll, { ...before, operationId }, "link_foreign");
+        case "none":
+          return yield* finish(row, withDetach(enroll, { ...before, operationId }), "unproven");
+      }
     }
     switch (outcome.kind) {
       case "committed":
@@ -449,7 +465,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           return yield* note(row, withDetach(enroll, { ...before, step: "done" }), {
             link_operation_id: null,
           });
-        return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
+        return yield* halt(row, enroll, { ...before, operationId }, "link_lost");
       case "unsettled":
         return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
       case "open":
