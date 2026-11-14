@@ -349,9 +349,7 @@ export function PullRequestsPage() {
   }));
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
   const partitionTargets = (() => {
-    // The main list goes first. Besides putting the visible rows on screen sooner, it proves
-    // which repositories the host search indexes, so an empty partition does not trigger the
-    // expensive per-repository fallback.
+    // The main list identifies indexed repositories before the expensive per-repository fallback.
     if (
       !partitionsWanted ||
       baselineQuery.data === null ||
@@ -664,6 +662,8 @@ export function PullRequestsPage() {
     heldPullRequestsBySurface,
   } = pullRequestGroups({
     known: ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
+    // The baseline was read without typed qualifiers, and rows cannot be checked for `checks:`.
+    baseline: typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
     providers: baselineQuery.data?.providers ?? listData?.providers ?? [],
     viewers,
     involvement: search.involvement,
