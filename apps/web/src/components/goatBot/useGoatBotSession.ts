@@ -14,7 +14,6 @@ import {
   settleGoatBotEnsure,
   startGoatBotEnsure,
   syncGoatBotEnsure,
-  type GoatBotEnsureMachine,
   type GoatBotSendQueue,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
@@ -30,7 +29,6 @@ import type {
   ScopedThreadRef,
 } from "@goat/contracts";
 import { useContext, useEffect, useSyncExternalStore } from "react";
-import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { randomUUID } from "~/lib/utils";
@@ -45,14 +43,10 @@ import { environmentThreadDetails } from "~/state/threads";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import {
-  goatBotHomeReadBack,
-  goatBotSupportUnknown,
   memberBotRef,
   pickGoatBotEnvironment,
-  resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotAvailability,
-  type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
 import {
   releaseGoatBotAttachments,
@@ -65,33 +59,20 @@ import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannel
 import { useGoatBotSource } from "./useGoatBotSource";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 import { registerGoatBotEnvironmentDisposal } from "./goatBotEnvironmentLifecycle";
+import {
+  goatBotEnabledFor,
+  goatBotHomeKey,
+  goatBotHomeReady,
+  goatBotMainAvailability,
+  goatBotNotHomeHolds,
+  updateGoatBotSession as update,
+  useGoatBotSessions as useSessions,
+} from "./goatBotSessions";
 
-interface Session {
-  readonly homeKey: string;
-  readonly notHome: { readonly homeKey: string; readonly settingsSnapshot: object | null } | null;
-  readonly connected: boolean;
-  readonly capability: boolean;
-  readonly generation: number;
-  readonly machine: GoatBotEnsureMachine;
-  readonly port: GoatBotChannelPort | null;
-  readonly canOperate: boolean;
-  readonly legacyAutoRetried: boolean;
-  readonly queue: GoatBotSendQueue<GoatBotDraftAttachment>;
-  /** Conversation threads of member bots a chat here confirmed active; their messages may send. */
-  readonly members: ReadonlySet<string>;
-}
+export { goatBotEnabled } from "./goatBotSessions";
 
-const useSessions = create<{ sessions: ReadonlyMap<EnvironmentId, Session>; revision: number }>(
-  () => ({ sessions: new Map(), revision: 0 }),
-);
 const EMPTY_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
 const changed = () => useSessions.setState((state) => ({ revision: state.revision + 1 }));
-
-function update(environmentId: EnvironmentId, session: Session) {
-  useSessions.setState((state) => ({
-    sessions: new Map(state.sessions).set(environmentId, session),
-  }));
-}
 
 function disposeWebGoatBotEnvironment(environmentId: EnvironmentId): void {
   const session = useSessions.getState().sessions.get(environmentId);
@@ -175,12 +156,7 @@ function newQueue(environmentId: EnvironmentId) {
 /** Sidebar observers also track reconnects while the bot screen is closed. */
 function useObservedEnvironments() {
   const environments = useGoatBotEnvironments();
-  const { supported, resolution } = resolveGoatBotHomeSelection(environments, null);
-  const homeKey = !supported
-    ? "legacy"
-    : resolution.state === "claimed"
-      ? `${resolution.claim.environmentId}:${resolution.claim.claimedAt}:${resolution.claim.claimId}`
-      : resolution.state;
+  const homeKey = goatBotHomeKey(resolveGoatBotHomeSelection(environments, null));
   useEffect(() => {
     const observed = new Map(environments.map((entry) => [entry.environmentId, entry]));
     for (const [environmentId, session] of useSessions.getState().sessions) {
@@ -224,16 +200,6 @@ function useObservedEnvironments() {
   return environments;
 }
 
-export function goatBotEnabled(
-  port: GoatBotChannelPort | null,
-  environment: GoatBotEnvironmentInput | null,
-): boolean {
-  return (
-    port !== null &&
-    (environment?.supportsChannelLedger === true || goatBotSupportUnknown(environment))
-  );
-}
-
 export function useGoatBotEnabled() {
   const port = useContext(GoatBotChannelContext);
   const environments = useObservedEnvironments();
@@ -244,11 +210,7 @@ export function useGoatBotEnabled() {
     environment === null ? undefined : state.sessions.get(environment.environmentId),
   );
   return {
-    enabled: home.supported
-      ? port !== null &&
-        (home.resolution.state === "claimed" ||
-          environments.some((entry) => entry.supportsChannelLedger))
-      : goatBotEnabled(port, environment),
+    enabled: goatBotEnabledFor(port, environments, home, environment),
     environments,
     home,
     environment,
@@ -389,24 +351,16 @@ export function useGoatBotSession(
   // The transport supplies a hook, installed for the lifetime of the app provider.
   const canOperate = (port ?? NO_PORT_PERMISSION).useCanSend(environmentId);
 
-  const homeKey = !home.supported
-    ? "legacy"
-    : home.resolution.state === "claimed"
-      ? `${home.resolution.claim.environmentId}:${home.resolution.claim.claimedAt}:${home.resolution.claim.claimId}`
-      : home.resolution.state;
+  const homeKey = goatBotHomeKey(home);
   const settingsSnapshot = environment?.settingsSnapshot ?? null;
-  const homeReady = !home.supported || goatBotHomeReadBack(home);
+  const homeReady = goatBotHomeReady(home);
   useEffect(() => {
     if (environmentId === null || session === undefined) return;
     let current = useSessions.getState().sessions.get(environmentId);
     if (!current) return;
     // A not_home refusal waits for observed evidence, including across manual retry and reconnect.
     if (current.notHome !== null) {
-      if (
-        current.notHome.homeKey === homeKey &&
-        current.notHome.settingsSnapshot === settingsSnapshot
-      )
-        return;
+      if (goatBotNotHomeHolds(current, homeKey, settingsSnapshot)) return;
       current = { ...current, notHome: null, machine: retryGoatBotEnsure(current.machine) };
       update(environmentId, current);
     }
@@ -498,19 +452,7 @@ export function useGoatBotSession(
   ]);
 
   useMemberRegistration(environmentId, member);
-  const mainAvailability = !enabled
-    ? { kind: "unsupported" as const }
-    : resolveGoatBotAvailability({
-        environments,
-        botRef,
-        ensure:
-          session?.connected === environment?.connected &&
-          session?.capability === environment?.supportsChannelLedger &&
-          session?.port === port &&
-          session.homeKey === homeKey
-            ? session.machine.ensure
-            : { state: "idle" },
-      });
+  const mainAvailability = goatBotMainAvailability({ port, environments, botRef, session });
   // A member answers only through its own environment's session.
   const availability: GoatBotAvailability =
     member === null || mainAvailability.kind !== "ready"

@@ -8,7 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../../persistence/Migrations.ts";
 import * as Settings from "../../serverSettings.ts";
-import type { Delegation } from "./attachModel.ts";
+import { type Delegation, penNodeId } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { fakeEnrollHost } from "./DisposableEnroll.testkit.ts";
@@ -73,6 +73,11 @@ export const fakePen = () => {
     membersAsked: 0,
     /** The next member-list read answers this instead, as a view taken before a join would. */
     staleMembersOnce: undefined as Set<string> | undefined,
+    /** Pen's member list cannot be read. */
+    membersUnreadable: false,
+    /** Awaited by the next member-list read after membersStarted completes, so a test can hold it. */
+    membersGate: undefined as Deferred.Deferred<void> | undefined,
+    membersStarted: undefined as Deferred.Deferred<void> | undefined,
     /** Awaited before the mint touches the book, so a test can hold or interrupt it. */
     mintGate: undefined as Deferred.Deferred<void> | undefined,
     mintStarted: undefined as Deferred.Deferred<void> | undefined,
@@ -115,8 +120,14 @@ export const fakePen = () => {
       control.featuresAsked += 1;
       return control.features;
     }),
-    members: Effect.sync(() => {
+    members: Effect.gen(function* () {
       control.membersAsked += 1;
+      const { membersGate: gate, membersStarted: started } = control;
+      control.membersGate = undefined;
+      control.membersStarted = undefined;
+      if (started) yield* Deferred.succeed(started, undefined);
+      if (gate) yield* Deferred.await(gate);
+      if (control.membersUnreadable) return undefined;
       const stale = control.staleMembersOnce;
       control.staleMembersOnce = undefined;
       if (stale !== undefined) return stale;
@@ -210,7 +221,14 @@ export const fakePen = () => {
   return { service, control, book, members };
 };
 
-export type World = Attach.DisposableAttach | Settings.ServerSettingsService | SqlClient.SqlClient;
+export type World =
+  | Attach.DisposableAttach
+  | Settings.ServerSettingsService
+  | SqlClient.SqlClient
+  | EnrollHost
+  | MachineKey
+  | PenInvites
+  | Attach.Provisioners;
 
 /** The provisioner's grant as the fake reports it; the call numbered gateOnCall waits on gate. */
 export interface Grant {
@@ -225,18 +243,33 @@ export interface Grant {
 export const world = <A, E>(
   body: (
     pen: ReturnType<typeof fakePen>,
-    home: { contracts: Set<string>; settingsUnreadable: boolean; contractsAsked: number },
+    home: {
+      contracts: Set<string>;
+      settingsUnreadable: boolean;
+      contractsAsked: number;
+      /** Completed once the next settings read has read, or a locked snapshot is asked for. */
+      settingsAccess?: Deferred.Deferred<void> | undefined;
+    },
     grant: Grant,
     host: ReturnType<typeof fakeEnrollHost>,
   ) => Effect.Effect<A, E, World>,
 ) => {
   const pen = fakePen();
   const host = fakeEnrollHost();
-  const home = {
+  // A key Pen dropped takes its route with it, and the machine can no longer answer through Pen.
+  host.control.inPen = (nodeId) =>
+    [...pen.members].some((signPub) => penNodeId(signPub) === nodeId);
+  const home: Parameters<typeof body>[1] = {
     contracts: new Set<string>(HOME_ATTACH_CONTRACTS),
     settingsUnreadable: false,
     contractsAsked: 0,
   };
+  const accessed = () =>
+    Effect.suspend(() => {
+      const seen = home.settingsAccess;
+      home.settingsAccess = undefined;
+      return seen === undefined ? Effect.void : Deferred.succeed(seen, undefined);
+    });
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 147 });
@@ -279,7 +312,7 @@ export const world = <A, E>(
           }),
       }),
     ),
-    // A settings read fails while home.settingsUnreadable is set.
+    // A settings read fails while home.settingsUnreadable is set; settingsAccess sees the next read.
     Effect.provideServiceEffect(
       Settings.ServerSettingsService,
       Effect.map(Settings.ServerSettingsService, (inner) =>
@@ -290,8 +323,10 @@ export const world = <A, E>(
               ? Effect.fail(
                   new ServerSettingsError({ settingsPath: "<memory>", operation: "read-file" }),
                 )
-              : inner.getSettings,
+              : Effect.tap(inner.getSettings, accessed),
           ),
+          withSettingsSnapshot: (use) =>
+            Effect.andThen(accessed(), inner.withSettingsSnapshot(use)),
         }),
       ),
     ),

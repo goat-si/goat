@@ -27,6 +27,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -139,7 +140,14 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         }),
-        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: (id) =>
+            Effect.succeed(
+              id === projectId || id === otherProjectId
+                ? Option.some({ id } as never)
+                : Option.none(),
+            ),
+        }),
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       ),
@@ -147,6 +155,49 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("refuses a project that does not exist", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service
+        .listThreads(scope, { projectId: ProjectId.make("project:missing") })
+        .pipe(Effect.flip);
+      assert.equal(error.code, "invalid_request");
+      assert.include(error.message, "not found");
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([]),
+          listProjectThreads: () => Effect.succeed([]),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    ),
+  );
+  it.effect("lists a thread awaiting background work as waiting", () => {
+    const waiting = finished(ThreadId.make("thread:awaiting"), {
+      activityRunStatus: null,
+      pendingBackgroundTasks: [{ taskId: "sleep-600", kind: "command", awaited: true }],
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, { projectId, statuses: ["waiting"] });
+      assert.deepEqual(
+        result.threads.map((thread) => [thread.threadId, thread.status]),
+        [[waiting.id, "waiting"]],
+      );
+      assert.deepEqual(result.threads[0]?.pendingBackgroundTasks, [
+        { taskId: "sleep-600", kind: "command", awaited: true },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([waiting]),
+          listProjectThreads: () => Effect.succeed([waiting]),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   // The caller launched a, b (in another project) and d, and forked c; b launched a thread that asks.
   const a = ThreadId.make("thread:lazy-a");
   const b = ThreadId.make("thread:lazy-b");
