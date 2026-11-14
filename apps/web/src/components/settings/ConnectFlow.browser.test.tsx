@@ -363,7 +363,7 @@ const environmentRow = (id: string, label: string): EnvironmentRow => ({
   entry: { enabled: true },
 });
 
-it("Create link's advice for another environment says its link gets Standard permissions, whatever is chosen here", async () => {
+it("Create link's advice for another environment names no command and claims no permissions for it", async () => {
   const actions = setup();
   mocks.environments = [
     environmentRow("primary", "Desk PC"),
@@ -375,13 +375,13 @@ it("Create link's advice for another environment says its link gets Standard per
   await expect
     .element(
       dialog().getByText(
-        /run goat pair on the machine that runs it; that link gets Standard permissions, whatever you choose here, unless you add --scope/,
+        /A link for it is created on the machine that runs it; see Manage or revoke access in the Remote access guide\./,
       ),
     )
     .toBeVisible();
   expect(
     dialog()
-      .getByText(/goat auth pairing create/)
+      .getByText(/goat (pair|auth)|--scope|Standard permissions/)
       .query(),
   ).toBeNull();
 });
@@ -404,6 +404,32 @@ it("Create link keeps a long environment name and many environments inside a 390
     // Nothing in the dialog is wider than the dialog itself.
     const popup = dialog().element();
     expect(popup.scrollWidth).toBeLessThanOrEqual(popup.clientWidth);
+  } finally {
+    await page.viewport(1280, 720);
+  }
+});
+
+it("Create link keeps its buttons on a phone screen with very long environment names", async () => {
+  const actions = setup();
+  mocks.environments = [
+    environmentRow("primary", "t".repeat(2000)),
+    ...["a", "b", "c"].map((letter) => environmentRow("env-" + letter, letter.repeat(500))),
+  ];
+  await page.viewport(390, 844);
+  try {
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/which this link does not pair with/))
+      .toBeInTheDocument();
+    for (const name of ["Create link", "Cancel"]) {
+      const box = dialog()
+        .getByRole("button", { name, exact: true })
+        .element()
+        .getBoundingClientRect();
+      expect(box.top).toBeGreaterThanOrEqual(0);
+      expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
+    }
   } finally {
     await page.viewport(1280, 720);
   }
