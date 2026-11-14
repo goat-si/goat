@@ -79,3 +79,17 @@ it("every detach text fits the wire's 500 characters with the longest name and o
                   }
   expect(seen).toBeGreaterThan(100);
 });
+
+it("an unproven detach names the planted ocx-child by the path a person can run on the machine", () => {
+  const shown = detachMessage({
+    state: "purged",
+    name: "cc-1",
+    linkId: null,
+    detach: { step: "done", attempt: 1, operationId: "a.link.1", outcome: "unproven" },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: false,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("~/.cache/opencodex/bin/ocx-child connect status --json");
+});
