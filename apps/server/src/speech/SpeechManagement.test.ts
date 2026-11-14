@@ -21,7 +21,7 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
     const installed = new Set<string>();
     let settings = DEFAULT_SERVER_SETTINGS;
     const store = Layer.mock(SpeechModelStore.SpeechModelStore)({
-      linkedFrom: () => Effect.succeed(undefined),
+      linkedFrom: () => Effect.undefined,
       isReady: (model) => Effect.succeed(installed.has(model.id)),
       installedPath: (model) =>
         Effect.succeed(installed.has(model.id) ? model.filename : undefined),
