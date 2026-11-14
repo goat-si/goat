@@ -33,6 +33,7 @@ import { NOW_MS, DAY_MS, at, shell, allocatedBytes } from "./storageCleanup.test
 import {
   LEGACY_WORKTREE_RULES,
   cleanupFixture,
+  submoduleCleanupFixture,
   cleanupTestLayer,
   pausedMeasurementFixture,
   runCleanupTest,
@@ -236,32 +237,6 @@ describe("merged pull request cleanup", () => {
   });
 });
 
-const submoduleCleanupFixture = () =>
-  Effect.gen(function* () {
-    const fixture = yield* cleanupFixture();
-    const { command, repo, worktree } = fixture;
-    const submodule = `${worktree}/module`;
-    const child = `${submodule}/child`;
-    for (const [cwd, name] of [
-      [worktree, "module"],
-      [submodule, "child"],
-    ] as const) {
-      yield* command(cwd, ["-c", "protocol.file.allow=always", "submodule", "add", repo, name]);
-      yield* command(`${cwd}/${name}`, ["config", "user.name", "Cleanup test"]);
-      yield* command(`${cwd}/${name}`, ["config", "user.email", "cleanup@example.test"]);
-    }
-    const recordSubmodules = () =>
-      Effect.gen(function* () {
-        yield* command(submodule, ["commit", "-am", "record child"]);
-        yield* command(submodule, ["push", "origin", "HEAD:submodule"]);
-        yield* command(worktree, ["commit", "-am", "record module"]);
-        // Shipped to the project branch, so only the submodule rules decide.
-        yield* command(repo, ["merge", "--ff-only", "feature"]);
-      });
-    yield* recordSubmodules();
-    return { ...fixture, submodule, child, recordSubmodules };
-  });
-
 it.live("removes clean submodules recursively, including deinitialized repositories", () =>
   runCleanupTest(
     Effect.gen(function* () {
@@ -275,6 +250,37 @@ it.live("removes clean submodules recursively, including deinitialized repositor
         repo,
         "stored",
       ]);
+      const legacy = `${worktree}/legacy`;
+      yield* command(repo, ["clone", "--no-hardlinks", repo, legacy]);
+      yield* command(worktree, ["submodule", "add", repo, "legacy"]);
+      expect((yield* fs.stat(`${legacy}/.git`)).type).toBe("Directory");
+      yield* command(legacy, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        repo,
+        "child",
+      ]);
+      yield* command(legacy, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        repo,
+        "stored",
+      ]);
+      yield* command(legacy, [
+        "-c",
+        "user.name=Cleanup test",
+        "-c",
+        "user.email=cleanup@example.test",
+        "commit",
+        "-am",
+        "record legacy children",
+      ]);
+      yield* command(legacy, ["push", "origin", "HEAD:legacy"]);
+      yield* command(legacy, ["submodule", "deinit", "stored"]);
       yield* recordSubmodules();
       yield* command(submodule, ["submodule", "deinit", "stored"]);
       const admin = (yield* command(worktree, ["rev-parse", "--absolute-git-dir"])).stdout.trim();
@@ -1503,12 +1509,14 @@ describe("storage cleanup reports and local file policies", () => {
       runCleanupTest(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
+          const statted: string[] = [];
           const storeDir = yield* fs.makeTempDirectoryScoped({ prefix: "pnpm-store-" });
           const { service, worktree, setPolicy } = yield* cleanupFixture().pipe(
             Effect.provideService(FileSystem.FileSystem, {
               ...fs,
-              stat: (target) =>
-                fs
+              stat: (target) => {
+                statted.push(target);
+                return fs
                   .stat(target)
                   .pipe(
                     Effect.map((info) =>
@@ -1516,7 +1524,8 @@ describe("storage cleanup reports and local file policies", () => {
                         ? { ...info, dev: info.dev + 1n }
                         : info,
                     ),
-                  ),
+                  );
+              },
             }),
           );
           setPolicy("tracked-changes");
@@ -1547,6 +1556,9 @@ describe("storage cleanup reports and local file policies", () => {
           );
           const report = yield* service.runNow;
           expect(report.entries[0]).toMatchObject({ outcome: "removed", bytes });
+          expect(statted.includes(`${nodeModules}/.pnpm/pkg@1.0.0/index.js`)).toBe(
+            store !== "same-device",
+          );
         }),
       ),
   );
@@ -1580,7 +1592,7 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
-  it.live("still removes a worktree when measuring its size fails", () =>
+  it.live("keeps a worktree when the inspection cannot read its directories", () =>
     runCleanupTest(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1591,9 +1603,14 @@ describe("storage cleanup reports and local file policies", () => {
           }),
         );
         const report = yield* service.runNow;
-        expect(report.entries[0]).toMatchObject({ outcome: "removed", bytes: null, files: null });
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Worktree could not be fully inspected",
+          bytes: null,
+          files: null,
+        });
         expect(report.bytesFreed).toBe(0);
-        expect(yield* fs.exists(worktree)).toBe(false);
+        expect(yield* fs.exists(worktree)).toBe(true);
       }),
     ),
   );

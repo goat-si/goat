@@ -1,3 +1,4 @@
+import { makeWorktreeMeasurement } from "./storageCleanupMeasurement.ts";
 import { keyAt, makeCanonicalWorktreePaths, worktreePathOf } from "./storageCleanupCanonical.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import { cleanupFailureReason, isMissingGitRepository } from "./storageCleanupGitErrors.ts";
@@ -265,61 +266,14 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => null),
   );
 
-  const measureWorktree = Effect.fn("storageCleanup.measureWorktree")(
-    function* (worktreePath: string) {
-      const root = yield* fs.realPath(worktreePath);
-      const skipped = yield* sharedPnpmVirtualStore(root);
-      const pending = [root];
-      let entries = 1;
-      let bytes = 0;
-      while (pending.length > 0) {
-        const inspected = yield* Effect.forEach(
-          pending.splice(-8),
-          // A worktree can contain millions of entries; per-entry spans would overwhelm tracing.
-          Effect.fnUntraced(function* (target) {
-            if (target === skipped) return { target, bytes: 0, names: [] as string[] };
-            const isLink = yield* fs.readLink(target).pipe(
-              Effect.as(true),
-              Effect.catchIf(
-                (error) =>
-                  error.cause instanceof Error &&
-                  "code" in error.cause &&
-                  error.cause.code === "EINVAL",
-                () => Effect.succeed(false),
-              ),
-            );
-            if (isLink) return { target, bytes: 0, names: [] as string[] };
-            if ((yield* fs.realPath(target)) !== target) return null;
-            const stat = yield* fs.stat(target);
-            if (stat.type === "Directory")
-              return { target, bytes: 0, names: yield* fs.readDirectory(target) };
-            if (stat.type !== "File" || Option.getOrElse(stat.nlink, () => 1n) !== 1n)
-              return { target, bytes: 0, names: [] as string[] };
-            const bytes = Option.match(stat.blocks, {
-              onNone: () => Number(stat.size),
-              onSome: (blocks) => Number(blocks * 512n),
-            });
-            return { target, bytes, names: [] as string[] };
-          }),
-          { concurrency: 8 },
-        );
-        for (const result of inspected) {
-          if (result === null) return null;
-          bytes += result.bytes;
-          entries += result.names.length;
-          if (entries > 2_000_000) return null;
-          for (const name of result.names) {
-            const child = path.join(result.target, name);
-            if (!inside(root, child)) return null;
-            pending.push(child);
-          }
-        }
-      }
-      return bytes;
-    },
-    Effect.timeout("30 seconds"),
-    Effect.orElseSucceed(() => null),
-  );
+  const measureWorktree = makeWorktreeMeasurement({
+    fs,
+    path,
+    git,
+    pathKey,
+    inside,
+    sharedPnpmVirtualStore,
+  });
 
   // Large snapshots take seconds; use the reader worker instead of blocking the event loop.
   const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
@@ -410,7 +364,7 @@ const make = Effect.gen(function* () {
             firstMeasurement ? Effect.asSome : Effect.timeoutOption(remaining),
           );
           firstMeasurement = false;
-          if (Option.isSome(measured)) orphanSizes.set(key, measured.value);
+          if (Option.isSome(measured)) orphanSizes.set(key, measured.value.bytes);
         }
         const bytes = orphanSizes.get(key) ?? null;
         entries.push({
@@ -916,7 +870,9 @@ const make = Effect.gen(function* () {
         });
         const blocked = yield* blockedSinceCheck();
         if (blocked !== null) return keep(blocked);
-        const bytes = yield* measureWorktree(worktreePath);
+        const inspection = yield* measureWorktree(worktreePath, true);
+        if (inspection.reason !== null) return keep(inspection.reason);
+        const bytes = inspection.bytes;
         const blockedWhileMeasuring = yield* blockedSinceCheck();
         if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
         if (yield* branchChanged(worktreePath, thread.branch))
