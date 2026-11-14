@@ -68,3 +68,23 @@ it.each([
   expect(visible.map((window) => window.remainingPercent)).toEqual(remaining);
   expect(cursorUsageWindowDetails(ids.at(-1)!, pool)?.label).toBe(label);
 });
+
+it("weights pooled Codex quota and resets by plan capacity", () => {
+  const accounts = [
+    {
+      ...account("pro", [{ ...weekly, id: "secondary", usedPercent: 100 }]),
+      driver: ProviderDriverKind.make("codex"),
+      plan: "ChatGPT Pro 200 Subscription",
+    },
+    {
+      ...account("plus", [{ ...weekly, id: "secondary", usedPercent: 0 }]),
+      driver: ProviderDriverKind.make("codex"),
+      plan: "ChatGPT Plus Subscription",
+    },
+  ];
+  const window = collectLimitPools(accounts, now)[0]?.windows[0];
+  expect(window?.remainingPercent).toBe(5);
+  expect(
+    window?.resets.map(({ member, restoresPercent }) => [member.account.key, restoresPercent]),
+  ).toContainEqual(["pro", 95]);
+});
