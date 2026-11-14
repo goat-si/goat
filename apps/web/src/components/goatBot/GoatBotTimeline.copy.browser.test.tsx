@@ -32,13 +32,12 @@ const rows = ["First", "Second"].map((text) => ({
   groupPosition: "single" as const,
 }));
 
-it("shows copied only on the latest copied reply and reports clipboard failures", async () => {
+it("shows copied only on the latest copied reply", async () => {
   state.toasts = [];
   await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
     router: false,
   }); // No navigation links.
-  using write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
-  using _fallback = vi.spyOn(document, "execCommand").mockReturnValue(false);
+  using _write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   const messages = screen.container.querySelectorAll("[data-follow-row]");
   const button = (index: number) =>
     messages[index]?.querySelector<HTMLButtonElement>(
@@ -54,8 +53,16 @@ it("shows copied only on the latest copied reply and reports clipboard failures"
   await userEvent.click(second);
   await vi.waitFor(() => expect(button(1)?.getAttribute("aria-label")).toBe("Copied"));
   expect(button(0)?.getAttribute("aria-label")).toBe("Copy");
-  write.mockRejectedValueOnce(new Error("denied"));
-  await userEvent.click(first);
+});
+
+it("reports clipboard failure", async () => {
+  state.toasts = [];
+  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
+    router: false, // No navigation links.
+  });
+  using _write = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+  using _fallback = vi.spyOn(document, "execCommand").mockReturnValue(false);
+  await userEvent.click(screen.getByRole("button", { name: "Copy" }).first());
   await vi.waitFor(() =>
     expect(state.toasts).toEqual([expect.objectContaining({ type: "error" })]),
   );
