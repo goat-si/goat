@@ -527,26 +527,39 @@ it.effect.each([
       yield* fs.writeFileString(executable, "#!/bin/sh\n");
       yield* fs.chmod(executable, 0o755);
 
-      let spawned: ChildProcess.StandardCommand | undefined;
+      const spawned: ChildProcess.StandardCommand[] = [];
       yield* Effect.gen(function* () {
         const launcher = yield* ExternalLauncher.ExternalLauncher;
         assert.include(yield* launcher.resolveAvailableEditors(), editor);
         yield* launcher.launchEditor({ editor, cwd: "/workspace with spaces/file.ts:12:4" });
+        yield* launcher.launchEditor({
+          editor,
+          cwd: "/workspace with spaces/file.ts:12:4",
+          projectRoot: "/workspace with spaces",
+        });
       }).pipe(
         Effect.provide(
           layerTest({
             platform: "darwin",
             env: { HOME: home, PATH: path.join(home, "empty") },
             onSpawn: (command) => {
-              spawned = command;
+              spawned.push(command);
             },
           }),
         ),
       );
 
-      assert.ok(spawned);
-      assert.equal(spawned.command, executable);
-      assert.deepEqual(spawned.args, [
+      assert.ok(spawned[0]);
+      assert.equal(spawned[0].command, executable);
+      assert.deepEqual(spawned[0].args, [
+        "--line",
+        "12",
+        "--column",
+        "3",
+        "/workspace with spaces/file.ts",
+      ]);
+      assert.deepEqual(spawned[1]?.args, [
+        "/workspace with spaces",
         "--line",
         "12",
         "--column",
