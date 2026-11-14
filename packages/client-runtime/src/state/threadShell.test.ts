@@ -622,23 +622,18 @@ it("governs Threads only for the computer whose bot Home this client opens", () 
       ),
   });
   harness.registry.mount(shells.goatBotObservationThreadKeysAtom);
-  const hidden = (computer: EnvironmentId, id: string) =>
-    harness.registry.get(shells.goatBotObservationThreadKeysAtom).has(`${computer}:${id}`);
+  // The complete hidden set, so an extra key or a worker kept hidden under Home's rule fails too.
+  const hidden = () =>
+    [...harness.registry.get(shells.goatBotObservationThreadKeysAtom)].toSorted();
+  const key = (computer: EnvironmentId, id: string) => `${computer}:${id}`;
   // (a) A is the bot Home on screen: B keeps dev's legacy rule and reads no list of its own.
-  expect(hidden(computerA, "coding")).toBe(true);
-  expect(hidden(computerB, "coding")).toBe(false);
-  expect(hidden(computerB, "worker")).toBe(true);
+  expect(hidden()).toEqual([key(computerA, "coding"), key(computerB, "worker")].toSorted());
   expect(reads[computerB]).toBe(0);
   // (b) The bot Home moves to B: A returns to the legacy rule and B's links hide.
   harness.registry.set(selected, computerB);
-  expect(hidden(computerB, "coding")).toBe(true);
-  expect(hidden(computerA, "coding")).toBe(false);
-  expect(hidden(computerA, "worker")).toBe(true);
+  expect(hidden()).toEqual([key(computerA, "worker"), key(computerB, "coding")].toSorted());
   // (c) No bot Home: both computers keep dev's legacy set.
   harness.registry.set(selected, null);
-  expect(hidden(computerA, "coding")).toBe(false);
-  expect(hidden(computerB, "coding")).toBe(false);
-  expect(hidden(computerA, "worker")).toBe(true);
-  expect(hidden(computerB, "worker")).toBe(true);
+  expect(hidden()).toEqual([key(computerA, "worker"), key(computerB, "worker")].toSorted());
   harness.registry.dispose();
 });
