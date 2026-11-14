@@ -148,7 +148,13 @@ it.layer(layerTest)("CodexDriver", (it) => {
           );
         const inherited = yield* create(false);
         const overridden = yield* create(true);
+        const first = yield* inherited.snapshot.resolveMaintenance();
+        expect(first.update?.executable).toBe(NodePath.join(oldBin, "codex"));
+        expect(yield* inherited.snapshot.resolveMaintenance()).toBe(first);
         host.PATH = newBin;
+        expect((yield* inherited.snapshot.resolveMaintenance()).update?.executable).toBe(
+          NodePath.join(newBin, "codex"),
+        );
         yield* inherited.snapshot.refresh;
         expect(paths.at(-1)).toBe(newBin);
         yield* overridden.snapshot.refresh;

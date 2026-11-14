@@ -220,18 +220,46 @@ export const CodexDriver: ProviderDriver<
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
-    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-      currentEnvironment.pipe(
-        Effect.flatMap((env) =>
-          resolveProviderMaintenanceCapabilitiesEffect(
-            makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
-            { binaryPath: effectiveConfig.binaryPath, env },
-          ),
-        ),
+    const maintenanceForEnvironment = (env: NodeJS.ProcessEnv) =>
+      resolveProviderMaintenanceCapabilitiesEffect(
+        makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
+        { binaryPath: effectiveConfig.binaryPath, env },
+      ).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
-      ),
+      );
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
+      {
+        key: currentEnvironment.pipe(
+          Effect.map((env) =>
+            JSON.stringify({
+              binaryPath: effectiveConfig.binaryPath,
+              PATH: env.PATH,
+              Path: env.Path,
+              path: env.path,
+              PATHEXT: env.PATHEXT,
+              Pathext: env.Pathext,
+            }),
+          ),
+        ),
+        resolve: (key) => {
+          const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
+          return currentEnvironment.pipe(
+            Effect.flatMap((env) =>
+              maintenanceForEnvironment({
+                ...env,
+                PATH: lookupEnv.PATH,
+                Path: lookupEnv.Path,
+                path: lookupEnv.path,
+                PATHEXT: lookupEnv.PATHEXT,
+                Pathext: lookupEnv.Pathext,
+              }),
+            ),
+          );
+        },
+      },
     );
 
     const memoryAdmission = yield* Effect.serviceOption(

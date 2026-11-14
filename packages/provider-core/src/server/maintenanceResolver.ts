@@ -15,7 +15,6 @@ import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver
 import * as HostProcess from "@goat/shared/HostProcess";
 import { causeErrorTag } from "@goat/shared/observability";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
-import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -53,14 +52,13 @@ export {
   npmGlobalPrefixFromCommandPath,
   parseChocolateyLatestVersion,
 } from "./maintenanceCommandPaths.ts";
+export { makeCachedProviderMaintenanceResolution } from "./maintenanceCache.ts";
 
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_MAX_BYTES = 256 * 1_024;
 const MISE_WRAPPER_MAX_BYTES = 16 * 1_024;
 const PROVIDER_UPDATE_ACTION_TOAST_MESSAGE = "Install the update now or review provider settings.";
-
-const MAINTENANCE_CAPABILITIES_CACHE_TTL = Duration.hours(1);
 
 const compactEnv = (input: Record<string, Option.Option<string>>): NodeJS.ProcessEnv =>
   Object.fromEntries(
@@ -801,19 +799,6 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
     platform: yield* HostProcess.Platform,
   });
 }, Effect.flatMap(withConfiguredNpmVersionLookup));
-
-export const makeCachedProviderMaintenanceResolution = Effect.fn(
-  "makeCachedProviderMaintenanceResolution",
-)(function* (resolve: Effect.Effect<ProviderMaintenanceCapabilities>) {
-  const cache = yield* Cache.make({
-    capacity: 1,
-    timeToLive: MAINTENANCE_CAPABILITIES_CACHE_TTL,
-    lookup: () => resolve,
-  });
-  const cached = Cache.get(cache, undefined);
-  return (options?: { readonly fresh?: boolean }) =>
-    options?.fresh ? Cache.invalidate(cache, undefined).pipe(Effect.andThen(cached)) : cached;
-});
 
 /**
  * An install GOAT cannot update gets no Update button or command, so its
