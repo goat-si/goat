@@ -23,6 +23,19 @@ const shortcut = {
   modKey: true,
 };
 
+it.effect("accepts a title regeneration shortcut and drops unknown commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(ResolvedKeybindingsConfig, [
+      { command: "thread.regenerateTitle", shortcut },
+      { command: "thread.regenerateTitles", shortcut },
+    ]);
+    assert.deepEqual(
+      parsed.map((rule) => rule.command),
+      ["thread.regenerateTitle"],
+    );
+  }),
+);
+
 it.effect("drops resolved rules with commands this build does not know", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(ResolvedKeybindingsConfig, [
