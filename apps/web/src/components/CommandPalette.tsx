@@ -241,11 +241,10 @@ import {
 import {
   CommandPaletteSubmitButton,
   NewProjectPublishHostPicker,
-  NewProjectSummary,
-  RemoteRepositorySummary,
   remoteProjectSourceIcon,
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
+import { CommandPaletteProjectSummaries } from "./CommandPaletteProjectSummaries";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
 import {
   APPEARANCE_OPTIONS,
@@ -3012,23 +3011,13 @@ function OpenCommandPaletteDialog(props: {
       showBackHint={isSubmenu}
       value={query}
     >
-      {newProjectPathPreview !== null ? (
-        <NewProjectSummary
-          name={newProjectName}
-          pathPreview={newProjectPathPreview}
-          projectsRoot={newProjectsRoot}
-          environmentLabel={newProjectEnvironmentLabel}
-        />
-      ) : null}
-      {addProjectCloneFlow?.step === "confirm" ? (
-        <RemoteRepositorySummary
-          source={addProjectCloneFlow.source}
-          title={
-            addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
-          }
-          description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
-        />
-      ) : null}
+      <CommandPaletteProjectSummaries
+        pathPreview={newProjectPathPreview}
+        name={newProjectName}
+        projectsRoot={newProjectsRoot}
+        environmentLabel={newProjectEnvironmentLabel}
+        cloneFlow={addProjectCloneFlow}
+      />
       {browseAccessError ? (
         <div role="alert" className="px-4 py-3 text-sm text-muted-foreground">
           {browseAccessError}
