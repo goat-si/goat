@@ -19,6 +19,7 @@ import {
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { forgetKeptPerComputer } from "../goat-bot/useKeptPerComputer";
 import { relayManagedEnvironmentIds } from "./environmentSections";
 
 export interface RelayEnvironmentView {
@@ -90,7 +91,10 @@ export function useConnectionController() {
     [registerEnvironment],
   );
   const removeEnvironment = useCallback(
-    (environmentId: EnvironmentId) => removeEnvironmentMutation(environmentId),
+    (environmentId: EnvironmentId) => {
+      forgetKeptPerComputer(environmentId);
+      return removeEnvironmentMutation(environmentId);
+    },
     [removeEnvironmentMutation],
   );
   const retryEnvironment = useCallback(

@@ -185,14 +185,18 @@ export function MobileBotRoster(props: {
                 ...(roster.connected
                   ? {}
                   : {
-                      unavailable: `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
+                      unavailable:
+                        environmentId === null
+                          ? "Unavailable until a computer with GOAT Bot connects"
+                          : `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
                     }),
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
                 onLongPressBot: askAbout,
-                canRestore: manage.canManage,
+                // Offline a deleted bot's Restore stays in view, disabled with the reason.
+                canRestore: manage.mayManage,
                 onRestoreDeleted: (bot) =>
                   menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
                     { text: "Cancel", style: "cancel" },

@@ -59,6 +59,7 @@ vi.mock("react-native", () => ({
     disabled,
     accessibilityState,
     accessibilityLabel,
+    accessibilityHint,
     onAccessibilityAction,
     accessibilityActions,
     className,
@@ -70,6 +71,7 @@ vi.mock("react-native", () => ({
     disabled?: boolean;
     accessibilityState?: { selected?: boolean; expanded?: boolean };
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
     accessibilityActions?: ReadonlyArray<{ name: string; label?: string }>;
     className?: string;
@@ -83,6 +85,7 @@ vi.mock("react-native", () => ({
         aria-pressed={accessibilityState?.selected}
         aria-expanded={accessibilityState?.expanded}
         aria-label={accessibilityLabel}
+        aria-description={accessibilityHint}
         data-class={className}
         data-actions={accessibilityActions?.map((action) => action.label ?? action.name).join(",")}
         onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
@@ -102,6 +105,13 @@ const phone = vi.hoisted(() => ({
   selected: [] as Array<{ name: string; params?: object }>,
   bots: [] as ReadonlyArray<object>,
   hidden: [] as ReadonlyArray<object>,
+  deleted: [] as ReadonlyArray<object>,
+  // The roster's computer: its member support as last read, whether it is connected, and who may manage.
+  supportsMembers: true,
+  membersUnknown: false,
+  connected: true,
+  environmentId: "env" as string | null,
+  mayManage: false,
 }));
 const homeRoute = { index: 0, routes: [{ key: "home", name: "Home" }] };
 vi.mock("@react-navigation/native", () => ({
@@ -116,9 +126,12 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
     bots: phone.bots,
-    groups: { main: null, members: [], hidden: phone.hidden, deleted: [] },
-    supportsMembers: true,
-    environmentId: "env",
+    groups: { main: null, members: [], hidden: phone.hidden, deleted: phone.deleted },
+    supportsMembers: phone.supportsMembers,
+    membersUnknown: phone.membersUnknown,
+    connected: phone.connected,
+    computerLabel: "Studio Mac",
+    environmentId: phone.environmentId,
     slackEnabled: false,
     listedBots: [],
     refreshBots: () => {},
@@ -128,7 +141,12 @@ vi.mock("./useMobileBotRoster", () => ({
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileBotManage", () => ({
-  useMobileBotManage: () => ({ canCreate: false, canManage: false, canEdit: false }),
+  useMobileBotManage: () => ({
+    canCreate: phone.connected,
+    canManage: phone.connected && phone.mayManage,
+    canEdit: false,
+    mayManage: phone.mayManage,
+  }),
 }));
 vi.mock("./MobileBotEditSheet", () => ({ MobileBotEditSheet: () => null }));
 vi.mock("./MobileNewBotStatus", () => ({ MobileNewBotStatus: () => null }));
@@ -204,15 +222,22 @@ vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
     accessibilityLabel,
+    accessibilityHint,
     disabled,
     onPress,
   }: {
     label: string;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
+    <button
+      aria-label={accessibilityLabel}
+      aria-description={accessibilityHint}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {label}
     </button>
   ),
@@ -531,4 +556,69 @@ it("says what waits is unavailable when the computer is offline before any read 
   await showRoster(true);
   expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
   link.phase = "connected";
+});
+
+/** The phone's bot list, rendered with its real panel and view, for one state of the roster's computer. */
+async function showPhoneList(state: Partial<typeof phone>) {
+  registry = AtomRegistry.make();
+  resetKeptPerComputerForTests();
+  Object.assign(phone, {
+    selected: [],
+    bots: [{ kind: "main", profile: null }],
+    hidden: [],
+    deleted: [],
+    supportsMembers: true,
+    membersUnknown: false,
+    connected: true,
+    environmentId: "env",
+    mayManage: false,
+    ...state,
+  });
+  root ??= createRoot(container);
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <MobileBotList />
+      </RegistryContext>,
+    ),
+  );
+  return [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("New bot"),
+  );
+}
+
+it("New bot says Coming soon only for a computer that says it has no member bots", async () => {
+  const older = await showPhoneList({ supportsMembers: false });
+  expect(older?.textContent).toBe("New bot · Coming soon");
+  const offline = "Unavailable while Studio Mac is offline";
+  for (const [state, why] of [
+    [{ connected: false }, offline],
+    // Nothing read from this computer yet: unknown, not an older server.
+    [{ connected: false, supportsMembers: false, membersUnknown: true }, offline],
+    [
+      { connected: false, supportsMembers: false, membersUnknown: true, environmentId: null },
+      "Unavailable until a computer with GOAT Bot connects",
+    ],
+  ] as const) {
+    const add = await showPhoneList(state);
+    expect(add?.textContent).toBe("New bot");
+    expect(add?.disabled).toBe(true);
+    expect(add?.getAttribute("aria-description")).toBe(why);
+  }
+  const online = await showPhoneList({});
+  expect(online?.textContent).toBe("New bot");
+  expect(online?.disabled).toBe(false);
+});
+
+it("offline, a deleted bot's Restore stays in view, disabled with the reason; back online it restores", async () => {
+  const gone = profile("gone", "Gone", { state: "deleted" });
+  await showPhoneList({ connected: false, mayManage: true, deleted: [gone] });
+  const restore = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Restore Gone"]');
+  expect(restore()?.disabled).toBe(true);
+  expect(restore()?.getAttribute("aria-description")).toBe(
+    "Unavailable while Studio Mac is offline",
+  );
+  await showPhoneList({ connected: true, mayManage: true, deleted: [gone] });
+  expect(restore()?.disabled).toBe(false);
 });

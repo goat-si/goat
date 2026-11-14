@@ -1,3 +1,5 @@
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -66,7 +68,7 @@ vi.mock("../../state/channels", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
-import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
+import { forgetKeptPerComputer, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 let value: ReturnType<typeof useMobileBotRoster>;
 function Probe() {
@@ -119,7 +121,7 @@ it("names the main bot's chat with its renamed profile", async () => {
   expect(named?.member?.name).toBe("Echo");
 });
 
-it("reads the main bot's name only while its computer is connected, as the roster does", async () => {
+it("reads no bot list while the computer is offline, for the main bot or a named member", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
   state.connected = false;
   // A saved home keeps its computer selected while it is offline.
@@ -131,9 +133,8 @@ it("reads the main bot's name only while its computer is connected, as the roste
   root = createRoot(document.createElement("div"));
   await act(async () => root?.render(<NameProbe />));
   expect(state.calls).toEqual([]);
-  // A named member is still looked up, as before.
   await act(async () => root?.render(<NameProbe botId="echo" />));
-  expect(state.calls).toContain("profiles");
+  expect(state.calls).toEqual([]);
 });
 
 const echoBots = [
@@ -194,4 +195,32 @@ it("never shows one computer's kept bots for another", async () => {
   state.botRef = { environmentId: "first", threadId: "bot" };
   await act(async () => root?.render(<Probe />));
   expect(memberNames()).toEqual(["Echo"]);
+});
+
+it("forgets a computer's kept bots when that computer is removed, so adding it again starts empty", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  root = createRoot(document.createElement("div"));
+  const rendered = () => (
+    <RegistryContext value={registry}>
+      <Probe />
+    </RegistryContext>
+  );
+  await act(async () => root?.render(rendered()));
+  expect(memberNames()).toEqual(["Echo"]);
+  state.connected = false;
+  forgetKeptPerComputer(EnvironmentId.make("env"), registry);
+  await act(async () => root?.render(rendered()));
+  expect(memberNames()).toEqual([]);
+});
+
+it("before a computer's capabilities are read, member support is unknown rather than missing", async () => {
+  state.connected = false;
+  root = createRoot(document.createElement("div"));
+  state.capabilities = undefined as unknown as Record<string, boolean>;
+  await act(async () => root?.render(<Probe />));
+  expect(value.membersUnknown).toBe(true);
+  expect(value.supportsMembers).toBe(false);
 });

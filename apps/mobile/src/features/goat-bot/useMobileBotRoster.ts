@@ -48,8 +48,8 @@ export function useMobileBotRoster() {
     bots: botRoster({ supportsProfiles, bots }),
     groups: botRosterGroups(bots ?? []),
     supportsMembers,
-    /** No capabilities read from this computer yet: not taken as an older server. */
-    membersUnknown: environmentId !== null && capabilities === undefined,
+    /** No computer, or none of its capabilities read yet: not taken as an older server. */
+    membersUnknown: capabilities === undefined,
     connected,
     computerLabel: selected?.label ?? null,
     environmentId,
@@ -85,7 +85,7 @@ export function useMobileGoatBotMember(botId: string | undefined) {
   const connected = selected?.connected === true;
   const readsMain = connected && capabilities?.goatBotProfiles === true;
   const profiles = useEnvironmentQuery(
-    environmentId !== null && (readsMember || readsMain)
+    environmentId !== null && connected && (readsMember || readsMain)
       ? channelEnvironment.listBots({
           environmentId,
           input: supported ? { includeDeleted: true } : {},

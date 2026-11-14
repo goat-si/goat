@@ -106,7 +106,7 @@ export function MobileBotRosterView(props: {
     readonly hidden: ReadonlyArray<BotProfile>;
     readonly deleted: ReadonlyArray<BotProfile>;
     readonly canCreate: boolean;
-    /** Why New bot cannot be used now (the computer is offline); said to the screen reader. */
+    /** Why New bot and Restore cannot be used now (the computer is offline); said to the screen reader. */
     readonly unavailable?: string;
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
@@ -268,7 +268,7 @@ export function MobileBotRosterView(props: {
                 accessibilityRole="button"
                 accessibilityLabel={`${profile.name}, deleted`}
                 accessibilityHint="Opens its archived conversation"
-                {...(props.members?.canRestore
+                {...(props.members?.canRestore && props.members.unavailable === undefined
                   ? { onLongPress: () => props.members?.onRestoreDeleted(profile) }
                   : {})}
                 onPress={() => props.onOpenBot({ kind: "member", profile })}
@@ -281,10 +281,23 @@ export function MobileBotRosterView(props: {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`Restore ${profile.name}`}
+                  disabled={props.members.unavailable !== undefined}
+                  accessibilityState={{ disabled: props.members.unavailable !== undefined }}
+                  {...(props.members.unavailable === undefined
+                    ? {}
+                    : { accessibilityHint: props.members.unavailable })}
                   onPress={() => props.members?.onRestoreDeleted(profile)}
                   className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
                 >
-                  <Text className="font-goat-medium text-primary-text">Restore</Text>
+                  <Text
+                    className={
+                      props.members.unavailable === undefined
+                        ? "font-goat-medium text-primary-text"
+                        : "font-goat-medium text-foreground-muted"
+                    }
+                  >
+                    Restore
+                  </Text>
                 </Pressable>
               ) : null}
             </View>

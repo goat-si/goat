@@ -9,6 +9,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
+import { goatBotComputerConnectedNow } from "../goat-bot/goatBotComputerLink";
 import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
@@ -144,6 +145,9 @@ function GoatBotProfileSection({ environmentId }: { readonly environmentId: Envi
           canSubmit={canEdit}
           onClose={() => setEditing(false)}
           onSubmit={async (changes) => {
+            // The section can still be on screen for a moment after the computer drops.
+            if (!goatBotComputerConnectedNow(environmentId))
+              return "GOAT Bot's computer isn't connected.";
             const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
               environmentId,
               input: { botId: main.botId, ...changes },
