@@ -263,6 +263,10 @@
       "types": "./src/commandActions.ts",
       "import": "./src/commandActions.ts"
     },
+    "./commandOutput": {
+      "types": "./src/commandOutput.ts",
+      "import": "./src/commandOutput.ts"
+    },
     "./terminalOutput": {
       "types": "./src/terminalOutput.ts",
       "import": "./src/terminalOutput.ts"
