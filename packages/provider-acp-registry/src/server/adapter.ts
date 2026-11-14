@@ -9,6 +9,7 @@ import {
   extractDevinSubagentUpdate,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
+import { extractOpenCodeElicitationForm } from "./opencodeAcp.ts";
 import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
@@ -190,6 +191,13 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const registryAgentId = options.settings.source === "local" ? "" : options.settings.agentId;
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
+  const isOpenCode =
+    registryAgentId === "opencode" ||
+    registryAgentId === "opencode-v2" ||
+    (options.settings.source === "local" &&
+      /^opencode(?:-v2)?(\.exe|\.cmd)?$/i.test(
+        options.settings.commandPath.split(/[\\/]/).pop() ?? "",
+      ));
   // Cloud auto setup adds Devin as a local `devin acp` command, so match the binary too.
   const isDevin =
     registryAgentId === "devin" ||
@@ -230,7 +238,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
     ...(registryAgentId === "factory-droid"
       ? { extractElicitationForm: extractDroidElicitationForm }
-      : {}),
+      : isOpenCode
+        ? { extractElicitationForm: extractOpenCodeElicitationForm }
+        : {}),
     // glm-acp-agent is the one agent whose per-turn usage a live probe has verified.
     ...(registryAgentId === "glm-acp-agent" ? { reportsPerTurnPromptUsage: true } : {}),
     ...(registryAgentId === "mistral-vibe"

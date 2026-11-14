@@ -35,6 +35,11 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factory-droid" });
+const OPENCODE_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({
+  source: "local",
+  commandPath: "/usr/local/bin/opencode",
+  commandArgs: ["acp"],
+});
 
 const layerTest = Layer.mergeAll(
   DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
@@ -76,6 +81,41 @@ describe("ACP Registry elicitation", () => {
       { label: "Plain text", description: "Plain text", value: "option_1" },
     ],
   }));
+
+  // OpenCode 2.1 pairs each qN choice with a qN_custom free-form companion.
+  const openCodeSchema = {
+    type: "object",
+    properties: {
+      q0: {
+        type: "string",
+        title: "Color preference",
+        description: "Which color do you prefer?",
+        oneOf: [
+          { const: "red", title: "Red", description: "Choose the color red" },
+          { const: "blue", title: "Blue" },
+        ],
+        default: "red",
+      },
+      q0_custom: {
+        type: "string",
+        title: "Color preference (other)",
+        description: "Type your own answer",
+        minLength: 1,
+      },
+    },
+  };
+  const openCodeQuestions = [
+    {
+      id: "q0",
+      header: "Color preference",
+      question: "Which color do you prefer?",
+      options: [
+        { label: "Red", description: "Choose the color red", value: "red" },
+        { label: "Blue", description: "Blue", value: "blue" },
+      ],
+      allowCustomAnswer: true,
+    },
+  ];
 
   it.live.each([
     {
@@ -121,8 +161,19 @@ describe("ACP Registry elicitation", () => {
       answers: { name: "Ada" },
       result: { action: "accept", content: { name: "Ada" } },
     },
-  ])("Droid elicitation $scenario", ({ schema, questions, answers, result, withAttachments }) =>
-    Effect.gen(function* () {
+    {
+      scenario: "OpenCode keeps the selected option and hides the custom companion",
+      settings: OPENCODE_SETTINGS,
+      schema: openCodeSchema,
+      questions: openCodeQuestions,
+      answers: { q0: "blue" },
+      result: { action: "accept", content: { q0: "blue" } },
+    },
+  ])("Registry elicitation $scenario", (fixture) => {
+    const { schema, questions, answers, result } = fixture;
+    const withAttachments = "withAttachments" in fixture && fixture.withAttachments;
+    const settings = "settings" in fixture ? fixture.settings : DROID_SETTINGS;
+    return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-droid-form-" });
@@ -229,7 +280,7 @@ describe("ACP Registry elicitation", () => {
       const adapter = yield* makeAcpRegistryAdapterV2({
         instanceId,
         selfInvocation: yield* resolveSelfInvocation(),
-        settings: DROID_SETTINGS,
+        settings,
         environment: {},
         makeRuntime: makeAcpReplayRuntime({
           transcript,
@@ -293,6 +344,6 @@ describe("ACP Registry elicitation", () => {
         Stream.runHead,
       );
       assert.equal(Option.getOrThrow(terminal).status, "completed");
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
+    }).pipe(Effect.provide(layerTest), Effect.scoped);
+  });
 });
