@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
-import { listed, rows, world } from "./DisposableAttach.testkit.ts";
+import { listed, world } from "./DisposableAttach.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
 import {
   detach,
@@ -13,20 +13,17 @@ import {
   THREAD,
 } from "./DisposableDetach.flow.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
-import { decodeEnroll } from "./enrollModel.ts";
 
-// Every detach stop, reached and then left by doing what its own text tells a person to do.
-// A stop whose way out lies outside GOAT names it here: none does. link_foreign without a force
-// needs an unsettled entry with no reserved id, which v2.100.3 never journals; its force ends it
-// (the alias-sharing test below).
+// Every detach stop, left by doing what the row says. Not walked: a removal owned by an operation
+// GOAT did not start (link_retirement_owned), left to a person on the Home; link_foreign without a
+// force, which needs an unsettled entry with no reserved id, never journalled at v2.100.3.
 
-const stopOf = (attachId: string) =>
-  Effect.map(rows, (all) => {
-    const row = all.find((one) => one.attach_id === attachId);
-    return typeof row?.enroll_json === "string"
-      ? decodeEnroll(row.enroll_json).detach?.stop
-      : undefined;
-  });
+/** What the row says now: its message and next action. */
+const says = (attachId: string) =>
+  Effect.map(listed(attachId), (machine) => ({
+    message: machine?.message ?? "",
+    next: machine?.nextAction ?? "",
+  }));
 /** Runs passes, 30 minutes apart, until the record is final or the budget runs out. */
 const settle = (attachId: string) =>
   Effect.gen(function* () {
@@ -43,6 +40,10 @@ const resolved = (entry: { resolvedAt?: string } | undefined) => {
 type Home = ReturnType<typeof fakeDetachHome>;
 interface Walk {
   readonly stop: string;
+  /** What the stop's message says. */
+  readonly says: string;
+  /** What its next action tells a person to do. */
+  readonly next: string;
   /** What reaches the stop on a linked machine, before the detach. */
   readonly arrange: (ocx: Home) => void;
   /** What the stop's text tells a person to do: fix it on the machine or hub, then a detach or a force. */
@@ -54,11 +55,15 @@ const purge1 = (attachId: string) => attachId + ".purge.1";
 const WALKS: ReadonlyArray<Walk> = [
   {
     stop: "revoke_child_residual",
+    says: "keeps records it cannot restore",
+    next: "forces the detach",
     arrange: (ocx) => (ocx.childRefusal = "child_residual"),
     leave: () => ({ force: true }),
   },
   {
     stop: "revoke_child_link_mismatch",
+    says: "belongs to another link",
+    next: "detaches again",
     arrange: (ocx) => (ocx.childRefusal = "child_link_mismatch"),
     // The person lets the other connect finish on the machine, then detaches again.
     leave: (ocx) => ((ocx.childRefusal = undefined), { force: false }),
@@ -66,6 +71,8 @@ const WALKS: ReadonlyArray<Walk> = [
 
   {
     stop: "revoke_answered",
+    says: "the machine answers, yet",
+    next: "then forces the detach",
     arrange: (ocx) => (ocx.purgeIncomplete = true),
     leave: (ocx, attachId) => (
       (ocx.purgeIncomplete = false),
@@ -75,28 +82,38 @@ const WALKS: ReadonlyArray<Walk> = [
   },
   {
     stop: "revoke_expect_link_unsupported",
+    says: "too old to check which link",
+    next: "forces the detach",
     arrange: (ocx) => (ocx.childRefusal = "expect_link_unsupported"),
     leave: () => ({ force: true }),
   },
   {
     stop: "revoke_child_missing",
+    says: "no planted ocx-child",
+    next: "forces the detach",
     arrange: (ocx) => (ocx.childMissing = true),
     // Forced, recover then waits for a person to forget the cleanup of a machine with no ocx-child.
     leave: () => ({ force: true }),
   },
   {
     stop: "revoke_refused",
+    says: "refused the revoke",
+    next: "forces the detach",
     arrange: (ocx) => (ocx.purgeRefusal = "purge_unsupported"),
     leave: () => ({ force: true }),
   },
   {
     stop: "revoke_unsettled",
+    says: "never recorded",
+    next: "detaches again",
     // The Home's journal cannot record the revoke: never journalled.
     arrange: (ocx) => (ocx.journalRefuses = 3),
     leave: (ocx) => ((ocx.journalRefuses = 0), { force: false }),
   },
   {
     stop: "tombstone_limit",
+    says: "too many links removed",
+    next: "forces the detach",
     arrange: (ocx) => (ocx.tombstoneLimit = true),
     start: "force",
     leave: (ocx) => ((ocx.tombstoneLimit = false), { force: true }),
@@ -111,11 +128,15 @@ it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk
       walk.arrange(ocx);
       yield* detach(PERSON, attachId, "d-1", walk.start === "force");
       for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
-      expect(yield* stopOf(attachId)).toBe(walk.stop);
+      const stopped = yield* says(attachId);
+      expect(stopped.message).toContain(walk.says);
+      expect(stopped.next).toContain(walk.next);
+      // The way out matches what the text names: a force, or a detach again.
       const { force } = walk.leave(ocx, attachId);
+      expect(force).toBe(walk.next.includes("forces"));
       yield* detach(PERSON, attachId, "d-2", force);
       yield* detachPass;
-      expect(yield* stopOf(attachId)).toBeUndefined();
+      expect((yield* says(attachId)).message).not.toContain(walk.says);
       yield* settle(attachId);
       // A machine with no planted ocx-child waits in recover until a person forgets its cleanup.
       if ((yield* listed(attachId))?.state !== "purged") {
@@ -129,7 +150,7 @@ it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk
 );
 
 it.effect(
-  "revoke_unsettled on an open purge: the person fixes the Home and detaches again, GOAT repeats that id, and the walk ends",
+  "revoke_unsettled on an open purge: the person fixes the Home and detaches again, GOAT repeats that id; the recovered entry is resolved and forced, as its text says",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -138,21 +159,45 @@ it.effect(
         ocx.purgeOpen = true;
         yield* detach(PERSON, attachId, "d-1");
         for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
-        expect(yield* stopOf(attachId)).toBe("revoke_unsettled");
-        const open = yield* listed(attachId);
-        expect(open?.message).toContain("detaches again");
-        expect(open?.nextAction).not.toContain("resolve");
-        // A force while the purge is open repeats the purge id: OpenCodex refuses any other revoke.
+        const open = yield* says(attachId);
+        expect(open.message).toContain("still lists the revoke");
+        expect(open.next).toContain("detaches again");
+        expect(open.next).not.toContain("resolve");
+        ocx.purgeOpen = false;
+        yield* detach(PERSON, attachId, "d-2");
+        yield* detachPass;
+        expect(ocx.sent.at(-1)).toBe(purge1(attachId));
+        const recovered = yield* says(attachId);
+        expect(recovered.message).toContain("could not tell what the revoke did");
+        expect(recovered.next).toContain("forces the detach");
+        resolved(ocx.revokes.get(purge1(attachId)));
+        yield* detach(PERSON, attachId, "d-3", true);
+        yield* settle(attachId);
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
+
+it.effect(
+  "a force on an open purge repeats that id, never a force id, and stays a force: the replaced purge is resolved once the force commits",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId } = yield* linked(pen, home, host, 1);
+        ocx.purgeOpen = true;
+        yield* detach(PERSON, attachId, "d-1");
+        for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
         ocx.purgeOpen = false;
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
         expect(ocx.sent.filter((id) => id.includes(".force."))).toEqual([]);
         expect(ocx.sent.at(-1)).toBe(purge1(attachId));
-        // The recovered entry is unknown: the person checks, resolves it, and detaches again.
-        expect(yield* stopOf(attachId)).toBe("revoke_unsettled");
-        resolved(ocx.revokes.get(purge1(attachId)));
-        yield* detach(PERSON, attachId, "d-3");
+        // The recovered entry is unknown; its text says force, which resolves it once committed.
+        expect((yield* says(attachId)).next).toContain("forces the detach");
+        yield* detach(PERSON, attachId, "d-3", true);
         yield* settle(attachId);
+        expect(ocx.resolved).toContain(purge1(attachId));
         expect((yield* listed(attachId))?.state).toBe("purged");
       }),
     ),
@@ -169,7 +214,7 @@ it.effect(
         ocx.ownsReceiptOnLimit = true;
         yield* detach(PERSON, attachId, "d-1", true);
         yield* detachPass;
-        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
+        expect((yield* says(attachId)).message).toContain("too many links removed");
         // Capacity still full: the new id meets the owner, GOAT goes back to it and stops there.
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
@@ -179,7 +224,7 @@ it.effect(
           attachId + ".force.2",
           attachId + ".force.1",
         ]);
-        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
+        expect((yield* says(attachId)).message).toContain("too many links removed");
         ocx.tombstoneLimit = false;
         yield* detach(PERSON, attachId, "d-3", true);
         yield* settle(attachId);
@@ -204,12 +249,13 @@ it.effect(
           yield* TestClock.adjust(HOUR / 2);
           yield* detachPass;
         }
-        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
-        expect((yield* listed(attachId))?.nextAction).toContain("detaches it");
+        const stopped = yield* says(attachId);
+        expect(stopped.message).toContain("too many links removed");
+        expect(stopped.next).toContain("detaches it");
         ocx.tombstoneLimit = false;
         yield* detach(PERSON, attachId, "d-1");
         yield* detachPass;
-        expect(yield* stopOf(attachId)).toBeUndefined();
+        expect((yield* says(attachId)).message).not.toContain("too many links removed");
         expect(ocx.tombstones.size).toBe(1);
         ocx.machineAnswers = true;
         host.control.reachAnswers.delete(nodeId);
@@ -262,7 +308,9 @@ it.effect(
         const { attachId } = yield* unsettledAdd(pen, home, host, "unknown");
         yield* detach(THREAD, attachId, "d-1");
         yield* detachPass;
-        expect(yield* stopOf(attachId)).toBe("link_unsettled");
+        expect((yield* says(attachId)).next).toContain(
+          "resolves the operation on the hub and detaches again",
+        );
         resolved(host.control.journal.get(attachId + ".link.1"));
         yield* detach(THREAD, attachId, "d-2");
         yield* settle(attachId);
@@ -280,7 +328,7 @@ it.effect("link_open: the person forces, and the detach ends once the quiet wind
       yield* detachPass;
       yield* TestClock.adjust(11 * 60 * 1000);
       yield* detachPass;
-      expect(yield* stopOf(attachId)).toBe("link_open");
+      expect((yield* says(attachId)).message).toContain("as running after 10 quiet minutes");
       yield* detach(PERSON, attachId, "d-2", true);
       yield* settle(attachId);
       expect((yield* listed(attachId))?.state).toBe("purged");
@@ -299,7 +347,7 @@ it.effect("link_lost: the person forces, and the detach ends", () =>
       yield* detachPass;
       yield* TestClock.adjust(11 * 60 * 1000);
       yield* detachPass;
-      expect(yield* stopOf(attachId)).toBe("link_lost");
+      expect((yield* says(attachId)).message).toContain("has no record of");
       yield* detach(PERSON, attachId, "d-2", true);
       yield* settle(attachId);
       expect((yield* listed(attachId))?.state).toBe("purged");
