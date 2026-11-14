@@ -446,6 +446,10 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
 if [ "$#" -eq 4 ] && [ "$1" = - ] && [ "\${2##*/}" = port ] && [ "$3" = 3773 ] && [ "$4" = 200 ]; then
   printf '%s\\n' "$3" >> "$HOME/.test/pick-port-defaults"
   set -- "$1" "$2" ${pickPort} "$4"
+  picked="$('${process.execPath.replaceAll("'", "'\\''")}' "$@")" || exit $?
+  printf '%s\\n' "$picked" >> "$HOME/.test/pick-port-results"
+  printf '%s\\n' "$picked"
+  exit 0
 fi
 exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `,
