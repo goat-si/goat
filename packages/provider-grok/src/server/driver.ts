@@ -40,6 +40,7 @@ import {
   withGrokAuthPresentation,
 } from "./auth.ts";
 import { discoverGrokSkills } from "./skills.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
 import {
   homebrewOwnershipFromCommandPath,
   makeCachedProviderMaintenanceResolution,
@@ -136,9 +137,10 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     const host = yield* ProviderHost.ProviderHost;
     const { cwd } = host.paths;
     const hostEnvironment = yield* HostProcess.Environment;
+    const home = yield* HostProcess.HomeDirectory;
     const currentEnvironment = Effect.suspend(() =>
       mergeProviderInstanceEnvironment(environment, hostEnvironment),
-    ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
     const processEnv = { ...(yield* currentEnvironment) };
     const snapshotReady = yield* Deferred.make<Effect.Effect<ServerProvider>>();
     const auth = yield* makeGrokAuth({
@@ -231,14 +233,21 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
-    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+    const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
       currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
       {
-        lookup: currentEnvironment.pipe(
-          // A copy: with no instance variables the merged environment is the live host object.
-          Effect.flatMap((live) =>
+        // Everything derives from the host snapshot resolveMaintenance provides: a merged copy, and
+        // the host's hash, because a manual install's npm advisory reads the host environment,
+        // where an instance override can mask a change.
+        lookup: Effect.flatMap(HostProcess.Environment, (snapshot) =>
+          mergeProviderInstanceEnvironment(environment, snapshot).pipe(
+            Effect.provideService(HostProcess.HomeDirectory, home),
+            Effect.map((merged) => ({ merged, host: hostEnvironmentHash(snapshot) })),
+          ),
+        ).pipe(
+          Effect.flatMap(({ merged, host }) =>
             Effect.gen(function* () {
-              const env = { ...live };
+              const env = { ...merged };
               const resolved = effectiveConfig.binaryPath
                 ? yield* resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
                     Effect.provideService(CommandResolutionCache, new Map()),
@@ -248,7 +257,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
                 ? yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => null))
                 : null;
               // The link target, so an upgrade that retargets the same path is a new install.
-              return { env, resolvedCommandPath: resolved ?? null, install: real };
+              return {
+                env,
+                resolvedCommandPath: resolved ?? null,
+                install: `${real ?? ""}\0${host}`,
+              };
             }),
           ),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -258,6 +271,12 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
           maintenanceForEnvironment(env, resolvedCommandPath),
       },
     );
+    const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
+      Effect.suspend(() =>
+        cachedMaintenance(options).pipe(
+          Effect.provideService(HostProcess.Environment, { ...hostEnvironment }),
+        ),
+      );
     const orchestrationAdapter = yield* GrokAdapterV2Driver.create({
       instanceId,
       displayName,

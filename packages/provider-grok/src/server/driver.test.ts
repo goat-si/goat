@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -232,6 +233,65 @@ it.layer(layerTest)("GrokDriver", (it) => {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
         Effect.scoped,
       );
+    },
+  );
+
+  // The grok and npm fixtures are POSIX shell scripts, which Windows command resolution rejects.
+  it.effect.skipIf(windowsHost)(
+    "a host registry change an instance override masks reaches the next manual install advisory",
+    () => {
+      const host: NodeJS.ProcessEnv = { PATH: "", HOME: "/tmp" };
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "grok-masked-registry-" }),
+        );
+        // A cask whose brew GOAT cannot find is a manual install: npm only advises.
+        const cask = path.join(root, "Caskroom", "grok", "1.0", "grok");
+        yield* fs.makeDirectory(path.dirname(cask), { recursive: true });
+        yield* fs.writeFileString(cask, "#!/bin/sh\n");
+        yield* fs.chmod(cask, 0o755);
+        const dirs = [path.join(root, "first"), path.join(root, "second")];
+        for (const dir of dirs) {
+          yield* fs.makeDirectory(dir);
+          yield* fs.symlink(cask, path.join(dir, "grok"));
+          yield* fs.writeFileString(
+            path.join(dir, "npm"),
+            `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *instance*) echo '"9.0.0"';; *) echo '"1.0.0"';; esac\n`,
+          );
+          yield* fs.chmod(path.join(dir, "npm"), 0o755);
+        }
+        Object.assign(host, {
+          PATH: dirs[0],
+          HOME: root,
+          NPM_CONFIG_REGISTRY: "https://x.example",
+        });
+        const instance = yield* GrokDriver.create({
+          instanceId: ProviderInstanceId.make("grok-masked-registry"),
+          displayName: undefined,
+          enabled: false,
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          config: GrokDriver.defaultConfig(),
+        });
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // A manual install's advisory reads the host registry; the instance's own one masks it.
+        expect(yield* advisory).toBe("1.0.0");
+        yield* TestClock.adjust("50 minutes");
+        host.PATH = dirs[1];
+        expect(yield* advisory).toBe("1.0.0");
+        yield* TestClock.adjust("5 minutes");
+        host.NPM_CONFIG_REGISTRY = "https://y.example";
+        expect(yield* advisory).toBe("2.0.0");
+      }).pipe(Effect.provideService(HostProcess.Environment, host), Effect.scoped);
     },
   );
 
