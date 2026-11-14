@@ -1,7 +1,7 @@
 import { ArrowLeftIcon, ArrowRightIcon } from "~/components/solar";
 import { useEffect, useState } from "react";
 
-import { cn } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import { canNavigateHistory, navigateHistory, type HistoryDirection } from "../navigationHistory";
 
 const SWIPE_TRIGGER_DISTANCE = 120;
@@ -94,6 +94,7 @@ export function HistorySwipeNavigation() {
 
   // oxlint-disable-next-line goat/react-effect-budget -- window wheel and desktop gesture listeners track trackpad swipes
   useEffect(() => {
+    if (!isMacPlatform(navigator.platform)) return;
     let gesture: SwipeGesture | null = null;
     const hideIndicator = () =>
       setSwipe((current) => (current === null ? null : { ...current, tracking: false }));
