@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -54,6 +55,8 @@ import {
 } from "./CodexHomeLayout.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
 import { codexUsageReader } from "./codexUsage.ts";
+import { withoutOtherHomeUsage } from "./codexUsageHome.ts";
+import type { CodexUsageReporter } from "../../orchestration-v2/Adapters/CodexAdapterV2Options.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
@@ -63,6 +66,9 @@ import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
+// A check whose home moved while it ran; no session's home identity equals it.
+const UNESTABLISHED = "unestablished";
+const MAX_REMEMBERED_CHECKS = 16;
 const CODEX_STANDALONE_HOME_PATTERN = /^(.*)\/packages\/standalone\//is;
 
 function codexStandaloneHome(commandPath: string): string | null {
@@ -227,8 +233,31 @@ export const CodexDriver: ProviderDriver<
         Effect.provideService(Path.Path, pathService),
         Effect.orElseSucceed(() => home),
       );
-    /** The home identity of the last committed status check. */
-    let checkedHome: string | undefined;
+    // The home each check ran under, by its checkedAt: a report is judged by the snapshot shown now,
+    // so a check counts once its snapshot is published. Bounded; old checks are no longer shown.
+    const checkHomes = new Map<string, string>();
+    const rememberCheckHome = (checkedAt: string, identity: string) => {
+      checkHomes.delete(checkedAt);
+      checkHomes.set(checkedAt, identity);
+      for (const stale of checkHomes.keys()) {
+        if (checkHomes.size <= MAX_REMEMBERED_CHECKS) break;
+        checkHomes.delete(stale);
+      }
+    };
+    const publishedHome: Effect.Effect<string | undefined> = Effect.suspend(
+      () => snapshot.getSnapshot,
+    ).pipe(Effect.map((shown) => checkHomes.get(shown.checkedAt)));
+    const ignoreUsage: CodexUsageReporter = () => Effect.void;
+    const reportUsageFor =
+      (identity: string): CodexUsageReporter =>
+      (update) =>
+        publishedHome.pipe(
+          Effect.flatMap((shown) =>
+            shown === undefined || shown === identity
+              ? snapshot.applyUsageLimits(update)
+              : Effect.void,
+          ),
+        );
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,
@@ -325,19 +354,20 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        // A session's usage counts only for the home of the last committed check; others are dropped
-        // silently (the next check restores the windows). Unknown homes and the first check pass.
+        // A home that moved while the process started is not one GOAT can attribute usage to.
         sessionUsage: (home) =>
-          home === undefined
-            ? Effect.succeed(snapshot.applyUsageLimits)
-            : homeIdentity(home).pipe(
-                Effect.map(
-                  (identity) => (update: Parameters<typeof snapshot.applyUsageLimits>[0]) =>
-                    checkedHome === undefined || checkedHome === identity
-                      ? snapshot.applyUsageLimits(update)
-                      : Effect.void,
-                ),
-              ),
+          homeIdentity(home).pipe(
+            Effect.map(
+              (opened) => (reattached: boolean) =>
+                reattached
+                  ? Effect.succeed(snapshot.applyUsageLimits)
+                  : homeIdentity(home).pipe(
+                      Effect.map((started) =>
+                        started === opened ? reportUsageFor(started) : ignoreUsage,
+                      ),
+                    ),
+            ),
+          ),
         // New sessions read the same environment the status check uses.
         currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
@@ -371,16 +401,23 @@ export const CodexDriver: ProviderDriver<
         Effect.zipWith(
           currentEnvironment.pipe(
             Effect.flatMap((env) =>
-              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(
-                provideHomeRoute,
-                Effect.tap(() =>
-                  homeIdentity(executionHome(env)).pipe(
-                    Effect.map((identity) => {
-                      checkedHome = identity;
-                    }),
-                  ),
-                ),
-              ),
+              Effect.gen(function* () {
+                const home = executionHome(env);
+                const before = yield* homeIdentity(home);
+                const status = yield* checkCodexProviderStatus(
+                  effectiveConfig,
+                  undefined,
+                  env,
+                ).pipe(provideHomeRoute);
+                const identity = before === (yield* homeIdentity(home)) ? before : UNESTABLISHED;
+                const shown = yield* publishedHome;
+                rememberCheckHome(status.checkedAt, identity);
+                return withoutOtherHomeUsage(
+                  status,
+                  shown !== undefined && shown !== identity,
+                  DateTime.formatIso(yield* DateTime.now),
+                );
+              }),
             ),
           ),
           currentCatalog,

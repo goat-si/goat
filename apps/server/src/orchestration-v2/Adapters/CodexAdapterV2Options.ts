@@ -38,10 +38,13 @@ export interface CodexAdapterV2Options {
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   /**
-   * Called once per session after it connects, with the home it runs under (none for a process GOAT
-   * reattached to); returns where that session's usage reports go.
+   * Called before a session's process starts, with the home it will run under; the result, called
+   * once the process is up (reattached: GOAT did not start it, so its home is unknown), returns where
+   * that session's usage reports go.
    */
-  readonly sessionUsage?: (home: string | undefined) => Effect.Effect<CodexUsageReporter>;
+  readonly sessionUsage?: (
+    home: string,
+  ) => Effect.Effect<(reattached: boolean) => Effect.Effect<CodexUsageReporter>>;
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly compatibility?: (
     version: string,
@@ -70,15 +73,12 @@ export type CodexUsageReporter = ManagedServerProvider["applyUsageLimits"];
 
 const ignoreUsage: CodexUsageReporter = () => Effect.void;
 
-/** A session's usage reporter, made once it is known whether its process was reattached. */
+/** Starts a session's usage reporter before its process starts; finish it once it is known. */
 export const codexSessionUsage = (
   options: Pick<CodexAdapterV2Options, "sessionUsage">,
-  process: { readonly connection: { readonly reattached: boolean } } | undefined,
   route: { readonly execution: { readonly home: string } },
-): Effect.Effect<CodexUsageReporter> =>
-  options.sessionUsage?.(
-    process?.connection.reattached === true ? undefined : route.execution.home,
-  ) ?? Effect.succeed(ignoreUsage);
+): Effect.Effect<(reattached: boolean) => Effect.Effect<CodexUsageReporter>> =>
+  options.sessionUsage?.(route.execution.home) ?? Effect.succeed(() => Effect.succeed(ignoreUsage));
 
 /** The environment a new session opens with: its managed runtime's, else the host's as it is now. */
 export const codexSessionEnvironment = (

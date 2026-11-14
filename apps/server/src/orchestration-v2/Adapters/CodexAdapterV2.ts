@@ -1578,6 +1578,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           detached,
           survivors,
         });
+        const startUsage = yield* codexSessionUsage(adapterOptions, routeInput);
         const client = yield* clientFactory
           .open({
             instanceId: adapterOptions.instanceId,
@@ -1595,7 +1596,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             connection: processStart?.connection,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
-        const reportUsage = yield* codexSessionUsage(adapterOptions, processStart, routeInput);
+        const reportUsage = yield* startUsage(processStart?.connection.reattached === true);
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         const credentialsByThread = new Map<string, string>();
