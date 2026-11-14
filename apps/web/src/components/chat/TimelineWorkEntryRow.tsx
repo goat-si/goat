@@ -614,24 +614,20 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           !toolIconAcceptsTint(entryToolIcon) ? (
             <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
           ) : null}
+          {canExpandProjectedItem ? (
+            <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+              <ChevronRightIcon
+                className={cn(
+                  "size-3 shrink-0 text-icon-muted transition-transform duration-200",
+                  // Like Codex: the chevron appears on hover or focus and stays while open.
+                  expanded
+                    ? "rotate-90 opacity-70"
+                    : "opacity-0 group-hover/timeline-row:opacity-70 group-focus-within/timeline-row:opacity-70 pointer-coarse:opacity-70",
+                )}
+              />
+            </span>
+          ) : null}
           <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
-          <span
-            className={cn(
-              "flex size-4 shrink-0 items-center justify-center",
-              !canExpandProjectedItem && "invisible",
-            )}
-            aria-hidden
-          >
-            <ChevronRightIcon
-              className={cn(
-                "size-3 shrink-0 text-icon-muted transition-transform duration-200",
-                // Like Codex: the chevron appears on hover or focus and stays while open.
-                expanded
-                  ? "rotate-90 opacity-70"
-                  : "opacity-0 group-hover/timeline-row:opacity-70 group-focus-within/timeline-row:opacity-70 pointer-coarse:opacity-70",
-              )}
-            />
-          </span>
         </>
       }
     >
