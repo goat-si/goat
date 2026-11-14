@@ -1,3 +1,4 @@
+import { registerPullRequestBehaviorTests } from "./PullRequestInteractive.testkit.ts";
 import {
   project,
   changeRequest,
@@ -146,7 +147,7 @@ it.effect("does not wait for an in-flight detail read to display a preview", () 
   }),
 );
 
-function makeService(input: {
+export function makeService(input: {
   readonly settings?: ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
@@ -1308,8 +1309,8 @@ it.effect("ranks references by number, keeping the host's recent-first order", (
     }> = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
-        project({ id: "p2", title: "tree", workspaceRoot: "/b", repository: "pingdotgg/t3code" }),
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "goat-si/goat" }),
+        project({ id: "p2", title: "tree", workspaceRoot: "/b", repository: "goat-si/goat" }),
       ],
       providers: [
         fakePullRequestProvider(SourceControlProviderKind.make("github"), {
@@ -1352,7 +1353,7 @@ it.effect("ranks references by number, keeping the host's recent-first order", (
 
     assert.deepStrictEqual(
       queries.map(({ repository, query, sigil }) => ({ repository, query, sigil })),
-      [{ repository: "pingdotgg/t3code", query: "12", sigil: "#" }],
+      [{ repository: "goat-si/goat", query: "12", sigil: "#" }],
     );
     assert.deepStrictEqual(
       result.references.map((candidate) => candidate.reference),
@@ -2011,6 +2012,8 @@ it.effect("stops new reads after a rate limit while leaving manual actions avail
     assert.lengthOf(paused.errors, 1);
   }),
 );
+
+registerPullRequestBehaviorTests(makeService);
 
 it.effect("refuses a repository that does not belong to the requested project", () =>
   Effect.gen(function* () {
