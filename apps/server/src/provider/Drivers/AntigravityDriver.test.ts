@@ -282,6 +282,14 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     launches,
     readRequests,
     assertClosed,
+    makeReplacement: () =>
+      AntigravityDriver.create({
+        instanceId,
+        displayName: "Replacement",
+        enabled: false,
+        config: AntigravityDriver.defaultConfig(),
+        environment: [],
+      }).pipe(Effect.provide(layerInstallation)),
   };
 });
 
@@ -322,6 +330,66 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "preserves live runtime homes while sweeping orphaned runs on replacement",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped();
+        const skills = path.join(home, ".gemini", "config", "skills");
+        yield* fs.makeDirectory(skills, { recursive: true });
+        const h = yield* makeHarness().pipe(
+          Effect.provideService(HostProcess.Environment, { ...original, HOME: home }),
+        );
+        const threadId = ThreadId.make("replacement-live");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: home,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const session = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("replacement-live"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const runtimeHome = h.launches.at(-1)?.profileDirectory;
+        if (!runtimeHome) return yield* Effect.die("Missing runtime home");
+        const orphan = path.join(h.directories.runtimeTemp, "run-orphan");
+        yield* fs.makeDirectory(orphan);
+        yield* h.makeReplacement();
+        expect(yield* fs.exists(runtimeHome)).toBe(true);
+        expect(yield* fs.readLink(path.join(runtimeHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(runtimeHome, "config", "skills"))).toBe(skills);
+        expect(yield* fs.exists(orphan)).toBe(false);
+        yield* session.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        const events = yield* session.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        expect(Array.from(events).some((event) => event.type === "turn.terminal")).toBe(true);
+      }).pipe(Effect.scoped),
+  );
   // The runtime fixture uses POSIX shell scripts.
   it.effect.skipIf(windowsHost)("session command updates retain the home captured at launch", () =>
     Effect.gen(function* () {

@@ -57,6 +57,7 @@ import {
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type { ServerProviderDraft } from "@goat/provider-core/server/snapshotProbe";
 import {
+  acquireAntigravityRuntimeTemp,
   retireAntigravityRuntimeTempDirs,
   removeAntigravitySessionFiles,
 } from "../acp/AntigravitySessionFiles.ts";
@@ -266,26 +267,17 @@ export const AntigravityDriver: ProviderDriver<
       // Use one directory per process; shared cleanup could delete files another session still reads.
       // Remove after the child dies, best-effort on Windows where handles may outlive the kill;
       // the next driver start sweeps leftovers.
-      const runtimeTempDirectory = yield* Effect.acquireRelease(
-        fileSystem.makeTempDirectory({ directory: profile.tempDirectory, prefix: "run-" }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderSetupError({
-                instanceId,
-                operation: "start",
-                detail: "Could not create an Antigravity runtime temp directory.",
-                cause,
-              }),
-          ),
+      const runtimeTempDirectory = yield* acquireAntigravityRuntimeTemp(profile.tempDirectory).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.mapError(
+          (cause) =>
+            new ProviderSetupError({
+              instanceId,
+              operation: "start",
+              detail: "Could not create an Antigravity runtime temp directory.",
+              cause,
+            }),
         ),
-        (directory) =>
-          fileSystem
-            .remove(directory, { recursive: true, force: true })
-            .pipe(
-              Effect.catch(() =>
-                Effect.logWarning("Could not remove an Antigravity runtime temp directory."),
-              ),
-            ),
       );
       const runtimeProfile = yield* prepareAntigravityRuntimeHome({
         directory: runtimeTempDirectory,
