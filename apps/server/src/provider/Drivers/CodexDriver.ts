@@ -59,6 +59,7 @@ import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -224,10 +225,13 @@ export const CodexDriver: ProviderDriver<
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       homePath: pinnedHome,
     } satisfies CodexSettings;
-    const maintenanceForEnvironment = (env: NodeJS.ProcessEnv) =>
+    const maintenanceForEnvironment = (
+      env: NodeJS.ProcessEnv,
+      resolvedCommandPath?: string | null,
+    ) =>
       resolveProviderMaintenanceCapabilitiesEffect(
         makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
-        { binaryPath: effectiveConfig.binaryPath, env },
+        { binaryPath: effectiveConfig.binaryPath, env, resolvedCommandPath },
       ).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -237,29 +241,39 @@ export const CodexDriver: ProviderDriver<
       currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
       {
         key: currentEnvironment.pipe(
-          Effect.map((env) =>
-            JSON.stringify({
-              binaryPath: effectiveConfig.binaryPath,
-              PATH: env.PATH,
-              Path: env.Path,
-              path: env.path,
-              PATHEXT: env.PATHEXT,
-              Pathext: env.Pathext,
-            }),
+          Effect.flatMap((env) =>
+            resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+              Effect.map((resolvedCommandPath) =>
+                JSON.stringify({
+                  resolvedCommandPath: resolvedCommandPath ?? "missing",
+                  PATH: env.PATH,
+                  Path: env.Path,
+                  path: env.path,
+                  PATHEXT: env.PATHEXT,
+                  Pathext: env.Pathext,
+                }),
+              ),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, pathService),
+              Effect.provideService(CommandResolutionCache, new Map()),
+            ),
           ),
         ),
         resolve: (key) => {
           const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
           return currentEnvironment.pipe(
             Effect.flatMap((env) =>
-              maintenanceForEnvironment({
-                ...env,
-                PATH: lookupEnv.PATH,
-                Path: lookupEnv.Path,
-                path: lookupEnv.path,
-                PATHEXT: lookupEnv.PATHEXT,
-                Pathext: lookupEnv.Pathext,
-              }),
+              maintenanceForEnvironment(
+                {
+                  ...env,
+                  PATH: lookupEnv.PATH,
+                  Path: lookupEnv.Path,
+                  path: lookupEnv.path,
+                  PATHEXT: lookupEnv.PATHEXT,
+                  Pathext: lookupEnv.Pathext,
+                },
+                lookupEnv.resolvedCommandPath === "missing" ? null : lookupEnv.resolvedCommandPath,
+              ),
             ),
           );
         },
