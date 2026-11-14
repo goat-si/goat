@@ -469,7 +469,8 @@ export const CodexDriver: ProviderDriver<
                 Effect.gen(function* () {
                   const { client } = yield* withCodexAppServerClient({
                     binaryPath: effectiveConfig.binaryPath,
-                    homePath: effectiveConfig.homePath,
+                    // Explicit, so a variable the host adds later cannot move it off the locked home.
+                    homePath: accountKey,
                     launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
                     cwd: process.cwd(),
                     environment: processEnv,

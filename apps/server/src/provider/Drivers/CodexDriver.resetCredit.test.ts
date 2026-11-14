@@ -4,6 +4,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { ChildProcess } from "effect/process";
 
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import { CodexDriver } from "./CodexDriver.ts";
@@ -34,6 +37,47 @@ const scriptedCoordinator = (script: Array<"uncertain" | "settled">) =>
   });
 
 it.layer(layerTest)("CodexDriver reset credits", (it) => {
+  // The fixture codex is a POSIX shell script, which Windows cannot resolve as an executable.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "the redemption process is launched with CODEX_HOME set to the home its lock is keyed on",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const bin = path.join(root, "bin");
+        yield* fs.makeDirectory(bin);
+        yield* fs.writeFileString(path.join(bin, "codex"), "#!/bin/sh\n");
+        yield* fs.chmod(path.join(bin, "codex"), 0o755);
+        const homes: Array<string | undefined> = [];
+        const observedSpawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) homes.push(command.options.env?.CODEX_HOME);
+          return Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "test",
+              method: "spawn",
+              description: "recorded",
+            }),
+          );
+        });
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("reset-credit-spawn-home"),
+          displayName: "Codex reset credit test",
+          enabled: false,
+          environment: [],
+          config: CodexDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, { PATH: bin, HOME: `${root}/b` }),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
+        );
+        const before = homes.length;
+        yield* instance.consumeResetCredit!().pipe(Effect.exit);
+        expect(homes.slice(before)).toEqual([`${root}/b/.codex`]);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("two homes that differ only by a trailing space are separate accounts", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
