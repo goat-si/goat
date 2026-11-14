@@ -135,7 +135,7 @@ async function submitQueuedRunEdit(input: {
       readImage: readFileAsDataUrl,
       uploadFiles,
     });
-    // The edit draft owns thread and machine mentions, so a chip removed while editing is dropped.
+    // The edit draft owns thread mentions, so a chip removed while editing is dropped.
     const keptRecords = (editing.context?.records ?? []).filter(
       (record) =>
         !isDraftOwnedRecord(record) &&
