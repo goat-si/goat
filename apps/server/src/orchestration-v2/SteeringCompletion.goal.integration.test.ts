@@ -36,6 +36,33 @@ it.effect("stops the running turn and starts a goal sent into it next", () =>
   ),
 );
 
+it.effect.each([false, true])("OpenCode goal dispatch requires native support: %s", (nativeGoals) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, layer, startFirstTurn, send, read } = yield* goalHarness(
+        "opencode-goal-steer",
+        Effect.void,
+        nativeGoals,
+      );
+      yield* Effect.gen(function* () {
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = yield* startFirstTurn;
+        yield* send("queued", "queued", "queue");
+        const sending = send("goal", "/goal all tests pass", "auto");
+        if (nativeGoals) yield* sending;
+        else yield* Effect.flip(sending);
+        yield* worker.drain();
+        assert.deepEqual(steered, []);
+        assert.deepEqual(yield* read(threadId), {
+          queue: ["queued"],
+          started: nativeGoals ? ["first", "/goal all tests pass"] : ["first"],
+          stopRequested: nativeGoals,
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("queues a goal clear without stopping work when no goal drives it", () =>
   Effect.scoped(
     Effect.gen(function* () {

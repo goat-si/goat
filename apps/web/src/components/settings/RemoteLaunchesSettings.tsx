@@ -20,8 +20,13 @@ import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
 import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
+import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { useThreadShells } from "~/state/entities";
-import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
+import {
+  type EnvironmentPresentation,
+  useEnvironments,
+  usePrimaryEnvironment,
+} from "~/state/environments";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
 import {
@@ -172,7 +177,33 @@ function RemoteHostLaunches({
     },
     [],
   );
-  const canConnectOverSsh = window.desktopBridge !== undefined;
+  const preflightSshHost = useAtomCommand(serverEnvironment.preflightSshHost, {
+    reportFailure: false,
+  });
+  // The desktop dials through its own server's SSH config, so that server checks the host too.
+  const primary = usePrimaryEnvironment();
+  const own = primary?.environmentId ?? null;
+  const primaryHttpBaseUrl =
+    primary?.entry.target._tag === "PrimaryConnectionTarget"
+      ? primary.entry.target.httpBaseUrl
+      : null;
+  const checkedBy =
+    own === null || own === dispatcher.environmentId
+      ? [dispatcher.environmentId]
+      : [own, dispatcher.environmentId];
+  const canCheckDispatcher = useAtomValue(
+    serverEnvironment.preflightSshHost.permissionAtom(dispatcher.environmentId),
+  );
+  const canCheckOwn = useAtomValue(
+    serverEnvironment.preflightSshHost.permissionAtom(own ?? dispatcher.environmentId),
+  );
+  // As Add device: only with this desktop's native primary, whose SSH config the own check reads and
+  // the desktop dials with, and only where a person may run both guarded SSH checks.
+  const canConnectOverSsh =
+    own !== null &&
+    desktopOwnsSshHostConfig(window.desktopBridge, primaryHttpBaseUrl) &&
+    canCheckDispatcher &&
+    canCheckOwn;
   const dismissLaunch = useAtomCommand(serverEnvironment.dismissRemoteLaunch, {
     reportFailure: false,
   });
@@ -205,6 +236,31 @@ function RemoteHostLaunches({
     const submissionId = ++submission.current;
     setConnecting(true);
     const connect = async () => {
+      // Each guarded SSH check (this desktop's own server and the GOAT that launched there) refuses
+      // a disposable machine under any alias: its Pen alias (Pen's pen-<name> too) offline, or the
+      // ED25519 key it offers. Nothing connects after a failed step.
+      for (const environmentId of checkedBy) {
+        const checked = await preflightSshHost({ environmentId, input: { host: group.host } });
+        if (submission.current !== submissionId) return;
+        if (checked._tag === "Failure") {
+          if (!isAtomCommandInterrupted(checked))
+            toastManager.add({
+              type: "error",
+              title: `Could not connect ${group.host}`,
+              description: errorMessage(squashAtomCommandFailure(checked)),
+            });
+          return;
+        }
+        const failed = checked.value.steps.find((step) => step.state === "failed");
+        if (failed !== undefined) {
+          toastManager.add({
+            type: "error",
+            title: `Could not connect ${group.host}`,
+            description: failed.detail ?? failed.summary,
+          });
+          return;
+        }
+      }
       const result = await connectSshEnvironment({
         target: { alias: group.host, hostname: group.host, username: null, port: null },
         label: "",

@@ -392,6 +392,8 @@ export function GoatBotScreen(props: {
   const hasBanner = session.availability !== "ready";
   const homeError = homeSettings.error;
   const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
+  // Android hides the native header and draws edge to edge, so the Home chip starts below the status bar.
+  const homeChipTop = Platform.OS === "android" ? insets.top : topInset;
   // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = 0;
@@ -667,7 +669,7 @@ export function GoatBotScreen(props: {
             conversation={conversation}
           />
         ) : null}
-        <View style={{ paddingTop: topInset }}>
+        <View style={{ paddingTop: homeChipTop }}>
           <MobileBotWork
             taskId={taskId}
             open={homeOpen}
@@ -724,6 +726,7 @@ export function GoatBotScreen(props: {
             }
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
+            taskChips={session.taskChips}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
             taskTitle={props.taskTitle}

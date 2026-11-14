@@ -32,6 +32,7 @@ import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
 import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as DisposableMachineStore from "./hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "./hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
@@ -834,7 +835,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // per-alias readiness lock and SSH cache invalidation span every caller.
   Layer.provideMerge(SshRemoteDispatchLive.layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
-  Layer.provideMerge(LinkedHosts.layer),
+  // With the guard every route add, link and move asks whether a route names a disposable machine.
+  Layer.provideMerge(LinkedHosts.layer.pipe(Layer.provide(DisposableRouteGuard.layer))),
   Layer.provideMerge(
     DecisionLayers.layer.pipe(
       // The decision feed follows committed events through the shared sink.
@@ -1076,7 +1078,13 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
+          Layer.provide(
+            Layer.mergeAll(
+              MaintenanceAudit.layer,
+              PermissionProfiles.layer,
+              DisposableRouteGuard.layer,
+            ),
+          ),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(

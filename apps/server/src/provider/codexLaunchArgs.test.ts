@@ -5,16 +5,50 @@ import { describe, it } from "vite-plus/test";
 import {
   codexAppServerArgs,
   codexExecLaunchArgs,
+  codexMcpListLaunchArgs,
   resolveCodexLaunchArgs,
 } from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
+  it("requests immediate unload while allowing an explicit override", () => {
+    NodeAssert.deepStrictEqual(codexAppServerArgs("-c thread_unload_delay_secs=1800", [], true), [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+      "-c",
+      "thread_unload_delay_secs=1800",
+    ]);
+  });
   it("preserves escaped TOML quotes in config values", () => {
     NodeAssert.deepStrictEqual(
       codexAppServerArgs(String.raw`--config model=\"gpt-6.1-sol\" --strict-config`),
       ["app-server", "--config", 'model="gpt-6.1-sol"', "--strict-config"],
     );
   });
+});
+
+it("keeps local provider flags for exec and filters them from mcp list", () => {
+  const input =
+    "--strict-config --oss --local-provider ollama --profile local -p=work --listen off --enable foo";
+  const exec = codexExecLaunchArgs(input);
+  NodeAssert.deepStrictEqual(exec, [
+    "--strict-config",
+    "--oss",
+    "--local-provider",
+    "ollama",
+    "--profile",
+    "local",
+    "-p=work",
+    "--enable",
+    "foo",
+  ]);
+  NodeAssert.deepStrictEqual(codexMcpListLaunchArgs(exec), [
+    "--profile",
+    "local",
+    "-p=work",
+    "--enable",
+    "foo",
+  ]);
 });
 
 describe("codexExecLaunchArgs", () => {

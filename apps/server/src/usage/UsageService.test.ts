@@ -1,3 +1,4 @@
+import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -86,13 +87,7 @@ function claudeLine(
   })}\n`;
 }
 
-const WINDOW: UsageSummaryInput = {
-  timeZone: "UTC",
-  sinceDay: UsageDay.make("2026-07-31"),
-  untilDay: UsageDay.make("2026-08-02"),
-};
-
-const setup = Effect.gen(function* () {
+export const setup = Effect.gen(function* () {
   const home = yield* Effect.promise(() =>
     NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "usage-service-test-")),
   );
@@ -136,7 +131,7 @@ const makeWithCursor = (read: CursorAccountReader.CursorAccountReader["Service"]
     };
   });
 
-const layerService = (input: {
+export const layerService = (input: {
   readonly prefix: string;
   readonly home: string;
   readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
@@ -1824,6 +1819,8 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
+  registerUnpricedTest(setup, layerService);
+
   it.live("includes host and merged OpenCode instance histories once across list aliases", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
@@ -2027,7 +2024,6 @@ describe("UsageService", () => {
       }
     }).pipe(Effect.scoped),
   );
-
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -2094,6 +2090,7 @@ describe("UsageService", () => {
                 },
                 [ProviderInstanceId.make("codex-work")]: {
                   driver: ProviderDriverKind.make("codex"),
+                  config: { shadowHomePath: NodePath.join(home, "work-shadow") },
                   environment: [{ name: "CODEX_HOME", value: codexHome, sensitive: false }],
                 },
                 [ProviderInstanceId.make("codex-alias")]: {
