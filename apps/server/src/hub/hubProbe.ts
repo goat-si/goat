@@ -7,8 +7,8 @@ import { decodeJson, Probe } from "./hubOcxJson.ts";
 
 const HOME_TIMEOUT_MS = 60_000;
 
-/** The phase a probe answers when the device is a disposable machine; its message is GOAT's own. */
-export const DISPOSABLE_PHASE = "disposable_machine";
+/** The phase a probe answers when the device is a disposable machine (phaseMessage shows it as is). */
+const DISPOSABLE_PHASE = "disposable_machine";
 
 /**
  * Home's ocx link probe, which join, the repair re-link and move read before they link. Design
