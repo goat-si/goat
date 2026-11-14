@@ -372,19 +372,24 @@ it("Create link's advice for another environment says its link gets Standard per
   await using _screen = await render(<CreateLink actions={actions} />, { router: false });
   await page.getByRole("button", { name: "Create link" }).click();
   await dialog().getByRole("button", { name: "Read only" }).click();
-  const advice = dialog().getByText(/also shows Withgame box/);
-  await expect.element(advice).toHaveTextContent(/run goat pair on the machine that runs it/);
   await expect
-    .element(advice)
-    .toHaveTextContent(/Standard permissions, whatever you choose here, unless you add --scope/);
-  await expect.element(advice).not.toHaveTextContent(/goat auth pairing create/);
+    .element(
+      dialog().getByText(
+        /run goat pair on the machine that runs it; that link gets Standard permissions, whatever you choose here, unless you add --scope/,
+      ),
+    )
+    .toBeVisible();
+  expect(
+    dialog()
+      .getByText(/goat auth pairing create/)
+      .query(),
+  ).toBeNull();
 });
 
 it("Create link keeps a long environment name and many environments inside a 390 px dialog", async () => {
   const actions = setup();
-  const unbroken = "x".repeat(80);
   mocks.environments = [
-    environmentRow("primary", unbroken),
+    environmentRow("primary", "x".repeat(80)),
     ...Array.from({ length: 12 }, (_, index) =>
       environmentRow("env-" + index, "Box " + (index + 1)),
     ),
@@ -393,12 +398,12 @@ it("Create link keeps a long environment name and many environments inside a 390
   try {
     await using _screen = await render(<CreateLink actions={actions} />, { router: false });
     await page.getByRole("button", { name: "Create link" }).click();
-    const description = dialog().getByText(/as an authorized client/);
     await expect
-      .element(description)
-      .toHaveTextContent(/also shows Box 1, Box 2, Box 3, and 9 more,/);
-    const element = description.element();
-    expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
+      .element(dialog().getByText(/also shows Box 1, Box 2, Box 3, and 9 more, which/))
+      .toBeVisible();
+    // Nothing in the dialog is wider than the dialog itself.
+    const popup = dialog().element();
+    expect(popup.scrollWidth).toBeLessThanOrEqual(popup.clientWidth);
   } finally {
     await page.viewport(1280, 720);
   }
