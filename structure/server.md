@@ -186,10 +186,11 @@ own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, 
 and that name no link are pruned 30 days after they ended and left Pen; a released record only once
 Pen's member list shows its key absent. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are
 thin transports over it.
-Kept-machine route paths refuse an open record's machine by its Pen alias, offered sshd key or
-environment (`routeGuard.ts`): `HubNodes.add` and its import, `SshDeviceAdd` after preflight, and
-the HubMembership probe that join, move and the repair re-link read (`hubProbe.ts`). An unreadable
-table reads as kept. `host.status` and Hub nodes carry the projected class.
+Kept-machine route paths refuse an open record's machine by its Pen alias (before any network read),
+the environment it reaches, or the sshd key it negotiates, trusted or not (`routeGuard.ts`,
+`SshHostKeys`): `HubNodes.add` with its linked add (before the pairing code is spent) and import,
+`SshDeviceAdd`, and HubMembership's join (both transports), move and repair re-link (`hubProbe.ts`).
+An unreadable table reads as kept. `host.status` and Hub nodes carry the projected class.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
