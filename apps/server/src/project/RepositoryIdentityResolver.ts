@@ -166,12 +166,30 @@ class RepositoryIdentityCacheKey extends Data.Class<{
   readonly isBare: boolean;
 }> {}
 
+const repositorySelectors = new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]);
+
+const gitEnv = (platform: NodeJS.Platform): NodeJS.ProcessEnv => ({
+  ...Object.fromEntries(
+    Object.keys(process.env)
+      .filter((name) => repositorySelectors.has(platform === "win32" ? name.toUpperCase() : name))
+      .map((name) => [name, undefined]),
+  ),
+  ...explicitBareRepositoryEnv(process.env, platform),
+});
+
 const resolveRepositoryIdentityCacheKey = Effect.fn("RepositoryIdentityResolver.resolveCacheKey")(
   function* (cwd: string) {
     const processRunner = yield* ProcessRunner.ProcessRunner;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const env = explicitBareRepositoryEnv(process.env, yield* HostProcess.Platform);
+    const env = gitEnv(yield* HostProcess.Platform);
 
     // `git -C` cannot enter a missing folder or a file, so every probe below would fail.
     const isFolder = yield* fileSystem.stat(cwd).pipe(
@@ -255,11 +273,12 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   cacheKey: RepositoryIdentityCacheKey,
 ): Effect.fn.Return<RepositoryIdentity | null, never, ProcessRunner.ProcessRunner> {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const env = gitEnv(yield* HostProcess.Platform);
   const remoteResult = yield* processRunner
     .run({
       command: "git",
       args: ["-C", cacheKey.rootPath, ...(cacheKey.isBare ? ["--git-dir=."] : []), "remote", "-v"],
-      env: explicitBareRepositoryEnv(process.env, yield* HostProcess.Platform),
+      env,
       timeoutBehavior: "timedOutResult",
     })
     .pipe(Effect.option);
@@ -278,7 +297,7 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
         "--get-regexp",
         "^remote\\..*\\.gh-resolved$",
       ],
-      env: explicitBareRepositoryEnv(process.env, yield* HostProcess.Platform),
+      env,
       timeoutBehavior: "timedOutResult",
     })
     .pipe(Effect.option);
