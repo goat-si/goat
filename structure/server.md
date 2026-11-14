@@ -196,7 +196,10 @@ before the pairing code is spent), `HubNodes.add` and import, SSH preflight
 (`disposablePreflight.ts`, so the Settings and agent SSH adds stop before trust or a save, and
 the desktop's Remote launches Connect asks it on the dispatcher and on its own server first),
 `SshDeviceAdd`, and HubMembership's join (both transports; the Hub-client join compares the key
-itself), move and repair re-link (`hubProbe.ts`). Web's Add route refuses a disposable Hub device
+itself), move and repair re-link (`hubProbe.ts`). Leave and the whole repair ladder refuse an open
+record by its alias or its Home link id (`ownLink` in `hubProbe.ts`; a twin `pen-<name>` only by
+the link id), since its link ends only through detach and OpenCodex's Home supervisor retries a
+dropped tunnel itself. Web's Add route refuses a disposable Hub device
 from the hub snapshot (`client-runtime` `hubNodes.ts`). An
 unreadable table or Pen file reads as kept. A client's own pairing with the machine's GOAT is not
 seen by the hub. `host.status` and Hub nodes carry the projected class.

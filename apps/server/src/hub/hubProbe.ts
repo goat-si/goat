@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 
 import { DisposableRouteGuard } from "./disposable/DisposableRouteGuard.ts";
+import { ownLinkRefusal } from "./disposable/routeGuard.ts";
 import type { HubOcx } from "./HubOcx.ts";
 import { decodeJson, Probe } from "./hubOcxJson.ts";
 
@@ -50,5 +51,21 @@ export const makeHubProbe = Effect.fn("HubMembership.makeProbe")(function* (
       ? { ok: true as const, ...offered }
       : { ok: false as const, phase: DISPOSABLE_PHASE, message: claim };
   });
-  return { probe, disposableRoute };
+  /** Leave and repair: an open record's own link, by its alias (offline) or its link id on the Home. */
+  const ownLink = Effect.fn("HubMembership.ownLink")(function* (
+    alias: string,
+    linkId: string | undefined,
+    action: "leave" | "repair",
+  ) {
+    const named = yield* guard.claim({ alias });
+    // A twin Pen name may be a kept member's link too: only the record's own link id refuses it.
+    const found =
+      named !== undefined && named.shared !== true
+        ? named
+        : linkId === undefined
+          ? undefined
+          : yield* guard.claim({ linkId });
+    return found === undefined ? undefined : ownLinkRefusal(found, alias, action);
+  });
+  return { probe, disposableRoute, ownLink };
 });

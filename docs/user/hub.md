@@ -192,6 +192,13 @@ desktop or phone (including a phone's Add route) with the machine's own GOAT by
 its address and pairing code is a connection of that client alone: the hub
 never sees it, so GOAT cannot refuse it and **Hub devices** does not mark it as
 a Conflict.
+Its OpenCodex link ends only through Detach. A request to remove it from the
+hub or to repair it, from an agent or from **Repair** and **Leave** in **Hub
+devices**, is refused by its Pen alias or its link before anything is asked
+or changed. Repair is not needed for a dropped tunnel:
+OpenCodex retries the link by itself, at least every 5 minutes, unless the
+machine's host key changed or a removal holds the link, and GOAT checks the
+machine every 30 minutes; a changed host key shows on its row.
 Its row in **Hub devices** shows **Disposable**, or **Conflict** when something
 about it is ambiguous, **Still in Pen** while its key is a Pen member, who
 attached it and how long it has been in its state.
