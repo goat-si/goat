@@ -9,7 +9,6 @@ export {
   LEGACY_BOOT_SERVICE_NAMES,
   type BootServiceNames,
 } from "./bootServiceNames.ts";
-export { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
 import { systemdManager } from "./systemdManager.ts";
 import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
 import {
