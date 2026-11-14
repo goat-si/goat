@@ -464,7 +464,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             operation,
             // Codex treats an empty CODEX_HOME as unset.
             configuredHome ??
-              (effectiveEnvironment.CODEX_HOME?.trim() || path.join(homeDirectory, ".codex")),
+              (effectiveEnvironment.CODEX_HOME || path.join(homeDirectory, ".codex")),
             { settings: effectiveConfig, environment: effectiveEnvironment },
           )
         : configuredHome;
