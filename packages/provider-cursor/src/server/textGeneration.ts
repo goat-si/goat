@@ -1,3 +1,4 @@
+import { sdkBackendMatches } from "./cloud/credentials.ts";
 import {
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
@@ -59,10 +60,10 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   resolveApiKey?: Effect.Effect<string, ProviderSetupError>,
   withAccess?: CursorAuth["withAccess"],
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment ?? process.env),
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
-  const resolvedEnvironment = environment ?? process.env;
 
   const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
     operation: TextGenerationOperations.Operation,
@@ -76,7 +77,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
 
     const apiKey = resolveApiKey
       ? yield* resolveApiKey
-      : resolvedEnvironment.CURSOR_API_KEY?.trim();
+      : (yield* currentEnvironment).CURSOR_API_KEY?.trim();
     if (!apiKey) {
       return yield* new TextGenerationError({
         operation,
@@ -93,6 +94,13 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const { operation, prompt, modelSelection } = input;
       const isMemory = TextGenerationOperations.isMemoryOperation(operation);
       const apiKey = yield* resolveCursorApiKey(operation);
+      if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail:
+            "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
+        });
+      }
       const { Agent } = yield* Effect.try(sdk.load);
       // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
       if (yield* fs.exists(`${yield* HostProcess.HomeDirectory}/.cursor/sandbox.json`)) {
@@ -131,8 +139,17 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           enableAgentRetries: !isMemory,
         },
       } satisfies AgentOptions;
-      const createCursorAgent = (sandboxEnabled: boolean) =>
-        Effect.tryPromise((signal) =>
+      const createCursorAgent = Effect.fn("CursorTextGeneration.createAgent")(function* (
+        sandboxEnabled: boolean,
+      ) {
+        if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
+          return yield* new TextGenerationError({
+            operation,
+            detail:
+              "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
+          });
+        }
+        return yield* Effect.tryPromise((signal) =>
           Agent.create(
             sandboxEnabled
               ? agentOptions
@@ -159,6 +176,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               }),
           ),
         );
+      });
 
       const request = Effect.gen(function* () {
         // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.

@@ -2,13 +2,21 @@ import type { StoredSdkCredentials } from "@cursor/sdk";
 import { ProviderSetupError, type ProviderInstanceId } from "@goat/contracts";
 import type { ProviderAuthController } from "@goat/provider-core/server/auth";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+export { sdkBackendMatches } from "../sdkBackend.ts";
+export { cloudSdkBackendMatches } from "../sdkBackend.ts";
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
+export const BACKEND_MISMATCH =
+  "Cursor Cloud supports production backends only: unset CURSOR_BACKEND_URL on the server and in the selected Cursor provider (or set the provider value to https://api2.cursor.sh), then restart the server.";
+export const credentialFailureDetail = (error: ProviderSetupError) =>
+  error.detail === BACKEND_MISMATCH ? BACKEND_MISMATCH : "Cursor Cloud sign-in is unavailable.";
 const Credentials = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.Literal(1),
@@ -26,7 +34,7 @@ function usable(value: StoredSdkCredentials | undefined, now: number) {
   return (
     value !== undefined &&
     value.apiKey.trim().length > 0 &&
-    value.backendUrl.replace(/\/$/, "") === PRODUCTION_BACKEND &&
+    value.backendUrl.replace(/\/+$/, "") === PRODUCTION_BACKEND &&
     (value.apiKeyExpiresAtMs === undefined || value.apiKeyExpiresAtMs > now)
   );
 }
@@ -58,6 +66,7 @@ export const makeCursorCloudCredentials = Effect.fn("makeCursorCloudCredentials"
   siblingId: ProviderInstanceId,
 ) {
   const host = yield* ProviderHost.ProviderHost;
+  const hostEnvironment = yield* HostProcess.Environment;
   const credentials = yield* host.credentials("cursor", siblingId);
   const failure = (cause: unknown) =>
     new ProviderSetupError({
@@ -79,19 +88,21 @@ export const makeCursorCloudCredentials = Effect.fn("makeCursorCloudCredentials"
         detail: "The selected credential source must be an existing Cursor provider instance.",
       });
     }
+    const environment = yield* mergeProviderInstanceEnvironment(
+      sibling?.environment,
+      hostEnvironment,
+    );
     if (
-      process.env.CURSOR_BACKEND_URL &&
-      process.env.CURSOR_BACKEND_URL.replace(/\/$/, "") !== PRODUCTION_BACKEND
+      environment.CURSOR_BACKEND_URL !== undefined &&
+      environment.CURSOR_BACKEND_URL.replace(/\/+$/, "") !== PRODUCTION_BACKEND
     ) {
       return yield* new ProviderSetupError({
         instanceId,
         operation: "credentials",
-        detail: "Cursor Cloud currently supports the production Cursor backend only.",
+        detail: BACKEND_MISMATCH,
       });
     }
-    const configuredKey =
-      sibling?.environment?.findLast((item) => item.name === "CURSOR_API_KEY")?.value ??
-      process.env.CURSOR_API_KEY;
+    const configuredKey = environment.CURSOR_API_KEY;
     const stored = credentials.get.pipe(
       Effect.mapError(failure),
       Effect.flatMap((bytes) =>

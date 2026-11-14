@@ -22,7 +22,11 @@ import * as Schema from "effect/Schema";
 import * as CursorSdk from "../CursorSdk.ts";
 import { buildCursorDiscoveredModelsFromSdk } from "../status.ts";
 import { CursorCloudSettings } from "../../settings.ts";
-import { makeCursorCloudCredentials } from "./credentials.ts";
+import {
+  BACKEND_MISMATCH,
+  makeCursorCloudCredentials,
+  cloudSdkBackendMatches,
+} from "./credentials.ts";
 import { DRIVER, makeCursorCloudAdapter } from "./adapter.ts";
 import * as CursorCloudSdk from "./sdk.ts";
 
@@ -111,7 +115,19 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
       const checkProvider = input.enabled
         ? Effect.gen(function* () {
             const apiKey = yield* credentials.requireApiKey;
+            if (!cloudSdkBackendMatches())
+              return yield* snapshotValue({
+                status: "error",
+                auth: "unknown",
+                message: BACKEND_MISMATCH,
+              });
             yield* sdk.checkAccess(apiKey);
+            if (!cloudSdkBackendMatches())
+              return yield* snapshotValue({
+                status: "error",
+                auth: "unknown",
+                message: BACKEND_MISMATCH,
+              });
             const models = yield* sdk.readModels(apiKey);
             return yield* snapshotValue({
               status: "ready",
@@ -131,7 +147,10 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
                 ? snapshotValue({
                     status: "error",
                     auth: "unauthenticated",
-                    message: "Sign in to Cursor to use Cursor Cloud.",
+                    message:
+                      cause.detail === BACKEND_MISMATCH
+                        ? BACKEND_MISMATCH
+                        : "Sign in to Cursor to use Cursor Cloud.",
                   })
                 : snapshotValue({
                     status: "error",

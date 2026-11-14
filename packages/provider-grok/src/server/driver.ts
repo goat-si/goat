@@ -1,5 +1,7 @@
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 import { ProviderDriverKind, ProviderSetupError, type ServerProvider } from "@goat/contracts";
 import { GrokSettings } from "../settings.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -7,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -37,6 +40,7 @@ import {
   withGrokAuthPresentation,
 } from "./auth.ts";
 import { discoverGrokSkills } from "./skills.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
 import {
   homebrewOwnershipFromCommandPath,
   makeCachedProviderMaintenanceResolution,
@@ -132,13 +136,45 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     const path = yield* Path.Path;
     const host = yield* ProviderHost.ProviderHost;
     const { cwd } = host.paths;
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
-    const hasEnvironmentKey = Boolean(processEnv[GROK_API_KEY_ENV]?.trim());
+    const hostEnvironment = yield* HostProcess.Environment;
+    const home = yield* HostProcess.HomeDirectory;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+    const processEnv = { ...(yield* currentEnvironment) };
     const snapshotReady = yield* Deferred.make<Effect.Effect<ServerProvider>>();
     const auth = yield* makeGrokAuth({
       instanceId,
       enabled,
-      hasEnvironmentKey,
+      currentEnvironment,
+      verifyKey: (key) =>
+        httpClient
+          .execute(
+            HttpClientRequest.get("https://api.x.ai/v1/models").pipe(
+              HttpClientRequest.bearerToken(key),
+            ),
+          )
+          .pipe(
+            Effect.flatMap((response) =>
+              response.status >= 200 && response.status < 300
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "start",
+                      detail: "Could not verify the Grok API key. Try again.",
+                    }),
+                  ),
+            ),
+            Effect.mapError(
+              () =>
+                new ProviderSetupError({
+                  instanceId,
+                  operation: "start",
+                  detail: "Could not verify the Grok API key. Try again.",
+                }),
+            ),
+          ),
       onChanged: (expectAuthenticated) =>
         Effect.gen(function* () {
           const provider = yield* yield* Deferred.await(snapshotReady);
@@ -161,7 +197,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
           }),
       ),
     );
-    const presentSnapshot = (snapshot: ServerProvider, hasStoredKey: boolean) =>
+    const presentSnapshot = (
+      snapshot: ServerProvider,
+      hasStoredKey: boolean,
+      hasEnvironmentKey: boolean,
+    ) =>
       withGrokAuthPresentation(snapshot, {
         enabled,
         hasEnvironmentKey,
@@ -179,16 +219,64 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
-    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+    const maintenanceForEnvironment = (
+      env: NodeJS.ProcessEnv,
+      resolvedCommandPath?: string | null,
+    ) =>
       resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
-        env: processEnv,
+        env,
+        ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(CommandResolutionCache, new Map()),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
-      ),
+      );
+    const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
+      {
+        // Everything derives from the host snapshot resolveMaintenance provides: a merged copy, and
+        // the host's hash, because a manual install's npm advisory reads the host environment,
+        // where an instance override can mask a change.
+        lookup: Effect.flatMap(HostProcess.Environment, (snapshot) =>
+          mergeProviderInstanceEnvironment(environment, snapshot).pipe(
+            Effect.provideService(HostProcess.HomeDirectory, home),
+            Effect.map((merged) => ({ merged, host: hostEnvironmentHash(snapshot) })),
+          ),
+        ).pipe(
+          Effect.flatMap(({ merged, host }) =>
+            Effect.gen(function* () {
+              const env = { ...merged };
+              const resolved = effectiveConfig.binaryPath
+                ? yield* resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+                    Effect.provideService(CommandResolutionCache, new Map()),
+                  )
+                : undefined;
+              const real = resolved
+                ? yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => null))
+                : null;
+              // The link target, so an upgrade that retargets the same path is a new install.
+              return {
+                env,
+                resolvedCommandPath: resolved ?? null,
+                install: `${real ?? ""}\0${host}`,
+              };
+            }),
+          ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+        resolve: ({ env, resolvedCommandPath }) =>
+          maintenanceForEnvironment(env, resolvedCommandPath),
+      },
     );
+    const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
+      Effect.suspend(() =>
+        cachedMaintenance(options).pipe(
+          Effect.provideService(HostProcess.Environment, { ...hostEnvironment }),
+        ),
+      );
     const orchestrationAdapter = yield* GrokAdapterV2Driver.create({
       instanceId,
       displayName,
@@ -209,7 +297,9 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     );
     const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv, {
       resolveEnvironment: auth.readStored.pipe(
-        Effect.map((stored) => applyStoredGrokApiKey(processEnv, stored)),
+        Effect.flatMap((stored) =>
+          currentEnvironment.pipe(Effect.map((env) => applyStoredGrokApiKey(env, stored))),
+        ),
       ),
       memoryRunnerContext: {
         providerInstanceId: instanceId,
@@ -218,25 +308,35 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     });
 
     const checkProvider = auth.readStored.pipe(
-      Effect.flatMap((stored) => {
-        const environment = applyStoredGrokApiKey(processEnv, stored);
-        return checkGrokProviderStatus(effectiveConfig, environment, cwd).pipe(
-          Effect.flatMap((snapshot) =>
-            effectiveConfig.enabled &&
-            snapshot.installed &&
-            snapshot.auth.status === "authenticated"
-              ? readGrokAccount(environment).pipe(
-                  Effect.map(({ email, usageLimits }) => ({
-                    ...snapshot,
-                    auth: email ? { ...snapshot.auth, email } : snapshot.auth,
-                    usageLimits,
-                  })),
-                )
-              : Effect.succeed(snapshot),
-          ),
-          Effect.map((snapshot) => presentSnapshot(stampIdentity(snapshot), stored !== undefined)),
-        );
-      }),
+      Effect.flatMap((stored) =>
+        currentEnvironment.pipe(
+          Effect.flatMap((env) => {
+            const environment = applyStoredGrokApiKey(env, stored);
+            return checkGrokProviderStatus(effectiveConfig, environment, cwd).pipe(
+              Effect.flatMap((snapshot) =>
+                effectiveConfig.enabled &&
+                snapshot.installed &&
+                snapshot.auth.status === "authenticated"
+                  ? readGrokAccount(environment).pipe(
+                      Effect.map(({ email, usageLimits }) => ({
+                        ...snapshot,
+                        auth: email ? { ...snapshot.auth, email } : snapshot.auth,
+                        usageLimits,
+                      })),
+                    )
+                  : Effect.succeed(snapshot),
+              ),
+              Effect.map((snapshot) =>
+                presentSnapshot(
+                  stampIdentity(snapshot),
+                  stored !== undefined,
+                  Boolean(env[GROK_API_KEY_ENV]?.trim()),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -253,9 +353,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       initialSnapshot: (settings) =>
         Effect.gen(function* () {
           const stored = yield* auth.readStored;
+          const env = yield* currentEnvironment;
           return presentSnapshot(
             stampIdentity(yield* buildInitialGrokProviderSnapshot(settings.provider)),
             stored !== undefined,
+            Boolean(env[GROK_API_KEY_ENV]?.trim()),
           );
         }),
       checkProvider,
@@ -291,10 +393,14 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
             snapshot.getSnapshot,
             auth.readStored.pipe(
               Effect.flatMap((stored) =>
-                discoverGrokSkills(
-                  effectiveConfig,
-                  applyStoredGrokApiKey(processEnv, stored),
-                  workspaceCwd,
+                currentEnvironment.pipe(
+                  Effect.flatMap((env) =>
+                    discoverGrokSkills(
+                      effectiveConfig,
+                      applyStoredGrokApiKey(env, stored),
+                      workspaceCwd,
+                    ),
+                  ),
                 ),
               ),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

@@ -78,6 +78,7 @@ function sdkErrorReason(cause: unknown): string | undefined {
 export const isCursorAgentSdkRunnerError = Schema.is(CursorAgentSdkRunnerError);
 
 export interface CursorAgentSdkOpenInput {
+  readonly validate?: Effect.Effect<void, CursorAgentSdkRunnerError>;
   readonly operation: "create" | "resume";
   readonly agentId?: string;
   readonly options: AgentOptions;

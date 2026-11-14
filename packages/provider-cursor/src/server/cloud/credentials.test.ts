@@ -5,7 +5,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import { resolveKey, makeCursorCloudCredentials } from "./credentials.ts";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { makeHarness } from "./adapter.testkit.ts";
+import { resolveKey, makeCursorCloudCredentials, cloudSdkBackendMatches } from "./credentials.ts";
+import { currentCloudSdkBackend } from "../sdkBackend.ts";
+import { loadCursorSdk } from "../sdk.ts";
+import { CursorCloudDriver } from "./driver.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as CursorSdk from "../CursorSdk.ts";
 
 const instanceId = ProviderInstanceId.make("cursorCloud-test");
 const siblingId = ProviderInstanceId.make("cursor-account-2");
@@ -18,6 +25,42 @@ const stored = (apiKey: string, apiKeyExpiresAtMs?: number) => ({
 });
 
 const decodeSettings = Schema.decodeEffect(ServerSettings);
+
+it.live("Cloud guard agrees with the SDK request destination", () =>
+  Effect.promise(async () => {
+    const previous = process.env.CURSOR_BACKEND_URL;
+    const fetch = vi.fn(
+      async (_url: string | URL | Request) => new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      for (const backend of [
+        undefined,
+        "https://api.cursor.com",
+        "",
+        "https://example.invalid",
+        "https://api2.cursor.sh",
+        "https://api.cursor.com/",
+      ]) {
+        if (backend === undefined) delete process.env.CURSOR_BACKEND_URL;
+        else process.env.CURSOR_BACKEND_URL = backend;
+        fetch.mockClear();
+        await loadCursorSdk()
+          .Agent.list({ runtime: "cloud", apiKey: "fixture", limit: 1 })
+          .catch(() => undefined);
+        const url = String(fetch.mock.calls.at(-1)?.[0]);
+        expect(url).toBe(`${currentCloudSdkBackend()}/v1/agents?limit=1`);
+        expect(cloudSdkBackendMatches(), `backend ${backend}, request ${url}`).toBe(
+          backend === undefined,
+        );
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+      else process.env.CURSOR_BACKEND_URL = previous;
+      vi.unstubAllGlobals();
+    }
+  }),
+);
 
 const credentialFixture = (
   settings: ServerSettings,
@@ -156,6 +199,26 @@ describe("Cursor Cloud credential precedence", () => {
       expect(key).toBe("instance-fixture");
     }),
   );
+  it.effect("rejects the selected sibling's non-production backend", () =>
+    Effect.gen(function* () {
+      const settings = yield* decodeSettings({
+        providerInstances: {
+          [siblingId]: {
+            driver: "cursor",
+            enabled: true,
+            config: {},
+            environment: [{ name: "CURSOR_BACKEND_URL", value: "https://example.invalid" }],
+          },
+        },
+      });
+      const h = credentialFixture(settings);
+      const failure = yield* Effect.gen(function* () {
+        const credentials = yield* makeCursorCloudCredentials(instanceId, siblingId);
+        return yield* credentials.requireApiKey;
+      }).pipe(Effect.provideService(ProviderHost.ProviderHost, h.host), Effect.result);
+      expect(failure._tag).toBe("Failure");
+    }),
+  );
   it.effect("fails when the selected Cursor provider is signed out", () =>
     Effect.gen(function* () {
       const settings = yield* decodeSettings({
@@ -231,3 +294,123 @@ describe("Cursor Cloud credential precedence", () => {
     }),
   );
 });
+
+it.effect("refuses an SDK call when the server backend differs from the sibling override", () =>
+  Effect.gen(function* () {
+    const previous = process.env.CURSOR_BACKEND_URL;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+        else process.env.CURSOR_BACKEND_URL = previous;
+      }),
+    );
+    process.env.CURSOR_BACKEND_URL = "https://custom.invalid";
+    const settings = yield* decodeSettings({
+      providerInstances: {
+        [siblingId]: {
+          driver: "cursor",
+          enabled: true,
+          config: {},
+          environment: [{ name: "CURSOR_BACKEND_URL", value: "https://api2.cursor.sh" }],
+        },
+      },
+    });
+    const h = credentialFixture(settings);
+    const credentials = yield* makeCursorCloudCredentials(instanceId, siblingId).pipe(
+      Effect.provideService(ProviderHost.ProviderHost, h.host),
+    );
+    const adapter = yield* makeHarness(credentials.requireApiKey);
+    const result = yield* adapter.runtime.startTurn(adapter.input).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.message).toContain("CURSOR_BACKEND_URL");
+    expect(adapter.create).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+);
+
+it.live("driver advice permits the production configuration and explains a custom backend", () =>
+  Effect.gen(function* () {
+    const previous = process.env.CURSOR_BACKEND_URL;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+        else process.env.CURSOR_BACKEND_URL = previous;
+        vi.unstubAllGlobals();
+      }),
+    );
+    delete process.env.CURSOR_BACKEND_URL;
+    const requests: string[] = [];
+    const mockedFetch = vi.fn(async (input: string | URL | Request) => {
+      requests.push(String(input));
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", mockedFetch);
+    const sdk = {
+      Agent: {
+        list: async () => {
+          await mockedFetch("https://api.cursor.com/v1/agents");
+          return { items: [] };
+        },
+      },
+      Cursor: { models: { list: async () => [] } },
+    };
+    const settings = yield* decodeSettings({
+      providerInstances: {
+        [siblingId]: {
+          driver: "cursor",
+          enabled: true,
+          config: {},
+          environment: [{ name: "CURSOR_BACKEND_URL", value: "https://api.cursor.com" }],
+        },
+      },
+    });
+    const h = credentialFixture(settings);
+    const hostEnv: NodeJS.ProcessEnv = { CURSOR_API_KEY: "fixture" };
+    const instance = yield* CursorCloudDriver.create({
+      instanceId,
+      displayName: undefined,
+      enabled: true,
+      environment: [],
+      config: { sourceInstanceId: siblingId },
+    }).pipe(
+      Effect.provideService(ProviderHost.ProviderHost, h.host),
+      Effect.provideService(HostProcess.Environment, hostEnv),
+      Effect.provideService(CursorSdk.CursorSdk, {
+        load: () => sdk as unknown as ReturnType<typeof loadCursorSdk>,
+        loadSqlite: () => {
+          throw new Error("unused");
+        },
+      }),
+      Effect.provide(IdAllocator.layer),
+    );
+    const refused = yield* instance.snapshot.refresh;
+    expect(refused.message).toContain("unset CURSOR_BACKEND_URL");
+    expect(requests).toEqual([]);
+    const allowedSettings = yield* decodeSettings({
+      providerInstances: { [siblingId]: { driver: "cursor", enabled: true, config: {} } },
+    });
+    const allowedHost = credentialFixture(allowedSettings);
+    const allowed = yield* CursorCloudDriver.create({
+      instanceId,
+      displayName: undefined,
+      enabled: true,
+      environment: [],
+      config: { sourceInstanceId: siblingId },
+    }).pipe(
+      Effect.provideService(ProviderHost.ProviderHost, allowedHost.host),
+      Effect.provideService(HostProcess.Environment, hostEnv),
+      Effect.provideService(CursorSdk.CursorSdk, {
+        load: () => sdk as unknown as ReturnType<typeof loadCursorSdk>,
+        loadSqlite: () => {
+          throw new Error("unused");
+        },
+      }),
+      Effect.provide(IdAllocator.layer),
+    );
+    const ready = yield* allowed.snapshot.refresh;
+    expect(ready.status).toBe("ready");
+    expect(requests).toEqual(["https://api.cursor.com/v1/agents"]);
+  }).pipe(Effect.scoped),
+);

@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { makeCursorAuth, type CursorAuthOptions } from "./auth.ts";
 import { loadCursorSdk } from "./sdk.ts";
@@ -42,6 +43,7 @@ const makeHarness = Effect.fn("makeCursorAuthHarness")(function* (
     displayName: "Personal Cursor",
     enabled: true,
     store,
+    verifyKey: () => Effect.void,
     onChanged: (signedIn) =>
       Effect.sync(() => {
         changes.push(signedIn);
@@ -80,6 +82,70 @@ const phase = (auth: Auth, phase: ProviderAuthState["phase"], session = owner) =
   );
 
 it.layer(NodeServices.layer)("CursorAuth", (it) => {
+  it.effect("fails stalled verification and permits sign-out after the verification deadline", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          verifyKey: () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        });
+        yield* harness.auth.controller.start(owner);
+        yield* phase(harness.auth, "waiting");
+        harness.complete.resolve();
+        yield* Deferred.await(entered);
+        const failed = yield* phase(harness.auth, "failed").pipe(Effect.forkScoped);
+        yield* TestClock.adjust("31 seconds");
+        const result = failed.pollUnsafe();
+        expect(result, "verification should fail by the deadline").toBeDefined();
+        const state = yield* Fiber.join(failed);
+        expect(state.message).toContain("verify");
+        expect(yield* Effect.promise(() => harness.store.load())).toBeUndefined();
+        expect((yield* harness.auth.controller.logout(Effect.void)).phase).toBe("idle");
+      }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+    }).pipe(Effect.scoped),
+  );
+  it.effect("refuses admission when sign-out follows validation of a captured key", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Effect.promise(() => harness.store.save(harness.credentials));
+      const validated = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let opened = false;
+      const open = yield* Effect.gen(function* () {
+        yield* harness.auth.validateSessionApiKey("browser-key", undefined);
+        yield* Deferred.succeed(validated, undefined);
+        yield* Deferred.await(resume);
+        return yield* harness.auth.withAccess(
+          Effect.sync(() => {
+            opened = true;
+          }),
+          harness.auth.validateSessionApiKey("browser-key", undefined),
+        );
+      }).pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(validated);
+      yield* harness.auth.controller.logout(Effect.void);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(open);
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(opened).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("starts browser sign-in against the selected instance backend", () =>
+    Effect.gen(function* () {
+      for (const backend of ["https://instance.invalid", "https://api2.cursor.sh"]) {
+        yield* Effect.gen(function* () {
+          const harness = yield* makeHarness({ currentBackend: Effect.succeed(backend) });
+          yield* harness.auth.controller.start(owner);
+          yield* phase(harness.auth, "waiting");
+          expect(harness.loginOptions()?.backendUrl).toBe(backend);
+        }).pipe(Effect.scoped);
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("closes SDK sessions and interrupts in-flight credential work before signing out", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -141,6 +207,27 @@ it.layer(NodeServices.layer)("CursorAuth", (it) => {
       expect(harness.changes).toEqual([true]);
       expect(Object.values(succeeded)).not.toContain("browser-key");
       expect(yield* Effect.promise(() => harness.store.load())).toEqual(harness.credentials);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reports an environment override after verifying the browser key", () =>
+    Effect.gen(function* () {
+      let environmentKey: string | undefined;
+      const verified: string[] = [];
+      const harness = yield* makeHarness({
+        currentApiKey: Effect.sync(() => environmentKey),
+        verifyKey: (key) =>
+          Effect.sync(() => {
+            verified.push(key);
+          }),
+      });
+      yield* harness.auth.controller.start(owner);
+      yield* phase(harness.auth, "waiting");
+      environmentKey = "environment-key";
+      harness.complete.resolve();
+      const succeeded = yield* phase(harness.auth, "succeeded");
+      expect(verified).toEqual(["browser-key"]);
+      expect(succeeded.message).toContain("CURSOR_API_KEY currently overrides");
     }).pipe(Effect.scoped),
   );
 

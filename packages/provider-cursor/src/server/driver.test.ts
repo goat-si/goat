@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { AgentOptions, SDKModel } from "@cursor/sdk";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -68,6 +70,390 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
 );
 
 it.layer(layerTest)("CursorDriver", (it) => {
+  it.effect("keeps the session key when MCP configuration reopens an agent", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { PATH: "/usr/bin", CURSOR_API_KEY: "old-key" };
+      const openedKeys: Array<string | undefined> = [];
+      const instanceId = ProviderInstanceId.make("cursor-session-key");
+      const threadId = ThreadId.make("cursor-session-key-thread");
+      const instance = yield* CursorDriver.create({
+        instanceId,
+        displayName: undefined,
+        enabled: true,
+        environment: [],
+        config: CursorDriver.defaultConfig(),
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+          assertComplete: Effect.void,
+          open: (request) =>
+            Effect.sync(() => {
+              openedKeys.push(request.options.apiKey);
+              return {
+                agentId: "agent",
+                listMessages: Effect.succeed([]),
+                send: () => Effect.die("unused"),
+                close: Effect.void,
+              };
+            }),
+        }),
+      );
+      const modelSelection = { instanceId, model: "auto" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const open = (id: string) =>
+        instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(id),
+          modelSelection,
+          runtimePolicy,
+        });
+      const first = yield* open("first");
+      const thread = yield* first.ensureThread({ threadId, modelSelection, runtimePolicy });
+      host.CURSOR_API_KEY = "new-key";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("environment"),
+        threadId,
+        providerSessionId: "mcp",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer rotated",
+        browserToolsAvailable: false,
+      });
+      yield* first.resumeThread({ providerThread: thread });
+      const second = yield* open("second");
+      yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+      expect(openedKeys).toEqual(["old-key", "old-key", "new-key"]);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("refuses local SDK open and reopen when the selected backend differs", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { PATH: "/usr/bin", CURSOR_API_KEY: "old-key" };
+      const previousBackend = process.env.CURSOR_BACKEND_URL;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousBackend === undefined) delete process.env.CURSOR_BACKEND_URL;
+          else process.env.CURSOR_BACKEND_URL = previousBackend;
+        }),
+      );
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh";
+      host.CURSOR_BACKEND_URL = "https://custom.invalid";
+      const openedKeys: Array<string | undefined> = [];
+      const instanceId = ProviderInstanceId.make("cursor-backend-isolation");
+      const threadId = ThreadId.make("cursor-backend-isolation-thread");
+      const instance = yield* CursorDriver.create({
+        instanceId,
+        displayName: undefined,
+        enabled: true,
+        environment: [],
+        config: CursorDriver.defaultConfig(),
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+          assertComplete: Effect.void,
+          open: (request) =>
+            Effect.sync(() => {
+              openedKeys.push(request.options.apiKey);
+              return {
+                agentId: "agent",
+                listMessages: Effect.succeed([]),
+                send: () => Effect.die("unused"),
+                close: Effect.void,
+              };
+            }),
+        }),
+      );
+      const modelSelection = { instanceId, model: "auto" };
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const open = (id: string) =>
+        instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(id),
+          modelSelection,
+          runtimePolicy,
+        });
+      const mismatch = yield* open("mismatch");
+      expect(
+        (yield* mismatch
+          .ensureThread({ threadId, modelSelection, runtimePolicy })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(openedKeys).toEqual([]);
+      process.env.CURSOR_BACKEND_URL = "https://custom.invalid";
+      const changed = yield* open("changed-after-sdk-load");
+      expect(
+        (yield* changed
+          .ensureThread({ threadId, modelSelection, runtimePolicy })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(openedKeys).toEqual([]);
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh";
+      host.CURSOR_BACKEND_URL = "https://api2.cursor.sh/";
+      const first = yield* open("first");
+      const thread = yield* first.ensureThread({ threadId, modelSelection, runtimePolicy });
+      host.CURSOR_API_KEY = "new-key";
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("environment"),
+        threadId,
+        providerSessionId: "mcp",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer rotated",
+        browserToolsAvailable: false,
+      });
+      process.env.CURSOR_BACKEND_URL = "https://other.invalid";
+      expect((yield* first.resumeThread({ providerThread: thread }).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(openedKeys).toEqual(["old-key"]);
+    }).pipe(Effect.scoped),
+  );
+  it.effect(
+    "regression #3079: Cursor workspace probes use the current host environment and respect instance overrides",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const oldHome = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-old-" });
+        const newHome = yield* fs.makeTempDirectoryScoped({ prefix: "cursor-new-" });
+        yield* fs.makeDirectory(`${newHome}/.cursor/skills/fresh`, { recursive: true });
+        yield* fs.writeFileString(
+          `${newHome}/.cursor/skills/fresh/SKILL.md`,
+          "---\nname: fresh\ndescription: fresh skill\n---\nhello\n",
+        );
+        const host = { HOME: oldHome, PATH: "/old/bin" };
+        const make = (override: boolean) =>
+          CursorDriver.create({
+            instanceId: ProviderInstanceId.make(`cursor-path-${override}`),
+            displayName: undefined,
+            enabled: true,
+            environment: [
+              { name: "FIXTURE", value: "1", sensitive: false },
+              ...(override ? [{ name: "HOME", value: oldHome, sensitive: false }] : []),
+            ],
+            config: CursorDriver.defaultConfig(),
+          }).pipe(Effect.provideService(HostProcess.Environment, host));
+        const inherited = yield* make(false);
+        const overridden = yield* make(true);
+        host.HOME = newHome;
+        host.PATH = "/new/bin";
+        yield* inherited.snapshot.refresh;
+        expect(
+          (yield* inherited.snapshotForCwd!(oldHome)).skills.map((skill) => skill.name),
+        ).toContain("fresh");
+        expect(
+          (yield* overridden.snapshotForCwd!(oldHome)).skills.map((skill) => skill.name),
+        ).not.toContain("fresh");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "regression #3079: status and a new session use a CURSOR_API_KEY the host gains after the instance started",
+    () =>
+      Effect.gen(function* () {
+        const authorizations: Array<string | undefined> = [];
+        const client = HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                request.url.endsWith("/v1/me")
+                  ? { apiKeyName: "GOAT", createdAt: "2026-01-01T00:00:00.000Z" }
+                  : { items: [{ id: "auto", displayName: "Auto" }] },
+              ),
+            ),
+          );
+        });
+        const openedKeys: Array<string | undefined> = [];
+        const host: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+        const instanceId = ProviderInstanceId.make("cursor-host-key");
+        const instance = yield* CursorDriver.create({
+          instanceId,
+          displayName: undefined,
+          enabled: true,
+          environment: [],
+          config: CursorDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
+            assertComplete: Effect.void,
+            open: (request) =>
+              Effect.sync(() => {
+                openedKeys.push(request.options.apiKey);
+                return {
+                  agentId: "host-key-agent",
+                  listMessages: Effect.succeed([]),
+                  send: () => Effect.die("This test only opens a session"),
+                  close: Effect.void,
+                };
+              }),
+          }),
+        );
+        host.CURSOR_API_KEY = "host-key-new";
+        // Labelled by the key the check used, not by what the instance saw when it started.
+        const withKey = yield* instance.snapshot.refresh;
+        expect(withKey.auth).toMatchObject({ type: "api-key", canLogout: false });
+        expect(withKey.setup?.canAuthenticate).toBe(false);
+        expect((yield* Effect.result(instance.auth!.start("owner")))._tag).toBe("Failure");
+        expect((yield* Effect.result(instance.auth!.logout(Effect.void)))._tag).toBe("Failure");
+        expect(authorizations).toContain("Bearer host-key-new");
+        const threadId = ThreadId.make("cursor-host-key-thread");
+        const modelSelection = { instanceId, model: "auto" };
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const runtime = yield* instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("cursor-host-key-session"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        expect(openedKeys).toEqual(["host-key-new"]);
+        delete host.CURSOR_API_KEY;
+        const withoutKey = yield* instance.snapshot.refresh;
+        expect(withoutKey.setup?.canAuthenticate).toBe(true);
+        expect(withoutKey.auth.canLogout).toBe(true);
+        expect((yield* Effect.result(instance.auth!.logout(Effect.void)))._tag).toBe("Success");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "regression #3079: verifies a browser key when an environment key appears during login",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const resume = Promise.withResolvers<void>();
+        const login = vi.spyOn(Cursor.auth, "login").mockImplementation(async (options) => {
+          options?.onLoginUrl?.("https://cursor.com/loginDeepControl?challenge=test-only");
+          Deferred.doneUnsafe(entered, Effect.void);
+          await resume.promise;
+          await options?.store?.save({
+            version: 1,
+            backendUrl: "https://api2.cursor.sh",
+            apiKey: "invalid-browser",
+            createdAtMs: 0,
+            apiKeyExpiresAtMs: 4_000_000_000_000,
+          });
+          return { apiKey: "invalid-browser", apiKeyExpiresAtMs: 4_000_000_000_000 };
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => login.mockRestore()));
+        const authorizations: Array<string | undefined> = [];
+        const client = HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                request.url.endsWith("/v1/me")
+                  ? { apiKeyName: "test", createdAt: "2026-01-01" }
+                  : { items: [] },
+                { status: request.headers.authorization === "Bearer invalid-browser" ? 401 : 200 },
+              ),
+            ),
+          );
+        });
+        const host: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+        const instance = yield* CursorDriver.create({
+          instanceId: ProviderInstanceId.make("cursor-browser-race"),
+          displayName: undefined,
+          enabled: true,
+          environment: [],
+          config: CursorDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+        yield* instance.auth!.start("client");
+        yield* Deferred.await(entered);
+        host.CURSOR_API_KEY = "valid-environment";
+        resume.resolve();
+        const state = yield* instance.auth!.subscribe("client").pipe(
+          Stream.filter((state) => state.phase === "succeeded" || state.phase === "failed"),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(authorizations).toContain("Bearer invalid-browser");
+        expect(state.phase).toBe("failed");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "regression #3079: refuses browser verification when the backend changes during login",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const resume = Promise.withResolvers<void>();
+        const login = vi.spyOn(Cursor.auth, "login").mockImplementation(async (options) => {
+          options?.onLoginUrl?.("https://cursor.com/loginDeepControl?challenge=test-only");
+          Deferred.doneUnsafe(entered, Effect.void);
+          await resume.promise;
+          await options?.store?.save({
+            version: 1,
+            backendUrl: "https://api2.cursor.sh",
+            apiKey: "invalid-browser",
+            createdAtMs: 0,
+            apiKeyExpiresAtMs: 4_000_000_000_000,
+          });
+          return { apiKey: "invalid-browser", apiKeyExpiresAtMs: 4_000_000_000_000 };
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => login.mockRestore()));
+        const authorizations: Array<string | undefined> = [];
+        const verificationUrls: string[] = [];
+        const client = HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          if (request.headers.authorization === "Bearer invalid-browser")
+            verificationUrls.push(request.url);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                request.url.endsWith("/v1/me")
+                  ? { apiKeyName: "test", createdAt: "2026-01-01" }
+                  : { items: [] },
+                { status: 200 },
+              ),
+            ),
+          );
+        });
+        const host: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+        const instance = yield* CursorDriver.create({
+          instanceId: ProviderInstanceId.make("cursor-browser-race"),
+          displayName: undefined,
+          enabled: true,
+          environment: [],
+          config: CursorDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+        yield* instance.auth!.start("client");
+        yield* Deferred.await(entered);
+        host.CURSOR_BACKEND_URL = "https://other.invalid";
+        resume.resolve();
+        const state = yield* instance.auth!.subscribe("client").pipe(
+          Stream.filter((state) => state.phase === "succeeded" || state.phase === "failed"),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(authorizations).not.toContain("Bearer invalid-browser");
+        expect(verificationUrls).toEqual([]);
+        expect(state.phase).toBe("failed");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "persists browser credentials, uses them for chat, and closes the SDK session on logout",
     () =>
@@ -141,7 +527,9 @@ it.layer(layerTest)("CursorDriver", (it) => {
           Stream.runHead,
           Effect.map(Option.getOrThrow),
         );
-        expect(requests).toContainEqual({
+        expect(
+          requests.find((request) => request.authorization === "Bearer instance-browser-key"),
+        ).toEqual({
           url: "https://api.cursor.com/v1/me",
           authorization: "Bearer instance-browser-key",
         });

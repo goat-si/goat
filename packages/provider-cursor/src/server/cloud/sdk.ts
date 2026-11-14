@@ -4,6 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as CursorSdk from "../CursorSdk.ts";
+import { cloudSdkBackendMatches } from "./credentials.ts";
+
+export function guardedStream(run: CloudRun, mismatch: () => Error) {
+  if (!cloudSdkBackendMatches()) throw mismatch();
+  return run.stream();
+}
 
 export type CloudRun = Pick<Run, "id" | "agentId" | "status" | "stream" | "wait" | "createdAt">;
 export type CloudAgent = Pick<SDKAgent, "agentId" | "close"> & {

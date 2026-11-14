@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
+import * as Credentials from "./credentials.ts";
 import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
@@ -277,12 +278,13 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     operation: CursorCloudSdk.CursorCloudSdkError["operation"],
     request: () => Promise<A>,
   ) =>
-    CursorCloudSdk.request(operation, request).pipe(
-      Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+    Effect.suspend(() =>
+      Credentials.cloudSdkBackendMatches()
+        ? CursorCloudSdk.request(operation, request).pipe(
+            Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+          )
+        : Effect.fail(protocol(Credentials.BACKEND_MISMATCH)),
     );
-  const key = requireApiKey.pipe(
-    Effect.mapError(() => protocol("Cursor Cloud sign-in is unavailable.")),
-  );
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId,
@@ -292,6 +294,14 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     openSession: (opened) =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
+        const captured = yield* requireApiKey.pipe(
+          Effect.mapError((error) => protocol(Credentials.credentialFailureDetail(error))),
+          Effect.result,
+        );
+        const key: Effect.Effect<string, ProviderAdapter.ProviderAdapterProtocolError> =
+          captured._tag === "Success"
+            ? Effect.succeed(captured.success)
+            : Effect.fail(captured.failure);
         const now = yield* DateTime.now;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         let active: Active | undefined;
@@ -475,7 +485,9 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             if (agent) {
               const messages: AsyncIterable<SDKMessage> = {
                 [Symbol.asyncIterator]() {
-                  const iterator = ctx.run.stream();
+                  const iterator = CursorCloudSdk.guardedStream(ctx.run, () =>
+                    protocol(Credentials.BACKEND_MISMATCH),
+                  );
                   return {
                     next: () => iterator.next(),
                     // Abort the owned stream before awaiting return with a pending next.

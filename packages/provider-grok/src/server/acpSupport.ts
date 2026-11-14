@@ -135,6 +135,7 @@ function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args: [...grokAcpSpawnArgs(runtimeMode)],
     cwd,
+    extendEnv: false,
     env: {
       ...environment,
       [GROK_OAUTH2_REFERRER_ENV]: GOAT_OAUTH_REFERRER,
