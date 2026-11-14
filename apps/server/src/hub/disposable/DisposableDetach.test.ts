@@ -410,7 +410,7 @@ it.effect(
 );
 
 it.effect(
-  "a refused forced revoke waits for a person and is repeated under its own id, as OpenCodex asks",
+  "a refused forced revoke waits for a person, who forces again: the same id first, which only replays, then a new id, as OpenCodex asks",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -427,7 +427,11 @@ it.effect(
         ocx.tombstoneLimit = false;
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
-        expect(ocx.sent).toEqual([attachId + ".force.1", attachId + ".force.1"]);
+        expect(ocx.sent).toEqual([
+          attachId + ".force.1",
+          attachId + ".force.1",
+          attachId + ".force.2",
+        ]);
         expect(ocx.tombstones.has(linkId)).toBe(true);
       }),
     ),
