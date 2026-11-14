@@ -23,7 +23,9 @@ import { decodeEnroll } from "./enrollModel.ts";
 const stopOf = (attachId: string) =>
   Effect.map(rows, (all) => {
     const row = all.find((one) => one.attach_id === attachId);
-    return row === undefined ? undefined : decodeEnroll(row.enroll_json).detach?.stop;
+    return typeof row?.enroll_json === "string"
+      ? decodeEnroll(row.enroll_json).detach?.stop
+      : undefined;
   });
 /** Runs passes, 30 minutes apart, until the record is final or the budget runs out. */
 const settle = (attachId: string) =>
