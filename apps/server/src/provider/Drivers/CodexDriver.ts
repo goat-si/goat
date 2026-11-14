@@ -5,10 +5,12 @@ import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/http";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import type * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
@@ -42,6 +44,7 @@ import {
   makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
+  type ProviderMaintenanceCapabilities,
 } from "@goat/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -101,6 +104,31 @@ function makeCodexMaintenanceResolver(sharedHomePath: string) {
       }),
     },
   });
+}
+
+// `codex update` installs this channel's release, which can lag npm's latest tag.
+const CODEX_NATIVE_CHANNEL = "https://releases.openai.com/codex/channels/latest";
+const CodexNativeRelease = Schema.Struct({ tag_name: Schema.String });
+
+function withCodexNativeLatestVersion(
+  capabilities: ProviderMaintenanceCapabilities,
+  http: HttpClient.HttpClient,
+): ProviderMaintenanceCapabilities {
+  if (capabilities.update?.lockKey !== `${DRIVER_KIND}-native`) return capabilities;
+  return {
+    ...capabilities,
+    latestVersion: null,
+    latestVersionCacheKey: CODEX_NATIVE_CHANNEL,
+    lookupLatestVersion: http.get(CODEX_NATIVE_CHANNEL).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.flatMap(Schema.decodeUnknownEffect(CodexNativeRelease)),
+      Effect.map((release) => /^rust-v(\d+\.\d+\.\d+)$/.exec(release.tag_name)?.[1] ?? null),
+      Effect.timeoutOption("4 seconds"),
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    ),
+  };
 }
 
 export type CodexDriverEnv =
@@ -197,11 +225,11 @@ export const CodexDriver: ProviderDriver<
     );
     const processEnv = { ...(yield* mergedEnvironment) };
     const environmentHome = processEnv.CODEX_HOME;
-    const homeLayout = yield* resolveCodexHomeLayout(
-      !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
+    const homeConfig =
+      !config.homePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
-        : config,
-    );
+        : config;
+    const homeLayout = yield* resolveCodexHomeLayout(homeConfig);
     // A home the instance sets itself is fixed; otherwise each check and launch uses the host's current CODEX_HOME.
     const homeConfigured =
       config.homePath.trim() !== "" ||
@@ -306,6 +334,8 @@ export const CodexDriver: ProviderDriver<
           ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         },
       ).pipe(
+        // Inside the cache, so a cache hit returns the same capabilities object.
+        Effect.map((capabilities) => withCodexNativeLatestVersion(capabilities, httpClient)),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
@@ -338,7 +368,9 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        // A home the instance sets names the session home; otherwise each new session reads the
+        // host's CODEX_HOME when it opens, through currentEnvironment.
+        config: homeConfigured ? homeConfig : config,
       },
       {
         // A home that moved while the process started is not one GOAT can attribute usage to.
@@ -583,6 +615,20 @@ export const CodexDriver: ProviderDriver<
         ),
       );
 
+    // The home current at creation; a home the host moves to later is seen at the next check.
+    const watchedHome = effectiveConfig.enabled
+      ? (yield* currentEnvironment).CODEX_HOME
+      : undefined;
+    if (watchedHome) {
+      yield* fileSystem.watch(watchedHome).pipe(
+        Stream.filter((event) => pathService.basename(event.path) === "auth.json"),
+        Stream.debounce(Duration.millis(250)),
+        Stream.runForEach(() => snapshot.refresh.pipe(Effect.ignoreCause({ log: true }))),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.void),
+        Effect.tapError((error) => Effect.logWarning("Codex auth watch failed", { error })),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+    }
     return {
       instanceId,
       driverKind: DRIVER_KIND,

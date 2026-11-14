@@ -1,4 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -9,7 +8,6 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpClient } from "effect/http";
-
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";

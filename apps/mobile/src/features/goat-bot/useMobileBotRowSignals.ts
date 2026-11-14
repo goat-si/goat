@@ -4,7 +4,7 @@ import type { BotId, EnvironmentId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 
 import { channelEnvironment } from "../../state/channels";
-import { mobileGoatBotHomeWorkByEnvironment } from "../../state/goatBotHomeWork";
+import { mobileGoatBotHomeEnvironmentIdAtom } from "../../state/goatBotHomeEnvironment";
 
 const NOT_GOVERNED = Atom.make(false).pipe(Atom.withLabel("mobile-goat-bot-governed:none"));
 const NO_UNREAD = Atom.make<number | "pending" | "unavailable">("pending").pipe(
@@ -13,9 +13,11 @@ const NO_UNREAD = Atom.make<number | "pending" | "unavailable">("pending").pipe(
 
 /** Whether Home governs an environment, as one boolean: its readers re-render only when it flips. */
 export const mobileGoatBotGovernedAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make((get) => homeWorkGoverns(get(mobileGoatBotHomeWorkByEnvironment(environmentId)))).pipe(
-    Atom.withLabel(`mobile-goat-bot-governed:${environmentId}`),
-  ),
+  Atom.make(
+    (get) =>
+      get(mobileGoatBotHomeEnvironmentIdAtom) === environmentId &&
+      homeWorkGoverns(get(channelEnvironment.homeCurrentOpenableWorkByEnvironment(environmentId))),
+  ).pipe(Atom.withLabel(`mobile-goat-bot-governed:${environmentId}`)),
 );
 
 export type MobileBotRowSignals = {
