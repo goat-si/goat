@@ -17,8 +17,8 @@ vi.mock("../../state/channels", () => ({
     homeCurrentUnreadAtom: ([id, bot]: [string, string]) => `unread:${id}:${bot}`,
   },
 }));
-vi.mock("../../state/goatBotHomeWork", () => ({
-  mobileGoatBotHomeWorkByEnvironment: (id: string) => `by-env:${id}`,
+vi.mock("../../state/goatBotHomeEnvironment", () => ({
+  mobileGoatBotHomeEnvironmentIdAtom: "home-environment",
 }));
 vi.mock("effect/reactivity", () => ({
   Atom: {
