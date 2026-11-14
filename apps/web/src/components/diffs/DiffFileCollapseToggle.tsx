@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
-import { Button } from "~/components/ui/button";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function DiffFileCollapseToggle({
   filePath,

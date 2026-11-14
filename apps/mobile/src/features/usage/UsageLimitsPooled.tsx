@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { getProviderClient } from "../../lib/providerClients";
 import { EnvironmentId } from "@goat/contracts";
 import {
   collectExternalUsageLinks,
@@ -55,7 +56,7 @@ const VERDICT_CLASS = {
 function rowName(row: LimitBoardRow) {
   if (row.name) return row.name;
   if (row.email) return "••••••@••••••";
-  return DRIVER_LABEL[row.driver] ?? String(row.driver);
+  return DRIVER_LABEL[row.driver] ?? getProviderClient(row.driver)?.label ?? String(row.driver);
 }
 
 function LimitRow({
@@ -228,7 +229,9 @@ function LimitSectionView({
         <View className="flex-row items-center gap-2">
           <ProviderIcon provider={section.driver} size={18} />
           <Text className="text-base font-goat-medium text-foreground">
-            {DRIVER_LABEL[section.driver] ?? section.driver}
+            {DRIVER_LABEL[section.driver] ??
+              getProviderClient(section.driver)?.label ??
+              section.driver}
           </Text>
         </View>
         <Text className={`text-sm ${VERDICT_CLASS[section.verdict.tone]}`}>
@@ -395,6 +398,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   {account.poolName ??
                     account.displayName ??
                     DRIVER_LABEL[account.driver] ??
+                    getProviderClient(account.driver)?.label ??
                     account.driver}
                 </Text>
               </View>

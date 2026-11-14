@@ -1,3 +1,4 @@
+import { GitActionItemIcon, GitQuickActionIcon } from "./GitActionIcons";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -30,8 +31,6 @@ import {
   CloudUploadIcon,
   FileDiffIcon,
   GitBranchPlusIcon,
-  GitCommitIcon,
-  InfoIcon,
   LockIcon,
   GlobeIcon,
 } from "~/components/solar";
@@ -49,9 +48,7 @@ import {
   GIT_ACTION_SUCCESS_VISIBLE_MS,
   hasUsableGitMenuContent,
   type GitActionProgressPresentation,
-  type GitActionIconName,
   type GitActionMenuItem,
-  type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
   resolveDefaultBranchActionDialogCopy,
@@ -219,41 +216,6 @@ function getPublishProviderReadiness(input: {
 const COMMIT_DIALOG_TITLE = "Commit changes";
 const COMMIT_DIALOG_DESCRIPTION =
   "Review and confirm your commit. Leave the message blank to auto-generate one.";
-
-function GitActionItemIcon({
-  icon,
-  SourceControlIcon,
-}: {
-  icon: GitActionIconName;
-  SourceControlIcon: ReturnType<typeof getSourceControlPresentation>["Icon"];
-}) {
-  if (icon === "commit") return <GitCommitIcon />;
-  if (icon === "push") return <CloudUploadIcon />;
-  return <SourceControlIcon />;
-}
-
-function GitQuickActionIcon({
-  quickAction,
-  SourceControlIcon,
-  className = "size-3.5",
-}: {
-  quickAction: GitQuickAction;
-  className?: string;
-  SourceControlIcon: ReturnType<typeof getSourceControlPresentation>["Icon"];
-}) {
-  if (quickAction.kind === "open_publish") return <CloudUploadIcon className={className} />;
-  if (quickAction.kind === "run_pull") return <CloudDownloadIcon className={className} />;
-  if (quickAction.kind === "run_action") {
-    if (quickAction.action === "commit") return <GitCommitIcon className={className} />;
-    if (quickAction.action === "push" || quickAction.action === "commit_push") {
-      return <CloudUploadIcon className={className} />;
-    }
-    return <SourceControlIcon className={className} />;
-  }
-  if (quickAction.label === "Commit") return <GitCommitIcon className={className} />;
-  if (quickAction.label === "Push") return <CloudUploadIcon className={className} />;
-  return <InfoIcon className={className} />;
-}
 
 function GitActionElapsedTime({
   startedAtMs,
@@ -1750,28 +1712,36 @@ export default function GitActionsControl({
               </PopoverPopup>
             </Popover>
           ) : (
-            <ThreadDetailsControl
-              variant={isPanel ? "ghost" : "outline"}
-              size="xs"
-              part="primary"
-              panel={isPanel}
-              disabled={!canWriteSourceControl || isGitActionRunning || quickAction.disabled}
-              onClick={runQuickAction}
-            >
-              <GitQuickActionIcon
-                quickAction={quickAction}
-                SourceControlIcon={SourceControlIcon}
-                {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
-              />
-              <span
-                className={cn(
-                  "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
-                  isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
-                )}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ThreadDetailsControl
+                    data-toolbar-control=""
+                    variant={isPanel ? "ghost" : "outline"}
+                    size="xs"
+                    part="primary"
+                    panel={isPanel}
+                    disabled={!canWriteSourceControl || isGitActionRunning || quickAction.disabled}
+                    onClick={runQuickAction}
+                  />
+                }
               >
-                {quickAction.label}
-              </span>
-            </ThreadDetailsControl>
+                <GitQuickActionIcon
+                  quickAction={quickAction}
+                  SourceControlIcon={SourceControlIcon}
+                  {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
+                />
+                <span
+                  className={cn(
+                    "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                    isPanel && cn("not-sr-only ml-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS),
+                  )}
+                >
+                  {quickAction.label}
+                </span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">{quickAction.label}</TooltipPopup>
+            </Tooltip>
           )}
           {isPanel && gitActionProgress && !sshFetchBack.visible ? (
             // The menu is disabled while an action runs, so its chevron slot
@@ -1796,23 +1766,33 @@ export default function GitActionsControl({
                   }
                 }}
               >
-                <MenuTrigger
-                  render={
-                    <ThreadDetailsControl
-                      aria-label="Git action options"
-                      size={isPanel ? "sm" : "icon-xs"}
-                      variant={isPanel ? "ghost" : "outline"}
-                      part="secondary"
-                      panel={isPanel}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <MenuTrigger
+                        render={
+                          <ThreadDetailsControl
+                            aria-label="Git action options"
+                            data-toolbar-control=""
+                            size={isPanel ? "sm" : "icon-xs"}
+                            variant={isPanel ? "ghost" : "outline"}
+                            part="secondary"
+                            panel={isPanel}
+                          />
+                        }
+                        disabled={
+                          (isGitActionRunning && !sshFetchBack.visible) || !hasGitMenuContent
+                        }
+                      />
+                    }
+                  >
+                    <ChevronDownIcon
+                      aria-hidden="true"
+                      className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
                     />
-                  }
-                  disabled={(isGitActionRunning && !sshFetchBack.visible) || !hasGitMenuContent}
-                >
-                  <ChevronDownIcon
-                    aria-hidden="true"
-                    className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
-                  />
-                </MenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Git action options</TooltipPopup>
+                </Tooltip>
                 <MenuPopup
                   align="end"
                   {...(isPanel ? { anchor: panelAnchorRef } : {})}

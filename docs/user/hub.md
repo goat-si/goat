@@ -217,12 +217,13 @@ check on it and names `ocx link operations resolve --operation-id <id> --yes` to
 run before you force it. A forced revoke that reads unknown goes the other way
 round, as OpenCodex asks: a force repeats it first, and the list names the
 resolve only if it stays unknown after that. If an unfinished removal by another revoke holds the
-link, the list says how to find it and names the
-`ocx link revoke --link-id <id> --force --yes` that finishes it on the hub; then
-detach it again. A revoke OpenCodex left running, or never recorded, goes again
+link, the list says how to find it; it names the
+`ocx link revoke --link-id <id> --force --yes` that finishes it on the hub unless
+another revoke is still open there, which you fix first; then detach it again.
+A revoke OpenCodex left running, or never recorded, goes again
 under its own id when you fix what stopped it and detach again. GOAT marks each
-purge it gives up on for a silent machine as resolved itself, so OpenCodex's
-journal does not fill up. If GOAT's removal of a silent machine's link stops,
+purge it gives up on for a silent machine as resolved itself, and its own
+earlier revoke once a removal is done, so OpenCodex's journal does not fill up. If GOAT's removal of a silent machine's link stops,
 the machine list says why; once that is fixed, detach it.
 **Force detach** removes the link now, without the machine; only a person can
 force, and it is also the way out for a machine that presents another SSH host

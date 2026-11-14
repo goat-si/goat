@@ -1,3 +1,5 @@
+import { DiffFileCollapseToggle } from "./diffs/DiffFileCollapseToggle";
+import { useWordWrap } from "~/hooks/useWordWrap";
 import { DiffFileHeaderSuffix } from "./diffs/DiffFileHeaderSuffix";
 import { GIT_REVIEW_SCOPES, type GitReviewScope } from "@goat/client-runtime/state/review";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -97,7 +99,6 @@ import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
 import { getCachedFileEntry } from "./diffs/cachedFileEntry";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
-import { DiffFileCollapseToggle } from "./diffs/DiffFileCollapseToggle";
 import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 
@@ -128,7 +129,7 @@ export default function DiffPanel({
     wordWrap: settings.wordWrap,
   }));
   const diffLayout = settings.diffLayout;
-  const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+  const [wordWrap, setWordWrapOverride] = useWordWrap(settings.wordWrap);
   const diffIgnoreWhitespace =
     useDiffPanelSessionStore((state) => state.ignoreWhitespace) ?? settings.diffIgnoreWhitespace;
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
@@ -895,7 +896,7 @@ export default function DiffPanel({
                 size="sm"
                 pressed={wordWrap}
                 onPressedChange={(pressed) => {
-                  setWordWrap(Boolean(pressed));
+                  setWordWrapOverride(Boolean(pressed));
                 }}
               />
             }

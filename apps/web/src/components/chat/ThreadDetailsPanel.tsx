@@ -1,3 +1,7 @@
+import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { isScratchProject } from "@goat/client-runtime/state/projects";
+import { useProject, useQuietThreadShell, useServerConfigs } from "../../state/entities";
+import { ThreadDetailsThreadPrRows, threadShellHasPullRequest } from "./ThreadDetailsThreadPrRows";
 import type {
   EditorId,
   EnvironmentId,
@@ -80,7 +84,19 @@ export interface ThreadDetailsPanelProps
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const activeThreadRef = { environmentId: props.environmentId, threadId: props.threadId };
+  const project = useProject(scopeProjectRef(props.environmentId, props.projectId));
+  const config = useServerConfigs().get(props.environmentId);
+  // A No project thread's folder sits inside the shared scratch root, so it must never get git.
+  // Until the config and project load, a No project thread looks like any other folder.
+  const offersGit =
+    props.gitCwd !== null &&
+    config !== undefined &&
+    project !== null &&
+    !isScratchProject(project, config.scratchWorkspaceRoot);
   const thread = useThreadShell(props.draftId ? null : activeThreadRef);
+  const hasPullRequest = threadShellHasPullRequest(
+    useQuietThreadShell(props.draftId ? null : activeThreadRef),
+  );
   const projection = useThreadProjection(props.draftId ? null : activeThreadRef)?.projection;
   const selectedInstanceId = useComposerDraftStore(
     (store) =>
@@ -179,7 +195,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             </div>
           </ThreadDetailsSection>
 
-          {props.gitCwd && showLocalWorkspace ? (
+          {showLocalWorkspace && (offersGit || hasPullRequest) ? (
             <ThreadDetailsSection
               headingId="thread-details-version-control-heading"
               title="Version Control"
@@ -187,10 +203,18 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               separated={density === "full"}
             >
               <div className="flex flex-col">
-                {props.isGitRepo ? (
+                {offersGit && props.isGitRepo ? (
                   <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
                 ) : null}
-                {props.activeProjectName ? (
+                {/* Without a branch selector, linked pull requests still need somewhere to show. */}
+                {!offersGit || !props.isGitRepo ? (
+                  <ThreadDetailsThreadPrRows
+                    threadRef={activeThreadRef}
+                    project={project}
+                    composerTarget={props.draftId ?? activeThreadRef}
+                  />
+                ) : null}
+                {offersGit && props.gitCwd && props.activeProjectName ? (
                   <GitActionsControl
                     displayMode="panel"
                     compact={density !== "full"}

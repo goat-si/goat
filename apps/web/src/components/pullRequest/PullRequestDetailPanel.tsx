@@ -58,7 +58,10 @@ import {
   usePullRequestDefaultMergeMethodResolver,
   writeHandoffToComposer,
 } from "./usePullRequestActions";
-import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
+import {
+  offHeadPullRequestCheckoutToast,
+  reportCheckoutCommandError,
+} from "./pullRequestCheckoutToast";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -166,14 +169,6 @@ const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
 // Defer the diff viewer's worker pool until Code is approached.
 const loadCodeTab = () => import("./PullRequestCodeTab");
 const PullRequestCodeTab = lazy(loadCodeTab);
-
-function reportCheckoutCommandError(error: Error) {
-  toastManager.add({
-    type: "error",
-    title: "Could not copy checkout command",
-    description: error.message,
-  });
-}
 
 function resolvePullRequestReference(
   requestedReference: PullRequestRef,
@@ -1000,6 +995,7 @@ export function PullRequestDetailPanel({
         headBranch: detail.headBranch,
         baseBranch: detail.baseBranch,
         finding,
+        inThisThread: attachTarget !== null,
       }),
     );
   };
@@ -1018,6 +1014,7 @@ export function PullRequestDetailPanel({
         comments: detail.comments,
         checks: checksStale ? [] : detail.checks,
         commentsTruncated: detail.commentsTruncated,
+        inThisThread: attachTarget !== null,
       }),
     );
   };
@@ -1030,6 +1027,7 @@ export function PullRequestDetailPanel({
         url: handoffSummary.url,
         headBranch: handoffSummary.headBranch,
         baseBranch: handoffSummary.baseBranch,
+        inThisThread: attachTarget !== null,
       }),
     });
   };
