@@ -5,18 +5,13 @@ import { bootServiceUnitPaths } from "./bootServiceUnitPaths.ts";
 import { bootServiceProgramOf } from "./systemdValues.ts";
 
 export const bootServiceRuntimeReferences = Effect.fn("cloud.boot_service.runtime_references")(
-  function* (input: { readonly noSystemd: "allow" | "skip" }) {
+  function* () {
     const fs = yield* FileSystem.FileSystem;
     const unitPaths = yield* bootServiceUnitPaths();
     if (unitPaths === undefined) {
       yield* Effect.logWarning(
         "Could not determine the service unit directory; skipping runtime pruning",
       );
-      return undefined;
-    }
-    if (unitPaths === "no-systemd") {
-      if (input.noSystemd === "allow") return [];
-      yield* Effect.logWarning("Systemd is not running here; skipping runtime pruning");
       return undefined;
     }
     const references: string[] = [];

@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as ProcessRunner from "../processRunner.ts";
 import { BOOT_SERVICE_NAMES, LEGACY_BOOT_SERVICE_NAMES } from "./bootServiceNames.ts";
-import { readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
+import { defaultSystemdUnitDirectory, readSystemdUnitDirectory } from "./systemdUnitDirectory.ts";
 
 export const bootServiceUnitPaths = Effect.fn("cloud.boot_service.unit_paths")(function* () {
   const path = yield* Path.Path;
@@ -22,7 +22,15 @@ export const bootServiceUnitPaths = Effect.fn("cloud.boot_service.unit_paths")(f
     Effect.as(true),
     Effect.catch((error) => Effect.succeed(error.reason._tag === "NotFound" ? false : undefined)),
   );
-  if (systemd === false) return "no-systemd" as const;
+  if (systemd === false) {
+    const homeDir = yield* Config.String("HOME").pipe(Config.withDefault(""));
+    if (homeDir === "") return undefined;
+    const xdgConfigHome = yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""));
+    const unitDir = defaultSystemdUnitDirectory(path, homeDir, xdgConfigHome);
+    return [BOOT_SERVICE_NAMES, LEGACY_BOOT_SERVICE_NAMES].map((names) =>
+      path.join(unitDir, names.unitFile),
+    );
+  }
   if (systemd === undefined) return undefined;
   const uid = yield* HostProcess.UserId;
   const runtimeDir = yield* Config.String("XDG_RUNTIME_DIR").pipe(Config.withDefault(""));

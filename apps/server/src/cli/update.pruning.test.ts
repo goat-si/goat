@@ -6,6 +6,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as TestClock from "effect/testing/TestClock";
@@ -19,11 +20,24 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
   it.effect.each([
     { scenario: "unconfirmed manager", lookupFails: true, unit: "goat.service", keep: true },
     {
-      scenario: "systemd absent in a container sharing a host service home",
+      scenario: "systemd absent current unit",
       lookupFails: false,
       unit: "goat.service",
       keep: true,
     },
+    {
+      scenario: "systemd absent legacy unit",
+      lookupFails: false,
+      unit: "t3code.service",
+      keep: true,
+    },
+    {
+      scenario: "systemd absent unreadable unit",
+      lookupFails: false,
+      unit: "unreadable-current",
+      keep: true,
+    },
+    { scenario: "systemd absent no unit", lookupFails: false, unit: "none", keep: false },
     { scenario: "current service", lookupFails: false, unit: "goat.service", keep: true },
     { scenario: "legacy service", lookupFails: false, unit: "t3code.service", keep: true },
     {
@@ -48,7 +62,11 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
       yield* h.makeService(undefined, target);
       const versions = path.join(h.baseDir, "runtime", "goat", "versions");
       const staleDir = path.join(versions, stale);
-      const unitDir = path.join(managerConfig, "systemd", "user");
+      const unitDir = path.join(
+        scenario.startsWith("systemd absent") ? shellConfig : managerConfig,
+        "systemd",
+        "user",
+      );
       yield* fs.makeDirectory(unitDir, { recursive: true });
       if (unit === "goat.service" || unit === "t3code.service") {
         yield* fs.writeFileString(
@@ -64,6 +82,10 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
       const runnerLayer = vi
         .spyOn(ProcessRunner, "layer", "get")
         .mockReturnValue(Layer.succeed(ProcessRunner.ProcessRunner, h.runner));
+      const warnings: unknown[] = [];
+      const logger = Logger.make(({ message, logLevel }) => {
+        if (logLevel === "Warn") warnings.push(...(Array.isArray(message) ? message : [message]));
+      });
       try {
         yield* Command.runWith(updateCommand, { version: "0.1.0" })([
           target,
@@ -71,7 +93,9 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
           h.baseDir,
           "--allow-downgrade",
         ]).pipe(
-          Effect.provide(NetService.layer),
+          Effect.provide(
+            Layer.mergeAll(Logger.layer([logger], { mergeWithExisting: false }), NetService.layer),
+          ),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
             stat: (file) =>
@@ -117,6 +141,11 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
           ),
         );
         expect(yield* fs.exists(staleDir)).toBe(keep);
+        if (scenario === "systemd absent unreadable unit") {
+          expect(warnings).toContain(
+            "Could not inspect the service unit; skipping runtime pruning",
+          );
+        }
       } finally {
         runnerLayer.mockRestore();
       }
