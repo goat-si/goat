@@ -2,8 +2,10 @@ import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@goat/contr
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { isMacPlatform } from "~/lib/utils";
 
 const state = vi.hoisted(() => ({
   file: null as ProjectReadFileResult | null,
@@ -140,6 +142,16 @@ function filePreview(relativePath: string, workspaceMutationId: string | null = 
   );
 }
 
+function markdownPreview(truncated: boolean, contents = "- [ ] Keep the rest of this file\n") {
+  state.file = {
+    relativePath: "tasks.md",
+    contents,
+    byteLength: truncated ? 1_200_000 : contents.length,
+    truncated,
+  };
+  return filePreview("tasks.md");
+}
+
 function documentPreview(workspaceMutationId: string, fileRevision: string) {
   state.file = null;
   state.assetUrl = {
@@ -207,5 +219,31 @@ describe("workspace document previews", () => {
     await screen.rerender(documentPreview("mutation-2", "revision-2"));
 
     await expect.element(preview).toHaveTextContent("/assets/report.docx?mint=2");
+  });
+});
+
+describe("rendered Markdown select all", () => {
+  it("selects only the rendered file, including after a task toggle", async () => {
+    using _settings = setup();
+    await using screen = await render(
+      <>
+        <p>Transcript text from the chat thread.</p>
+        {markdownPreview(false, "- [ ] Task item\n\nRendered file body.\n")}
+      </>,
+    );
+    const expectFileOnlySelection = async () => {
+      await userEvent.keyboard(
+        isMacPlatform(navigator.platform) ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+      );
+      const selection = window.getSelection()?.toString() ?? "";
+      expect(selection).toContain("Rendered file body.");
+      expect(selection).not.toContain("Transcript text from the chat thread.");
+    };
+
+    await userEvent.click(screen.getByText("Rendered file body."));
+    await expectFileOnlySelection();
+    // A toggled checkbox keeps focus on an input inside the preview.
+    await userEvent.click(screen.getByRole("checkbox"));
+    await expectFileOnlySelection();
   });
 });

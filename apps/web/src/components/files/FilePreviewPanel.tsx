@@ -89,6 +89,7 @@ import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { WorkspaceDocumentPreview } from "./WorkspaceDocumentPreview";
+import { selectRenderedContentOnSelectAll } from "./selectRenderedContent";
 import { AudioPreview } from "./AudioPreview";
 import { isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
@@ -953,7 +954,7 @@ function RenderedMarkdownSurface({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {!readOnly ? <FileSaveStatus coordinator={saveCoordinator} /> : null}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" onKeyDown={selectRenderedContentOnSelectAll}>
         <FileMarkdownPreview
           text={contents}
           cwd={cwd}
