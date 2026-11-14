@@ -156,6 +156,26 @@ describe("Cursor Cloud credential precedence", () => {
       expect(key).toBe("instance-fixture");
     }),
   );
+  it.effect("rejects the selected sibling's non-production backend", () =>
+    Effect.gen(function* () {
+      const settings = yield* decodeSettings({
+        providerInstances: {
+          [siblingId]: {
+            driver: "cursor",
+            enabled: true,
+            config: {},
+            environment: [{ name: "CURSOR_BACKEND_URL", value: "https://example.invalid" }],
+          },
+        },
+      });
+      const h = credentialFixture(settings);
+      const failure = yield* Effect.gen(function* () {
+        const credentials = yield* makeCursorCloudCredentials(instanceId, siblingId);
+        return yield* credentials.requireApiKey;
+      }).pipe(Effect.provideService(ProviderHost.ProviderHost, h.host), Effect.result);
+      expect(failure._tag).toBe("Failure");
+    }),
+  );
   it.effect("fails when the selected Cursor provider is signed out", () =>
     Effect.gen(function* () {
       const settings = yield* decodeSettings({

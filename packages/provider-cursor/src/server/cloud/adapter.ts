@@ -280,9 +280,6 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     CursorCloudSdk.request(operation, request).pipe(
       Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
     );
-  const key = requireApiKey.pipe(
-    Effect.mapError(() => protocol("Cursor Cloud sign-in is unavailable.")),
-  );
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId,
@@ -292,6 +289,14 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     openSession: (opened) =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
+        const captured = yield* requireApiKey.pipe(
+          Effect.mapError(() => protocol("Cursor Cloud sign-in is unavailable.")),
+          Effect.result,
+        );
+        const key: Effect.Effect<string, ProviderAdapter.ProviderAdapterProtocolError> =
+          captured._tag === "Success"
+            ? Effect.succeed(captured.success)
+            : Effect.fail(captured.failure);
         const now = yield* DateTime.now;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         let active: Active | undefined;
