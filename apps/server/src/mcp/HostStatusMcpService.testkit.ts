@@ -5,6 +5,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  type HubNode,
   GoatHostStatusResult,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -39,6 +40,7 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import * as HubNodes from "../hubNodes/HubNodes.ts";
 
 export const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 export const threadId = ThreadId.make("caller-thread");
@@ -119,6 +121,8 @@ export const run = <A, E>(
     readonly opencodexRead?: Effect.Effect<OpenCodexInventorySnapshot>;
     /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
     readonly optIns?: Readonly<Record<string, boolean>>;
+    /** The hub's nodes; host.status reports a host's class from the node its alias routes to. */
+    readonly nodes?: ReadonlyArray<HubNode>;
     readonly hostCall?: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -137,6 +141,7 @@ export const run = <A, E>(
   let connectedReads = 0;
   let repositoryReads = 0;
   let parityReads = 0;
+  let snapshotReads = 0;
   const inventory = {
     installed: false,
     binaries: [],
@@ -149,6 +154,18 @@ export const run = <A, E>(
   const interrupted = { value: false };
   const makeLayer = (probes: Probes) =>
     HostStatusMcpService.layer.pipe(
+      Layer.provide(
+        Layer.mock(HubNodes.HubNodes)({
+          snapshot: Effect.sync(() => {
+            snapshotReads += 1;
+            return {
+              hubEnvironmentId: EnvironmentId.make("hub"),
+              nodes: options.nodes ?? [],
+              notices: [],
+            };
+          }),
+        }),
+      ),
       Layer.provide(ServerSettings.layerTest(options.settings)),
       Layer.provide(
         Layer.mock(HubParity.HubParity)({
@@ -284,6 +301,7 @@ export const run = <A, E>(
       connectedReads: () => connectedReads,
       repositoryReads,
       parityReads,
+      snapshotReads: () => snapshotReads,
       interrupted: interrupted.value,
     };
   });

@@ -2194,7 +2194,7 @@ export const layerWithOptions = (
                 markProviderThreadLoaded({
                   providerSessionId,
                   threadId: input.threadId,
-                  providerThreadKey: providerThreadLoadKey({
+                  providerThreadKey: providerThreadLoadKey(runtime, {
                     providerThread,
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
@@ -2207,7 +2207,7 @@ export const layerWithOptions = (
             if (threadId === null || threadId === undefined) {
               return runtime.resumeThread(input);
             }
-            const providerThreadKey = providerThreadLoadKey({
+            const providerThreadKey = providerThreadLoadKey(runtime, {
               providerThread: input.providerThread,
               ...(input.modelSelection === undefined
                 ? {}
@@ -2239,7 +2239,7 @@ export const layerWithOptions = (
                 markProviderThreadLoaded({
                   providerSessionId,
                   threadId,
-                  providerThreadKey: providerThreadLoadKey({
+                  providerThreadKey: providerThreadLoadKey(runtime, {
                     providerThread,
                     ...(input.modelSelection === undefined
                       ? {}
@@ -2266,7 +2266,7 @@ export const layerWithOptions = (
                 markProviderThreadLoaded({
                   providerSessionId,
                   threadId: input.targetThreadId,
-                  providerThreadKey: providerThreadLoadKey({
+                  providerThreadKey: providerThreadLoadKey(runtime, {
                     providerThread,
                     ...(input.modelSelection === undefined
                       ? {}

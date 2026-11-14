@@ -1,6 +1,14 @@
 import type { RunId } from "@goat/contracts";
-import type { ThreadFeedEntry } from "./threadActivity";
-let cachedThinkingRow: Extract<ThreadFeedEntry, { readonly type: "thinking" }> | null = null;
+
+export type ThinkingRow = {
+  readonly type: "thinking";
+  readonly id: string;
+  readonly createdAt: string;
+  readonly runId: RunId | null;
+  readonly providerStartingLabel?: string;
+};
+
+let cachedThinkingRow: ThinkingRow | null = null;
 export const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
 export function thinkingRow(

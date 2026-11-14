@@ -418,7 +418,10 @@ it.effect.each([
       assert.equal(snapshot.status, "error");
       assert.equal(snapshot.auth.status, "unauthenticated");
       assert.deepStrictEqual(snapshot.models, []);
-      assert.include(
+      assert.include(constraints, snapshot.message);
+      assert.include(snapshot.message ?? "", fixture.input.settings.homePath);
+      assert.isTrue(constraints.some((constraint) => constraint.includes("Run `codex login`")));
+      assert.notInclude(
         constraints,
         "Codex CLI is not authenticated. Run `codex login` and try again.",
       );
