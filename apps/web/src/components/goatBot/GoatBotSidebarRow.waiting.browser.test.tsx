@@ -57,6 +57,7 @@ vi.mock("@effect/atom-react", async (original) => {
           byBot: [{ eligible: state.h2 }, { eligible: state.governed }],
           links: [],
         };
+      if (atom === "main-unread") return 0;
       if (atom === "main-work")
         return { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
       if (atom === "configs")
@@ -88,6 +89,7 @@ vi.mock("~/state/channels", () => ({
   channelEnvironment: {
     homeCurrentOpenableWorkByEnvironment: () => "home-work",
     homeCurrentOpenableWorkAtom: () => "main-work",
+    homeCurrentUnreadAtom: () => "main-unread",
   },
 }));
 vi.mock("~/state/environments", async (original) => ({

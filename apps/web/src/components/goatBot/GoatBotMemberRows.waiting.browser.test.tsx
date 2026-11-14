@@ -56,6 +56,7 @@ vi.mock("@effect/atom-react", async (original) => ({
         byBot: [{ eligible: server.connected }, { eligible: server.memberEligible }],
         links: [],
       };
+    if (atom === "unread-count") return 0;
     if (atom === "current-work")
       return { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } };
     return true;
@@ -67,6 +68,7 @@ vi.mock("~/state/channels", () => {
     channelEnvironment: {
       botStatus: () => "status",
       homeCurrentOpenableWorkAtom: () => "current-work",
+      homeCurrentUnreadAtom: () => "unread-count",
       homeCurrentOpenableWorkByEnvironment: () => "home-work",
       setBotHidden: command("hide"),
       deleteBot: command("delete"),

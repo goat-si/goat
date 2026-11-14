@@ -29,6 +29,7 @@ const bots = vi.hoisted(() => ({
 const channels = vi.hoisted(() => ({
   homeCurrentOpenableWorkByEnvironment: () => "home-work",
   homeCurrentOpenableWorkAtom: () => "current-work",
+  homeCurrentUnreadAtom: () => "unread-count",
   updateTaskView: { permissionAtom: () => null },
   createBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -106,9 +107,11 @@ vi.mock("@effect/atom-react", async (original) => ({
   useAtomValue: (atom: unknown) =>
     atom === "home-work"
       ? { rosterKnown: bots.rosterKnown, byBot: [{ eligible: bots.eligible }] }
-      : atom === "current-work"
-        ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
-        : true,
+      : atom === "unread-count"
+        ? 0
+        : atom === "current-work"
+          ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
+          : true,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>

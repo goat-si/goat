@@ -1,53 +1,42 @@
 import { useAtomValue } from "@effect/atom-react";
-import { BotId, type EnvironmentId } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
+import type { BotId, EnvironmentId } from "@goat/contracts";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironment } from "~/state/environments";
 import { Badge } from "../ui/badge";
 
-const NO_WORK = Atom.make(null);
-
-export function GoatBotRowSignals({
-  environmentId,
-  botId,
-  governed,
-  waiting,
-  waitingState,
-}: {
+type Props = {
   readonly environmentId: EnvironmentId | null;
   readonly botId: BotId;
   /** Whether Home governs this environment; otherwise the row is the older one, with no signals. */
   readonly governed: boolean;
   readonly waiting: number | undefined;
   readonly waitingState: "ready" | "pending" | "unavailable";
-}) {
+};
+
+/** A row Home does not govern subscribes to nothing of its bot's work. */
+export function GoatBotRowSignals(props: Props) {
+  return props.governed && props.environmentId !== null ? (
+    <GovernedRowSignals {...props} environmentId={props.environmentId} />
+  ) : null;
+}
+
+function GovernedRowSignals({
+  environmentId,
+  botId,
+  waiting,
+  waitingState,
+}: Props & { readonly environmentId: EnvironmentId }) {
   const environment = useEnvironment(environmentId);
-  const work = useAtomValue(
-    environmentId === null
-      ? NO_WORK
-      : channelEnvironment.homeCurrentOpenableWorkAtom([environmentId, botId]),
-  );
-  const available =
-    environment?.connection.phase === "connected" &&
-    work?.eligible === true &&
-    work.list === "ready";
-  const unread = available
-    ? [...work.work.running, ...work.work.waiting, ...work.work.finished].filter(
-        (item) => item.row.unread,
-      ).length
-    : undefined;
+  const signal = useAtomValue(channelEnvironment.homeCurrentUnreadAtom([environmentId, botId]));
+  const unread = typeof signal === "number" ? signal : undefined;
   const missing = [
-    unread === undefined &&
-    (environment?.connection.phase !== "connected" || !work?.eligible || work.list === "failed")
-      ? "Unread"
-      : null,
+    signal === "unavailable" ? "Unread" : null,
     waiting === undefined &&
     (environment?.connection.phase !== "connected" || waitingState === "unavailable")
       ? "waiting"
       : null,
   ].filter(Boolean);
   const label = `${unread} unread task${unread === 1 ? "" : "s"}; recent work only; older work may be missing`;
-  if (!governed) return null;
   return (
     <>
       {unread !== undefined && unread > 0 ? (

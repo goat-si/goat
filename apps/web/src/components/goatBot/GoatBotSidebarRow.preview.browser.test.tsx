@@ -101,13 +101,23 @@ vi.mock("~/state/environments", async (original) => ({
 }));
 vi.mock("~/state/channels", async (original) => ({
   ...(await original<typeof import("~/state/channels")>()),
-  channelEnvironment: { homeCurrentOpenableWorkAtom: () => "main-work" },
+  channelEnvironment: {
+    homeCurrentOpenableWorkAtom: () => "main-work",
+    homeCurrentUnreadAtom: () => "main-unread",
+  },
 }));
 vi.mock("@effect/atom-react", async (original) => {
   const actual = await original<typeof import("@effect/atom-react")>();
   return {
     ...actual,
     useAtomValue: (atom: unknown) => {
+      if (atom === "main-unread") {
+        useTick();
+        const { eligible, list, work } = state.work;
+        if (!eligible || list === "failed") return "unavailable";
+        if (list === "pending") return "pending";
+        return work.running.filter((task) => task.row.unread).length;
+      }
       if (atom === "main-work") {
         useTick();
         return state.work;

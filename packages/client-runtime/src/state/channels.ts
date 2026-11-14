@@ -145,24 +145,41 @@ export function createChannelEnvironmentAtoms<R, E>(
         config.environment.capabilities.goatBotTaskThreadsPaged === true &&
         config.environment.capabilities.goatBotTaskLookupSearch === true &&
         get(listPermission.permissionAtom(environmentId, input));
-      const result = get(listBotThreads({ environmentId, input }));
+      // An ineligible bot reads no list: an older server's sidebar and Threads make no new reads.
+      const result = eligible ? get(listBotThreads({ environmentId, input })) : null;
       const filtered = eligible ? get(retainedFor(environmentId, input)) : null;
       return selectHomeCurrentOpenableWork({
         sourceEnvironmentId: environmentId,
         botId,
         eligible,
-        list: AsyncResult.isSuccess(result)
-          ? "ready"
-          : result._tag === "Failure"
-            ? "failed"
-            : "pending",
-        current: AsyncResult.isSuccess(result) ? (filtered ?? result.value) : null,
+        list:
+          result === null
+            ? "pending"
+            : AsyncResult.isSuccess(result)
+              ? "ready"
+              : result._tag === "Failure"
+                ? "failed"
+                : "pending",
+        current:
+          result !== null && AsyncResult.isSuccess(result) ? (filtered ?? result.value) : null,
         isOpenable: (destination) => get(remoteWorkOpenable(destination)),
       });
     });
   });
   const homeCurrentOpenableWorkAtom = (key: readonly [EnvironmentId, BotId]) =>
     currentOpenableFamily(JSON.stringify(key));
+  // A bot row's unread signal, derived once per work value so a row re-renders only when it moves.
+  const currentUnreadFamily = Atom.family((key: string) =>
+    Atom.make((get): number | "pending" | "unavailable" => {
+      const { eligible, list, work } = get(currentOpenableFamily(key));
+      if (!eligible || list === "failed") return "unavailable";
+      if (list === "pending") return "pending";
+      return [...work.running, ...work.waiting, ...work.finished].filter((task) => task.row.unread)
+        .length;
+    }).pipe(Atom.withLabel(`environment-data:channel:home-current-unread:${key}`)),
+  );
+  const homeCurrentUnreadAtom = (key: readonly [EnvironmentId, BotId]) =>
+    currentUnreadFamily(JSON.stringify(key));
   const retained = Atom.family((key: string) => {
     const [environmentId, input] = JSON.parse(key) as [EnvironmentId, ChannelListBotThreadsInput];
     const pendingSince = new Map<string, number>();
@@ -318,6 +335,7 @@ export function createChannelEnvironmentAtoms<R, E>(
     listBots,
     listedBotWork,
     homeCurrentOpenableWorkAtom,
+    homeCurrentUnreadAtom,
     homeCurrentOpenableWorkByEnvironment,
     remoteWorkOpenable,
     /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
