@@ -254,3 +254,38 @@ it.effect.each(["darwin", "linux"] as const)(
     );
   },
 );
+
+it.effect("rescans tools using PATH refreshed from the login shell", () => {
+  const env: NodeJS.ProcessEnv = { SHELL: "/bin/sh", PATH: "/usr/bin" };
+  const runProcess = (input: Parameters<typeof run>[0]) =>
+    Effect.suspend(() => {
+      if (input.operation === "source-control.discovery.refreshPath")
+        return Effect.succeed(
+          TestSourceControlHost.processOutput(
+            "__GOAT_ENV_PATH_START__\n/new/bin\n__GOAT_ENV_PATH_END__\n",
+          ),
+        );
+      if (input.command === "jj" && !env.PATH?.includes("/new/bin"))
+        return Effect.fail(
+          new VcsProcessSpawnError({
+            operation: input.operation,
+            command: input.command,
+            cwd: input.cwd,
+            cause: new Error("not found"),
+          }),
+        );
+      return run(input);
+    });
+  return Effect.gen(function* () {
+    const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+    const result = yield* discovery.discover;
+    assert.strictEqual(
+      result.versionControlSystems.find((item) => item.kind === "jj")?.status,
+      "available",
+    );
+  }).pipe(
+    Effect.provide(SourceControlDiscovery.layer.pipe(Layer.provide(layerDiscovery(runProcess)))),
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Environment, env),
+  );
+});

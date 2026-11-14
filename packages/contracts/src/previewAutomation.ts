@@ -72,11 +72,14 @@ export const ServerBrowserReadiness = Schema.Struct({
 });
 export type ServerBrowserReadiness = typeof ServerBrowserReadiness.Type;
 
+const VISIBLE_DESCRIPTION =
+  "True while a client shows this tab: a streamed live view, or the desktop app's own browser panel.";
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   /** On the server browser's status without a tab; desktop hosts and older servers omit it. */
   browser: ForwardCompatibleOptional(ServerBrowserReadiness),
-  visible: Schema.Boolean,
+  visible: Schema.Boolean.annotate({ description: VISIBLE_DESCRIPTION }),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
@@ -121,7 +124,7 @@ export const PreviewAutomationStatus = Schema.Struct({
         openerTabId: Schema.optional(PreviewTabId),
         owner: Schema.optional(PreviewAutomationTabOwner),
         ownedByCaller: Schema.optional(Schema.Boolean),
-        visible: Schema.optional(Schema.Boolean),
+        visible: Schema.optional(Schema.Boolean.annotate({ description: VISIBLE_DESCRIPTION })),
         profileId: Schema.optional(BrowserProfileId),
         session: Schema.optional(Session.PreviewTabSession),
       }),

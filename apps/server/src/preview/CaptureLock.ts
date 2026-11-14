@@ -95,6 +95,19 @@ export const withCaptureLock = <A>(
   operation: () => Promise<A>,
   deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<A> => queueCaptureBy(deadlineMs)(tab, operation).answer;
+
+/** Like withCaptureLock, but the next capture also waits for each capture handed to `hold`. */
+export const withCaptureLockHeld = <A>(
+  tab: CaptureLockHolder,
+  operation: (hold: (capture: Promise<unknown>) => void) => Promise<A>,
+): Promise<A> => {
+  const held: Array<Promise<unknown>> = [];
+  const { run } = queueCaptureBy()(tab, () => operation((capture) => void held.push(capture)));
+  tab.captureLock = run
+    .then(constVoid, constVoid)
+    .then(() => Promise.allSettled(held).then(constVoid));
+  return run;
+};
 /**
  * Runs one agent call against its deadline. Calls queue per tab, so one still waiting then is
  * answered here, before the broker gives up on the whole host; half a second lets the call's own
