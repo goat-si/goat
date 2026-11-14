@@ -289,7 +289,7 @@ const WAITING: Record<string, string> = {
   key_dir_unreadable:
     "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --base-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
   machine_key_unusable:
-    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, or its folder is a symlink.",
+    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, its folder is a symlink, or it is not the plain ed25519 key file GOAT made.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:
