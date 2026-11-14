@@ -48,13 +48,6 @@ const STOPS: Record<string, Stop> = {
       ".",
     next: CHECK_NEXT,
   },
-  revoke_child_disconnect_pending: {
-    text: () =>
-      "the Child has an unfinished disconnect not tied to this link. A person checks its planted ocx-child's connect status: only with no connection, they finish it there with disconnect and detach again; else they force the detach" +
-      WHERE +
-      ".",
-    next: CHECK_NEXT,
-  },
   revoke_answered: {
     text: (operationId) =>
       "the machine answers, yet OpenCodex could not tell whether the purge removed its lightweight Child. A person checks the machine, runs " +

@@ -73,25 +73,6 @@ it.effect("a reissue whose request id embeds a detach's does not answer that det
 );
 
 it.effect(
-  "a Child with an unfinished disconnect stops the purge for a person with its own text, and nothing is resolved",
-  () =>
-    world((pen, home, _grant, host) =>
-      Effect.gen(function* () {
-        const ocx = fakeDetachHome(host);
-        const { attachId } = yield* linked(pen, home, host, 1);
-        ocx.childRefusal = "child_disconnect_pending";
-        yield* detach(THREAD, attachId, "d-1");
-        yield* detachPass;
-        yield* TestClock.adjust(2 * HOUR);
-        yield* detachPass;
-        expect(ocx.sent).toEqual([attachId + ".purge.1"]);
-        expect(ocx.resolved).toEqual([]);
-        expect((yield* listed(attachId))?.message).toContain("unfinished disconnect");
-      }),
-    ),
-);
-
-it.effect(
   "a machine that answers while its purge stays unknown stops for a person, and a new purge waits until the entry is resolved",
   () =>
     world((pen, home, _grant, host) =>

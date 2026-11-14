@@ -52,7 +52,6 @@ const OWED_STOP: Record<string, string> = {
   unknown: "revoke_unsettled",
   residual: "revoke_unsettled",
   answered: "revoke_answered",
-  disconnect_pending: "revoke_child_disconnect_pending",
 };
 
 /** What one pass reads once and every record shares. */
@@ -423,13 +422,6 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             enroll,
             { ...admitted, outcome: outcome.state },
             "revoke_unsettled",
-          );
-        if (sent?.refusal?.hint === "child_disconnect_pending")
-          return yield* halt(
-            row,
-            enroll,
-            { ...admitted, outcome: "disconnect_pending" },
-            "revoke_child_disconnect_pending",
           );
         // The CLI prints no hint for a Child that answered but kept its binary: GOAT's own
         // handshake tells a machine that answers from a silent one.

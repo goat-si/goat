@@ -22,7 +22,6 @@ const STOPS = [
   undefined,
   "revoke_child_residual",
   "revoke_child_link_mismatch",
-  "revoke_child_disconnect_pending",
   "revoke_answered",
   "revoke_expect_link_unsupported",
   "revoke_child_missing",
