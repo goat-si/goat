@@ -14,7 +14,7 @@ export { sdkBackendMatches } from "../sdkBackend.ts";
 export { cloudSdkBackendMatches } from "../sdkBackend.ts";
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
 export const BACKEND_MISMATCH =
-  "Cursor Cloud cannot use this key: set the server's CURSOR_BACKEND_URL to https://api.cursor.com or unset it, then restart the server.";
+  "Cursor Cloud supports production backends only: unset CURSOR_BACKEND_URL on the server and in the selected Cursor provider (or set the provider value to https://api2.cursor.sh), then restart the server.";
 const Credentials = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.Literal(1),
@@ -97,7 +97,7 @@ export const makeCursorCloudCredentials = Effect.fn("makeCursorCloudCredentials"
       return yield* new ProviderSetupError({
         instanceId,
         operation: "credentials",
-        detail: "Cursor Cloud currently supports the production Cursor backend only.",
+        detail: BACKEND_MISMATCH,
       });
     }
     const configuredKey = environment.CURSOR_API_KEY;

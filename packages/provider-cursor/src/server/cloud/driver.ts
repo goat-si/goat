@@ -147,7 +147,10 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
                 ? snapshotValue({
                     status: "error",
                     auth: "unauthenticated",
-                    message: "Sign in to Cursor to use Cursor Cloud.",
+                    message:
+                      cause.detail === BACKEND_MISMATCH
+                        ? BACKEND_MISMATCH
+                        : "Sign in to Cursor to use Cursor Cloud.",
                   })
                 : snapshotValue({
                     status: "error",

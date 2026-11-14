@@ -1,13 +1,14 @@
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
 let initializedBackend: string | undefined;
 
-export const normalizeSdkBackend = (backend: string | undefined) =>
+const normalizeSdkBackend = (backend: string | undefined) =>
   (backend || PRODUCTION_BACKEND).replace(/\/+$/, "");
 
 export const currentSdkBackend = () => normalizeSdkBackend(process.env.CURSOR_BACKEND_URL);
 export const currentCloudSdkBackend = () =>
   process.env.CURSOR_BACKEND_URL ?? "https://api.cursor.com";
 export const cloudSdkBackendMatches = () =>
+  process.env.CURSOR_BACKEND_URL === undefined &&
   currentCloudSdkBackend() === "https://api.cursor.com" &&
   (initializedBackend === undefined || initializedBackend === PRODUCTION_BACKEND);
 export const bindSdkBackend = (backend: string) => {

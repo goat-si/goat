@@ -50,7 +50,7 @@ it.effect(
       const result = yield* h.runtime.startTurn(h.input).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       expect(h.create).not.toHaveBeenCalled();
-      process.env.CURSOR_BACKEND_URL = "https://api.cursor.com";
+      delete process.env.CURSOR_BACKEND_URL;
       const matching = yield* makeHarness();
       yield* matching.runtime.startTurn(matching.input);
       yield* Deferred.await(matching.streamStarted);
