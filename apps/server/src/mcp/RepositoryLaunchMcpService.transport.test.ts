@@ -197,7 +197,7 @@ it.effect(
         dispatch,
       );
       const layer = Launch.layer.pipe(
-        Layer.provideMerge(HostStatus.layer),
+        Layer.provideMerge(HostStatus.layerWithoutDependencies),
         Layer.provide(HostThreads.layer.pipe(Layer.provide(layerNoFleetSync))),
         Layer.provide(dependencies),
         Layer.provide(NodeServices.layer),
