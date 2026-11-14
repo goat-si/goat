@@ -137,16 +137,22 @@ const STOPS: Record<string, Stop> = {
           : "A person checks the machine, then forces the detach" + WHERE + ".",
   },
   link_retirement_owned: {
-    text: (_operationId, _outcome, detach, linkId) =>
-      "an unfinished removal holds its link (link_retirement_owned)" +
-      (detach.owner === undefined
-        ? ""
-        : " and GOAT's repeat of its earlier revoke did not end it") +
-      ". " +
-      ownerWayOut(linkId) +
-      ", then detaches again" +
-      WHERE +
-      ".",
+    text: (_operationId, outcome, detach, linkId) =>
+      outcome === "owner_open" && detach.owner !== undefined
+        ? "GOAT's earlier revoke " +
+          detach.owner +
+          " of its link is still open in OpenCodex, which refuses every other revoke meanwhile. A person fixes what stopped it on this hub (for example the journal's disk), then detaches again" +
+          WHERE +
+          ": GOAT repeats it."
+        : "an unfinished removal holds its link (link_retirement_owned)" +
+          (detach.owner === undefined
+            ? ""
+            : " and GOAT's repeat of its earlier revoke did not end it") +
+          ". " +
+          ownerWayOut(linkId) +
+          ", then detaches again" +
+          WHERE +
+          ".",
     // The refused id was never recorded, so it names nothing a person can look up.
     bare: true,
     next:

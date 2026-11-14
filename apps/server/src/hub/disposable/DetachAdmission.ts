@@ -33,7 +33,14 @@ const NOT_PROVISIONER =
 // A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
 const RELEASABLE = new Set(["unknown"]);
 /** Outcomes of a stopped retirement force that OpenCodex may still hold: open, unknown, or unread. */
-const MAY_OWE = new Set(["open", "unsettled", "not_found", "unreadable", "retirement_owned"]);
+const MAY_OWE = new Set([
+  "open",
+  "unsettled",
+  "not_found",
+  "unreadable",
+  "retirement_owned",
+  "owner_open",
+]);
 // Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const DETACHABLE = new Set([
