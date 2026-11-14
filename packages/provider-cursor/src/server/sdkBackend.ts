@@ -7,7 +7,9 @@ export const normalizeSdkBackend = (backend: string | undefined) =>
 export const currentSdkBackend = () => normalizeSdkBackend(process.env.CURSOR_BACKEND_URL);
 export const currentCloudSdkBackend = () =>
   process.env.CURSOR_BACKEND_URL ?? "https://api.cursor.com";
-export const cloudSdkBackendMatches = () => currentCloudSdkBackend() === "https://api.cursor.com";
+export const cloudSdkBackendMatches = () =>
+  currentCloudSdkBackend() === "https://api.cursor.com" &&
+  (initializedBackend === undefined || initializedBackend === PRODUCTION_BACKEND);
 export const bindSdkBackend = (backend: string) => {
   initializedBackend ??= backend;
 };
