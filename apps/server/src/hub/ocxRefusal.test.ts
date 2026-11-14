@@ -11,9 +11,9 @@ it("reads the code, hint and outcome from ocx's own revoke and recover refusal l
   // An unreachable machine: the code alone.
   expect(
     refusalOf(
-      "Error: Link revoke did not complete (operation a1.revoke.2: failed_clean) (code remote_disconnect_failed)",
+      "Error: Link revoke did not complete (operation a1.purge.2: unknown) (code remote_disconnect_failed)",
     ),
-  ).toEqual({ code: "remote_disconnect_failed", outcome: "failed_clean" });
+  ).toEqual({ code: "remote_disconnect_failed", outcome: "unknown" });
   expect(
     refusalOf(
       "Error: Link lnk_0123456789abcdef is not on this Home; no revoke was journalled (code link_not_found).",

@@ -114,6 +114,8 @@ it.effect(
         // so the 49th, 24 hours after the first, forces.
         expect(ocx.sent.filter((id) => id.includes(".purge."))).toHaveLength(49);
         expect(ocx.sent.at(-1)).toBe(attachId + ".force.50");
+        // Each purge it gave up on is resolved, so the Home keeps no trail of unknown entries.
+        expect(ocx.resolved).toHaveLength(49);
         expect(ocx.tombstones.has(linkId)).toBe(true);
         expect((yield* listed(attachId))?.message).toContain(
           "ocx link recover --forget --link-id " + linkId,
@@ -160,12 +162,11 @@ it.effect("a lost answer is read back and the same revoke id is sent again, neve
     Effect.gen(function* () {
       const ocx = fakeDetachHome(host);
       const { attachId } = yield* linked(pen, home, host, 1);
-      ocx.machineAnswers = false;
       yield* detach(THREAD, attachId, "d-1");
       ocx.loseRead = 1;
       yield* detachPass;
-      ocx.machineAnswers = true;
       yield* detachPass;
+      // The repeat replays the purge that committed while its answer was lost.
       expect(ocx.sent).toEqual([attachId + ".purge.1", attachId + ".purge.1"]);
       expect((yield* listed(attachId))?.state).toBe("purged");
     }),
@@ -538,4 +539,65 @@ it.effect("a link removed outside GOAT ends the detach with a text that says so"
       expect(ocx.tombstones.size).toBe(0);
     }),
   ),
+);
+
+it.effect(
+  "a forced revoke refused before the journal three times waits for a person, whose force reads its id and goes on",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, linkId } = yield* linked(pen, home, host, 1);
+        ocx.busy = 3;
+        yield* detach(PERSON, attachId, "d-1", true);
+        for (let pass = 0; pass < 5; pass += 1) yield* detachPass;
+        expect(ocx.sent).toEqual([
+          attachId + ".force.1",
+          attachId + ".force.1",
+          attachId + ".force.1",
+        ]);
+        expect((yield* listed(attachId))?.message).toContain("could not tell what the revoke did");
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        expect(ocx.sent.at(-1)).toBe(attachId + ".force.1");
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+      }),
+    ),
+);
+
+it.effect("a machine with no planted ocx-child stops for a person with its own text", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      ocx.childMissing = true;
+      yield* detach(THREAD, attachId, "d-1");
+      yield* detachPass;
+      yield* TestClock.adjust(HOUR);
+      yield* detachPass;
+      expect(ocx.sent).toEqual([attachId + ".purge.1"]);
+      expect((yield* listed(attachId))?.message).toContain("no planted ocx-child");
+    }),
+  ),
+);
+
+it.effect(
+  "a changed host key blocks a thread, and a person's force removes the link without the machine",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId, linkId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "host_key_changed");
+        yield* detachPass;
+        expect((yield* detach(THREAD, attachId, "d-1").pipe(Effect.flip)).reason).toBe("conflict");
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        expect(ocx.sent).toEqual([attachId + ".force.1"]);
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+        yield* TestClock.adjust(HOUR);
+        yield* detachPass;
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
 );

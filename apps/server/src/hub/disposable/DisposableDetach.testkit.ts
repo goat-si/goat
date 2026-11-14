@@ -11,13 +11,22 @@ interface RevokeEntry {
   state: string;
   code?: string;
   purged?: true;
+  resolvedAt?: string;
 }
 
 /**
- * A Home's link revoke, recover and operation journal as OpenCodex v2.100.3 answers them
- * (structure/remote-link.md): a purge needs the Child, which answers remote_disconnect_failed when
- * it is silent or refuses with a hint; a forced revoke leaves a tombstone that recover settles once
- * the machine answers; a person's forget drops it. Installs itself on the enrollment fake's ocx.
+ * A Home's link revoke, recover and operation journal as OpenCodex v2.100.3 answers them for an
+ * ephemeral Child with an explicit route (src/link/remote-plant.ts purgeDisconnectRemote,
+ * src/server/management/link-routes.ts, link-operation.ts, src/cli/link.ts):
+ * - a purge whose ssh fails (a silent machine), or whose Child kept its binary, settles unknown with
+ *   remote_disconnect_failed, and the CLI line carries no hint;
+ * - a Child's link-bound refusal (child_link_mismatch, child_residual, expect_link_unsupported) or a
+ *   missing planted ocx-child (managed_child_missing, no hint on the line) settles failed_clean;
+ * - a repeated purge id replays its recorded answer; a forced revoke left open or unknown resumes;
+ * - a forced revoke leaves a tombstone; tombstone_limit is refused (409) and recorded;
+ *   link_operation_in_progress is refused (409) before any journal entry;
+ * - resolve marks an unknown or residual entry resolved; recover settles a tombstone once the machine
+ *   answers, and a person's forget drops it.
  */
 export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
   const revokes = new Map<string, RevokeEntry>();
@@ -26,58 +35,95 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
   const control = {
     /** The Child answers ssh; false is a machine that is off or gone. */
     machineAnswers: true,
-    /** The Child refuses a purge with this hint. */
+    /** The Child refuses a purge with this hint (link-bound refusals). */
     childRefusal: undefined as string | undefined,
+    /** The machine has no planted ocx-child (managed_child_missing). */
+    childMissing: false,
     /** Recover answers this refusal while the machine answers. */
     recoverRefusal: undefined as string | undefined,
     /** A forced revoke is refused, as OpenCodex does at 256 waiting tombstones. */
     tombstoneLimit: false,
-    /** The next journal read fails, as a lost answer would. */
+    /** The next forced revokes are refused before the journal (another operation holds the link). */
+    busy: 0,
+    /** The next journal reads fail, as a lost answer would. */
     loseRead: 0,
     revokes,
     tombstones,
+    resolved: [] as Array<string>,
     /** A person forgets a tombstone on the Home. */
     forget: (linkId: string) => tombstones.delete(linkId),
     sent: [] as Array<string>,
   };
   const refused = (code: number, refusal: OcxRefusal): OcxOutput => ({ code, stdout: "", refusal });
   const option = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1] ?? "";
+  const answer = (entry: RevokeEntry): OcxOutput => {
+    if (entry.state === "committed")
+      return {
+        code: 0,
+        stdout: json({
+          linkId: entry.linkId,
+          operationId: entry.operationId,
+          outcome: "committed",
+          ...(entry.purged === true ? { purged: true } : {}),
+        }),
+      };
+    const code = entry.code ?? "failed";
+    return refused(code === "tombstone_limit" ? 5 : 1, {
+      code,
+      ...(entry.code === "tombstone_limit" ? {} : { outcome: entry.state }),
+      ...(entry.state === "failed_clean" &&
+      control.childRefusal !== undefined &&
+      code === "remote_disconnect_failed"
+        ? { hint: control.childRefusal }
+        : {}),
+    });
+  };
   const revoke = (args: ReadonlyArray<string>): OcxOutput => {
     const linkId = option(args, "--link-id");
     const operationId = option(args, "--operation-id");
     const force = args.includes("--force");
     control.sent.push(operationId);
     const known = revokes.get(operationId);
-    if (known?.state === "committed") return { code: 0, stdout: json({ linkId, operationId }) };
+    // A purge id replays; a forced one resumes unless it settled.
+    if (
+      known !== undefined &&
+      (!force || known.state === "committed" || known.state === "failed_clean") &&
+      !(force && known.code === "tombstone_limit")
+    )
+      return answer(known);
+    if (force && control.busy > 0) {
+      control.busy -= 1;
+      return refused(5, { code: "link_operation_in_progress" });
+    }
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
-    const entry: RevokeEntry = { operationId, linkId, force, state: "open" };
+    const entry: RevokeEntry = known ?? { operationId, linkId, force, state: "open" };
     revokes.set(operationId, entry);
     if (force) {
       if (control.tombstoneLimit) {
         entry.state = "failed_clean";
         entry.code = "tombstone_limit";
-        return refused(5, { code: "tombstone_limit" });
+        return answer(entry);
       }
       tombstones.add(linkId);
       host.control.links.delete(linkId);
       entry.state = "committed";
-      return { code: 0, stdout: json({ linkId, operationId, outcome: "committed" }) };
+      delete entry.code;
+      return answer(entry);
     }
-    if (!control.machineAnswers || control.childRefusal !== undefined) {
+    if (!control.machineAnswers) {
+      entry.state = "unknown";
+      entry.code = "remote_disconnect_failed";
+      return answer(entry);
+    }
+    if (control.childRefusal !== undefined || control.childMissing) {
       entry.state = "failed_clean";
       entry.code = "remote_disconnect_failed";
-      return refused(1, {
-        code: "remote_disconnect_failed",
-        outcome: "failed_clean",
-        ...(control.machineAnswers && control.childRefusal !== undefined
-          ? { hint: control.childRefusal }
-          : {}),
-      });
+      return answer(entry);
     }
     host.control.links.delete(linkId);
     entry.state = "committed";
     entry.purged = true;
-    return { code: 0, stdout: json({ linkId, operationId, outcome: "committed", purged: true }) };
+    return answer(entry);
   };
   const recover = (args: ReadonlyArray<string>): OcxOutput => {
     const linkId = option(args, "--link-id");
@@ -85,14 +131,30 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     if (!tombstones.has(linkId)) return refused(4, { code: "tombstone_not_found" });
     if (!control.machineAnswers)
       return refused(1, { code: "remote_recover_failed", hint: "ssh_failed" });
+    if (control.childMissing)
+      return refused(1, { code: "remote_recover_failed", hint: "managed_child_missing" });
     if (control.recoverRefusal !== undefined) return refused(5, { code: control.recoverRefusal });
     tombstones.delete(linkId);
     return { code: 0, stdout: json({ linkId, outcome: "clean", purged: true }) };
+  };
+  const resolve = (operationId: string): OcxOutput => {
+    const entry = revokes.get(operationId);
+    if (entry === undefined) return refused(4, { code: "operation_not_found" });
+    if (entry.state !== "unknown" && entry.state !== "residual")
+      return refused(5, { code: "operation_not_resolvable" });
+    entry.resolvedAt ??= "2026-11-15T00:00:00.000Z";
+    control.resolved.push(operationId);
+    return {
+      code: 0,
+      stdout: json({ operationId, state: entry.state, resolvedAt: entry.resolvedAt }),
+    };
   };
   host.control.extraOcx = (args) => {
     if (args[0] !== "link") return undefined;
     if (args[1] === "revoke") return revoke(args);
     if (args[1] === "recover") return recover(args);
+    if (args[1] === "operations" && args[2] === "resolve")
+      return resolve(option(args, "--operation-id"));
     if (args[1] === "operations") {
       const entry = revokes.get(option(args, "--operation-id"));
       if (entry === undefined) return undefined;
@@ -113,6 +175,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
           ...(entry.purged === undefined
             ? {}
             : { receipt: { purged: true, linkId: entry.linkId } }),
+          ...(entry.resolvedAt === undefined ? {} : { resolvedAt: entry.resolvedAt }),
         }),
       };
     }
