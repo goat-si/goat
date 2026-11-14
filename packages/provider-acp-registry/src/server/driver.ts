@@ -555,8 +555,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       });
     const withLiveRuntimeState = Effect.fn("AcpRegistryDriver.withLiveRuntimeState")(function* (
       input: ServerProvider,
+      environment?: NodeJS.ProcessEnv,
     ) {
-      if (input.auth.status === "unauthenticated") yield* confirmedAuthentication.set(false);
+      if (input.auth.status === "unauthenticated")
+        yield* confirmedAuthentication.set(false, environment);
       const provider =
         input.enabled &&
         input.installed &&
@@ -645,6 +647,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         return {
           provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
           generation: cacheState.generation,
+          environment,
         };
       }
       const enriched = yield* enrichProvider(environment);
@@ -662,7 +665,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             : current,
         );
       }
-      return { provider: enriched, generation: cacheState.generation };
+      return { provider: enriched, generation: cacheState.generation, environment };
     });
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<
@@ -693,15 +696,24 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           Effect.flatMap(
             Option.match({
               onNone: () => Effect.void,
-              onSome: ({ provider, generation }) =>
+              onSome: ({ provider, generation, environment }) =>
                 liveSnapshotSemaphore.withPermit(
-                  Ref.get(enrichmentCache).pipe(
-                    Effect.flatMap((current) =>
-                      current.generation === generation
-                        ? withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot))
-                        : Effect.void,
-                    ),
-                  ),
+                  Effect.gen(function* () {
+                    const matchesEnvironment = Effect.map(
+                      currentEnvironment,
+                      (current) =>
+                        JSON.stringify(
+                          Object.entries(current).toSorted(([a], [b]) => a.localeCompare(b)),
+                        ) ===
+                        JSON.stringify(
+                          Object.entries(environment).toSorted(([a], [b]) => a.localeCompare(b)),
+                        ),
+                    );
+                    const current = yield* Ref.get(enrichmentCache);
+                    if (current.generation !== generation || !(yield* matchesEnvironment)) return;
+                    const enriched = yield* withLiveRuntimeState(provider, environment);
+                    if (yield* matchesEnvironment) yield* publishSnapshot(enriched);
+                  }),
                 ),
             }),
           ),

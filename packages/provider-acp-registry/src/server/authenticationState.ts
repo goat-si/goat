@@ -81,7 +81,10 @@ export const makeAcpRegistryAuthenticationState = Effect.fn("makeAcpRegistryAuth
     const set = (authenticated: boolean, environment?: NodeJS.ProcessEnv) =>
       lock.withPermit(
         Effect.gen(function* () {
-          const binding = yield* bindingFor(environment ?? (yield* currentEnvironment));
+          const currentBinding = yield* bindingFor(yield* currentEnvironment);
+          const binding =
+            environment === undefined ? currentBinding : yield* bindingFor(environment);
+          if (binding !== currentBinding) return;
           yield* Ref.set(confirmed, { binding, authenticated });
           yield* persist(binding, authenticated);
         }),
