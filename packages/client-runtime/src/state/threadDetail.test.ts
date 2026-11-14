@@ -7,6 +7,7 @@ import {
   MessageId,
   NodeId,
   RunId,
+  ThreadId,
   TurnItemId,
   type OrchestrationV2Checkpoint,
   type OrchestrationV2ConversationMessage,
@@ -516,6 +517,43 @@ describe("assistantMessageTextAtom", () => {
     expect(finishedText()).toBe("Earlier answer");
     expect(reasoningText()).toBeNull();
     expect(missingText()).toBeNull();
+  });
+
+  it("returns the newest row's text when a fork's inherited row shares the streaming row's id", () => {
+    const shared = TurnItemId.make("shared");
+    const inherited: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: shared,
+      ordinal: 1,
+      text: "Parent's finished answer",
+      status: "completed",
+      streaming: false,
+    };
+    const local: OrchestrationV2TurnItem = { ...assistant, id: shared, ordinal: 2, text: "Live" };
+    const parent = ThreadId.make("thread-parent");
+    const projection: OrchestrationV2ThreadProjection = {
+      ...v2Projection,
+      turnItems: [local],
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "inherited",
+          sourceThreadId: parent,
+          sourceItemId: shared,
+          item: inherited,
+        },
+        {
+          position: 1,
+          visibility: "local",
+          sourceThreadId: v2ThreadId,
+          sourceItemId: shared,
+          item: local,
+        },
+      ],
+    };
+    using thread = setup(projection);
+
+    expect(thread.text(shared)()).toBe("Live");
   });
 });
 
