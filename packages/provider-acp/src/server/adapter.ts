@@ -1,6 +1,23 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
+import type {
+  AcpAdapterV2RuntimeInput,
+  AcpAdapterV2UserInputRequest,
+  AcpAdapterV2Flavor,
+  AcpAdapterV2SubagentUpdate,
+  AcpAdapterV2Options,
+} from "./adapterFlavor.ts";
+export type {
+  AcpAdapterV2RuntimeInput,
+  AcpAdapterV2NativeLogging,
+  AcpAdapterV2UserInputRequest,
+  AcpAdapterV2ExtensionContext,
+  AcpAdapterV2Flavor,
+  AcpSubagentSessionEvent,
+  AcpAdapterV2SubagentUpdate,
+  AcpAdapterV2Options,
+} from "./adapterFlavor.ts";
 import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
@@ -15,7 +32,6 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
@@ -25,13 +41,10 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
-  type OrchestrationV2UserInputQuestion,
   type OrchestrationV2WebSearchResult,
   type ProviderApprovalDecision,
-  type ProviderApprovalOption,
   type ProviderInstanceId,
   type ProviderInteractionMode,
-  type ProviderDriverKind,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
   type RuntimeRequestId,
@@ -42,7 +55,6 @@ import {
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { type SelfInvocation } from "@goat/shared/nodeRuntime";
 import {
   resolveGoatMcpItemCall,
   resolveGoatMcpShippedToolId,
@@ -105,7 +117,6 @@ import {
   withTrackedPermissionToolCall,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
-  type AcpSessionModeState,
   type AcpToolCallState,
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
@@ -126,7 +137,6 @@ import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
   acpPermissionDisposition,
-  type AcpPermissionDisposition,
   makeAcpClientPolicyGrants,
   unknownRecord,
 } from "./clientPolicy.ts";
@@ -147,9 +157,7 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { acpInstructionState, buildAcpRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
-  type BackgroundWork,
   type BackgroundWorkReport,
   backgroundWorkNotification,
 } from "@goat/provider-core/server/notification";
@@ -185,76 +193,6 @@ const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
 
 // Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
-export interface AcpAdapterV2RuntimeInput {
-  readonly cwd: string;
-  readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-  readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly processEnvironment?: NodeJS.ProcessEnv;
-  readonly resumeSessionId?: string;
-  readonly interruptPromptOnCancel?: boolean;
-  readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
-  readonly clientInfo: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
-  readonly requestLogger?: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["requestLogger"]>;
-  readonly protocolLogging: NonNullable<
-    AcpSessionRuntime.AcpSessionRuntimeOptions["protocolLogging"]
-  >;
-  readonly onTermination: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["onTermination"]>;
-  readonly onOutgoingResponseFailure?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponseFailure"];
-  readonly onOutgoingResponse?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponse"];
-  readonly onIncomingRequest?: AcpSessionRuntime.AcpSessionRuntimeOptions["onIncomingRequest"];
-}
-
-export type AcpAdapterV2NativeLogging = Pick<
-  AcpSessionRuntime.AcpSessionRuntimeOptions,
-  "requestLogger" | "protocolLogging"
->;
-
-export interface AcpAdapterV2UserInputRequest {
-  readonly nativeItemId: string;
-  readonly nativeRequestId: string;
-  readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-}
-
-export interface AcpAdapterV2ExtensionContext {
-  readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
-  readonly reportProviderRetry: (input: {
-    readonly sessionId: string;
-    readonly failure: OrchestrationV2ProviderFailure;
-  }) => Effect.Effect<void>;
-  readonly finishSubagent: (notice: {
-    readonly sessionId: string;
-    readonly childSessionId: string;
-    readonly status: "completed" | "failed" | "cancelled";
-    readonly result: string | null;
-  }) => Effect.Effect<void>;
-  readonly applyBackgroundTaskMutation: (mutation: {
-    readonly sessionId: string;
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly output?: string;
-    readonly report?: BackgroundWork;
-  }) => Effect.Effect<void>;
-  readonly requestUserInput: (
-    input: AcpAdapterV2UserInputRequest,
-    requestContext: EffectAcpProtocol.AcpRequestContext,
-  ) => Effect.Effect<
-    {
-      readonly acknowledgeNativeResponse: Effect.Effect<void, EffectAcpErrors.AcpError>;
-      readonly answers: ProviderUserInputAnswers | null;
-    },
-    EffectAcpErrors.AcpError
-  >;
-  readonly captureProposedPlan: (input: { readonly planMarkdown: string }) => Effect.Effect<void>;
-  readonly lastProposedPlanMarkdown: Effect.Effect<string | undefined>;
-}
-
-/**
- * Raised when an agent does not accept the session's model selection: the
- * session's model option does not offer it, or the agent answers the write
- * with invalid params. `makeProviderFailure` shows its message to the user;
- * the agent's reply stays on `cause`.
- */
 class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>()(
   "AcpModelSelectionError",
   {
@@ -311,193 +249,6 @@ export function acpPerTurnPromptUsage(
   };
 }
 
-export interface AcpAdapterV2Flavor {
-  readonly buildPrompt?: (input: {
-    readonly text: string;
-    readonly attachments: ReadonlyArray<ChatAttachment>;
-    readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
-    readonly promptCapabilities: EffectAcpSchema.AgentCapabilities["promptCapabilities"];
-    readonly agentVersion: string | undefined;
-    /** The session's model after selection, with its display name when the agent lists it. */
-    readonly currentModel: { readonly id: string; readonly name: string | undefined } | undefined;
-  }) => Effect.Effect<ReadonlyArray<EffectAcpSchema.ContentBlock>, EffectAcpErrors.AcpError>;
-  readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
-  /**
-   * Runs before `session/prompt`. The returned check sees a prompt the agent ended
-   * without an error or cancel, and reports a failure its stop reason hid. A reported
-   * failure restarts the runtime before the next turn.
-   */
-  readonly watchPromptOutcome?: (
-    sessionId: string,
-  ) => Effect.Effect<
-    (
-      result: EffectAcpSchema.PromptResponse,
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
-  >;
-  readonly requiresSignIn?: (cause: unknown) => boolean;
-  /**
-   * Runs before attachment paths, GOAT instructions and native slash-command detection,
-   * so a rewrite can turn the user's text into a native command.
-   */
-  readonly rewriteUserText?: (
-    text: string,
-    turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-  ) => Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner>;
-  readonly driver: ProviderDriverKind;
-  readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly clientCapabilitiesMeta?: NonNullable<
-    EffectAcpSchema.InitializeRequest["clientCapabilities"]
-  >["_meta"];
-  readonly normalizeSessionUpdate?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => EffectAcpSchema.SessionNotification;
-  readonly onAvailableCommandsUpdate?: (
-    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
-  ) => Effect.Effect<void>;
-  readonly onSessionConfigurationUpdate?: (
-    configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
-    modeState: AcpSessionModeState | undefined,
-    modelState: EffectAcpSchema.SessionModelState | null | undefined,
-  ) => Effect.Effect<void>;
-  readonly onUrlElicitation?: (input: {
-    readonly elicitationId: string;
-    readonly url: string;
-    readonly message: string;
-  }) => Effect.Effect<boolean>;
-  readonly extractElicitationForm?: (request: EffectAcpSchema.CreateElicitationRequest) =>
-    | {
-        readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.CreateElicitationResponse;
-      }
-    | undefined;
-  readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly makeRuntime: (
-    input: AcpAdapterV2RuntimeInput,
-  ) => Effect.Effect<
-    AcpSessionRuntime.AcpSessionRuntime["Service"],
-    EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
-  >;
-  readonly customModels?: ReadonlyArray<string>;
-  readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
-  readonly getModelContextWindow?: (
-    selection: ModelSelection,
-    session: AcpSessionRuntime.AcpSessionRuntimeStartResult,
-  ) => number | undefined;
-  readonly applyModelSelection?: (input: {
-    readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
-    readonly startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult;
-    readonly modelSelection: ModelSelection;
-  }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
-  readonly ownedModelOptionIds?: ReadonlyArray<string>;
-  readonly sessionModeForPolicy?: (
-    policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  ) => string | undefined;
-  readonly clientFileSystem?: {
-    readonly readTextFile: (
-      request: EffectAcpSchema.ReadTextFileRequest,
-      cwd: string | null,
-    ) => Effect.Effect<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError>;
-    readonly writeTextFile?: (
-      request: EffectAcpSchema.WriteTextFileRequest,
-      cwd: string | null,
-    ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
-  };
-  readonly extractPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) =>
-    | {
-        readonly question: OrchestrationV2UserInputQuestion;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.RequestPermissionResponse | undefined;
-      }
-    | undefined;
-  /** Grok Auto asks only about classifier refusals; GOAT policy must not auto-approve them. */
-  readonly permissionDisposition?: (
-    policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-    request: EffectAcpSchema.RequestPermissionRequest,
-  ) => AcpPermissionDisposition;
-  readonly approvalOptions?: (
-    request: EffectAcpSchema.RequestPermissionRequest,
-  ) => ReadonlyArray<ProviderApprovalOption>;
-  /** Prefer resume over load when both exist; Antigravity's load replays history slowly. */
-  readonly preferResumeSession?: boolean;
-  readonly onSessionEvent?: (
-    event: AcpSessionRuntime.AcpSessionRuntimeEvent,
-  ) => Effect.Effect<void>;
-  readonly subagentsIdleOnTurnCompletion?: boolean;
-  readonly supportsCompaction?: boolean;
-  readonly runtimeHarness?: string;
-  readonly registerExtensions?: (
-    context: AcpAdapterV2ExtensionContext,
-  ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
-  readonly extractSubagentSessionEvent?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => AcpSubagentSessionEvent | undefined;
-  readonly extractSubagentUpdate?: (
-    toolCall: AcpToolCallState,
-  ) => AcpAdapterV2SubagentUpdate | undefined;
-  readonly isProvisionalSubagentTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
-  readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
-  readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
-  /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
-  readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly extractBackgroundToolMutation?: (text: string) => ReadonlyArray<{
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly appendOutput: string;
-  }>;
-  readonly extractSubagentEndNotice?: (text: string) =>
-    | {
-        readonly childSessionId: string;
-        readonly status: "completed" | "failed";
-      }
-    | undefined;
-  readonly extractBackgroundTaskCompletion?: (toolCall: AcpToolCallState) => ReadonlyArray<{
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly appendOutput: string;
-  }>;
-  readonly isPersistentBackgroundTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly isProviderWakeNotification?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => boolean;
-  readonly deferFinalizeForBackgroundWork?: boolean;
-  readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
-  /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
-  readonly interruptPromptOnCancel?: boolean;
-  /**
-   * The agent's PromptResponse.usage counters read per-turn. The ACP spec
-   * leaves usage semantics open, so this stays unset until proven live.
-   */
-  readonly reportsPerTurnPromptUsage?: boolean;
-  /** Gemini-style usage: inputTokens leaves out cachedReadTokens, outputTokens leaves out thoughtTokens. */
-  readonly geminiPromptUsage?: boolean;
-  /**
-   * Fails a dispatched prompt after this long with no update for its session while no
-   * agent request, tool or subagent is open, and replaces the agent before the next turn.
-   */
-  readonly promptInactivityTimeout?: Duration.Input;
-  /** Grok can retain task_already_running until process exit. */
-  readonly restartRuntimeAfterInterrupt?: boolean;
-  /** Prompt failures after which the agent process keeps failing until replaced. */
-  readonly restartRuntimeAfterPromptError?: (error: unknown) => boolean;
-  readonly restartRuntimeOnEveryInterrupt?: boolean;
-  readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
-  readonly preserveRuntimeOnSettledInterrupt?: boolean;
-  readonly enablePostSettleContinuation?: boolean;
-  /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */
-  readonly followAgentWorkState?: boolean;
-  /**
-   * Grok CLI currently accepts and vision-processes image blocks while still
-   * reporting the capability as false; without this override, screenshot turns
-   * fail before `session/prompt`.
-   */
-  readonly supportsImagePrompts?: boolean;
-}
-
 function acpSupportsImagePrompts(input: {
   readonly flavorSupportsImagePrompts?: boolean | undefined;
   readonly negotiatedImage?: boolean | undefined;
@@ -517,84 +268,6 @@ function acpProviderItemNativeId(input: {
   return input.itemIdentityVersion === 2
     ? acpScopedNativeId(input.instanceId, input.nativeId)
     : input.nativeId;
-}
-
-export type AcpSubagentSessionEvent =
-  | {
-      readonly type: "state";
-      readonly childSessionId: string;
-      readonly parentSessionId: string;
-      readonly status: "running" | "completed" | "failed" | "cancelled";
-      readonly result: string | null;
-    }
-  | {
-      readonly type: "delegation";
-      readonly childSessionId: string;
-      readonly parentSessionId: string | null;
-      readonly delegationId: string;
-      readonly prompt: string;
-    };
-
-export interface AcpAdapterV2SubagentUpdate {
-  readonly nativeTaskId: string;
-  readonly prompt: string;
-  readonly title: string | null;
-  readonly model: string | null;
-  readonly status:
-    | "pending"
-    | "running"
-    | "idle"
-    | "completed"
-    | "failed"
-    | "interrupted"
-    | "cancelled";
-  readonly childSessionId: string | null;
-  readonly result: string | null;
-  readonly suppressNormalTool?: boolean;
-}
-
-export interface AcpAdapterV2Options {
-  readonly instanceId: ProviderInstanceId;
-  readonly flavor: AcpAdapterV2Flavor;
-  readonly selfInvocation: SelfInvocation;
-  readonly clientTerminals?: {
-    readonly environment?: NodeJS.ProcessEnv;
-    readonly shellCommands?: boolean;
-  };
-  readonly nativeLogging?: (threadId: ThreadId) => AcpAdapterV2NativeLogging;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
-  readonly testHooks?: {
-    readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
-    /** Wire signal is set; the completion callback has not requested its permit yet. */
-    readonly afterPromptWireSettled?: () => Effect.Effect<void>;
-    readonly afterPromptSettledWithBackgroundWork?: () => Effect.Effect<void>;
-    /** Terminal events, carryover cleanup, and the completion signal are finished. */
-    readonly afterTurnFinalized?: () => Effect.Effect<void>;
-    readonly afterNativeResponseTransportClosed?: () => Effect.Effect<void>;
-    readonly afterHardTeardownTransportDrained?: () => Effect.Effect<void>;
-    readonly beforeNativeResponseAdmissionCheck?: (
-      generation: number,
-      requestId: string,
-    ) => Effect.Effect<void>;
-    readonly onNativeResponseLifecycle?: (event: {
-      readonly generation?: number;
-      readonly requestId?: string;
-      readonly type:
-        | "admission_rejected"
-        | "failed"
-        | "late_noop"
-        | "registered"
-        | "removed"
-        | "timer_exited"
-        | "timer_started"
-        | "watcher_exited"
-        | "watcher_started";
-    }) => Effect.Effect<void>;
-  };
 }
 
 export function acpMcpToolCallOutput(rawOutput: unknown): unknown {
