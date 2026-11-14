@@ -124,6 +124,8 @@ it.effect(
         assert.isFalse(yield* scratch.isScratchProject(ProjectId.make("project:any")));
         const failure = yield* Effect.flip(scratch.ensureScratchProject);
         assert.equal(failure._tag, "ScratchUnavailableError");
+        assert.include(failure.message, baseDir);
+        assert.include(failure.message, checkout);
 
         // The GOAT bot still gets a project of its own beside the data dir's other folders.
         const projects = yield* ProjectService.ProjectService;
