@@ -44,6 +44,16 @@ describe("thread link destinations", () => {
 });
 
 describe("thread links", () => {
+  it("leaves escaped thread-link syntax literal while relabeling unescaped links", () => {
+    const href = "goat-thread://v1/t1";
+    for (const [source, expected] of [
+      [`\\[old](${href})`, `\\[old](${href})`],
+      [`\\\\[old](${href})`, `\\\\[New](${href})`],
+      [`[x](https://example.com/?next=${href})`, `[x](https://example.com/?next=${href})`],
+    ]) {
+      expect(relabelThreadLinks(source, () => "New")).toBe(expected);
+    }
+  });
   it("relabels an angle-bracketed thread destination", () => {
     expect(relabelThreadLinks("[old](<goat-thread://v1/t1>)", () => "New")).toBe(
       "[New](goat-thread://v1/t1)",
