@@ -29,7 +29,11 @@ import { resolveSpawnCommand } from "@goat/shared/shell";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
+import {
+  codexExecLaunchArgs,
+  codexMcpListLaunchArgs,
+  resolveCodexLaunchArgs,
+} from "../provider/codexLaunchArgs.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 import {
   normalizeCliError,
@@ -531,8 +535,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         binary,
         cwd: workingDirectory,
         env: execEnvironment,
-        // `codex mcp` rejects --strict-config; the overrides still apply.
-        launchArgs: execLaunchArgs.filter((arg) => arg !== "--strict-config"),
+        launchArgs: codexMcpListLaunchArgs(execLaunchArgs),
       }).pipe(Effect.map(codexMcpServersOff));
       const spawnCommand = yield* resolveSpawnCommand(
         binary,
