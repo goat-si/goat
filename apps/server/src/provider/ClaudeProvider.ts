@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - the SDK's spawn hook returns a Node child process.
+import * as NodeChildProcess from "node:child_process";
+import { guardChild } from "@goat/shared/errorGuards";
+import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
 import * as Schema from "effect/Schema";
 import {
   type ClaudeSettings,
@@ -28,6 +32,7 @@ import {
   type SDKControlGetUsageResponse,
   type SDKUserMessage,
   type SettingSource,
+  type SpawnOptions as ClaudeSpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -232,14 +237,36 @@ const CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+export function spawnClaudeProbeThroughEnv({
+  command,
+  args,
+  cwd,
+  env,
+  signal,
+}: ClaudeSpawnOptions) {
+  const launch = envTrampoline(command, args, cwd) ?? { command, args, cwd };
+  const child = guardChild(
+    NodeChildProcess.spawn(launch.command, launch.args, {
+      ...("cwd" in launch ? { cwd: launch.cwd } : {}),
+      env,
+      signal,
+      stdio: ["pipe", "pipe", "ignore"],
+    }),
+    () => child.kill("SIGKILL"),
+  );
+  return child;
+}
+
 export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly executablePath: string;
   readonly abortController: AbortController;
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | undefined;
   readonly managedMcpConfig: boolean;
+  readonly spawnThroughEnv?: boolean;
 }): ClaudeQueryOptions {
   return {
+    ...(input.spawnThroughEnv ? { spawnClaudeCodeProcess: spawnClaudeProbeThroughEnv } : {}),
     persistSession: false,
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
@@ -469,6 +496,8 @@ const probeClaudeCapabilities = (
           ...(yield* readClaudeSettingsEnv(claudeSettings, cwd, claudeEnvironment)),
         })
       : 0;
+    const spawnThroughEnv =
+      (yield* HostProcess.Platform) === "linux" && (yield* Effect.promise(supportsEnvChdir));
     return yield* Effect.tryPromise(async () => {
       const q = claudeQuery({
         // oxlint-disable-next-line require-yield -- never yields, so no prompt reaches the API
@@ -481,6 +510,7 @@ const probeClaudeCapabilities = (
           environment: claudeEnvironment,
           cwd,
           managedMcpConfig,
+          spawnThroughEnv,
         }),
       });
       const init = await q.initializationResult();

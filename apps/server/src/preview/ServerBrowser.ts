@@ -1,3 +1,6 @@
+import { makeRecordingFrames } from "./RecordingFrames.ts";
+import { withinStatusDeadline } from "./statusDeadline.ts";
+import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
 import { desktopReattachment } from "./DesktopReattachment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
@@ -13,7 +16,6 @@ import {
   PreviewAutomationLogsInput,
   PreviewClearProfileError,
   PreviewViewportSetting as PreviewViewportSettingSchema,
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type PreviewAppearancePreference,
@@ -68,7 +70,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
 
-import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -84,9 +85,19 @@ import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
-import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
+import {
+  answerBy,
+  answerCall,
+  queueCaptureBy,
+  waitInput,
+  withCaptureLock,
+  withCaptureLockHeld,
+} from "./CaptureLock.ts";
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
+import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
+import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
   browserSessionView,
   markUsed,
@@ -105,7 +116,7 @@ import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewpor
 import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRendering.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
-import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
+import { recordCopies, recordFrameCopies, dispatchViewerKey } from "./ServerBrowserClipboard.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
@@ -268,7 +279,7 @@ interface Recording {
   readonly encoder: Page;
   readonly session: CDPSession;
   readonly startedAt: string;
-  readonly framesInFlight: Set<Promise<void>>;
+  readonly frames: ReturnType<typeof makeRecordingFrames>;
 }
 
 interface ServerTab {
@@ -277,9 +288,13 @@ interface ServerTab {
   readonly page: Page;
   readonly cdp: CDPSession;
   readonly frameSessions: Map<Frame, CDPSession>;
+  copyReads: Promise<void>;
+  copyKeyedUntil: number;
+  pendingCopyReads: number;
   readonly createdAt: number;
   usedAt: number;
   readonly viewers: Set<ViewerState>;
+  viewerAttached: PromiseWithResolvers<void> | null;
   readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
   readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
   readonly diagnostics: ServerBrowserDiagnostics;
@@ -540,6 +555,7 @@ const make = Effect.gen(function* () {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
     tab.closing = true;
+    viewerArrived(tab);
     blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
@@ -551,8 +567,7 @@ const make = Effect.gen(function* () {
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else void tab.page.close().catch(constVoid);
-    if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
+    else closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
     void tab.recording?.encoder.close().catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
@@ -601,7 +616,7 @@ const make = Effect.gen(function* () {
       if (desktop) opened.push(desktop.close);
       if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
       // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
-      if (adopted === undefined && desktop === null && desktopChannel.available) {
+      if (adopted === undefined && desktop === null) {
         await runPromise(
           manager
             .markServerRendered({
@@ -662,9 +677,13 @@ const make = Effect.gen(function* () {
         page,
         cdp,
         frameSessions: new Map(),
+        copyReads: Promise.resolve(),
+        copyKeyedUntil: 0,
+        pendingCopyReads: 0,
         createdAt: Date.now(),
         usedAt: Date.now(),
         viewers: new Set(),
+        viewerAttached: null,
         consoleEntries: diagnostics.consoleEntries,
         networkEntries: diagnostics.networkEntries,
         diagnostics,
@@ -817,6 +836,7 @@ const make = Effect.gen(function* () {
         });
       });
       page.on("dialog", (dialog) => {
+        if (acceptClosingDialog(tab.closing, dialog)) return;
         tab.dialog = dialog;
         broadcastControl(tab);
       });
@@ -1346,13 +1366,23 @@ const make = Effect.gen(function* () {
       };
     }
     const url = ServerBrowserPage.withoutDataPayload(tab.page.url());
-    const viewport = tab.desktop ? await layoutSize(tab) : tab.page.viewportSize();
+    const [viewport, title] = await Promise.all([
+      tab.desktop
+        ? withinStatusDeadline(layoutSize(tab), () => tab.desktopViewport)
+        : tab.page.viewportSize(),
+      url === "about:blank" || tab.dialog
+        ? null
+        : withinStatusDeadline(
+            tab.page.title().catch(() => ""),
+            () => "",
+          ).then((value) => value || null),
+    ]);
     const status = {
       available: true,
       visible: capacity.visible(tab),
       tabId: tab.tabId,
       url: url === "about:blank" ? null : url,
-      title: null,
+      title,
       loading: tab.loading,
       documentGeneration: tab.documentGeneration,
       control: {
@@ -1392,8 +1422,7 @@ const make = Effect.gen(function* () {
         completedAt,
       })),
     };
-    if (status.url === null || tab.dialog) return status;
-    return { ...status, title: (await tab.page.title().catch(() => "")) || null };
+    return status;
   };
   const startRecording = (
     tab: ServerTab,
@@ -1421,43 +1450,43 @@ const make = Effect.gen(function* () {
         );
         const opened = await channel.newCDPSession(tab.page);
         session = opened;
-        const framesInFlight = new Set<Promise<void>>();
-        opened.on("Page.screencastFrame", (frame) => {
-          // A private tab records nothing; the frame still releases Chromium.
-          if (tab.control.isPrivate)
-            return void opened
-              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-              .catch(constVoid);
-          const cssWidth = tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth;
-          const delivered: Promise<void> = Promise.resolve()
-            .then(() =>
-              channel.call(() =>
+        const frames = makeRecordingFrames({
+          acknowledge: (sessionId) => opened.send("Page.screencastFrameAck", { sessionId }),
+          encode: async (data, width) => {
+            try {
+              return await channel.call(() =>
                 encoder.evaluate(
-                  ([data, width]) =>
-                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-                  [frame.data, cssWidth] as const,
+                  ([frameData, cssWidth]) =>
+                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
+                      frameData,
+                      cssWidth,
+                    ),
+                  [data, width] as const,
                 ),
-              ),
-            )
-            .then(async (accepted) => {
-              if (!accepted) await opened.send("Page.stopScreencast");
-            })
-            .catch(constVoid)
-            .finally(() => {
-              framesInFlight.delete(delivered);
-              void opened
-                .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-                .catch(constVoid);
-            });
-          framesInFlight.add(delivered);
+              );
+            } catch (cause) {
+              if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+                return false;
+              throw cause;
+            }
+          },
+          stop: () => opened.send("Page.stopScreencast"),
+          isPrivate: () => tab.control.isPrivate,
         });
+        opened.on("Page.screencastFrame", (frame) =>
+          frames.offer({
+            data: frame.data,
+            width: tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth,
+            sessionId: frame.sessionId,
+          }),
+        );
         await channel.sendFor(opened)("Page.startScreencast", RECORDING_SCREENCAST);
         if (tab.closing) throw new Error("The tab closed while the recording started.");
         const recording: Recording = {
           encoder,
           session: opened,
           startedAt: new Date().toISOString(),
-          framesInFlight,
+          frames,
         };
         tab.recording = recording;
         return recording;
@@ -1509,7 +1538,7 @@ const make = Effect.gen(function* () {
       deadlineMs,
     );
   const stopRecording = (tab: ServerTab) =>
-    withCaptureLock(tab, async () => {
+    withCaptureLockHeld(tab, async (hold) => {
       const recording = tab.recording;
       if (!recording) {
         throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1517,57 +1546,38 @@ const make = Effect.gen(function* () {
           "No recording is active for this tab.",
         );
       }
-      let mimeType: string | null;
-      const chunks: Array<Buffer> = [];
       try {
         await recording.session.send("Page.stopScreencast").catch(constVoid);
-        await Promise.all(recording.framesInFlight);
+        await recording.frames.finish();
         await recording.session.detach().catch(constVoid);
+        // A failed or unanswered last frame leaves the recording without it.
+        if (!tab.closing && !tab.dialog) {
+          const capture = captureFinalRecordingFrame(
+            tab.cdp,
+            RECORDING_SCREENCAST.quality,
+            tab.control,
+          );
+          hold(capture);
+          const finalFrame = await answeredFinalFrame(capture);
+          if (finalFrame !== undefined && !tab.control.isPrivate) {
+            await recording.encoder.evaluate(
+              ([data, width]) =>
+                (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+              [
+                finalFrame,
+                tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
+              ] as const,
+            );
+          }
+        }
         const stopped = await recording.encoder.evaluate(() =>
           (globalThis as unknown as EncoderWindow).__goatRecorder.stop(),
         );
-        mimeType = stopped.mimeType;
-        // Checked before the transfer so an oversized video never lands in this process.
-        if (stopped.bytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-          throw new ServerBrowserPage.ServerBrowserOperationError(
-            "PreviewAutomationRecordingTooLargeError",
-            "The recording is larger than the attachment limit.",
-          );
-        }
-        for (let index = 0; index < stopped.count; index += 1) {
-          const chunk = await recording.encoder.evaluate(
-            (chunkIndex) =>
-              (globalThis as unknown as EncoderWindow).__goatRecorder.chunk(chunkIndex),
-            index,
-          );
-          chunks.push(Buffer.from(chunk, "base64"));
-        }
+        return await saveRecording(recording.encoder, stopped, config.attachmentsDir, tab.tabId);
       } finally {
         await recording.encoder.close().catch(constVoid);
         tab.recording = null;
       }
-      const data = Buffer.concat(chunks);
-      if (!mimeType || data.byteLength === 0) {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          "The recording captured no frames.",
-        );
-      }
-
-      const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-      const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}-${extension}`;
-      const path = NodePath.join(config.attachmentsDir, `${pendingId}.${extension}`);
-      await NodeFSP.mkdir(config.attachmentsDir, { recursive: true });
-      await NodeFSP.writeFile(path, data);
-      return {
-        id: pendingId,
-        tabId: tab.tabId,
-        path,
-        mimeType: mimeType.split(";")[0]!,
-        sizeBytes: data.byteLength,
-        createdAt: new Date().toISOString(),
-        uploadedAttachmentId: pendingId,
-      };
     });
 
   const pointerFor =
@@ -1726,6 +1736,7 @@ const make = Effect.gen(function* () {
             if (url) await recordAction(tab, "navigate", loading, { url });
             else if (!existing) await loading();
             const reveal = open.open ?? open.show;
+            let shown: Promise<void> | undefined;
             if (reveal !== false) {
               await runPromise(
                 manager.requestReveal({
@@ -1734,6 +1745,7 @@ const make = Effect.gen(function* () {
                   force: reveal === true,
                 }),
               );
+              shown = awaitRevealedViewer(tab, reveal, deadlineMs);
             }
             if (!existing && url) {
               await tab.page
@@ -1744,6 +1756,7 @@ const make = Effect.gen(function* () {
               () => blockedTabs.assertTab(tab, request.runId, url),
               navigationSent,
             );
+            await shown;
             return statusWithTitle(tab, request.agentSessionId);
           },
           deadlineMs,
@@ -1826,6 +1839,11 @@ const make = Effect.gen(function* () {
     }
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
+      if (tab.control.agentId === null)
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          "This tab has no agent owner. Ask the user to close it in the browser panel.",
+        );
       if (tab.control.agentId !== request.agentSessionId)
         throw new BrowserControlInterrupted(
           "Only the agent session that opened this tab can close it.",
@@ -1834,6 +1852,7 @@ const make = Effect.gen(function* () {
       tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
       void tab.control.close().catch(constVoid);
+      if (tab.desktop && tab.dialog === null) await unloadDesktopTab(tab);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);
       return {};
@@ -2261,39 +2280,8 @@ const make = Effect.gen(function* () {
           modifiers,
         });
         return;
-      case "key": {
-        const key = typeof message.key === "string" ? message.key : "";
-        const code = typeof message.code === "string" ? message.code : "";
-        const text = typeof message.text === "string" ? message.text : undefined;
-        if (message.action === "up") {
-          await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, modifiers });
-          viewer.pressedKeys.delete(code || key);
-          return;
-        }
-        const command = ViewerInput.editingCommand(key, modifiers);
-        const copying =
-          !tab.desktop && (command?.commands[0] === "copy" || command?.commands[0] === "cut");
-
-        if (copying) await takeCopiedText(tab);
-        await session.send("Input.dispatchKeyEvent", {
-          type: text ? "keyDown" : "rawKeyDown",
-          key,
-          code,
-          modifiers,
-          ...(text ? { text, unmodifiedText: text } : {}),
-          ...command,
-          windowsVirtualKeyCode: ViewerInput.num(
-            message.keyCode,
-            key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
-          ),
-        });
-        viewer.pressedKeys.set(code || key, { key, code });
-        if (copying) {
-          const copied = await takeCopiedText(tab);
-          if (copied) viewer.push({ _tag: "clipboard", text: copied });
-        }
-        return;
-      }
+      case "key":
+        return dispatchViewerKey(tab, session, viewer, message, modifiers);
       case "text":
         if (typeof message.text === "string" && message.text.length > 0) {
           await session.send("Input.insertText", { text: message.text.slice(0, 10_000) });
@@ -2443,6 +2431,7 @@ const make = Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         tab.viewers.add(viewer);
+        viewerArrived(tab);
         reportLiveTabs();
       }),
       () =>
@@ -2555,8 +2544,9 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              const dispatch = (input: Record<string, unknown>) =>
-                dispatchViewerInput(tab, session, viewer, input);
+              const dispatch = async (input: Record<string, unknown>) => {
+                await dispatchViewerInput(tab, session, viewer, input);
+              };
               if (
                 message.type === "mouse" &&
                 message.action === "move" &&
@@ -2582,7 +2572,10 @@ const make = Effect.gen(function* () {
                   }),
                 );
               } else {
-                await tab.control.human(viewer.id, () => dispatch(message));
+                const copyRead = await tab.control.human(viewer.id, () =>
+                  dispatchViewerInput(tab, session, viewer, message),
+                );
+                await copyRead?.();
               }
             }
           } catch {

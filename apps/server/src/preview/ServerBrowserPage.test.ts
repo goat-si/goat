@@ -409,7 +409,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     const hidden = await failure("button");
     expect(hidden.tag).toBe("PreviewAutomationTimeoutError");
     expect(hidden.message).toBe(
-      'No input was sent. The click target "button" was not ready before the deadline.',
+      'No input was sent. The click target "button" was not ready before the deadline. Playwright last saw: element is not visible.',
     );
   });
 

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - cleanup uses Node's retrying rm, which the FileSystem service does not expose.
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ClaudeSettings, type ServerProvider } from "@goat/contracts";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
@@ -13,6 +14,7 @@ import {
   buildClaudeCapabilitiesProbeQueryOptions,
   probeClaudeWorkspaceSnapshot,
   probeClaudeCapabilities,
+  spawnClaudeProbeThroughEnv,
 } from "./ClaudeProvider.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
@@ -87,3 +89,30 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
     assert.equal(abortSignal?.aborted, true);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+if (HostProcess.Platform.defaultValue() === "linux") {
+  it.live("starts an exported-function launcher in the probe workspace", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const workspace = yield* fileSystem.realPath(yield* fileSystem.makeTempDirectoryScoped());
+        yield* fileSystem.writeFileString(`${workspace}/claude`, '#!/bin/bash\ngoat_launch "$@"\n');
+        yield* fileSystem.chmod(`${workspace}/claude`, 0o755);
+        const signal = yield* Effect.abortSignal;
+        const child = spawnClaudeProbeThroughEnv({
+          command: "claude",
+          args: ["--probe"],
+          cwd: workspace,
+          env: {
+            PATH: `.:${process.env.PATH}`,
+            "BASH_FUNC_goat_launch%%": '() { echo "$PWD $@"; }',
+          },
+          signal,
+        });
+        assert.deepEqual(child.spawnargs.slice(0, 3), ["/usr/bin/env", "-C", workspace]);
+        const output = yield* Effect.promise(() => child.stdout.setEncoding("utf8").toArray());
+        assert.equal(output.join(""), `${workspace} --probe\n`);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+}

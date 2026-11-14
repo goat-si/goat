@@ -1,6 +1,8 @@
+// @effect-diagnostics globalDate:off - Playwright input runs outside the Effect runtime.
 import { constVoid } from "effect/Function";
 import type { CDPSession, Frame, Page } from "playwright-core";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { sleepUntil } from "./ServerBrowserPointer.ts";
 import { openSetupSend } from "./openRunSignals.ts";
 
 interface ClipboardTab {
@@ -54,7 +56,7 @@ export const recordFrameCopies = async (
   });
 };
 
-const takeSessionCopies = async (cdp: CDPSession) => {
+const takeSessionCopies = async (cdp: CDPSession, since: number, until: number) => {
   const tree = await cdp.send("Page.getFrameTree").catch(() => null);
   if (!tree) return [];
   const frameIds = (node: typeof tree.frameTree): Array<string> => [
@@ -68,7 +70,7 @@ const takeSessionCopies = async (cdp: CDPSession) => {
         .then(({ executionContextId }) =>
           cdp.send("Runtime.evaluate", {
             contextId: executionContextId,
-            expression: "globalThis.takeCopy?.()",
+            expression: `globalThis.takeCopy?.(${since}, ${until})`,
             returnByValue: true,
           }),
         )
@@ -80,7 +82,67 @@ const takeSessionCopies = async (cdp: CDPSession) => {
   );
 };
 
-export const takeCopiedText = async (tab: ClipboardTab) => {
-  const copies = await Promise.all([tab.cdp, ...tab.frameSessions.values()].map(takeSessionCopies));
+const takeCopiedText = async (tab: ClipboardTab, since: number, until: number) => {
+  const copies = await Promise.all(
+    [tab.cdp, ...tab.frameSessions.values()].map((cdp) => takeSessionCopies(cdp, since, until)),
+  );
   return copies.flat().find((text) => text.length > 0);
+};
+
+export const dispatchViewerKey = async (
+  tab: ClipboardTab & {
+    desktop: unknown;
+    copyReads: Promise<void>;
+    copyKeyedUntil: number;
+    pendingCopyReads: number;
+  },
+  session: CDPSession,
+  viewer: {
+    pressedKeys: Map<string, { key: string; code: string }>;
+    push: (output: import("./ServerBrowser.ts").ServerBrowserViewerOutput) => void;
+  },
+  message: Record<string, unknown>,
+  modifiers: number,
+) => {
+  const key = typeof message.key === "string" ? message.key : "";
+  const code = typeof message.code === "string" ? message.code : "";
+  const text = typeof message.text === "string" ? message.text : undefined;
+  if (message.action === "up") {
+    await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, modifiers });
+    viewer.pressedKeys.delete(code || key);
+    return;
+  }
+  const command = ViewerInput.editingCommand(key, modifiers);
+  const copying =
+    !tab.desktop && (command?.commands[0] === "copy" || command?.commands[0] === "cut");
+  if (copying && tab.pendingCopyReads >= 128) await tab.copyReads;
+  if (copying) while (Date.now() <= tab.copyKeyedUntil) await sleepUntil(tab.copyKeyedUntil + 1);
+  const since = Date.now();
+  await session.send("Input.dispatchKeyEvent", {
+    type: text ? "keyDown" : "rawKeyDown",
+    key,
+    code,
+    modifiers,
+    ...(text ? { text, unmodifiedText: text } : {}),
+    ...command,
+    windowsVirtualKeyCode: ViewerInput.num(
+      message.keyCode,
+      key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
+    ),
+  });
+  viewer.pressedKeys.set(code || key, { key, code });
+  if (!copying) return;
+  const until = Date.now();
+  tab.copyKeyedUntil = until;
+  tab.pendingCopyReads++;
+  const read = tab.copyReads
+    .then(async () => {
+      const copied = await takeCopiedText(tab, since, until);
+      if (copied) viewer.push({ _tag: "clipboard", text: copied });
+    })
+    .finally(() => {
+      tab.pendingCopyReads--;
+    });
+  tab.copyReads = read;
+  return () => read;
 };

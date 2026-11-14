@@ -6160,6 +6160,19 @@ it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("reads a branch whose name starts with a parenthesis as attached", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd);
+      yield* git(cwd, ["switch", "-c", "(topic"]);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const status = yield* driver.statusDetailsLocal(cwd, { includeDivergence: false });
+      assert.equal(status.branch, "(topic");
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("lists branches when the current branch refresh fails", () =>
   Effect.gen(function* () {
     const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
