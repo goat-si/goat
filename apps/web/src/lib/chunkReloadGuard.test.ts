@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./chunkReloadGuard";
-
+import {
+  clearChunkReloadGuard,
+  isChunkLoadError,
+  reloadOnceForChunkLoadError,
+} from "./chunkReloadGuard";
 function createStorageStub(): Storage {
   const store = new Map<string, string>();
   return {
@@ -60,5 +63,16 @@ describe("reloadOnceForChunkLoadError", () => {
     expect(reloadOnceForChunkLoadError(blocked, reload)).toBe(false);
     expect(reload).not.toHaveBeenCalled();
     expect(() => clearChunkReloadGuard(blocked)).not.toThrow();
+  });
+});
+
+describe("isChunkLoadError", () => {
+  it.each([
+    ["Failed to fetch dynamically imported module: t3code://app/assets/a.js", true],
+    ["error loading dynamically imported module: https://app.t3.codes/assets/a.js", true],
+    ["Importing a module script failed.", true],
+    ["Cannot read properties of undefined", false],
+  ])("%s", (message, expected) => {
+    expect(isChunkLoadError(new TypeError(message))).toBe(expected);
   });
 });
