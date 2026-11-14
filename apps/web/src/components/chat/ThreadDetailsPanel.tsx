@@ -1,7 +1,7 @@
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { isScratchProject } from "@goat/client-runtime/state/projects";
-import { useProject, useServerConfigs } from "../../state/entities";
-import { ThreadDetailsThreadPrRows } from "./ThreadDetailsThreadPrRows";
+import { useProject, useQuietThreadShell, useServerConfigs } from "../../state/entities";
+import { ThreadDetailsThreadPrRows, threadShellHasPullRequest } from "./ThreadDetailsThreadPrRows";
 import type {
   EditorId,
   EnvironmentId,
@@ -91,6 +91,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     project !== null &&
     !isScratchProject(project, config.scratchWorkspaceRoot);
   const thread = useThreadShell(props.draftId ? null : activeThreadRef);
+  const hasPullRequest = threadShellHasPullRequest(
+    useQuietThreadShell(props.draftId ? null : activeThreadRef),
+  );
   const projection = useThreadProjection(props.draftId ? null : activeThreadRef)?.projection;
   const selectedInstanceId = useComposerDraftStore(
     (store) =>
@@ -189,7 +192,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             </div>
           </ThreadDetailsSection>
 
-          {showLocalWorkspace && (offersGit || !props.draftId) ? (
+          {showLocalWorkspace && (offersGit || hasPullRequest) ? (
             <ThreadDetailsSection
               headingId="thread-details-version-control-heading"
               title="Version Control"

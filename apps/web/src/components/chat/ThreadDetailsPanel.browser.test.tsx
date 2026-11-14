@@ -156,7 +156,7 @@ function Panel({ fixture }: { fixture: ReturnType<typeof setup> }) {
         availableEditors={[]}
         showOpenInPicker={false}
         openInShortcutEnabled={false}
-        gitCwd={state.folder}
+        gitCwd={state.folder || null}
         isGitRepo={false}
         envLocked
         availableEnvironments={[]}
@@ -199,6 +199,18 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByText("#27513")).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
+});
+
+it.each([
+  { name: "a No project thread", workspaceRoot: SCRATCH_ROOT, folder: SCRATCH_ROOT + "/thread" },
+  { name: "a thread without a folder", workspaceRoot: "/work/plain", folder: "" },
+])("leaves out Version Control in $name without a pull request", async (input) => {
+  using fixture = setup(input);
+  await using _screen = await render(<Panel fixture={fixture} />);
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
+  await expect
+    .element(page.getByRole("region", { name: "Version Control" }))
+    .not.toBeInTheDocument();
 });
 
 it("offers no Initialize Git before the server config says where No project lives", async () => {

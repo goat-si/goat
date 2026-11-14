@@ -1,4 +1,4 @@
-import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { findProjectForChangeRequest } from "@goat/client-runtime/change-request-links";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -9,6 +9,15 @@ import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useProjects, useQuietThreadShell } from "../../state/entities";
 import { prStatusIndicator, useLinkedThreadPullRequest } from "../ThreadStatusIndicators";
 import { ThreadDetailsPrRows } from "./ThreadDetailsPrRows";
+
+/** Whether the rows below have a pull request to show from the thread shell alone. */
+export function threadShellHasPullRequest(thread: EnvironmentThreadShell | null): boolean {
+  return (
+    (thread?.pullRequests.length ?? 0) > 0 ||
+    Boolean(thread?.linkedPullRequest) ||
+    Boolean(thread?.branchPullRequest)
+  );
+}
 
 export function ThreadDetailsThreadPrRows({
   threadRef,
