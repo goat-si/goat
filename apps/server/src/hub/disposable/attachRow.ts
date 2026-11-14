@@ -21,6 +21,7 @@ import {
   stateMessage,
 } from "./attachModel.ts";
 import type * as Store from "./DisposableMachineStore.ts";
+import { detachMessage } from "./detachText.ts";
 import { decodeEnroll, enrollMessage, enrollSteps, leftPenMessage } from "./enrollModel.ts";
 import type { PenInviteRef } from "./PenInvites.ts";
 
@@ -50,6 +51,7 @@ export interface Row {
   readonly route_json: string | null;
   readonly link_operation_id: string | null;
   readonly link_id: string | null;
+  readonly environment_id: string | null;
   readonly enroll_json: string;
   readonly request_key: string | null;
   readonly state_since: string;
@@ -127,6 +129,14 @@ export const status = (
     (leftWithLink
       ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
       : undefined) ??
+    detachMessage({
+      state: row.state,
+      name: row.name,
+      linkId: row.link_id,
+      detach: enroll.detach,
+      health: enroll.health,
+      linkKeyMoved: enroll.linkKeyMoved === true,
+    }) ??
     (row.pen_admitted_at === null
       ? undefined
       : enrollMessage(

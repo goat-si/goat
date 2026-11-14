@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   type HubMachineAttachInput,
+  type HubMachineDetachInput,
   type HubMachineList,
   type HubMachineListInput,
   type HubMachineReissueInput,
@@ -41,6 +42,7 @@ import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvit
 import { makeSharedPasses } from "./sharedPasses.ts";
 import { makeAuthority, Provisioners } from "./attachAuthority.ts";
 import { makeEnroll } from "./DisposableEnroll.ts";
+import { makeDetach } from "./DisposableDetach.ts";
 import { MachineKey } from "./machineKey.ts";
 import {
   afterCancel,
@@ -95,6 +97,12 @@ export class DisposableAttach extends Context.Service<
       principal: string,
       input: HubMachineReissueInput,
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
+    /** Fences the record and removes its link and Child in later passes (DisposableDetach). */
+    readonly detach: (
+      caller: AttachCaller,
+      principal: string,
+      input: HubMachineDetachInput,
+    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly list: (input: HubMachineListInput) => Effect.Effect<HubMachineList, HubMachinesError>;
     /** The stored record's Pen node id, read without asking Pen; for a caller's host check. */
     readonly nodeOf: (attachId: string) => Effect.Effect<string | undefined, HubMachinesError>;
@@ -110,6 +118,8 @@ export class DisposableAttach extends Context.Service<
      * starts it without waiting, so a slow link never holds back invites and withdrawals.
      */
     readonly enroll: Effect.Effect<void>;
+    /** One pass over linked, detaching and retired records; joined if running. */
+    readonly detachPass: Effect.Effect<void>;
   }
 >()("goat/hub/disposable/DisposableAttach") {}
 
@@ -189,6 +199,7 @@ export const make = Effect.gen(function* () {
 
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
   const enrollment = yield* makeEnroll(exclusive);
+  const detacher = yield* makeDetach(exclusive);
   /** The public line a machine must trust; attach makes the key, a read never does. */
   const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
@@ -599,8 +610,11 @@ export const make = Effect.gen(function* () {
     );
   const enrollPass = enrollment.pass.pipe(Effect.mapError(storageFailed));
   const enroll = Effect.flatMap(shared("enroll", enrollPass), Deferred.await);
+  const detachRun = detacher.pass.pipe(Effect.mapError(storageFailed));
+  const detachPass = Effect.flatMap(shared("detach", detachRun), Deferred.await);
   const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await).pipe(
     Effect.andThen(shared("enroll", enrollPass)),
+    Effect.andThen(shared("detach", detachRun)),
     Effect.asVoid,
   );
 
@@ -763,7 +777,16 @@ export const make = Effect.gen(function* () {
 
   const nodeOf = (attachId: string) => Effect.map(read(attachId), (row) => row?.node_id);
 
-  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile, enroll });
+  return DisposableAttach.of({
+    attach,
+    reissue,
+    detach: detacher.detach,
+    list,
+    nodeOf,
+    reconcile,
+    enroll,
+    detachPass,
+  });
 });
 
 // Settles invites and withdraws ones whose authority ended, also when no client is reading.

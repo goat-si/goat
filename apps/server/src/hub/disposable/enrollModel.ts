@@ -2,6 +2,8 @@ import { type HubMachineStep } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { Detach, Health } from "./detachModel.ts";
+
 /**
  * An attach's progress after Pen admits the machine (design section 2, steps 3 to 5): the route GOAT
  * recorded, whether it reached the machine with the hub's key, and the OpenCodex link operation.
@@ -30,6 +32,12 @@ const Enroll = Schema.Struct({
   keyDir: Schema.optionalKey(Schema.String),
   /** Why the attach stopped and only a person can move it on. */
   stop: Schema.optionalKey(Schema.String),
+  /** Removing the link: detach, retirement, recover (detachModel.ts). */
+  detach: Schema.optionalKey(Detach),
+  /** The handshake of a linked or detaching machine, every 30 minutes. */
+  health: Schema.optionalKey(Health),
+  /** The link names a machine key path that no longer holds the key: GOAT's home moved. */
+  linkKeyMoved: Schema.optionalKey(Schema.Literal(true)),
 });
 export type Enroll = typeof Enroll.Type;
 const EnrollJson = Schema.fromJsonString(Enroll);
