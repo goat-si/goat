@@ -92,6 +92,8 @@ vi.mock("../../state/server", async (importOriginal) => {
         permissionAtom: () => Atom.make(state.canWriteSsh),
       }),
       forgetSshHost: state.forgetSshHost,
+      // Add route reads the hub's nodes; the query mock answers every read the same way.
+      hubNodesLive: () => Atom.make(null),
       updateStateAtom: () => Atom.make({ status: "idle" }),
     },
     environmentUpdateStatesAtom: (key: string) =>
