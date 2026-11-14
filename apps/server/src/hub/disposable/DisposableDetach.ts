@@ -7,7 +7,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { OcxOutput } from "../HubOcx.ts";
-import { conflictCount } from "./attachModel.ts";
 import { type Columns, OWES_ACK, type Row } from "./attachRow.ts";
 import {
   CHECK_EVERY_MS,
@@ -16,7 +15,6 @@ import {
   type Health,
   linkKeyState,
   linkByAlias,
-  onlyHostKeyConflict,
   readRevoke,
   recoverAnswer,
   retires,
@@ -27,6 +25,7 @@ import { EnrollHost } from "./EnrollHost.ts";
 import {
   decodeEnroll,
   decodeRoute,
+  detachRuns,
   type Enroll,
   encodeEnroll,
   OPERATION_REPLAY_MS,
@@ -557,11 +556,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     if (row.final_at !== null) return;
     const enroll = decodeEnroll(row.enroll_json);
     // A conflict stops the record; only a person's force goes past a changed host key.
-    if (
-      conflictCount(row.conflicts_json) > 0 &&
-      !(enroll.detach?.force === true && onlyHostKeyConflict(row.conflicts_json))
-    )
-      return;
+    if (!detachRuns(row)) return;
     // A retirement force or a pending removal is finished under its stored id before anything else.
     const forcing = enroll.detach?.force === true && enroll.detach.step === "revoke";
     if (row.state === "linked")

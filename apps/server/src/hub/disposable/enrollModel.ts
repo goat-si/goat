@@ -2,7 +2,8 @@ import { type HubMachineStep } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { Detach, Health } from "./detachModel.ts";
+import { conflictCount } from "./attachModel.ts";
+import { Detach, Health, onlyHostKeyConflict } from "./detachModel.ts";
 
 /**
  * An attach's progress after Pen admits the machine (design section 2, steps 3 to 5): the route GOAT
@@ -46,6 +47,14 @@ const decodeEnrollJson = Schema.decodeOption(EnrollJson);
 export const decodeEnroll = (json: string): Enroll =>
   Option.getOrElse(decodeEnrollJson(json), () => ({ stop: "unreadable" }));
 export const encodeEnroll = Schema.encodeSync(EnrollJson);
+
+/** Whether a record's detach may run: no conflict, or a person's force past a changed host key only. */
+export const detachRuns = (row: {
+  readonly conflicts_json: string;
+  readonly enroll_json: string;
+}) =>
+  conflictCount(row.conflicts_json) === 0 ||
+  (decodeEnroll(row.enroll_json).detach?.force === true && onlyHostKeyConflict(row.conflicts_json));
 
 /** The route recorded at step 3, which every later SSH command and the link use unchanged. */
 const Route = Schema.Struct({
