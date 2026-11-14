@@ -125,10 +125,12 @@ const makePiFamilyDriver = (
       const maintenanceForEnvironment = (
         env: NodeJS.ProcessEnv,
         binaryPath = effectiveConfig.binaryPath,
+        resolvedCommandPath?: string | null,
       ) =>
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
           binaryPath,
           env,
+          ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -173,6 +175,7 @@ const makePiFamilyDriver = (
                     Pathext: lookupEnv.Pathext,
                   },
                   lookupEnv.binaryPath === "missing" ? "" : lookupEnv.binaryPath,
+                  lookupEnv.binaryPath === "missing" ? null : lookupEnv.binaryPath,
                 ),
               ),
             );

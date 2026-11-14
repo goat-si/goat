@@ -141,6 +141,33 @@ const create = (config: Partial<PiSettings> = {}, enabled = true) =>
   });
 
 it.layer(layerTest)("PiDriver workspace discovery", (it) => {
+  it.effect("maintenance resolves the executable once per uncached lookup", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const executable = `${root}/custom-pi`;
+      yield* fs.writeFileString(executable, "#!/bin/sh\n");
+      yield* fs.chmod(executable, 0o755);
+      let checks = 0;
+      const countingFs: FileSystem.FileSystem = {
+        ...fs,
+        stat: (path) => {
+          if (path === executable) checks++;
+          return fs.stat(path);
+        },
+      };
+      const instance = yield* create().pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: root, HOME: root }),
+        Effect.provideService(FileSystem.FileSystem, countingFs),
+      );
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        executable,
+      );
+      assert.strictEqual(checks, 2);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
