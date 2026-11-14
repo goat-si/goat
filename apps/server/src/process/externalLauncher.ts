@@ -138,6 +138,7 @@ function parseTargetPathAndPosition(target: string): Option.Option<TargetPathAnd
 function resolveCommandEditorArgs(
   editor: (typeof EDITORS)[number],
   target: string,
+  isDirectory: boolean,
 ): ReadonlyArray<string> {
   const parsedTarget = parseTargetPathAndPosition(target);
 
@@ -145,7 +146,11 @@ function resolveCommandEditorArgs(
     case "direct-path":
       return [target];
     case "goto":
-      return Option.isSome(parsedTarget) ? ["--goto", target] : [target];
+      return Option.isSome(parsedTarget)
+        ? ["--goto", target]
+        : isDirectory
+          ? ["--new-window", target]
+          : [target];
     case "line-column":
       return Option.match(parsedTarget, {
         onNone: () => [target],
@@ -483,11 +488,17 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
         baseArgs: "baseArgs" in editorDef ? editorDef.baseArgs : [],
       }),
     );
+    const isDirectory =
+      editorDef.launchStyle === "goto" &&
+      (yield* (yield* FileSystem.FileSystem).stat(input.cwd).pipe(
+        Effect.map((info) => info.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      ));
     return {
       editor: editorDef.id,
       target: input.cwd,
       command,
-      args: [...baseArgs, ...resolveCommandEditorArgs(editorDef, input.cwd)],
+      args: [...baseArgs, ...resolveCommandEditorArgs(editorDef, input.cwd, isDirectory)],
     };
   }
 
