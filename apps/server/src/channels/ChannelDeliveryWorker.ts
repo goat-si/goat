@@ -147,6 +147,18 @@ const make = Effect.gen(function* () {
   const inFlight = new Set<ChannelLedger.ChannelStoredDelivery["deliveryId"]>();
   // Progress writes running now; never more than PROGRESS_WRITES_IN_FLIGHT.
   let progressWrites = 0;
+  interface PendingSettle {
+    readonly owner: string;
+    readonly deliveryId: ChannelLedger.ChannelStoredDelivery["deliveryId"];
+    readonly attempt: number;
+    readonly sentAt: string;
+    readonly outcome: ChannelLedger.ChannelDeliveryOutcome;
+    tries: number;
+    nextAt: number;
+  }
+  // Local sends that reached their destination but whose settle failed; at most
+  // MAX_PENDING_RELEASES, retried by later passes, never sent again.
+  const pendingSettles = new Map<string, PendingSettle>();
   // One slot: a request made during a run asks for one more run after it.
   const reconcileRequests = yield* Queue.sliding<string>(1);
 
@@ -292,6 +304,73 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Records how a send went. A send that reached a local destination is there for the person to
+   * read, so a settle that fails is kept and retried by later passes at its original time, which
+   * keeps a receipt inside its deadline; the destination is never written twice.
+   */
+  const settle = Effect.fn("ChannelDeliveryWorker.settle")(function* (
+    delivery: ChannelLedger.ChannelStoredDelivery,
+    owner: string,
+    outcome: ChannelLedger.ChannelDeliveryOutcome,
+    sentAt: string,
+  ) {
+    const input = { owner, deliveryId: delivery.deliveryId, attempt: delivery.attempts };
+    const settled = yield* ledger
+      .recordDelivery({ ...input, now: sentAt, outcome })
+      .pipe(Effect.result);
+    if (settled._tag === "Success") return;
+    const kind = delivery.message.destination.kind;
+    if (
+      outcome.type !== "delivered" ||
+      (kind !== "goat" && kind !== "mcp") ||
+      settled.failure.reason === "ownership_lost" ||
+      pendingSettles.size >= MAX_PENDING_RELEASES
+    )
+      return yield* settled.failure;
+    yield* Effect.logWarning("channel delivery sent but not settled; settling it again later", {
+      deliveryId: delivery.deliveryId,
+      error: settled.failure,
+    });
+    pendingSettles.set(delivery.deliveryId, {
+      ...input,
+      sentAt,
+      outcome,
+      tries: 0,
+      nextAt:
+        DateTime.toEpochMillis(yield* DateTime.now) + Duration.toMillis(RELEASE_RETRY_INTERVAL),
+    });
+  });
+
+  /** Retries due settles: every few seconds at first, then at the reconciliation pace. */
+  const retrySettles = Effect.fn("ChannelDeliveryWorker.retrySettles")(function* () {
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const due = [...pendingSettles.values()].filter((entry) => entry.nextAt <= now);
+    for (const entry of due.slice(0, RELEASE_BATCH)) {
+      const result = yield* ledger
+        .recordDelivery({
+          owner: entry.owner,
+          deliveryId: entry.deliveryId,
+          attempt: entry.attempt,
+          now: entry.sentAt,
+          outcome: entry.outcome,
+        })
+        .pipe(Effect.result);
+      // A new owner's recovery sends the row again; a recorded settle frees the task's later rows.
+      if (result._tag === "Success" || result.failure.reason === "ownership_lost") {
+        pendingSettles.delete(entry.deliveryId);
+        if (result._tag === "Success") yield* wake.wake;
+        continue;
+      }
+      entry.tries += 1;
+      entry.nextAt =
+        now +
+        Duration.toMillis(
+          entry.tries < RELEASE_ATTEMPTS ? RELEASE_RETRY_INTERVAL : RECONCILE_INTERVAL,
+        );
+    }
+  });
+
   const sendReceipt = Effect.fn("ChannelDeliveryWorker.sendReceipt")(function* (
     delivery: ChannelLedger.ChannelStoredDelivery,
     owner: string,
@@ -327,13 +406,7 @@ const make = Effect.gen(function* () {
       : result.value._tag === "Success"
         ? { type: "delivered", externalMessageId: result.value.success.externalMessageId }
         : deliveryOutcomeFor(result.value.failure, delivery.attempts, now);
-    yield* ledger.recordDelivery({
-      owner,
-      deliveryId: delivery.deliveryId,
-      attempt: delivery.attempts,
-      now: DateTime.formatIso(now),
-      outcome,
-    });
+    yield* settle(delivery, owner, outcome, DateTime.formatIso(now));
     if (outcome.type !== "retry") {
       yield* Fiber.interrupt(expiry).pipe(Effect.forkIn(scope));
       // Rows held for this receipt are free now; the loop would otherwise wait for its next scan.
@@ -410,57 +483,33 @@ const make = Effect.gen(function* () {
     if (!(yield* handOver(delivery, owner))) return;
     const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
     const finishedAt = yield* DateTime.now;
-    const settled = yield* ledger
-      .recordDelivery({
-        owner,
-        deliveryId: delivery.deliveryId,
-        attempt: delivery.attempts,
-        outcome:
-          sent._tag === "Success"
-            ? {
-                type: "delivered",
-                ...(sent.success.externalMessageId === undefined
-                  ? {}
-                  : { externalMessageId: sent.success.externalMessageId }),
-              }
-            : deliveryOutcomeFor(
-                sent.failure,
-                delivery.attempts,
-                finishedAt,
-                delivery.message.personAnswer === undefined
-                  ? undefined
-                  : {
-                      maxAttempts: ANSWER_DECISION_ATTEMPTS,
-                      maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
-                    },
-              ),
-        now: DateTime.formatIso(finishedAt),
-      })
-      .pipe(Effect.result);
-    if (settled._tag === "Success") return;
-    const kind = delivery.message.destination.kind;
-    // A local destination records idempotently, so a send whose settle failed simply goes again.
-    if (
-      sent._tag === "Failure" ||
-      (kind !== "goat" && kind !== "mcp") ||
-      settled.failure.reason === "ownership_lost" ||
-      delivery.attempts >= MAX_ATTEMPTS
-    )
-      return yield* settled.failure;
-    yield* Effect.logWarning("channel delivery sent but not settled; sending it again", {
-      deliveryId: delivery.deliveryId,
-      error: settled.failure,
-    });
-    const entry: PendingRelease = {
+    yield* settle(
+      delivery,
       owner,
-      deliveryId: delivery.deliveryId,
-      attempt: delivery.attempts,
-      tries: 0,
-    };
-    if (!(yield* tryRelease(entry))) yield* holdForRelease(entry);
+      sent._tag === "Success"
+        ? {
+            type: "delivered",
+            ...(sent.success.externalMessageId === undefined
+              ? {}
+              : { externalMessageId: sent.success.externalMessageId }),
+          }
+        : deliveryOutcomeFor(
+            sent.failure,
+            delivery.attempts,
+            finishedAt,
+            delivery.message.personAnswer === undefined
+              ? undefined
+              : {
+                  maxAttempts: ANSWER_DECISION_ATTEMPTS,
+                  maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
+                },
+          ),
+      DateTime.formatIso(finishedAt),
+    );
   });
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {
+    yield* retrySettles();
     let handled = yield* deliverReceipts(owner);
     while (handled < MAX_PER_PASS) {
       const claimed = yield* ledger.claimDue({

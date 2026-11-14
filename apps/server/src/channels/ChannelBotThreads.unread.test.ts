@@ -169,6 +169,18 @@ const recordsOf = (id: string) =>
     ),
     (found) => found[0]?.n ?? 0,
   );
+const refuseMarks = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TRIGGER refuse_mark_insert BEFORE INSERT ON channel_runtime_state
+    WHEN NEW.key LIKE 'task-message-mark:%' BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
+  yield* sql`CREATE TRIGGER refuse_mark_update BEFORE UPDATE ON channel_runtime_state
+    WHEN NEW.key LIKE 'task-message-mark:%' BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
+});
+const allowMarks = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`DROP TRIGGER refuse_mark_insert`;
+  yield* sql`DROP TRIGGER refuse_mark_update`;
+});
 const updatedAt = (id = taskId) =>
   Effect.gen(function* () {
     return (yield* (yield* Ledger.ChannelLedger).getTask(id))!.task.updatedAt;
@@ -302,32 +314,95 @@ describe("task unread follows delivered messages", () => {
   );
 
   it.effect(
-    "regression #2550: a mark write that fails rolls its settle back, and the row is sent again and settles once",
+    "regression #2550: a post whose mark write fails stays unsettled and read, then settles once without a second record",
     () =>
       provide(
         Effect.gen(function* () {
           yield* ready;
           const before = yield* row();
-          const sql = yield* SqlClient.SqlClient;
-          yield* sql`CREATE TRIGGER refuse_mark_insert BEFORE INSERT ON channel_runtime_state
-            WHEN NEW.key LIKE 'task-message-mark:%'
-            BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
-          yield* sql`CREATE TRIGGER refuse_mark_update BEFORE UPDATE ON channel_runtime_state
-            WHEN NEW.key LIKE 'task-message-mark:%'
-            BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
+          yield* refuseMarks;
           yield* TestClock.adjust("1 second");
           yield* deliver(message("refused"));
           assert.strictEqual(yield* recordsOf("refused"), 1);
-          assert.strictEqual(yield* outboxState("refused"), "pending");
+          assert.strictEqual(yield* outboxState("refused"), "delivering");
           const unsettled = yield* row();
           assert.isFalse(unsettled.unread);
           assert.strictEqual(unsettled.lastActivityAt, before.lastActivityAt);
-          yield* sql`DROP TRIGGER refuse_mark_insert`;
-          yield* sql`DROP TRIGGER refuse_mark_update`;
+          yield* allowMarks;
           yield* TestClock.adjust("5 seconds");
           yield* deliverDue;
           assert.strictEqual(yield* recordsOf("refused"), 1);
           assert.strictEqual(yield* outboxState("refused"), "delivered");
+          assert.isTrue((yield* row()).unread);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a receipt whose mark write fails is settled again inside its deadline and turns the row unread",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+            goatInput("one more thing", "receipt-input"),
+            rpcContext,
+          );
+          const receipt: ChannelOutboundMessage = {
+            ...message("receipt"),
+            kind: "receipt",
+            inReplyToInputId: input.inputId,
+          };
+          yield* refuseMarks;
+          yield* (yield* Ledger.ChannelLedger).enqueueDeliveries(
+            [
+              {
+                deliveryId: receipt.deliveryId,
+                causeKey: "reply:" + input.inputId,
+                inputId: input.inputId,
+                taskId,
+                message: receipt,
+              },
+            ],
+            yield* now,
+          );
+          yield* deliverDue;
+          assert.strictEqual(yield* recordsOf("receipt"), 1);
+          assert.strictEqual(yield* outboxState("receipt"), "delivering");
+          assert.isFalse((yield* row()).unread);
+          yield* allowMarks;
+          yield* TestClock.adjust("5 seconds");
+          yield* deliverDue;
+          assert.strictEqual(yield* recordsOf("receipt"), 1);
+          assert.strictEqual(yield* outboxState("receipt"), "delivered");
+          assert.isTrue((yield* row()).unread);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a settle that keeps failing past the quick retries settles once the database recovers, freeing the task's later posts",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          yield* refuseMarks;
+          yield* TestClock.adjust("1 second");
+          yield* deliver(message("stuck"));
+          yield* queue(message("behind"));
+          for (let pass = 0; pass < 10; pass++) {
+            yield* TestClock.adjust("30 seconds");
+            yield* deliverDue;
+          }
+          assert.strictEqual(yield* outboxState("stuck"), "delivering");
+          assert.strictEqual(yield* outboxState("behind"), "pending");
+          assert.isFalse((yield* row()).unread);
+          yield* allowMarks;
+          yield* TestClock.adjust("30 seconds");
+          yield* deliverDue;
+          assert.strictEqual(yield* recordsOf("stuck"), 1);
+          assert.strictEqual(yield* outboxState("stuck"), "delivered");
+          assert.strictEqual(yield* outboxState("behind"), "delivered");
           assert.isTrue((yield* row()).unread);
         }),
       ),
