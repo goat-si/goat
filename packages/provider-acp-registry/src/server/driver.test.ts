@@ -610,7 +610,9 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
           Stream.runHead,
         );
 
-      const probed = yield* waitForModels(["old-model"]).pipe(Effect.forkScoped);
+      const probed = yield* waitForModels(["old-model"]).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
       yield* instance.snapshot.refresh;
       yield* Fiber.join(probed);
       yield* coordinator.publishLiveConfiguration(
@@ -622,7 +624,9 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       );
       yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["old-model", "new-model"]));
 
-      const refreshed = yield* waitForModels(["old-model", "new-model"]).pipe(Effect.forkScoped);
+      const refreshed = yield* waitForModels(["old-model", "new-model"]).pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
       yield* instance.invalidateCaches ?? Effect.void;
       expect(Option.isNone(yield* coordinator.getLiveConfiguration(identity.instanceId))).toBe(
         true,
@@ -701,10 +705,14 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
           },
         );
 
-      const probed = yield* waitFor("model-a:,model-b:").pipe(Effect.forkScoped);
+      const probed = yield* waitFor("model-a:,model-b:").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
       yield* instance.snapshot.refresh;
       yield* Fiber.join(probed);
-      const learned = yield* waitFor("model-a:effort,model-b:effort").pipe(Effect.forkScoped);
+      const learned = yield* waitFor("model-a:effort,model-b:effort").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
       yield* coordinator.publishLiveConfiguration(identity.instanceId, session("model-b"));
       yield* coordinator.publishLiveConfiguration(identity.instanceId, session("model-a"));
       yield* Fiber.join(learned);
