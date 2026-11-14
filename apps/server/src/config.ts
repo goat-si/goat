@@ -54,7 +54,7 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
-  /** The base folder came from GOAT_HOME or --home-dir, not GOAT's default. */
+  /** The base folder came from GOAT_HOME or --base-dir, not GOAT's default. */
   readonly baseDirIsExplicit?: boolean;
 }
 

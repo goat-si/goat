@@ -155,10 +155,12 @@ also refuses the key while a folder on its path can be written by its group or
 others or belongs to another user. GOAT removes group and other write by itself
 only from its state folder, the machine key's folder and its default home
 folder, when they are yours; a home you chose with `GOAT_HOME` or
-`--home-dir`, and every folder above it, it only names. The machine list says
+`--base-dir`, and every folder above it, it only names. The machine list says
 what to do: `chmod go-w` only for a folder of yours, otherwise moving GOAT's
 home to a path whose folders pass. Never change a shared or system folder or
-another user's folder or symlink, even as root. A machine with a full OpenCodex
+another user's folder or symlink, even as root. To move GOAT's home, stop GOAT,
+move the folder, and start GOAT with `GOAT_HOME=<new>` or `--base-dir <new>`;
+the database, secrets and hub records move with it. A machine with a full OpenCodex
 install, or one that shares its SSH host key with another disposable machine,
 stops for you to decide.
 

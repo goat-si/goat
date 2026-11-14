@@ -14,13 +14,15 @@ import { goatFolders, keyPathFor } from "./keyPath.ts";
 // Windows is skipped: GOAT stops there at the path form, and its modes say nothing of the ACL.
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 
+// GOAT running as root is never told to chmod, so the same folder answers chmod false for root.
+const ROOT = process.getuid?.() === 0;
 /** A folder of the user running the test that its group or others can write. */
-const writable = (directory: string, chmod: boolean) => ({
+const writable = (directory: string, own: boolean) => ({
   kind: "directory",
   directory,
   problem: "writable",
   owner: process.getuid?.() ?? -1,
-  chmod,
+  chmod: own && !ROOT,
 });
 
 /** shared/base/userdata/disposable/machine_ed25519 in a private temporary folder. */
@@ -66,7 +68,7 @@ it.live.skipIf(WINDOWS)("GOAT's own base folder left 0775 by a umask of 002 is t
 );
 
 it.live.skipIf(WINDOWS)(
-  "a base folder a person chose with GOAT_HOME or --home-dir is named and never changed",
+  "a base folder a person chose with GOAT_HOME or --base-dir is named and never changed",
   () =>
     Effect.gen(function* () {
       // Pointed at on purpose, it may be a folder its group shares; its state folder is GOAT's.

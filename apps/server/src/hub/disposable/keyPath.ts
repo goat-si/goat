@@ -69,7 +69,7 @@ interface Walk {
 
 /**
  * The folders GOAT may tighten: its state folder, the key's folder, and its base folder unless a
- * person chose it (GOAT_HOME or --home-dir), who may share it on purpose; that one it only names.
+ * person chose it (GOAT_HOME or --base-dir), who may share it on purpose; that one it only names.
  */
 export const goatFolders = (config: {
   readonly baseDir: string;

@@ -229,9 +229,9 @@ const STOPS: Record<string, string> = {
   identity_file_permissions:
     "OpenCodex refused this hub's machine key file's owner or permissions; OpenCodex on this hub may run as another user than GOAT.",
   identity_file_directory:
-    "OpenCodex refused this hub's machine key file: the folder holding it is not private to the user OpenCodex runs as, which may not be GOAT's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
+    "OpenCodex refused this hub's machine key file: the folder holding it is not private to the user OpenCodex runs as, which may not be GOAT's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
   identity_file_ancestor:
-    "OpenCodex refused this hub's machine key file: a folder above it or a symlink on its path is writable by others or belongs to another user than OpenCodex's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --home-dir) to a path that passes; never change a shared or system folder or another user's symlink, even as root.",
+    "OpenCodex refused this hub's machine key file: a folder above it or a symlink on its path is writable by others or belongs to another user than OpenCodex's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --base-dir) to a path that passes; never change a shared or system folder or another user's symlink, even as root.",
   identity_file_unreadable:
     "OpenCodex refused this hub's machine key file: it cannot read it or a folder on its path; OpenCodex on this hub may run as another user than GOAT.",
   identity_file_unsupported_platform:
@@ -279,17 +279,17 @@ const WAITING: Record<string, string> = {
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
   key_symlink_foreign:
-    "OpenCodex refuses a key whose path passes a symlink another user owns. Move GOAT's home (GOAT_HOME or --home-dir) to a path without it; never change another user's symlink, even as root.",
+    "OpenCodex refuses a key whose path passes a symlink another user owns. Move GOAT's home (GOAT_HOME or --base-dir) to a path without it; never change another user's symlink, even as root.",
   key_dir_unsafe:
-    "A folder of yours on the path of this hub's machine key can be written by its group or others, and its path is too long to show here. Move GOAT's home (GOAT_HOME or --home-dir) to a shorter path whose folders pass.",
+    "A folder of yours on the path of this hub's machine key can be written by its group or others, and its path is too long to show here. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass.",
   key_dir_shared:
-    "A folder on the path of this hub's machine key can be written by its group or others, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
+    "A folder on the path of this hub's machine key can be written by its group or others, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
   key_dir_foreign:
-    "A folder on the path of this hub's machine key belongs to another user, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change another user's folder, even as root.",
+    "A folder on the path of this hub's machine key belongs to another user, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change another user's folder, even as root.",
   key_dir_unreadable:
-    "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --home-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
+    "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --base-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
   machine_key_unusable:
-    "This hub's machine key cannot be used: GOAT cannot read it, or others can.",
+    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, or its folder is a symlink.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:
@@ -312,28 +312,28 @@ const PATH_TEXTS: Record<string, { readonly cap: number; readonly text: (at: str
       cap: 140,
       text: (at) =>
         at +
-        " can be written by its group or others, so OpenCodex refuses the machine key under it. It is your folder: run chmod go-w " +
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. If only you use it, run chmod go-w " +
         at +
-        " on the hub, or move GOAT's home (GOAT_HOME or --home-dir) if you share it on purpose.",
+        " on the hub; if you share it on purpose, move GOAT's home (GOAT_HOME or --base-dir).",
     },
     key_dir_shared: {
       cap: 240,
       text: (at) =>
         at +
-        " can be written by its group or others, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change a shared or system folder, even as root. GOAT tries again on the next pass.",
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root. GOAT tries again on the next pass.",
     },
     key_dir_foreign: {
       cap: 240,
       text: (at) =>
         at +
-        " belongs to another user, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --home-dir) to a path whose folders pass; never change another user's folder, even as root. GOAT tries again on the next pass.",
+        " belongs to another user, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change another user's folder, even as root. GOAT tries again on the next pass.",
     },
     key_symlink_foreign: {
       cap: 240,
       text: (at) =>
         "OpenCodex refuses a key whose path passes a symlink another user owns, " +
         at +
-        ", who could point it elsewhere. Move GOAT's home (GOAT_HOME or --home-dir) to a path without it; never change another user's symlink, even as root.",
+        ", who could point it elsewhere. Move GOAT's home (GOAT_HOME or --base-dir) to a path without it; never change another user's symlink, even as root.",
     },
   };
 const pathText = (outcome: string | undefined, at: string | undefined) => {

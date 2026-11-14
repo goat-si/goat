@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as ProcessRunner from "../../processRunner.ts";
 import { make } from "./machineKey.ts";
 
+// it.live: these run the real ssh-keygen and read real file modes, which only wall-clock fixtures can.
 // POSIX modes; a Windows hub cannot hold a disposable machine key (its modes always show group bits).
 const WINDOWS = HostProcess.Platform.defaultValue() === "win32";
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
