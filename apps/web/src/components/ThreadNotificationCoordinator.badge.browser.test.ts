@@ -104,6 +104,7 @@ const thread = {
   subagentOf: null as string | null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
+  pendingRequestId: "request-1",
   session: null as { status: string } | null,
   completionNotification: undefined as string | undefined,
   launchedBy: undefined as
@@ -154,9 +155,9 @@ function toV2ThreadShell(input: typeof thread) {
           ? "failed"
           : "running",
     pendingRuntimeRequest: input.hasPendingUserInput
-      ? { id: "request-1", kind: "user_input", createdAt: SHELL_NOW }
+      ? { id: input.pendingRequestId, kind: "user_input", createdAt: SHELL_NOW }
       : input.hasPendingApprovals
-        ? { id: "request-1", kind: "command", createdAt: SHELL_NOW }
+        ? { id: input.pendingRequestId, kind: "command", createdAt: SHELL_NOW }
         : null,
     latestVisibleMessage: null,
     latestUserMessageAt: null,
@@ -251,6 +252,18 @@ it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
     app.changeSettings();
     expect(state.badge).toHaveBeenLastCalledWith(0);
     expect(notification.close).toHaveBeenCalled();
+  },
+);
+
+it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
+  "notifies when a new %s request replaces the pending request",
+  async (flag) => {
+    await using app = setup();
+    app.start();
+    state.shells.set("one", shell({ [flag]: true, pendingRequestId: "request-1" }));
+    state.shells.set("one", shell({ [flag]: true, pendingRequestId: "request-2" }));
+    const title = flag === "hasPendingApprovals" ? "Approval needed" : "Input needed";
+    expect(TestNotification.sent.map((sent) => sent.title)).toEqual([title, title]);
   },
 );
 

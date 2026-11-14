@@ -11,6 +11,7 @@ export type ThreadNotificationKind = "input" | "completion";
 export interface ThreadNotificationObservation {
   /** Run and status key while the thread needs attention, otherwise null. */
   readonly attention: string | null;
+  readonly requestId?: string | null;
   /** The thread is idle and its latest run completed. */
   readonly settled: boolean;
   /** When the latest run completed, if it did. */
@@ -22,6 +23,7 @@ export function createThreadNotificationGate<Key>(
 ) {
   // The newest completion already notified, or deliberately skipped.
   const handled = new Map<Key, number>();
+  const attended = new Map<Key, Set<string>>();
   const skip = (key: Key, at: number | null) => {
     if (at !== null && at > (handled.get(key) ?? -Infinity)) handled.set(key, at);
   };
@@ -34,8 +36,18 @@ export function createThreadNotificationGate<Key>(
     ): void {
       // The first sighting, archived threads, and stopped or silent runs never notify completion.
       if (!prior || options.archived || options.quiet) skip(key, next.completedAt);
+      let fresh = next.attention !== null && next.attention !== prior?.attention;
+      if (next.attention === null) attended.delete(key);
+      else if (next.requestId != null) {
+        const seen = attended.get(key) ?? new Set<string>();
+        fresh = !seen.has(next.attention);
+        seen.add(next.attention);
+        const oldest = seen.values().next().value;
+        if (seen.size > 1000 && oldest !== undefined) seen.delete(oldest);
+        attended.set(key, seen);
+      }
       if (!prior || options.archived) return;
-      if (next.attention && next.attention !== prior.attention) {
+      if (fresh) {
         notify(key, "input");
         return;
       }
@@ -47,9 +59,11 @@ export function createThreadNotificationGate<Key>(
     /** Forgets threads that left the snapshot. */
     retain(keys: ReadonlySet<Key>): void {
       for (const key of handled.keys()) if (!keys.has(key)) handled.delete(key);
+      for (const key of attended.keys()) if (!keys.has(key)) attended.delete(key);
     },
     clear(): void {
       handled.clear();
+      attended.clear();
     },
   };
 }
@@ -113,9 +127,10 @@ export function notificationAttention(
   status: string,
   runId: string,
   feedOwned: boolean,
+  requestId: string | null = null,
 ): string | null {
   if (!NOTIFYING_STATUSES.has(status) || (feedOwned && status === "approval")) return null;
-  return `${runId}:${status}`;
+  return requestId === null ? `${runId}:${status}` : `${runId}:${status}:${requestId}`;
 }
 
 const NO_THREADS: ReadonlySet<ThreadId> = new Set();

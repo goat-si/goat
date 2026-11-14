@@ -7,6 +7,7 @@ import {
   presentThreadShell,
 } from "@goat/client-runtime/state/models";
 import { pendingSubagentRequestsByThread } from "@goat/client-runtime/state/threads";
+import { resolveBackgroundThreadRequest } from "./backgroundThreadAnnouncement";
 import type { AnyRouter } from "@tanstack/react-router";
 import type {
   DecisionFeed,
@@ -455,10 +456,12 @@ export function startThreadNotifications(
       const thread = presentThreadShell(environmentId, rawThread, subagentRequest);
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
+      const requestId = resolveBackgroundThreadRequest(thread).requestId;
       const attention = notificationAttention(
         status,
         thread.latestRun?.runId ?? "",
         feedOwned.has(rawThread.id),
+        requestId,
       );
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
       const settled = status === "ready" && thread.latestRun?.status === "completed";
@@ -469,6 +472,7 @@ export function startThreadNotifications(
         status,
         feedOwned: feedOwned.has(rawThread.id),
         attention,
+        requestId,
         settled,
         completedAt: settled && Number.isFinite(completedAt) ? completedAt : null,
       };

@@ -35,6 +35,23 @@ function harness() {
 }
 
 describe("createThreadNotificationGate", () => {
+  it("notifies each replacement request once while attention remains pending", () => {
+    const { notify, observe } = harness();
+    observe(working);
+    const request = (id: string) => ({
+      attention: notificationAttention("input", "run-1", false, id),
+      requestId: id,
+      settled: false,
+      completedAt: null,
+    });
+    observe(request("a"));
+    observe(request("b"));
+    observe(request("a"));
+    expect(notify).toHaveBeenCalledTimes(2);
+    observe(working);
+    observe(request("a"));
+    expect(notify).toHaveBeenCalledTimes(3);
+  });
   it("notifies a completion immediately and only once", () => {
     const { notify, observe } = harness();
     observe(working);
