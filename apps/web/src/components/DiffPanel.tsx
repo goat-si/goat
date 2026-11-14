@@ -50,6 +50,7 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { selectVisibleDiffFiles } from "./DiffPanel.logic";
+import { gitDiffPreviewInput } from "~/lib/gitDiffPreviewInput";
 import { DiffPanelAwaitingCheckpoint, useDiffPanelTurn } from "./diffs/DiffPanelTurn";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
@@ -255,13 +256,12 @@ export default function DiffPanel({
   );
   const branchDiffPreviewInput =
     canReadFiles && isGitSelection && activeThread && activeCwd
-      ? {
+      ? gitDiffPreviewInput({
           cwd: activeCwd,
           scope: GIT_REVIEW_SCOPES[selectedGitScope].sourceKind,
-          ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
+          baseRef: selectedBaseRef,
           ignoreWhitespace: diffIgnoreWhitespace,
-          metadataOnly: true,
-        }
+        })
       : undefined;
   const canRefreshGitDiff =
     isGitRepo && isGitSelection && activeThread != null && activeCwd != null;

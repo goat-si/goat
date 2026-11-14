@@ -9,6 +9,7 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useEnvironmentQuery } from "~/state/query";
 import { reviewEnvironment } from "~/state/review";
 import { revisionedQuery } from "~/state/revisionedQuery";
+import { gitDiffPreviewInput } from "~/lib/gitDiffPreviewInput";
 import { resolveChangesTotals } from "./GitActionsControl.logic";
 
 export function useChangesTotals(input: {
@@ -27,6 +28,9 @@ export function useChangesTotals(input: {
   const ignoreWhitespace = useDiffPanelSessionStore((state) => state.ignoreWhitespace) ?? setting;
   const { canReadFiles } = useFilesystemReadAccess(input.activeEnvironmentId);
   const status = input.gitStatus;
+  // Same input as the Diff panel's branch query, so both read one cached result. Status
+  // totals join the revision because edits, pulls and resets outside a turn leave the mutation
+  // id as is.
   const revision = status
     ? JSON.stringify([
         input.workspaceMutationId,
@@ -48,13 +52,12 @@ export function useChangesTotals(input: {
       ? revisionedQuery(
           reviewEnvironment.diffPreview({
             environmentId: input.activeEnvironmentId,
-            input: {
+            input: gitDiffPreviewInput({
               cwd: input.gitCwd,
-              ...(baseRef ? { baseRef } : {}),
-              ignoreWhitespace,
-              metadataOnly: true,
               scope: "branch-range",
-            },
+              baseRef,
+              ignoreWhitespace,
+            }),
           }),
           revision,
         )
