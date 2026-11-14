@@ -89,9 +89,12 @@ it("keeps the production destination across stream messages and reconnects", asy
     expect(reads).toBe(before);
     env.CURSOR_BACKEND_URL = "https://foreign.invalid";
     const beforeRejectedOpen = requests.length;
+    using streamOpens = vi.spyOn(run, "stream");
     expect(() => guardedStream(run, () => new Error("backend mismatch"))).toThrow(
       "backend mismatch",
     );
+    // The SDK never starts the rejected stream, so it cannot schedule a request later.
+    expect(streamOpens).not.toHaveBeenCalled();
     expect(
       requests
         .slice(beforeRejectedOpen)
