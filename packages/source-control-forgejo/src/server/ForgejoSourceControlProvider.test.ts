@@ -18,8 +18,8 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { VcsProcessSpawnError } from "@goat/contracts";
 import { firstNonEmptyLine } from "@goat/source-control-core/server/discovery";
-import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
