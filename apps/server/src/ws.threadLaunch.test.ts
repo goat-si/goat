@@ -88,22 +88,24 @@ it.effect(
               : Effect.void,
       }).pipe(
         Effect.provide(
-          layerWsRpc(
-            SESSION,
-            {
-              hasHost: Effect.succeed(false),
-              attach: () => Stream.die("unused connection catalog"),
-              respond: () => Effect.die("unused connection catalog"),
-              invoke: () => Effect.die("unused connection catalog"),
-            },
-            { surface: "web" },
-            {},
-            yield* PreviewAutomationBroker.PreviewAutomationBroker,
-            yield* ServerBrowser.ServerBrowser,
-            () => Effect.void,
-          ).pipe(Layer.provide(services)),
+          Layer.merge(
+            layerWsRpc(
+              SESSION,
+              {
+                hasHost: Effect.succeed(false),
+                attach: () => Stream.die("unused connection catalog"),
+                respond: () => Effect.die("unused connection catalog"),
+                invoke: () => Effect.die("unused connection catalog"),
+              },
+              { surface: "web" },
+              {},
+              yield* PreviewAutomationBroker.PreviewAutomationBroker,
+              yield* ServerBrowser.ServerBrowser,
+              () => Effect.void,
+            ).pipe(Layer.provide(services)),
+            RpcAuthorization.layer(SESSION.scopes),
+          ),
         ),
-        Effect.provide(RpcAuthorization.layer(SESSION.scopes)),
       );
       const payload = yield* decodeLaunchInput({
         commandId: "command-launch",
