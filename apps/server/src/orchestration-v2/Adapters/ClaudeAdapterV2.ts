@@ -21,6 +21,7 @@ import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
+import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
@@ -4492,7 +4493,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const events = yield* makeClaudeEventQueue();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
         const taskOutputTails = new Map<
           string,
@@ -4808,7 +4809,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               };
             }
           }
-          return Queue.offer(events, event).pipe(Effect.asVoid);
+          return events.offer(event);
         };
 
         const persistAttachmentBudget = Effect.fnUntraced(function* (nativeThreadId: string) {
@@ -11238,7 +11239,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession: session,
           getModelContextWindow: (selection) => resolveContextWindow(selection) ?? undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(events.take),
           backgroundTasksEndWithProcess: true,
           hasPendingBackgroundWork: Effect.gen(function* () {
             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
