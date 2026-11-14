@@ -853,6 +853,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }),
   );
 
+  // quarantine: #3176 Windows cannot execute the mock CLI script.
   it.live.skipIf(windowsHost)("refreshes Claude limits after the first post-reset read fails", () =>
     Effect.gen(function* () {
       const { outcome, after } = yield* redeemClaudeReset({
