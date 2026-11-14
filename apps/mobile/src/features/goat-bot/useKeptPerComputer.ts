@@ -74,7 +74,6 @@ export function useKeptPerComputer<A>(
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const settled = listed && live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
-  // The computer's removals as this render saw them; the write below is this render's answer.
   const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {

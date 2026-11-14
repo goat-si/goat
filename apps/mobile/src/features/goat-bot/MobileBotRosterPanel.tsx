@@ -195,7 +195,6 @@ export function MobileBotRoster(props: {
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);
                 },
                 onLongPressBot: askAbout,
-                // Offline a deleted bot's Restore stays in view, disabled with the reason.
                 canRestore: manage.mayManage,
                 onRestoreDeleted: (bot) =>
                   menu(`Restore ${bot.name}?`, "Its conversation comes back.", [
