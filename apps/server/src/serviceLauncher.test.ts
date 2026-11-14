@@ -274,6 +274,40 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       }),
   );
 
+  it.effect("starts the runtime in a GOAT home whose name ends in a space", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-space-" });
+      const root = path.join(parent, "GOAT data ");
+      const versionDir = path.join(root, "runtime", "goat", "versions", "1.0.0");
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        versionDir,
+        `import { writeFileSync } from "node:fs";
+writeFileSync(new URL("./started", import.meta.url), "");
+process.exit(0);`,
+      );
+      yield* Effect.promise(() =>
+        writeServiceState(path.join(root, "runtime", "service-state.json"), {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+      vi.stubEnv("GOAT_HOME", root);
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+      const failure = yield* Effect.promise(() =>
+        main().then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+      assert.include(String(failure), "Active child exited unexpectedly (0).");
+      assert.isTrue(yield* fs.exists(path.join(versionDir, "started")));
+    }),
+  );
+
   it.effect("a fresh launcher clears a restart deferred by goat update", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
