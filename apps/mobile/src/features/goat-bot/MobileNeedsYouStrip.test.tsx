@@ -182,6 +182,15 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+// The app's computers: the bot computer "env" stays in the catalog throughout.
+vi.mock("../../connection/catalog", async () => {
+  const { Atom: A } = await import("effect/reactivity");
+  return {
+    environmentCatalog: {
+      catalogValueAtom: A.make({ isReady: true, entries: new Map([["env", { enabled: true }]]) }),
+    },
+  };
+});
 // The bot computer's connection as the app sees it; each test sets it.
 const link = vi.hoisted(() => ({ phase: "connected" }));
 vi.mock("../../state/environments", () => ({

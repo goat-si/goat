@@ -110,7 +110,7 @@ export function GoatBotRouteScreen({
       member={member}
       main={main}
       onRestoreMember={
-        member !== null && member.state === "deleted" && manage.canManage
+        member !== null && member.state === "deleted" && manage.mayManage
           ? () => manage.restore(member)
           : undefined
       }

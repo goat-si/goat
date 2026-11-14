@@ -67,8 +67,20 @@ vi.mock("../../state/channels", () => ({
   },
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+// The app's computers. Each test's registry holds its own catalog value; "env" is listed unless a test says not.
+const catalog = vi.hoisted(() => ({
+  atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
+}));
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  catalog.atom = Atom.make<unknown>({
+    isReady: true,
+    entries: new Map(["env", "first", "second"].map((id) => [id, { enabled: true }])),
+  });
+  return { environmentCatalog: { catalogValueAtom: catalog.atom } };
+});
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
-import { forgetKeptPerComputer, resetKeptPerComputerForTests } from "./useKeptPerComputer";
+import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 let value: ReturnType<typeof useMobileBotRoster>;
 function Probe() {
@@ -197,11 +209,16 @@ it("never shows one computer's kept bots for another", async () => {
   expect(memberNames()).toEqual(["Echo"]);
 });
 
-it("forgets a computer's kept bots when that computer is removed, so adding it again starts empty", async () => {
+it("forgets a computer's kept bots when it leaves the app, even removed while connected, so adding it again starts empty", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
   state.bots = echoBots;
   state.botRef = { environmentId: "env", threadId: "bot" };
   const registry = AtomRegistry.make();
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
   root = createRoot(document.createElement("div"));
   const rendered = () => (
     <RegistryContext value={registry}>
@@ -210,8 +227,12 @@ it("forgets a computer's kept bots when that computer is removed, so adding it a
   );
   await act(async () => root?.render(rendered()));
   expect(memberNames()).toEqual(["Echo"]);
+  // Removed while its live answer is still on screen: nothing writes it back.
+  await act(async () => registry.set(catalog.atom!, listed([])));
+  await act(async () => root?.render(rendered()));
   state.connected = false;
-  forgetKeptPerComputer(EnvironmentId.make("env"), registry);
+  await act(async () => root?.render(rendered()));
+  await act(async () => registry.set(catalog.atom!, listed(["env"])));
   await act(async () => root?.render(rendered()));
   expect(memberNames()).toEqual([]);
 });

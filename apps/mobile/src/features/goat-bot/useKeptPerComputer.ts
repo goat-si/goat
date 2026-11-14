@@ -1,14 +1,15 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue, RegistryContext } from "@effect/atom-react";
 import { accessDenied } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
-import { useEffect } from "react";
+import { Atom, type AtomRegistry } from "effect/reactivity";
+import { useContext, useEffect } from "react";
 
-import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentCatalog } from "../../connection/catalog";
 import type { EnvironmentQueryView } from "../../state/query";
 
 // The last successful answer of a read, per computer, so the bot list and open asks still read while
-// that computer is offline. Kept until the computer is removed or an answer denies access.
+// that computer is offline. Kept while the computer is in the app's catalog: leaving the catalog,
+// by any path, forgets it, and an answer denying access does too.
 const KINDS = ["bots", "asks"] as const;
 type Kind = (typeof KINDS)[number];
 let generation = 0;
@@ -16,14 +17,31 @@ const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Ato
 const NO_KEPT = Atom.make<unknown>(null);
 const keyOf = (kind: Kind, environmentId: EnvironmentId) =>
   `${generation}:${kind}:${environmentId}`;
+const following = new WeakSet<AtomRegistry.AtomRegistry>();
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
 }
 
-/** Forget what was kept for a computer this phone no longer connects to. */
-export function forgetKeptPerComputer(environmentId: EnvironmentId, registry = appAtomRegistry) {
+function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
   for (const kind of KINDS) registry.set(keptAtom(keyOf(kind, environmentId)), null);
+}
+
+/** Once per registry: a computer that leaves the catalog loses what was kept for it. */
+function followCatalog(registry: AtomRegistry.AtomRegistry) {
+  if (following.has(registry)) return;
+  following.add(registry);
+  let known = new Set<EnvironmentId>();
+  registry.subscribe(
+    environmentCatalog.catalogValueAtom,
+    (catalog) => {
+      const now = new Set(catalog.entries.keys());
+      for (const environmentId of known)
+        if (!now.has(environmentId)) forget(registry, environmentId);
+      known = now;
+    },
+    { immediate: true },
+  );
 }
 
 /**
@@ -37,10 +55,14 @@ export function useKeptPerComputer<A>(
   live: EnvironmentQueryView<A>,
   offline: boolean,
 ): A | null {
+  const registry = useContext(RegistryContext);
+  followCatalog(registry);
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const listed = environmentId !== null && catalog.entries.has(environmentId);
   const atom = environmentId === null ? NO_KEPT : keptAtom(keyOf(kind, environmentId));
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
-  const settled = live.isSuccess ? live.data : null;
+  const settled = listed && live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
@@ -50,5 +72,5 @@ export function useKeptPerComputer<A>(
     } else if (settled !== null && settled !== stored) store(settled);
   }, [environmentId, settled, stored, denied, store]);
   if (!offline || live.data !== null) return live.data;
-  return stored;
+  return listed ? stored : null;
 }
