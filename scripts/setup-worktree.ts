@@ -51,7 +51,7 @@ function vpSupportsVerifiedNodeDownload(): { supported: boolean; timedOut: boole
     encoding: "utf8",
     timeout: 5_000,
   });
-  const match = /^vp v(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(result.stdout?.split(/\r?\n/, 1)[0] ?? "");
+  const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(result.stdout?.split(/\r?\n/, 1)[0] ?? "");
   const timedOut = result.error?.code === "ETIMEDOUT";
   if (result.status !== 0 || !match) return { supported: false, timedOut };
   const [, major = "0", minor = "0", patch = "0"] = match;

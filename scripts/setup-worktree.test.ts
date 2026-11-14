@@ -96,7 +96,7 @@ function setupFixture(
             : nodeRunner;
     NodeFS.writeFileSync(
       NodePath.join(bin, "vp"),
-      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1" = "--version" ] && [ -n "$SETUP_TEST_USE_CUSTOM_VERSION" ]; then printf '%s' "$SETUP_TEST_CUSTOM_VERSION"; exit \${SETUP_TEST_VERSION_EXIT:-0}; fi\nif [ "$1" = "--version" ]; then : > "$SETUP_TEST_LOG.version"; printf 'vp v%s\\n' "\${SETUP_TEST_VP_VERSION:-1.5.0}"; exit 0; fi\nprintf 'vp %s\\n' "$1" >> "$SETUP_TEST_LOG"\nif [ "$1" = "env" ]; then ${runner}; fi\nif [ -n "$SETUP_TEST_KILL_RERUN" ]; then kill -9 "$SETUP_TEST_RERUN_PID"; fi\nif [ -n "$SETUP_TEST_VP_FAIL" ]; then printf '%s\\n' "$SETUP_TEST_VP_FAIL" >&2; exit 3; fi\nexit 0\n`,
       { mode: 0o755 },
     );
   }
@@ -458,6 +458,40 @@ require("node:module").syncBuiltinESMExports();`,
         assert.isFalse(NodeFS.existsSync(fixture.log));
       } finally {
         fixture.cleanup();
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "accepts only a stable vp version in the exact expected format",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      for (const [output, accepted, exit] of [
+        ["vp v0.2.2", true, 0],
+        ["vp v0.2.2\n", true, 0],
+        ["vp v0.2.10\r\n", true, 0],
+        ["vp v1.0.0\n", true, 0],
+        ["vp v0.2.1\n", false, 0],
+        ["vp v0.2.2-beta.1\n", false, 0],
+        ["vp v0.3.0-rc.1\n", false, 0],
+        ["vp v0.3.0 rc.1\n", false, 0],
+        ["vp v0.2.2 unexpected\n", false, 0],
+        ["v0.2.2\n", false, 0],
+        ["vp 0.2.2\n", false, 0],
+        ["", false, 0],
+        ["vp v1.0.0\n", false, 1],
+      ] as const) {
+        const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+        fixture.env.SETUP_TEST_CUSTOM_VERSION = output;
+        fixture.env.SETUP_TEST_USE_CUSTOM_VERSION = "1";
+        fixture.env.SETUP_TEST_VERSION_EXIT = String(exit);
+        try {
+          const result = fixture.run();
+          assert.equal(result.status, accepted ? 0 : 1, JSON.stringify(output));
+          if (!accepted) assert.match(result.stderr, /update vite-plus/i);
+        } finally {
+          fixture.cleanup();
+        }
       }
     },
   );
