@@ -183,9 +183,7 @@ it("announces a reply while a file is open without repeating it on close", async
     await expect.element(screen.getByRole("heading", { name: "Weekly summary" })).toBeVisible();
     const fresh = { ...row, id: "new", text: "New reply" };
     await screen.rerender(view("bot", [row, fresh], source([row.id, fresh.id])));
-    const status = screen.container.querySelector<HTMLElement>(
-      '[role="status"][aria-label="New bot reply"]',
-    );
+    const status = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
     if (!status) throw new Error("missing bot status");
     expect(status.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
     expect(status.closest(".hidden, [hidden], [aria-hidden=true], [inert]")).toBeNull();

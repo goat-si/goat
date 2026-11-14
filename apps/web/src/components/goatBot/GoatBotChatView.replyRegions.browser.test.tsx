@@ -68,9 +68,7 @@ const view = (rows: ReadonlyArray<GoatBotRow>, work: boolean, reading = false) =
 
 it("keeps reply announcements independent of activity, clears on send, and alternates replies", async () => {
   await using screen = await render(view([old], true));
-  const replyStatus = screen.container.querySelector<HTMLElement>(
-    '[role="status"][aria-label="New bot reply"]',
-  );
+  const replyStatus = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
   expect(replyStatus).not.toBeNull();
   if (!replyStatus) throw new Error("missing reply status");
   expect(replyStatus.textContent).toBe("");
@@ -108,7 +106,7 @@ it("does not mutate the reply text when the bot finishes working", async () => {
   const first = reply("first");
   await screen.rerender(view([old, first], true));
   const status =
-    screen.container.querySelector<HTMLElement>('[role="status"][aria-label="New bot reply"]') ??
+    screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]") ??
     screen.container.querySelector<HTMLElement>('[role="status"][aria-atomic="true"]');
   if (!status) throw new Error("missing status");
   expect(status.textContent).toContain("GOAT Bot replied.");
@@ -128,7 +126,7 @@ it("clears the reply as soon as the composer accepts a send", async () => {
   const first = reply("first");
   await screen.rerender(view([old, first], true));
   const status =
-    screen.container.querySelector<HTMLElement>('[role="status"][aria-label="New bot reply"]') ??
+    screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]") ??
     screen.container.querySelector<HTMLElement>('[role="status"][aria-atomic="true"]');
   if (!status) throw new Error("missing status");
   expect(status.textContent).toContain("GOAT Bot replied.");

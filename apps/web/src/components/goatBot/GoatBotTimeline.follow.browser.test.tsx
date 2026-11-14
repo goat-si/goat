@@ -732,7 +732,7 @@ it("guard: live history and later exposure of a hidden baseline item are silent"
   projection.statuses = { speech: "live" };
   const hidden = reply("hidden-history");
   await using screen = await render(<SpeechChat shown={rows} source={[...rows, hidden]} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   expect(status?.textContent).toBe("");
   const element = scroller(screen.container);
   await act(() => {
@@ -747,7 +747,7 @@ it("guard: live history and later exposure of a hidden baseline item are silent"
 it("announces new bot replies once, batches newest and retains them across one activity change", async () => {
   projection.statuses = { speech: "live" };
   await using screen = await render(<SpeechChat shown={[]} source={[]} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   expect(status?.textContent).toBe("");
   const first = reply("first");
   await screen.rerender(<SpeechChat shown={[first]} source={[first]} />);
@@ -784,16 +784,14 @@ it("announces new bot replies once, batches newest and retains them across one a
       thread="other"
     />,
   );
-  expect(
-    screen.container.querySelector('[role="status"][aria-label="New bot reply"]')?.textContent,
-  ).toBe("");
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
 });
 
 it("announces and cues a filtered new reply only when first exposed", async () => {
   projection.statuses = { speech: "live" };
   const fresh = reply("filtered-new");
   await using screen = await render(<SpeechChat shown={rows} source={rows} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   const element = scroller(screen.container);
   await act(() => {
     element.scrollTop = 0;
@@ -817,7 +815,7 @@ it("consumes replies exposed during synchronization and announces only the newes
   const older = reply("sync-older");
   const newer = reply("sync-newer");
   await using screen = await render(<SpeechChat shown={rows} source={rows} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   projection.statuses.speech = "synchronizing";
   await screen.rerender(
     <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
@@ -841,16 +839,14 @@ it("consumes replies exposed during synchronization and announces only the newes
   await screen.rerender(<SpeechChat thread="other" shown={[]} source={[]} />);
   projection.statuses.speech = "live";
   await screen.rerender(<SpeechChat shown={rows} source={[...rows, older, newer, ghost]} />);
-  expect(
-    screen.container.querySelector('[role="status"][aria-label="New bot reply"]')?.textContent,
-  ).toBe("");
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
 });
 
 it("announces a synchronized reply even if filtering removes the last timeline row", async () => {
   projection.statuses = { speech: "live" };
   const fresh = reply("sync-last");
   await using screen = await render(<SpeechChat shown={[]} source={[]} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   projection.statuses.speech = "synchronizing";
   await screen.rerender(<SpeechChat shown={[fresh]} source={[fresh]} />);
   expect(status?.textContent).toBe("");
@@ -864,7 +860,7 @@ it("announces exposure while following and never revives its cue after scrolling
   projection.statuses = { speech: "live" };
   const fresh = reply("following-reply");
   await using screen = await render(<SpeechChat shown={rows} source={rows} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
   await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
   expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
@@ -881,7 +877,7 @@ it("announces exposure while following and never revives its cue after scrolling
 it("announces replies after a newer send and alternates successive categories", async () => {
   projection.statuses = { speech: "live" };
   await using screen = await render(<SpeechChat shown={[]} source={[]} />);
-  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   const first = reply("earlier-reply");
   const send = rows[0]!;
   await screen.rerender(<SpeechChat shown={[first, send]} source={[first, send]} />);

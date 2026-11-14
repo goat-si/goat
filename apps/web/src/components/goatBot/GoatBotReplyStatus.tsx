@@ -56,7 +56,7 @@ export function GoatBotReplyStatus({
     setReply({ ...reply, readingKey: replyingSince, sends, text: sending ? "" : reply.text });
   }
   return (
-    <span role="status" aria-live="polite" aria-label="New bot reply" className="sr-only">
+    <span role="status" aria-live="polite" data-goat-bot-reply-status="" className="sr-only">
       {painted ? reply.text : ""}
     </span>
   );

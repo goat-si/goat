@@ -35,7 +35,7 @@ const view = (work: boolean, reply = false, reading = false) => (
 
 it("keeps the reply unchanged across activity transitions", async () => {
   await using screen = await render(view(true));
-  const reply = screen.getByRole("status", { name: "New bot reply" });
+  const reply = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
   await screen.rerender(view(true, true));
   await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
   await screen.rerender(view(false, true));
@@ -46,7 +46,7 @@ it("keeps the reply unchanged across activity transitions", async () => {
 
 it("clears the reply when the person sends a message", async () => {
   await using screen = await render(view(true));
-  const reply = screen.getByRole("status", { name: "New bot reply" });
+  const reply = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
   await screen.rerender(view(true, true));
   await screen.rerender(view(true, true, true));
   await expect.element(reply).toHaveTextContent("");
