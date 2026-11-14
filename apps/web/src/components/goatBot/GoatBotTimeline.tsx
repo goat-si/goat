@@ -32,6 +32,7 @@ import {
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { goatBotSearch, useGoatBotMember, useGoatBotName } from "./goatBotMemberContext";
@@ -119,7 +120,12 @@ export function GoatBotTimeline({
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
 }) {
-  const { copyToClipboard } = useCopyToClipboard();
+  const [copiedRow, setCopiedRow] = useState<string | null>(null);
+  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
+    timeout: 1200,
+    onCopy: setCopiedRow,
+    onError: () => toastManager.add({ type: "error", title: "Could not copy reply" }),
+  });
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
@@ -553,14 +559,16 @@ export function GoatBotTimeline({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        aria-label="Copy"
-                        onClick={() => copyToClipboard(row.text, undefined)}
+                        aria-label={isCopied && copiedRow === row.id ? "Copied" : "Copy"}
+                        onClick={() => copyToClipboard(row.text, row.id)}
                       />
                     }
                   >
                     <CopyIcon className="size-4" />
                   </TooltipTrigger>
-                  <TooltipPopup>Copy</TooltipPopup>
+                  <TooltipPopup>
+                    {isCopied && copiedRow === row.id ? "Copied" : "Copy"}
+                  </TooltipPopup>
                 </Tooltip>
               </div>
             </div>
