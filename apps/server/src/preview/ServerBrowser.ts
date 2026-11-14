@@ -14,7 +14,6 @@ import {
   PreviewAutomationLogsInput,
   PreviewClearProfileError,
   PreviewViewportSetting as PreviewViewportSettingSchema,
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type PreviewAppearancePreference,
@@ -69,7 +68,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
 
-import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -89,6 +87,7 @@ import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
   browserSessionView,
   markUsed,
@@ -1525,8 +1524,6 @@ const make = Effect.gen(function* () {
           "No recording is active for this tab.",
         );
       }
-      let mimeType: string | null;
-      const chunks: Array<Buffer> = [];
       try {
         await recording.session.send("Page.stopScreencast").catch(constVoid);
         await Promise.all(recording.framesInFlight);
@@ -1553,48 +1550,11 @@ const make = Effect.gen(function* () {
         const stopped = await recording.encoder.evaluate(() =>
           (globalThis as unknown as EncoderWindow).__goatRecorder.stop(),
         );
-        mimeType = stopped.mimeType;
-        // Checked before the transfer so an oversized video never lands in this process.
-        if (stopped.bytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-          throw new ServerBrowserPage.ServerBrowserOperationError(
-            "PreviewAutomationRecordingTooLargeError",
-            "The recording is larger than the attachment limit.",
-          );
-        }
-        for (let index = 0; index < stopped.count; index += 1) {
-          const chunk = await recording.encoder.evaluate(
-            (chunkIndex) =>
-              (globalThis as unknown as EncoderWindow).__goatRecorder.chunk(chunkIndex),
-            index,
-          );
-          chunks.push(Buffer.from(chunk, "base64"));
-        }
+        return await saveRecording(recording.encoder, stopped, config.attachmentsDir, tab.tabId);
       } finally {
         await recording.encoder.close().catch(constVoid);
         tab.recording = null;
       }
-      const data = Buffer.concat(chunks);
-      if (!mimeType || data.byteLength === 0) {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          "The recording captured no frames.",
-        );
-      }
-
-      const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-      const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}-${extension}`;
-      const path = NodePath.join(config.attachmentsDir, `${pendingId}.${extension}`);
-      await NodeFSP.mkdir(config.attachmentsDir, { recursive: true });
-      await NodeFSP.writeFile(path, data);
-      return {
-        id: pendingId,
-        tabId: tab.tabId,
-        path,
-        mimeType: mimeType.split(";")[0]!,
-        sizeBytes: data.byteLength,
-        createdAt: new Date().toISOString(),
-        uploadedAttachmentId: pendingId,
-      };
     });
 
   const pointerFor =
