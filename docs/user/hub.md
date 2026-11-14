@@ -193,14 +193,18 @@ answering for 24 hours; if it answers again later, detach it to end its record.
 A failed try counts only while this hub's Pen answers its member list, so a
 stopped Pen does not remove its machines' links; a hub whose network is cut while
 Pen keeps running still counts them. A machine that answers but whose cleanup
-OpenCodex cannot confirm, or that has an unfinished disconnect, waits for you
-instead, and the machine list says what to check. GOAT marks each purge it gives
-up on for a silent machine as resolved in `ocx link operations` itself, so
-OpenCodex's journal does not fill up; the entries it leaves are the ones the
-machine list asks you to check and resolve.
+OpenCodex cannot confirm waits for you instead: the machine list says what to
+check and names the operation to resolve with
+`ocx link operations resolve --operation-id <id> --yes` before you force it or
+detach it again. A revoke OpenCodex left running, or never recorded, goes again
+under its own id when you fix what stopped it and detach again. GOAT marks each
+purge it gives up on for a silent machine as resolved itself, so OpenCodex's
+journal does not fill up. If GOAT's removal of a silent machine's link stops,
+the machine list says why; once that is fixed, detach it.
 **Force detach** removes the link now, without the machine; only a person can
 force, and it is also the way out for a machine that presents another SSH host
-key. If a forced or retired machine is gone for good, run
+key: force it first, then remove it from Pen. If a forced or retired machine is
+gone for good, run
 `ocx link recover --forget --link-id <id> --yes` on the hub yourself, as the
 machine list says; OpenCodex refuses it from an agent. A detaching machine you
 remove from Pen keeps its record, and with it its slot, until that cleanup ends.

@@ -174,7 +174,8 @@ onto hub nodes as the machine's class, and an unreadable table reads as kept. A 
 (`DisposableDetach`) runs after it: detach fences the record and removes the link with a journalled
 `ocx link revoke --purge`, clean only with the Child's purged receipt; a machine silent for 24 hours
 (48 handshakes or purges 30 minutes apart, counted only while this hub's Pen answers its member
-list, read once per pass), or a person's force, gets `ocx link revoke --force` and a tombstone that
+list, read once per pass, so a network cut with Pen's daemon still answering counts), or a person's
+force, gets `ocx link revoke --force` and a tombstone that
 `ocx link recover` settles once the machine answers. A silent machine's purge GOAT gives up on is
 resolved in OpenCodex's journal before the next purge, or after the force that replaces it commits;
 any other unsettled purge waits for a person and must read resolved before a new one goes, so a
