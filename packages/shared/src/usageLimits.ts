@@ -1,3 +1,4 @@
+import { creditReportWins } from "./usageCreditSource.ts";
 import { formatDuration } from "./usageDuration.ts";
 export { formatDuration } from "./usageDuration.ts";
 export { resetCreditChoices, type ResetCreditChoice } from "./resetCreditChoices.ts";
@@ -231,10 +232,12 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     const previousCredit = creditSources.get(key);
     if (
       next.limits.resetCredits &&
-      (!previousCredit ||
-        (next.redeem !== null && previousCredit.redeem === null) ||
-        (Boolean(next.redeem) === Boolean(previousCredit.redeem) &&
-          Date.parse(next.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt)))
+      creditReportWins(
+        { limits: next.limits, input: next.redeem?.input ?? null },
+        previousCredit
+          ? { limits: previousCredit.limits, input: previousCredit.redeem?.input ?? null }
+          : null,
+      )
     ) {
       creditSources.set(key, next);
     }
@@ -831,8 +834,15 @@ export function collectProviderUsageLimits(
     const previousCredit = previous?.credits;
     const credits =
       snapshot.limits.resetCredits &&
-      (!previousCredit ||
-        Date.parse(snapshot.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt))
+      creditReportWins(
+        { limits: snapshot.limits, input: { instanceId: provider.instanceId } },
+        previousCredit
+          ? {
+              limits: previousCredit.limits,
+              input: { instanceId: previousCredit.provider.instanceId },
+            }
+          : null,
+      )
         ? snapshot
         : (previousCredit ?? null);
     nativeByAccount.set(key, {
@@ -864,16 +874,41 @@ export function collectProviderUsageLimits(
           account.usageLimits.resetCredits &&
           !limitsNotice(account.usageLimits),
       )
-      .sort(
-        (a, b) =>
-          Date.parse(b.account.usageLimits.checkedAt) - Date.parse(a.account.usageLimits.checkedAt),
-      )[0];
+      .sort((a, b) => {
+        const report = (entry: typeof a) => ({
+          limits: entry.account.usageLimits,
+          input: entry.account.usageLimits.resetCredits?.nextCreditId
+            ? {
+                sourceId: entry.source.id,
+                accountId: entry.account.id,
+                creditId: entry.account.usageLimits.resetCredits.nextCreditId,
+              }
+            : null,
+        });
+        return creditReportWins(report(a), report(b))
+          ? -1
+          : creditReportWins(report(b), report(a))
+            ? 1
+            : 0;
+      })[0];
     const hubCreditId = hubCredits?.account.usageLimits.resetCredits?.nextCreditId;
     const showHubCredits =
       hubCredits &&
-      (!credits ||
-        Date.parse(hubCredits.account.usageLimits.checkedAt) >
-          Date.parse(credits.limits.checkedAt));
+      creditReportWins(
+        {
+          limits: hubCredits.account.usageLimits,
+          input: hubCreditId
+            ? {
+                sourceId: hubCredits.source.id,
+                accountId: hubCredits.account.id,
+                creditId: hubCreditId,
+              }
+            : null,
+        },
+        credits
+          ? { limits: credits.limits, input: { instanceId: credits.provider.instanceId } }
+          : null,
+      );
     const shownCredits = showHubCredits
       ? hubCredits.account.usageLimits.resetCredits
       : credits?.limits.resetCredits;
@@ -894,18 +929,18 @@ export function collectProviderUsageLimits(
       instanceId: provider.instanceId,
       ...(routed
         ? {}
-        : {
-            resetCreditInput:
-              showHubCredits && hubCreditId && hubCredits
-                ? {
-                    sourceId: hubCredits.source.id,
-                    accountId: hubCredits.account.id,
-                    creditId: hubCreditId,
-                  }
-                : showHubCredits
-                  ? undefined
+        : showHubCredits && !hubCreditId
+          ? { redeemable: false }
+          : {
+              resetCreditInput:
+                showHubCredits && hubCreditId && hubCredits
+                  ? {
+                      sourceId: hubCredits.source.id,
+                      accountId: hubCredits.account.id,
+                      creditId: hubCreditId,
+                    }
                   : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
-          }),
+            }),
       ...(provider.displayName ? { displayName: provider.displayName } : {}),
       ...(provider.accentColor ? { accentColor: provider.accentColor } : {}),
       ...(!routed && provider.auth.email ? { email: provider.auth.email } : {}),

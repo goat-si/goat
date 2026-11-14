@@ -951,7 +951,25 @@ describe("/usage-limits", () => {
     ]);
   });
 
-  it("redeems a native duplicate through the fresher native snapshot", () => {
+  it("does not offer redemption when the chosen hub credit has no id", () => {
+    const hub = [
+      {
+        ...sources[0]!,
+        accounts: [
+          {
+            ...sources[0]!.accounts[0]!,
+            usageLimits: { ...limits, resetCredits: { availableCount: 2 } },
+          },
+        ],
+      },
+    ];
+    const report = collectProviderUsageLimits(selected.instanceId, [selected], hub, now);
+    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
+    expect(report?.accounts[0]?.redeemable).toBe(false);
+    expect(report?.accounts[0]?.resetCreditInput).toBeUndefined();
+  });
+
+  it("redeems through the hub even when the native snapshot is fresher", () => {
     const fresher = provider({
       usageLimits: {
         checkedAt: "2026-09-03T11:30:00.000Z",
@@ -980,8 +998,12 @@ describe("/usage-limits", () => {
       },
     ];
     const report = collectProviderUsageLimits(fresher.instanceId, [fresher], stale, now);
-    expect(report?.accounts[0]?.resetCreditInput).toEqual({ instanceId: "codex" });
-    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(3);
+    expect(report?.accounts[0]?.resetCreditInput).toEqual({
+      sourceId: "hub",
+      accountId: "duplicate",
+      creditId: "hub-credit",
+    });
+    expect(report?.accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
   });
 
   it("keeps unidentified custom instances separate, filtering by driver", () => {

@@ -42,7 +42,7 @@ function provider(overrides: Partial<ServerProvider>): ServerProvider {
     ...overrides,
   };
 }
-it("redeems through the source of the fresher native credit report", () => {
+it("keeps direct reset options and their target even when the hub report is newer", () => {
   const native = provider({
     driver: claude,
     instanceId: ProviderInstanceId.make("claude"),
@@ -107,12 +107,8 @@ it("redeems through the source of the fresher native credit report", () => {
     .accounts[0]!;
   hub.usageLimits.checkedAt = "2026-09-03T12:00:00.000Z";
   const [freshHub] = collectLimitAccounts(hubNewer);
-  expect(freshHub?.limits.resetCredits?.nextCreditId).toBe("hub-credit");
-  expect(freshHub?.redeem?.input).toEqual({
-    sourceId: "hub",
-    accountId: "claude-same@example.com.json",
-    creditId: "hub-credit",
-  });
+  expect(freshHub?.limits.resetCredits).toEqual(native.usageLimits?.resetCredits);
+  expect(freshHub?.redeem?.input).toEqual({ instanceId: "claude" });
 });
 
 it("uses the redeemable report's credits when a fresher routed login cannot redeem", () => {
@@ -157,4 +153,51 @@ it("uses the redeemable report's credits when a fresher routed login cannot rede
       resetCreditChoices(account!.limits.resetCredits!, account!.redeem!.input, now)[0]?.input,
     ).toEqual({ instanceId: "direct", creditId: "direct-grant" });
   }
+});
+
+it("redeems through the hub when it holds a credit, even with a fresher native read", () => {
+  const native = provider({
+    driver: claude,
+    instanceId: ProviderInstanceId.make("claude"),
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt: "2026-09-03T11:30:00.000Z",
+      windows: [{ ...window, usedPercent: 40 }],
+      resetCredits: { availableCount: 3, nextCreditId: "native-credit" },
+    },
+  });
+  const input = new Map([
+    [
+      EnvironmentId.make("env-a"),
+      {
+        ...laptop,
+        serverConfig: {
+          providers: [native],
+          usageLimitSources: [
+            {
+              ...source,
+              accounts: [
+                {
+                  id: "claude-same@example.com.json",
+                  driver: claude,
+                  email: "same@example.com",
+                  usageLimits: {
+                    checkedAt,
+                    windows: [{ ...window, usedPercent: 55 }],
+                    resetCredits: { availableCount: 2, nextCreditId: "hub-credit" },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  ]);
+  const [account] = collectLimitAccounts(input);
+  expect(account?.redeem).toEqual({
+    environmentId: "env-a",
+    input: { sourceId: "hub", accountId: "claude-same@example.com.json", creditId: "hub-credit" },
+  });
+  expect(account?.limits.resetCredits?.availableCount).toBe(2);
 });
