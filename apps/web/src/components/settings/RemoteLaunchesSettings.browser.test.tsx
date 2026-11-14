@@ -19,6 +19,7 @@ import { afterEach, beforeEach, expect, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   connect: vi.fn(),
   preflight: vi.fn(),
+  canPreflight: true,
   toast: vi.fn(),
   presentations: null as unknown as Atom.Writable<
     ReadonlyMap<EnvironmentId, { connection: { phase: string } }>
@@ -33,7 +34,7 @@ vi.mock(import("../../state/environments"), { spy: true });
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 import { useNavigate } from "@tanstack/react-router";
 import { useThreadShells } from "../../state/entities";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
@@ -112,7 +113,11 @@ beforeEach(() => {
   vi.spyOn(serverEnvironment, "remoteLaunches").mockReturnValue(state.launches as never);
   // The dispatcher's guarded SSH preflight; it passes unless a test says otherwise.
   state.preflight.mockReset().mockResolvedValue({ _tag: "Success", value: preflightReport([]) });
+  state.canPreflight = true;
+  Object.assign(state.preflight, { permissionAtom: () => Atom.make(state.canPreflight) });
   Object.assign(serverEnvironment, { preflightSshHost: state.preflight });
+  // This desktop's own server is the dispatcher unless a test says otherwise.
+  vi.mocked(usePrimaryEnvironment).mockReturnValue({ environmentId: dispatcher } as never);
   registry = AtomRegistry.make();
   container = document.createElement("div");
   document.body.append(container);
@@ -154,8 +159,11 @@ function mountAndConnect() {
       });
     });
     const input = yield* Deferred.await(gate.entered);
-    // The dispatcher's guarded preflight passed before the desktop connects.
+    // The dispatcher is this desktop's own server here: one guarded preflight, before the connect.
     expect(state.preflight).toHaveBeenCalledOnce();
+    expect(state.preflight.mock.invocationCallOrder[0]).toBeLessThan(
+      state.connect.mock.invocationCallOrder[0] ?? 0,
+    );
     report = input.onPreparationProgress!;
     yield* actEffect(report(progress));
   });
@@ -258,4 +266,64 @@ it.effect(
         }),
       );
     }),
+);
+
+const openConnect = (click: boolean) =>
+  Effect.promise(async () => {
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <RemoteLaunchesSettings />
+        </RegistryContext>,
+      ),
+    );
+    const section = [...container.querySelectorAll("button")].find((node) =>
+      node.textContent?.includes("Remote launches"),
+    );
+    if (!section) throw new Error("Missing section");
+    await act(async () => section.click());
+    const button = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Connect",
+    );
+    if (click && button) await act(async () => button.click());
+    return button;
+  });
+
+it.effect(
+  "Connect also asks this desktop's own server, whose SSH config it dials: its refusal stops the connect though the dispatcher's check passes",
+  () =>
+    Effect.gen(function* () {
+      const own = EnvironmentId.make("desktop-own");
+      vi.mocked(usePrimaryEnvironment).mockReturnValue({ environmentId: own } as never);
+      state.preflight.mockImplementation((args: { readonly environmentId: EnvironmentId }) =>
+        Promise.resolve({
+          _tag: "Success",
+          value: preflightReport(
+            args.environmentId === own
+              ? [{ id: "host_key", detail: "fixture-vps is a disposable machine (attach a-1)." }]
+              : [],
+          ),
+        }),
+      );
+      const button = yield* openConnect(true);
+      expect(button).toBeDefined();
+      expect(state.preflight).toHaveBeenCalledWith(
+        expect.objectContaining({ environmentId: own, input: { host: "fixture-vps" } }),
+      );
+      expect(state.connect).not.toHaveBeenCalled();
+      expect(state.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          description: expect.stringContaining("fixture-vps is a disposable machine"),
+        }),
+      );
+    }),
+);
+
+it.effect("offers no Connect to a person who may not run the SSH check there", () =>
+  Effect.gen(function* () {
+    state.canPreflight = false;
+    expect(yield* openConnect(false)).toBeUndefined();
+    expect(container.textContent).toContain("Pair fixture-vps under Environments");
+  }),
 );
