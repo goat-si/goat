@@ -133,6 +133,8 @@ export const status = (
     detach: enroll.detach,
     health: enroll.health,
     linkKeyMoved: enroll.linkKeyMoved === true,
+    inPen: row.pen_admitted_at !== null && row.pen_removed_at === null,
+    stop: enroll.stop,
   });
   // A detach that still owes the link's cleanup speaks for the record, also out of Pen.
   const removing = row.state === "detaching" || row.state === "retired" || row.state === "returned";

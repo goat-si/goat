@@ -135,12 +135,13 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
   });
   const withDetach = (enroll: Enroll, detach: Detach): Enroll => ({ ...enroll, detach });
+  const withoutTry = ({ triedAtMs: _tried, ...rest }: Detach): Detach => rest;
 
   /** The link and Child are gone: GOAT's files for the machine go, and the record ends purged. */
   const finish = Effect.fn("DisposableDetach.finish")(function* (
     row: Row,
     enroll: Enroll,
-    outcome: "purged" | "forgotten",
+    outcome: "purged" | "forgotten" | "elsewhere",
   ) {
     yield* host.forgetKnownHosts(row.attach_id);
     const detach = { ...(enroll.detach ?? { step: "done", attempt: 0 }), step: "done", outcome };
@@ -282,7 +283,13 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     if (sent?.refusal?.code === "link_not_found")
       return yield* note(
         row,
-        withDetach(enroll, { ...admitted, step: "recover", outcome: "link_not_found" }),
+        withDetach(enroll, {
+          // Recover asks at once: nothing waits for the machine here.
+          ...withoutTry(admitted),
+          step: "recover",
+          outcome: "link_not_found",
+          elsewhere: true,
+        }),
       );
     const outcome = readRevoke(
       yield* host.ocx(
@@ -381,7 +388,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
     const tried: Detach = { ...before, triedAtMs: nowMs, outcome: answer };
     if (answer === "clean" || answer === "tombstone_not_found") {
-      const outcome = answer === "clean" ? "purged" : "forgotten";
+      const outcome =
+        answer === "clean" ? "purged" : before.elsewhere === true ? "elsewhere" : "forgotten";
       if (row.state === "retired" && answer === "clean") {
         if (
           yield* note(row, withDetach(enroll, { ...tried, step: "done" }), {

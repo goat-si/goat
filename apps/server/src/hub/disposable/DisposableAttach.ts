@@ -32,6 +32,7 @@ import {
   encodeProvisioner,
   observe,
   openEffects,
+  conflictCount,
   penNodeId,
   stateFromEffects,
   type StoredProvisioner,
@@ -533,7 +534,8 @@ export const make = Effect.gen(function* () {
         // A record that holds or started a link stays open until enrollment reads what it left; one
         // being detached keeps its detach, which still owes the link's or tombstone's cleanup.
         const linking = row.link_id !== null || row.link_operation_id !== null;
-        const detaching = REMOVING.has(row.state);
+        // A record a conflict stopped owes nothing GOAT can run; it ends naming its link.
+        const detaching = REMOVING.has(row.state) && conflictCount(row.conflicts_json) === 0;
         row = yield* save(row, effects, {
           ...(detaching ? {} : { fence: row.fence + 1 }),
           pen_removed_at: yield* nowIso,

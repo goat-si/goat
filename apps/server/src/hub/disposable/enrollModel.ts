@@ -372,7 +372,7 @@ export const leftPenMessage = (
         " for it; the link and the Child on the machine stay. Remove the link on the hub with ocx link revoke --link-id " +
         linkId +
         " (add --force --yes if the machine is gone).",
-      nextAction: "Detaching comes in a later GOAT.",
+      nextAction: "Run the ocx link revoke command above on the hub.",
     };
   return {
     message:
@@ -422,7 +422,7 @@ export const enrollMessage = (
           ? " Link operation " + operationId + "."
           : "") +
         leave,
-      nextAction: "Resuming or detaching an attach is not available yet.",
+      nextAction: "Detach it to remove what it left; resuming an attach is not available yet.",
     };
   if (state === "paused" && pausedAfterJoin)
     return {

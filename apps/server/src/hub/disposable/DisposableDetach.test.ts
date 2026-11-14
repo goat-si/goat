@@ -318,7 +318,10 @@ it.effect(
         const first = yield* attach(1);
         pen.control.join(first.attachId + ".1", false);
         yield* reconcile;
-        expect((yield* listed(first.attachId))?.state).toBe("unknown");
+        const stuck = yield* listed(first.attachId);
+        expect(stuck?.state).toBe("unknown");
+        // Mobile users and agents learn of Release from the message itself.
+        expect(stuck?.message).toContain("Release");
         yield* attach(2);
         // The cap is 2 and the unknown record still holds its slot.
         expect((yield* attach(3).pipe(Effect.flip)).reason).toBe("cap_reached");
@@ -432,7 +435,11 @@ it.effect(
         ocx.machineAnswers = true;
         yield* TestClock.adjust(HOUR / 2);
         yield* detachPass;
-        expect(yield* listed(attachId)).toMatchObject({ state: "purged", penMember: false });
+        const done = yield* listed(attachId);
+        expect(done).toMatchObject({ state: "purged", penMember: false });
+        // It left Pen, so nothing tells a person to remove it again.
+        expect(done?.message).toContain("has left Pen");
+        expect(done?.message).not.toContain("pen revoke");
       }),
     ),
 );
@@ -451,6 +458,7 @@ it.effect(
         yield* detachPass;
         expect(ocx.sent).toEqual([attachId + ".force.1"]);
         expect((yield* listed(attachId))?.message).toContain("too many links removed");
+        expect((yield* listed(attachId))?.message).toContain("force the detach again");
         ocx.tombstoneLimit = false;
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
@@ -488,6 +496,46 @@ it.effect("a thread the switch no longer names cannot detach", () =>
       expect((yield* detach(THREAD, attachId, "d-1").pipe(Effect.flip)).reason).toBe(
         "provisioner_refused",
       );
+    }),
+  ),
+);
+
+it.effect(
+  "a linked machine that presents another SSH host key says so and how to remove it, and names its link once out of Pen",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        fakeDetachHome(host);
+        const { attachId, nodeId, linkId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "host_key_changed");
+        yield* detachPass;
+        const changed = yield* listed(attachId);
+        expect(changed?.class).toBe("conflict");
+        expect(changed?.message).toContain("another SSH host key");
+        expect(changed?.message).toContain("pen revoke");
+        pen.members.delete(key(1));
+        yield* reconcile;
+        yield* enroll;
+        expect((yield* listed(attachId))?.message).toContain("ocx link revoke --link-id " + linkId);
+      }),
+    ),
+);
+
+it.effect("a link removed outside GOAT ends the detach with a text that says so", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId, linkId } = yield* linked(pen, home, host, 1);
+      host.control.links.delete(linkId);
+      yield* detach(THREAD, attachId, "d-1");
+      yield* detachPass;
+      expect((yield* listed(attachId))?.message).toContain("removed outside GOAT");
+      yield* detachPass;
+      const done = yield* listed(attachId);
+      expect(done?.state).toBe("purged");
+      expect(done?.message).toContain("removed outside GOAT");
+      expect(done?.message).not.toContain("forgot");
+      expect(ocx.tombstones.size).toBe(0);
     }),
   ),
 );
