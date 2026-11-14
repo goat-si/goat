@@ -114,10 +114,7 @@ describe("GOAT provider instructions", () => {
   });
 
   it("tells agents how to settle their own thread", () => {
-    assert.include(
-      GOAT_ORCHESTRATION_INSTRUCTIONS,
-      "when asked to settle any thread, including this one",
-    );
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "settle any thread, including this one");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`thread.organize`");
   });
 

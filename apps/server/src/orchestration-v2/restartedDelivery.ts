@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import type { RunId, OrchestrationV2UserMessageInputIntent } from "@goat/contracts";
 import type { OrchestratorV2DispatchResult } from "./Orchestrator.ts";
 
-export function restartedAsNextTurn(dispatch: OrchestratorV2DispatchResult, runId: RunId) {
+function restartedAsNextTurn(dispatch: OrchestratorV2DispatchResult, runId: RunId) {
   return dispatch.storedEvents.some(
     ({ event }) =>
       event.type === "turn-item.updated" &&
