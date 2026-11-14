@@ -35,49 +35,13 @@ import type {
   DesktopAppActivationResponse,
 } from "./desktopAppActivation.ts";
 
-export interface ContextMenuItem<T extends string = string> {
-  id: T;
-  label: string;
-  destructive?: boolean;
-  disabled?: boolean;
-  header?: boolean;
-  icon?: string;
-  separatorBefore?: boolean;
-  checked?: boolean;
-  children?: readonly ContextMenuItem<T>[];
-}
+import type { ContextMenuItem } from "./contextMenu.ts";
+export { ContextMenuItemSchema } from "./contextMenu.ts";
+export type { ContextMenuItem, ContextMenuItemSchemaType } from "./contextMenu.ts";
 
 export type QuitShortcutHintEvent =
   | { readonly state: "down"; readonly mode: Exclude<QuitConfirmationMode, "direct"> }
   | { readonly state: "up" };
-
-export interface ContextMenuItemSchemaType {
-  readonly id: string;
-  readonly label: string;
-  readonly destructive?: boolean;
-  readonly disabled?: boolean;
-  readonly header?: boolean;
-  readonly icon?: string;
-  readonly separatorBefore?: boolean;
-  readonly checked?: boolean;
-  readonly children?: readonly ContextMenuItemSchemaType[];
-}
-
-export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  destructive: Schema.optionalKey(Schema.Boolean),
-  disabled: Schema.optionalKey(Schema.Boolean),
-  header: Schema.optionalKey(Schema.Boolean),
-  icon: Schema.optionalKey(Schema.String),
-  separatorBefore: Schema.optionalKey(Schema.Boolean),
-  checked: Schema.optionalKey(Schema.Boolean),
-  children: Schema.optionalKey(
-    Schema.Array(
-      Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),
-    ),
-  ),
-});
 
 export type DesktopUpdateStatus =
   | "disabled"
@@ -1405,6 +1369,8 @@ export type ConfirmDialogVariant = "default" | "destructive";
 
 export interface ConfirmDialogOptions {
   readonly variant?: ConfirmDialogVariant;
+  /** Which button takes focus on open. Defaults to Cancel; destructive confirms always keep Cancel. */
+  readonly initialFocus?: "confirm" | "cancel";
 }
 
 export interface LocalApi {

@@ -1,3 +1,4 @@
+import "./HumanInputGuest.ts";
 // @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
 import { getElementContext } from "react-grab/primitives";
@@ -28,7 +29,6 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
-  HUMAN_INPUT_CHANNEL,
   MOUSE_NAVIGATE_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_POINTER_CHANNEL,
@@ -178,28 +178,6 @@ const applyAnnotationTheme = (
     host.style.setProperty(name, value);
   }
 };
-
-const reportHumanPointerInput = (event: PointerEvent): void => {
-  if (!event.isTrusted) return;
-  ipcRenderer.send(HUMAN_INPUT_CHANNEL, {
-    kind: "pointer",
-    x: event.clientX,
-    y: event.clientY,
-    button: event.button,
-  });
-};
-
-const reportHumanKeyInput = (event: KeyboardEvent): void => {
-  if (!event.isTrusted) return;
-  ipcRenderer.send(HUMAN_INPUT_CHANNEL, {
-    kind: "key",
-    key: event.key,
-    code: event.code,
-  });
-};
-
-window.addEventListener("pointerdown", reportHumanPointerInput, true);
-window.addEventListener("keydown", reportHumanKeyInput, true);
 
 const MOUSE_BUTTON_BACK = 3;
 const MOUSE_BUTTON_FORWARD = 4;

@@ -57,16 +57,10 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { readTextFromClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
-import {
-  observeSelectionActions,
-  resolveSelectionActionPosition,
-  type SelectionActionPoint,
-} from "~/lib/selectionActions";
 import { GhosttyTerminalSurface } from "~/terminal/ghostty/surface";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
-import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
-import { isTerminalUrl } from "../terminal-links";
+import { isTerminalUrl, resolveTerminalLinkTarget } from "../terminal-links";
 import {
   isDiffToggleShortcut,
   isTerminalClearShortcut,
@@ -74,6 +68,7 @@ import {
   isTerminalSplitShortcut,
   isTerminalSplitVerticalShortcut,
   isTerminalToggleShortcut,
+  isThreadNavigationShortcut,
   terminalDeleteShortcutData,
   terminalNavigationShortcutData,
 } from "../keybindings";
@@ -94,6 +89,11 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { preventTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
 import { observeResize } from "../lib/observeResize";
 import { openEnvironmentUrlExternally } from "../browser/openEnvironmentUrl";
+import { isElectron } from "../env";
+import { isPreviewFocused } from "../lib/previewFocus";
+import { useRoutePreviewShown } from "../lib/previewShown";
+import { isModelPickerOpen } from "../modelPickerVisibility";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import {
   consumePendingTerminalFocus,
   focusTerminal,
@@ -365,15 +365,6 @@ function terminalContextMenuItems(options: {
   ];
 }
 
-/** A superseded popup's unsettled promise must not cancel the newer right-click flow. */
-export function shouldClearTerminalSelectionAction(options: {
-  actionPending: boolean;
-  openMenuRequestId: number | null;
-  currentRequestId: number;
-}): boolean {
-  return options.actionPending || options.openMenuRequestId === options.currentRequestId;
-}
-
 /**
  * A writable session's output generation. A new one is a fresh PTY (or a
  * reconnect) that has not seen the surface's grid yet.
@@ -487,8 +478,19 @@ function TerminalSessionViewport({
   });
   const hasHandledExitRef = useRef(false);
   const selectionActionRequestIdRef = useRef(0);
-  const openSelectionMenuRequestIdRef = useRef<number | null>(null);
   const readKeybindings = useEffectEvent(() => keybindings);
+  const previewOpen = useRoutePreviewShown(threadRef);
+  const readThreadShortcutContext = useEffectEvent(() => ({
+    terminalOpen: selectThreadTerminalUiState(
+      useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+      threadRef,
+    ).terminalOpen,
+    previewFocus: isPreviewFocused(),
+    previewOpen,
+    modelPickerOpen: isModelPickerOpen(),
+    isWeb: !isElectron,
+    isDesktop: isElectron,
+  }));
   const handleSessionExited = useEffectEvent(() => {
     if (hasTerminalWriteAccess()) onSessionExited();
   });
@@ -597,7 +599,6 @@ function TerminalSessionViewport({
     let teardown: (() => void) | null = null;
     let setupTerminal: GhosttyTerminalSurface | null = null;
     let setupCleanups: Array<() => void> = [];
-    let selectionActions: ReturnType<typeof observeSelectionActions> | null = null;
 
     const setup = async (): Promise<(() => void) | null> => {
       const setupFont = terminalFontRef.current;
@@ -607,7 +608,7 @@ function TerminalSessionViewport({
         transparentBackground: liquidGlass,
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
-        onSelectionChange: () => handleSelectionChange(),
+        onSelectionChange: () => {},
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         canActivateLink: (text) => canActivateTerminalLink(text),
@@ -680,28 +681,17 @@ function TerminalSessionViewport({
         terminal.focus();
       }
 
-      const dismissSelectionAction = (supersede = false) => {
-        const ownsMenu =
-          openSelectionMenuRequestIdRef.current === selectionActionRequestIdRef.current;
-        if (supersede || ownsMenu) selectionActionRequestIdRef.current += 1;
-        if (ownsMenu) void localApi?.contextMenu.close();
-      };
       const clearSelectionAction = () => {
-        selectionActions?.cancel();
-        dismissSelectionAction(true);
+        selectionActionRequestIdRef.current += 1;
       };
       setupCleanups.push(clearSelectionAction);
 
-      const readSelectionAction = (
-        pointer: SelectionActionPoint | null = null,
-      ): {
-        position: { x: number; y: number };
+      const readSelectionAction = (): {
         clipboardText: string;
         selection: TerminalContextSelection;
       } | null => {
         const activeTerminal = terminalRef.current;
-        const mountElement = containerRef.current;
-        if (!activeTerminal || !mountElement || !activeTerminal.hasSelection()) {
+        if (!activeTerminal || !activeTerminal.hasSelection()) {
           return null;
         }
         const selectionText = activeTerminal.getSelection();
@@ -711,15 +701,7 @@ function TerminalSessionViewport({
           return null;
         }
         const { lineStart, lineEnd } = terminalSelectionLineRange(selectionPosition);
-        const bounds = mountElement.getBoundingClientRect();
-        const position = resolveSelectionActionPosition({
-          bounds,
-          selectionRect: activeTerminal.getSelectionEndClientRect(),
-          pointer,
-          viewport: { width: window.innerWidth, height: window.innerHeight },
-        });
         return {
-          position,
           clipboardText: selectionText,
           selection: {
             terminalId,
@@ -829,44 +811,6 @@ function TerminalSessionViewport({
         }
       };
 
-      const showSelectionAction = async (pointer: SelectionActionPoint | null) => {
-        if (!localApi) {
-          clearSelectionAction();
-          return;
-        }
-        if (openSelectionMenuRequestIdRef.current === selectionActionRequestIdRef.current) {
-          return;
-        }
-        const nextAction = readSelectionAction(pointer);
-        if (!nextAction) {
-          clearSelectionAction();
-          return;
-        }
-        const requestId = ++selectionActionRequestIdRef.current;
-        openSelectionMenuRequestIdRef.current = requestId;
-        const clicked = await localApi.contextMenu
-          .show(
-            terminalSelectionMenuItems({ canAddToChat: canAddSelectionToChat() }),
-            nextAction.position,
-          )
-          .finally(() => {
-            if (openSelectionMenuRequestIdRef.current === requestId) {
-              openSelectionMenuRequestIdRef.current = null;
-            }
-          });
-        if (requestId !== selectionActionRequestIdRef.current || clicked === null) {
-          return;
-        }
-        switch (clicked) {
-          case "add-to-chat":
-            if (canAddSelectionToChat()) addSelectionToChat(nextAction.clipboardText);
-            return;
-          case "copy":
-            await copySelection(nextAction.clipboardText, requestId);
-            return;
-        }
-      };
-
       const sendTerminalInput = async (data: string, fallbackError: string) => {
         if (!hasTerminalWriteAccess()) return;
         const activeTerminal = terminalRef.current;
@@ -892,7 +836,11 @@ function TerminalSessionViewport({
           isTerminalSplitShortcut(event, currentKeybindings, options) ||
           isTerminalSplitVerticalShortcut(event, currentKeybindings, options) ||
           isTerminalNewShortcut(event, currentKeybindings, options) ||
-          isDiffToggleShortcut(event, currentKeybindings, options)
+          isDiffToggleShortcut(event, currentKeybindings, options) ||
+          // Match Sidebar's context, or a key it will reject skips the shell.
+          isThreadNavigationShortcut(event, currentKeybindings, {
+            context: { ...readThreadShortcutContext(), terminalFocus: true },
+          })
         ) {
           return false;
         }
@@ -959,7 +907,7 @@ function TerminalSessionViewport({
           );
           return;
         }
-        const target = resolvePathLinkTarget(text, cwd);
+        const target = resolveTerminalLinkTarget(text, cwd);
         void (async () => {
           const result = await openTerminalPath(target);
           if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
@@ -985,28 +933,6 @@ function TerminalSessionViewport({
           );
         })();
       }
-
-      function handleSelectionChange(): void {
-        if (terminalRef.current?.hasSelection()) {
-          return;
-        }
-        const shouldClear = shouldClearTerminalSelectionAction({
-          actionPending: selectionActions?.pending ?? false,
-          openMenuRequestId: openSelectionMenuRequestIdRef.current,
-          currentRequestId: selectionActionRequestIdRef.current,
-        });
-        if (!shouldClear) return;
-        clearSelectionAction();
-      }
-
-      selectionActions = observeSelectionActions({
-        element: mount,
-        onSelection: (pointer) => {
-          void showSelectionAction(pointer);
-        },
-        onDismiss: (reason) => dismissSelectionAction(reason === "interaction"),
-      });
-      setupCleanups.push(() => selectionActions?.dispose());
 
       const themeObserver = new MutationObserver(() => {
         const activeTerminal = terminalRef.current;
@@ -1089,6 +1015,7 @@ function TerminalSessionViewport({
     const unregister = registerTerminalFocusTarget({
       threadRef,
       terminalId,
+      element: mount,
       focus,
     });
     return () => {

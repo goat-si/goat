@@ -106,7 +106,12 @@ import {
 } from "~/composer-undo-grouping";
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
+import { isRichTextFormattingShortcut } from "~/keybindings";
 import { cn, isMacPlatform } from "~/lib/utils";
+import { isThreadNavigationShortcut } from "~/keybindings";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryServerKeybindingsAtom } from "~/state/server";
+import { hasCommandForKeyDown } from "~/shortcuts/dispatcher";
 import { basenameOfPath } from "~/pierre-icons";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { FileTagChipContent } from "./chat/FileTagChip";
@@ -1035,6 +1040,19 @@ function ComposerPromptEditorTiptapInner(
       editable: !disabled,
       editorProps: {
         attributes: editorAttributes,
+        handleDOMEvents: {
+          // Composer commands keep precedence; otherwise true skips the editor's keymaps without
+          // preventDefault, so a bound app command still runs.
+          keydown: (_view, event) => {
+            if (!isRichTextFormattingShortcut(event)) return false;
+            if (readCallbacks().onCommandKeyDown?.(event.key, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return true;
+            }
+            return hasCommandForKeyDown(event);
+          },
+        },
         handleKeyDown: (view, event) => {
           // In a right-to-left line the start is on the right.
           const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
@@ -1054,6 +1072,13 @@ function ComposerPromptEditorTiptapInner(
             !event.ctrlKey &&
             !event.isComposing
           ) {
+            if (
+              isThreadNavigationShortcut(event, appAtomRegistry.get(primaryServerKeybindingsAtom), {
+                context: { editableFocus: true },
+              })
+            ) {
+              return false;
+            }
             const selection = window.getSelection();
             if (
               selection?.anchorNode &&
