@@ -21,7 +21,7 @@ export const makeCurrent = Effect.fn("CursorSessionEnvironment.makeCurrent")(fun
 export const forSession = (source: Source) =>
   (Effect.isEffect(source) ? source : Effect.succeed(source)).pipe(
     Effect.map((environment) => ({
-      environment,
+      environment: { ...environment },
       apiKey: environment.CURSOR_API_KEY?.trim() || undefined,
     })),
   );
