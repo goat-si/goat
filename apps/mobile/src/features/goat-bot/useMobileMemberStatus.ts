@@ -16,7 +16,7 @@ import { useEnvironmentQuery } from "../../state/query";
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
-  /** Whether the waiting count was read: before an answer, or after a failed read, it is 0. */
+  /** Whether the waiting count is known: pending before an answer, unavailable after a failed read. */
   readonly waitingState: "ready" | "pending" | "unavailable";
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
@@ -54,8 +54,9 @@ export function useMobileMemberStatus(bot: BotProfile): {
   const data = status.data ?? null;
   return {
     waitingCount: data?.waitingCount ?? 0,
+    // A failed refresh keeps its earlier answer beside the error; that answer is no longer known.
     waitingState:
-      data !== null ? "ready" : supported && status.error !== null ? "unavailable" : "pending",
+      supported && status.error !== null ? "unavailable" : data !== null ? "ready" : "pending",
     latest,
     unread,
     status:

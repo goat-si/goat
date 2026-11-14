@@ -115,6 +115,7 @@ const members = vi.hoisted(() => ({
       waitingCount: number;
       latest?: { text: string; at: string; author: "bot" | "person" };
       unread: boolean;
+      waitingState?: "ready" | "pending" | "unavailable";
     }
   >,
 }));
@@ -570,8 +571,14 @@ it("where Home governs, a row shows and says its unread recent tasks and what it
       missing: null,
       spoken: ["3 unread tasks; recent work only; older work may be missing"],
     },
-    scout: { unread: null, missing: "Unread unavailable", spoken: ["Unread unavailable"] },
+    scout: {
+      unread: null,
+      missing: "Unread and waiting unavailable",
+      spoken: ["Unread and waiting unavailable"],
+    },
   };
+  // Scout's last status read failed; the count it answered before is no longer known.
+  members.status = { scout: { waitingCount: 1, unread: false, waitingState: "unavailable" } };
   try {
     root = createRoot(container);
     await act(async () =>
@@ -609,9 +616,10 @@ it("where Home governs, a row shows and says its unread recent tasks and what it
       "3 unread tasks; recent work only; older work may be missing",
     );
     expect(row("GOAT Bot")?.textContent).toContain("3");
-    expect(row("Scout")?.getAttribute("aria-label")).toContain("Unread unavailable");
-    expect(row("Scout")?.textContent).toContain("–");
+    expect(row("Scout")?.getAttribute("aria-label")).toBe("Scout, Unread and waiting unavailable");
+    expect(row("Scout")?.textContent).toBe("Scout–");
   } finally {
     signals.byBot = {};
+    members.status = {};
   }
 });

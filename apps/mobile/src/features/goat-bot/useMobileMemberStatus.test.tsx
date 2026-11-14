@@ -8,6 +8,8 @@ const member = vi.hoisted(() => ({
   shell: null as null | { updatedAt: string; lastVisitedAt?: string | null },
   latest: undefined as undefined | { text: string; at: string; author: "bot" | "person" },
   refresh: vi.fn(),
+  // A refresh that failed after an earlier answer: the query keeps that answer beside the error.
+  error: null as string | null,
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
@@ -26,6 +28,7 @@ vi.mock("../../state/channels", () => ({ channelEnvironment: { botStatus: () => 
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: () => ({
     data: { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) },
+    error: member.error,
     refresh: member.refresh,
   }),
 }));
@@ -78,4 +81,24 @@ it("never marks a member unread on a server that records no visits", async () =>
   member.latest = { text: "Hi, I'm Scout.", at: "2026-11-11T10:05:00.000Z", author: "bot" };
   member.shell = { updatedAt: "2026-11-11T10:05:00.000Z" };
   expect(await unread()).toBe(false);
+});
+
+it("a waiting count whose latest read failed is unavailable, not the earlier answer", async () => {
+  let value: ReturnType<typeof useMobileMemberStatus> | undefined;
+  function Probe() {
+    value = useMobileMemberStatus(scout);
+    return null;
+  }
+  const show = async () => {
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(<Probe />));
+    await act(async () => root.unmount());
+  };
+  member.error = null;
+  await show();
+  expect(value?.waitingState).toBe("ready");
+  member.error = "failed";
+  await show();
+  expect(value?.waitingState).toBe("unavailable");
+  member.error = null;
 });

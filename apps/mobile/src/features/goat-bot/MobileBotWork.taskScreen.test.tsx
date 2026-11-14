@@ -705,13 +705,13 @@ it("a Pin sent while the task was listed, landing after a refresh dropped it and
   state.update.mockReturnValueOnce(pinned.promise);
   await show("task-old");
   await press("Pin");
-  // Another refresh is out and will drop the task; the Pin lands first.
-  Object.assign(state.task, { isPending: true });
+  // A refresh dropped the task, and the list is being read again, so no lookup has started yet.
+  Object.assign(state.task, { isPending: true, data: { rows: [] } });
   await show("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(0);
   await act(async () => pinned.settle(AsyncResult.success({})));
   expect(lookups("env", "main", "task-old")).toBe(0);
-  Object.assign(state.task, { isPending: false, data: { rows: [] } });
-  await show("task-old");
+  await settleList("task-old");
   expect(lookups("env", "main", "task-old")).toBe(1);
   expect(button("Unpin")).toBeDefined();
 });

@@ -326,16 +326,21 @@ function MemberRow(props: {
   readonly onLongPress: (() => void) | undefined;
 }) {
   const { bot } = props;
-  const { waitingCount, waitingState, latest, unread, status } = useMobileMemberStatus(bot);
+  const member = useMobileMemberStatus(bot);
+  const { waitingState, latest, unread, status } = member;
   const signals = useMobileBotRowSignals({
     environmentId: bot.environmentId,
     botId: bot.botId,
     waiting: waitingState,
   });
+  // Where Home governs, a count that could not be read is marked unavailable, not shown stale.
+  const stale = signals !== null && waitingState === "unavailable";
+  const waitingCount = stale ? 0 : member.waitingCount;
   const face = useMobileGoatBotFace(
     null,
     { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
-    { status },
+    // A status whose refresh failed is not read for the face either; it keeps the face it had.
+    { status: stale ? null : status },
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
