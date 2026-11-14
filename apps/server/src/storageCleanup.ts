@@ -1,3 +1,4 @@
+import { keyAt, makeCanonicalWorktreePaths, worktreePathOf } from "./storageCleanupCanonical.ts";
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 import { cleanupFailureReason, isMissingGitRepository } from "./storageCleanupGitErrors.ts";
 import {
@@ -242,19 +243,6 @@ const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
-  const hasTerminal = (worktreePath: string) =>
-    [...liveTerminals.values()]
-      .flatMap((entries) => [...entries.values()])
-      .some((terminal) => {
-        if (terminal.status !== "starting" && terminal.status !== "running") return false;
-        const cwd = path.resolve(terminal.cwd);
-        return (
-          (terminal.worktreePath !== null &&
-            pathKey(terminal.worktreePath) === pathKey(worktreePath)) ||
-          pathKey(cwd) === pathKey(worktreePath) ||
-          inside(worktreePath, cwd)
-        );
-      });
 
   // Same-device pnpm clones share store blocks; only cross-device copies count toward reclaim.
   const sharedPnpmVirtualStore = Effect.fnUntraced(
@@ -338,23 +326,6 @@ const make = Effect.gen(function* () {
     const snapshot = yield* projections.getShellSnapshot().pipe(NodeSqliteClient.readOnly);
     const projects = yield* projectStore.listShells();
     return { projects, threads: [...snapshot.threads, ...snapshot.archivedThreads] };
-  });
-
-  const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
-    worktreePath: string,
-    projects: ReadonlyArray<{ readonly workspaceRoot: string }>,
-  ) {
-    for (const project of projects) {
-      const projectPath = path.resolve(project.workspaceRoot);
-      if (pathKey(projectPath) === pathKey(worktreePath) || inside(worktreePath, projectPath))
-        return true;
-      const realPath = yield* fs
-        .realPath(projectPath)
-        .pipe(Effect.orElseSucceed(() => projectPath));
-      if (pathKey(realPath) === pathKey(worktreePath) || inside(worktreePath, realPath))
-        return true;
-    }
-    return false;
   });
 
   const reportOrphanWorktrees = Effect.fn("StorageCleanup.reportOrphanWorktrees")(function* (
@@ -650,13 +621,38 @@ const make = Effect.gen(function* () {
     )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
     const snapshot = yield* readThreads();
     const shipped = makeWorktreeShipping(git, gitManager);
-    const groups = Map.groupBy(
-      snapshot.threads.filter((thread) => thread.worktreePath !== null),
-      (thread) => path.resolve(thread.worktreePath!),
+    const { canonical, occupies, containsProjectRoot, invalidate } = makeCanonicalWorktreePaths(
+      fs,
+      path,
+      pathKey,
+      inside,
     );
-    const deletedByPath = Map.groupBy(deletedThreads, (thread) =>
-      path.resolve(thread.worktreePath!),
+    const liveThreads = snapshot.threads.filter((thread) => thread.worktreePath !== null);
+    const liveKeys = yield* Effect.forEach(liveThreads, (thread) =>
+      canonical(worktreePathOf(thread)),
     );
+    const groups = Map.groupBy(liveThreads, (_thread, index) => keyAt(liveKeys, index));
+    const deletedKeys = yield* Effect.forEach(deletedThreads, (thread) =>
+      canonical(worktreePathOf(thread)),
+    );
+    const deletedByPath = Map.groupBy(deletedThreads, (_thread, index) =>
+      keyAt(deletedKeys, index),
+    );
+    // A checkout may have several stored aliases; protect sessions under every one of them.
+    // Called for each worktree and again at each safety recheck.
+    const hasTerminal = Effect.fnUntraced(function* (worktrees: ReadonlyArray<string>) {
+      for (const terminal of [...liveTerminals.values()].flatMap((entries) => [
+        ...entries.values(),
+      ])) {
+        if (terminal.status !== "starting" && terminal.status !== "running") continue;
+        if (
+          (terminal.worktreePath !== null && (yield* occupies(worktrees, terminal.worktreePath))) ||
+          (yield* occupies(worktrees, terminal.cwd))
+        )
+          return true;
+      }
+      return false;
+    });
     const candidates = [
       ...[...groups].map(
         ([worktreePath, group]) =>
@@ -672,7 +668,7 @@ const make = Effect.gen(function* () {
           worktreeOwner(group) ??
           group[0]!,
       ),
-      ...deletedThreads.filter((thread) => !groups.has(path.resolve(thread.worktreePath!))),
+      ...deletedThreads.filter((_thread, index) => !groups.has(keyAt(deletedKeys, index))),
     ];
     const ranks = rankWorktrees(
       [...groups].map(([worktreePath, group]) => ({
@@ -687,7 +683,15 @@ const make = Effect.gen(function* () {
         settings.worktreeSnapshotChanges && settings.worktreeKeepWhen !== "any-local-files";
       if (!worktreeCleanupEnabled(settings)) continue;
       const worktreePath = path.resolve(thread.worktreePath!);
-      const group = groups.get(worktreePath) ?? [];
+      const worktreeKey = yield* canonical(worktreePath);
+      const group = groups.get(worktreeKey) ?? [];
+      const worktreePaths = [
+        worktreePath,
+        worktreeKey,
+        ...group.flatMap((member) =>
+          member.worktreePath ? [path.resolve(member.worktreePath)] : [],
+        ),
+      ];
       const activityAt = Math.max(...group.map(storageCleanupActivityAt));
       const deleted = "workspaceRoot" in thread;
       const members = deleted ? [thread, ...group] : group;
@@ -738,7 +742,7 @@ const make = Effect.gen(function* () {
           return keep(waitForStop("thread is running or has pending work"));
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
-        if (hasTerminal(worktreePath)) return keep(waitForStop("open terminal"));
+        if (yield* hasTerminal(worktreePaths)) return keep(waitForStop("open terminal"));
         // Compare canonical roots while allowing symlinked parents, never symlinked worktree directories.
         const realPath = yield* fs.realPath(worktreePath);
         const realParent = yield* fs.realPath(path.dirname(worktreePath));
@@ -748,7 +752,7 @@ const make = Effect.gen(function* () {
           return keep("outside the managed worktree folder");
         const otherHome = otherHomeReason(path, otherBindings, realPath);
         if (otherHome !== null) return keep(otherHome);
-        if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects]))
+        if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")
           return keep("not a linked worktree");
@@ -790,7 +794,7 @@ const make = Effect.gen(function* () {
           archived: thread.archivedAt !== null,
           pinned: false,
           deleted,
-          rank: ranks.get(worktreePath),
+          rank: ranks.get(worktreeKey),
         });
         if (!eligible && retention !== null) [eligible, removalReason] = [true, retention];
         // Only proof that the commits shipped lets any rule remove a worktree that has them.
@@ -837,16 +841,19 @@ const make = Effect.gen(function* () {
           );
         // Re-read this path's threads and sessions so new activity cancels removal; full per-worktree snapshots take seconds.
         const blockedSinceCheck = Effect.fnUntraced(function* () {
+          invalidate();
           // Another app may have bound it since the pass began; the hold keeps its turns out now.
           const otherHomeNow = otherHomeReason(path, yield* readOtherBindings, realPath);
           if (otherHomeNow !== null) return otherHomeNow;
           const latestProjects = yield* projectStore.listShells();
-          if (yield* containsProjectRoot(worktreePath, [project, ...latestProjects]))
+          if (yield* containsProjectRoot(worktreePaths, [project, ...latestProjects]))
             return "contains a project checkout";
-          const latest = (yield* projections.getThreadWorktreePaths({
-            includeArchived: true,
-          })).filter((entry) => path.resolve(entry.worktreePath) === worktreePath);
-          if (hasTerminal(worktreePath)) return waitForStop("open terminal");
+          const bindings = yield* projections.getThreadWorktreePaths({ includeArchived: true });
+          const bindingKeys = yield* Effect.forEach(bindings, (binding) =>
+            canonical(binding.worktreePath),
+          );
+          const latest = bindings.filter((_binding, index) => bindingKeys[index] === worktreeKey);
+          if (yield* hasTerminal(worktreePaths)) return waitForStop("open terminal");
           if (deleted) {
             if (
               !resolveWorktreeCleanup(yield* settingsService.getSettings, thread.projectId)
@@ -867,12 +874,15 @@ const make = Effect.gen(function* () {
             projections.getThreadShell(entry.threadId),
           );
           const latestGroup = latestShells.filter((shell) => shell !== null);
+          const latestKeys = yield* Effect.forEach(latestGroup, (shell) =>
+            shell.worktreePath === null ? Effect.succeed(null) : canonical(shell.worktreePath),
+          );
           const latestOwner = worktreeOwner(deleted ? [thread, ...latestGroup] : latestGroup);
           if (
             latestGroup.length !== group.length ||
             latestOwner?.id !== thread.id ||
             latestOwner?.branch !== thread.branch ||
-            latestGroup.some((shell) => {
+            latestGroup.some((shell, index) => {
               const previous = group.find((member) => member.id === shell.id);
               return (
                 previous === undefined ||
@@ -880,7 +890,7 @@ const make = Effect.gen(function* () {
                 !Equal.equals(shell.settledAt, previous.settledAt) ||
                 (shell.settledAt !== null && !Equal.equals(shell.updatedAt, previous.updatedAt)) ||
                 !storageCleanupThreadIdle(shell, now, serverSettings) ||
-                path.resolve(shell.worktreePath!) !== worktreePath ||
+                latestKeys[index] !== worktreeKey ||
                 storageCleanupActivityAt(shell) !== storageCleanupActivityAt(previous)
               );
             })
@@ -896,9 +906,8 @@ const make = Effect.gen(function* () {
           );
           // Ready persisted sessions may have released their runtime; only live sessions protect the path.
           for (const session of sessions) {
-            const cwd = path.resolve(session.cwd);
             if (
-              (pathKey(cwd) === pathKey(worktreePath) || inside(worktreePath, cwd)) &&
+              (yield* occupies(worktreePaths, session.cwd)) &&
               (yield* providerSessions.isLive(session.id))
             )
               return waitForStop("provider session is still open");
