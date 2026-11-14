@@ -556,7 +556,7 @@ it("does not reannounce older replies when a task card hides and restores the ne
     throw new Error("expected task card");
   const running = {
     ...finished,
-    ledgerTask: { ...finished.ledgerTask, status: "running" as const, summary: null },
+    ledgerTask: { ...finished.ledgerTask, status: "running" as const, summary: "In progress" },
   };
   const threadRef = setup(id, [turnItem(id, "history", "user", "History", 1), running]);
   mocks.taskMode = true;
@@ -613,6 +613,20 @@ it("does not reannounce older replies when a task card hides and restores the ne
   expect(status?.textContent).toBe(spoken);
 });
 
+it("guard: a synchronized empty mounted chat has an empty baseline and status", async () => {
+  const threadRef = setup("empty-guard");
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <MemberChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { details } = await synchronized(threadRef);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toHaveLength(0);
+  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
+    "",
+  );
+});
+
 it.each(["above", "following"] as const)(
   "the first reply after an empty synchronized member snapshot is new while %s",
   async (mode) => {
@@ -648,6 +662,9 @@ it.each(["above", "following"] as const)(
       2,
     );
     await deliver(socket, details, threadRef, answer, 3);
+    expect(
+      screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent,
+    ).toMatch(/Research replied\.|New reply from Research\./);
     const row = screen.container.querySelector<HTMLElement>(`[data-bot-row="${answer.id}"]`)!;
     expect(row).not.toBeNull();
     if (mode === "above") {
