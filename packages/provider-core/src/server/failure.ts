@@ -120,6 +120,7 @@ function curatedCauseMessages(cause: unknown): {
         case "ProviderSetupError":
         case "ProviderRestartRequiredError":
         case "ProviderCliMissingError":
+        case "ProviderCompactionUnsupportedError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
         // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.
         case "DevinCloudCliError":
