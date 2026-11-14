@@ -10,6 +10,15 @@ import {
 } from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
+  it("requests immediate unload while allowing an explicit override", () => {
+    NodeAssert.deepStrictEqual(codexAppServerArgs("-c thread_unload_delay_secs=1800", [], true), [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+      "-c",
+      "thread_unload_delay_secs=1800",
+    ]);
+  });
   it("preserves escaped TOML quotes in config values", () => {
     NodeAssert.deepStrictEqual(
       codexAppServerArgs(String.raw`--config model=\"gpt-6.1-sol\" --strict-config`),

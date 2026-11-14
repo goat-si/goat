@@ -1,3 +1,4 @@
+import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
 import { makeCodexRetryTimers } from "./CodexRetryTimers.ts";
 import {
   CodexProviderCapabilitiesV2,
@@ -1845,6 +1846,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<ProviderTurnId, ActiveCodexProviderRetry>(),
         );
         const providerRetryTimers = makeCodexRetryTimers(scope);
+        const threadClosings = makeCodexThreadClosings();
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingCodexRuntimeRequest>(),
@@ -4812,6 +4814,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // their command items, while the shared provider session stays alive.
         yield* survivorHooks.handleNotification("thread/closed", (payload) =>
           Effect.gen(function* () {
+            yield* threadClosings.close(payload.threadId);
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
               if (context.providerThread.nativeThreadRef?.nativeId !== payload.threadId) continue;
@@ -6858,12 +6861,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const resume = client.raw.request("thread/resume", { threadId, ...params });
           return yield* resume.pipe(
             Effect.catchTags({
-              CodexAppServerRequestError: (cause) =>
-                /\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage)
-                  ? client.raw
-                      .request("thread/unarchive", { threadId })
-                      .pipe(Effect.andThen(resume))
-                  : Effect.fail(cause),
+              CodexAppServerRequestError: (cause) => {
+                if (/\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage))
+                  return client.raw
+                    .request("thread/unarchive", { threadId })
+                    .pipe(Effect.andThen(resume));
+                if (/\bthread \S+ is closing\b/i.test(cause.errorMessage))
+                  return threadClosings.wait(threadId).pipe(Effect.andThen(resume));
+                return Effect.fail(cause);
+              },
             }),
           );
         });
@@ -7618,7 +7624,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return next;
               });
               sessionApprovals.delete(nativeThreadId);
-              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              yield* threadClosings.begin(nativeThreadId);
+              yield* client
+                .request("thread/unsubscribe", { threadId: nativeThreadId })
+                .pipe(Effect.onError(() => threadClosings.close(nativeThreadId)));
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
               foreignConfigThreads.delete(nativeThreadId);

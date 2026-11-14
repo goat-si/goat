@@ -9,8 +9,13 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
-export const codexAppServerArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
+export const codexAppServerArgs = (
+  launchArgs?: string,
+  routeArgs: ReadonlyArray<string> = [],
+  unloadImmediately = false,
+) => [
   "app-server",
+  ...(unloadImmediately ? ["-c", "thread_unload_delay_secs=0"] : []),
   ...codexLaunchArgv(launchArgs),
   ...routeArgs,
 ];
