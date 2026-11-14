@@ -159,7 +159,9 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
         refName = branch;
         restoredFrom = "branch";
       } else {
-        const remotes = parseRemoteNamesInGitOrder(yield* runGit(["remote"]));
+        const remotes = parseRemoteNamesInGitOrder(
+          yield* runGit(["remote"]).pipe(Effect.orElseSucceed(() => "")),
+        );
         const remoteName = remotes.includes("origin") ? "origin" : (remotes[0] ?? null);
         if (
           remoteName !== null &&
