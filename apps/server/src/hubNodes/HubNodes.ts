@@ -35,6 +35,8 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
 import { claimedBy, refusalText, type RouteClaim } from "../hub/disposable/routeGuard.ts";
+import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";
+import * as SshHostKeys from "../sshRemote/SshHostKeys.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
 import * as Context from "effect/Context";
@@ -84,6 +86,8 @@ export class HubNodes extends Context.Service<
     readonly disposableRoute: (target: {
       readonly alias?: string;
       readonly hostKeyFingerprint?: string;
+      /** False checks the alias and given key only, reading nothing from the network. */
+      readonly identify?: boolean;
     }) => Effect.Effect<string | undefined>;
   }
 >()("goat/hubNodes/HubNodes") {}
@@ -106,6 +110,22 @@ export const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const http = yield* HttpClient.HttpClient;
   const disposableMachines = yield* DisposableMachineStore.DisposableMachineStore;
+  const hostKeys = yield* SshHostKeys.SshHostKeys;
+  /**
+   * The sshd key an SSH target negotiates now, trusted or not, when an open record has a pin to
+   * compare it with; nothing is probed otherwise.
+   */
+  const negotiatedKey = (
+    records: ReadonlyArray<DisposableRecord>,
+    target: {
+      readonly alias: string;
+      readonly username: string | null;
+      readonly port: number | null;
+    },
+  ) =>
+    records.some((record) => !record.final && record.sshdPin !== null)
+      ? hostKeys.negotiatedFingerprint(target)
+      : Effect.sync((): string | undefined => undefined);
   const signals = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   // Orders cloud alias invalidation against check results, so a check that finishes after a
@@ -321,6 +341,9 @@ export const make = Effect.gen(function* () {
         detail: "The hub cannot add itself as a node.",
       });
     yield* refuseDisposable(alias, { environmentId: identity });
+    const negotiated = yield* negotiatedKey(disposable, target);
+    if (negotiated !== undefined)
+      yield* refuseDisposable(alias, { hostKeyFingerprint: negotiated });
     if (identity === null && options.requireIdentity)
       return yield* new HubNodesError({
         reason: "invalid_request",
@@ -602,7 +625,7 @@ export const make = Effect.gen(function* () {
   );
   const disposableRoute: HubNodes["Service"]["disposableRoute"] = Effect.fn(
     "HubNodes.disposableRoute",
-  )(function* ({ alias, hostKeyFingerprint }) {
+  )(function* ({ alias, hostKeyFingerprint, identify }) {
     const records = yield* disposableMachines.recordsOrKept;
     const target = alias ?? "This host";
     const offered = claimedBy(records, {
@@ -610,13 +633,22 @@ export const make = Effect.gen(function* () {
       ...(hostKeyFingerprint === undefined ? {} : { hostKeyFingerprint }),
     });
     if (offered !== undefined) return refusalText(offered, target);
-    if (alias === undefined || records.every((record) => record.final)) return undefined;
+    if (alias === undefined || identify === false || records.every((record) => record.final))
+      return undefined;
     // An alias GOAT cannot identify is judged by its name alone; hub.nodes.add identifies again.
     const identity = yield* ssh
       .identifyTarget({ alias, hostname: alias, username: null, port: null })
       .pipe(Effect.orElseSucceed(() => null));
     const byEnvironment = claimedBy(records, { environmentId: identity });
-    return byEnvironment === undefined ? undefined : refusalText(byEnvironment, alias);
+    if (byEnvironment !== undefined) return refusalText(byEnvironment, alias);
+    // A key the caller already trusts carries no fingerprint in its preflight: read it here.
+    const negotiated =
+      hostKeyFingerprint === undefined
+        ? yield* negotiatedKey(records, { alias, username: null, port: null })
+        : undefined;
+    const byKey =
+      negotiated === undefined ? undefined : claimedBy(records, { hostKeyFingerprint: negotiated });
+    return byKey === undefined ? undefined : refusalText(byKey, alias);
   });
 
   return HubNodes.of({
@@ -632,4 +664,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(HubNodes, make);
+export const layer = Layer.effect(HubNodes, make).pipe(Layer.provide(SshHostKeys.layer));

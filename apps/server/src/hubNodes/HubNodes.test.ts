@@ -29,6 +29,7 @@ import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStor
 import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
+import * as SshHostKeys from "../sshRemote/SshHostKeys.ts";
 
 const hub = EnvironmentId.make("env-hub");
 const remote = EnvironmentId.make("env-box");
@@ -122,6 +123,9 @@ const fixture = Effect.gen(function* () {
       | Effect.Effect<EnvironmentId | null, SshRemoteDispatch.SshRemoteDispatchError>
       | undefined,
     disposable: [] as Array<DisposableRecord>,
+    /** The SSH host key each alias negotiates now, trusted or not. */
+    hostKeys: {} as Record<string, string>,
+    keyProbes: [] as Array<string>,
   };
   const disposableMachines = DisposableMachineStore.DisposableMachineStore.of({
     records: Effect.sync(() => state.disposable),
@@ -267,6 +271,16 @@ const fixture = Effect.gen(function* () {
   const service = yield* HubNodes.make.pipe(
     Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
     Effect.provideService(DisposableMachineStore.DisposableMachineStore, disposableMachines),
+    Effect.provideService(
+      SshHostKeys.SshHostKeys,
+      SshHostKeys.SshHostKeys.of({
+        negotiatedFingerprint: (target) =>
+          Effect.sync(() => {
+            state.keyProbes.push(target.alias);
+            return state.hostKeys[target.alias];
+          }),
+      }),
+    ),
     Effect.provideService(LinkedHosts.LinkedHosts, linked),
     Effect.provideService(CloudMachineService.CloudMachineService, cloud),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
@@ -429,6 +443,33 @@ describe("HubNodes", () => {
           expect(yield* service.disposableRoute({ hostKeyFingerprint: "SHA256:pinned" })).toContain(
             "disposable machine",
           );
+        }),
+      ),
+  );
+
+  it.effect(
+    "a trusted alias whose GOAT cannot be identified is refused by the sshd key it negotiates; no key is probed while no record has a pin",
+    () =>
+      run(({ service, state, repository }) =>
+        Effect.gen(function* () {
+          state.identity = null;
+          state.disposable = [disposableRecord("e".repeat(26), remote)];
+          yield* service.add(sshInput("cc-01"), options);
+          expect(state.keyProbes).toEqual([]);
+          state.disposable = [
+            { ...disposableRecord("e".repeat(26), remote), sshdPin: "SHA256:pinned" },
+          ];
+          state.hostKeys = { lab: "SHA256:pinned" };
+          const refused = yield* service.add(sshInput("lab"), options).pipe(Effect.flip);
+          expect(refused.detail).toContain("disposable machine");
+          expect((yield* repository.listRegistrations).map((row) => row.routeId)).toEqual([
+            "ssh:cc-01",
+          ]);
+          expect(yield* service.disposableRoute({ alias: "lab" })).toContain("disposable machine");
+          // An alias-only check reads nothing from the network.
+          state.keyProbes = [];
+          expect(yield* service.disposableRoute({ alias: "lab", identify: false })).toBeUndefined();
+          expect(state.keyProbes).toEqual([]);
         }),
       ),
   );

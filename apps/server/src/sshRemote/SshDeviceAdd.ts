@@ -148,6 +148,24 @@ const make = Effect.gen(function* () {
         ...input,
         address: input.host ?? input.address!,
       });
+      const refusal = (message: string) => ({
+        saved: false as const,
+        reason: message,
+        kind: "error" as const,
+        code: "unsupported" as const,
+        message,
+        fix: {
+          actor: "human" as const,
+          instruction:
+            "Detach the disposable machine in Settings → Hub first, or remove it from Pen with pen revoke.",
+        },
+      });
+      // A disposable machine's Pen alias is refused by name, before preflight reaches the network.
+      const named =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, identify: false });
+      if (named !== undefined) return refusal(named);
       const reviewed = yield* setup.preflight(
         resolved.host
           ? { host: resolved.host }
@@ -164,20 +182,7 @@ const make = Effect.gen(function* () {
         ...(resolved.host === undefined ? {} : { alias: resolved.host }),
         ...(offeredKey === undefined ? {} : { hostKeyFingerprint: offeredKey }),
       });
-      if (disposable !== undefined)
-        return {
-          saved: false,
-          preflight,
-          reason: disposable,
-          kind: "error",
-          code: "unsupported",
-          message: disposable,
-          fix: {
-            actor: "human",
-            instruction:
-              "Detach the disposable machine in Settings → Hub first, or remove it from Pen with pen revoke.",
-          },
-        };
+      if (disposable !== undefined) return { ...refusal(disposable), preflight };
       // Why the connection could not be saved, kept so a later denied step still explains it.
       let saveBlocked: string | undefined;
       const deniedReason = (message: string) =>

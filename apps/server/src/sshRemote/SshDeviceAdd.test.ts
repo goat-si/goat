@@ -268,19 +268,19 @@ const fixture = (
     };
   });
 it.effect.each(["alias", "host_key"] as const)(
-  "a disposable machine named by its %s is refused after preflight, before any trust, catalog or hub save",
+  "a disposable machine named by its %s is refused before any trust, catalog or hub save; its Pen alias even before preflight, so an offline one is refused too",
   (by) =>
     Effect.gen(function* () {
       const f = yield* fixture(
         by === "alias"
-          ? { disposable: by }
+          ? { disposable: by, blocked: "failed" }
           : { disposable: by, typed: true, fingerprint: true, blocked: "needs_review" },
       );
       const refused = yield* f.call();
       expect(refused).toMatchObject({ saved: false, kind: "error", code: "unsupported" });
       expect(JSON.stringify(refused)).toContain("disposable machine");
       expect(JSON.stringify(refused)).not.toContain("SHA256:private");
-      expect(f.calls).toEqual(["preflight"]);
+      expect(f.calls).toEqual(by === "alias" ? [] : ["preflight"]);
     }),
 );
 it.effect("failed preflight creates no handoff and never dispatches", () =>
