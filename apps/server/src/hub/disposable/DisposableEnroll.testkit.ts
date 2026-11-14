@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { OcxOutput, PenExactRoute } from "../HubOcx.ts";
-import type { PenNode } from "../penSshRoute.ts";
+import type { PenNode } from "@goat/ssh/penRoute";
 import { EnrollHost, KnownHostsError, type ReachAnswer } from "./EnrollHost.ts";
 import { MachineKey } from "./machineKey.ts";
 import type { DisposableRoute } from "./routeContract.ts";
