@@ -3625,6 +3625,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ...(item.exitCode === null || item.exitCode === undefined
               ? {}
               : { exitCode: item.exitCode }),
+            ...(context.subagent === null && continuationRequests !== undefined
+              ? { completionWake: "always" as const }
+              : {}),
           };
           return { node, turnItem };
         });
