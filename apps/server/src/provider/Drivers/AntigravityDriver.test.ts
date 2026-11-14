@@ -313,6 +313,7 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)("reads user skills from the current host home", () =>
     Effect.gen(function* () {
       const original = yield* HostProcess.Environment;
@@ -358,6 +359,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("authenticated");
     }).pipe(Effect.scoped),
   );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
     "keeps the session executable and environment when MCP credentials change",
     () =>
@@ -431,6 +433,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         expect(h.acquisitions).toHaveLength(2);
       }).pipe(Effect.scoped),
   );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
     "regression #3079: status and new runtimes read the current host PATH while instance PATH wins",
     () =>

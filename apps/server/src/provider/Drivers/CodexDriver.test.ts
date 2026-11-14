@@ -114,6 +114,7 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  // The fixture executables are POSIX shell scripts, which Windows cannot execute.
   it.effect.skipIf(windowsHost)(
     "regression #3079: status and maintenance read current host PATH while instance PATH wins",
     () =>
