@@ -671,7 +671,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
+  const redeemClaudeReset = (claim: {
+    result: string;
+    usageFailsAfterClaim: boolean;
+    creditId?: string;
+  }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -694,7 +698,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
                 cedar_ember: {
                   eligible: true,
                   next_grant_id: "grant_a",
-                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+                  grants: [
+                    { id: "grant_a", resets_left: 1, usable_now: true, clears: ["seven_day"] },
+                  ],
                 },
               }),
             );
@@ -732,7 +738,10 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       const before = yield* instance!.snapshot.refresh;
       expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
       expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
-      const outcome = yield* instance!.consumeResetCredit!().pipe(Effect.result);
+      const invalid = yield* instance!.consumeResetCredit!("unknown-grant");
+      expect(invalid).toBe("noCredit");
+      expect(yield* fs.exists(marker)).toBe(false);
+      const outcome = yield* instance!.consumeResetCredit!(claim.creditId).pipe(Effect.result);
       return { outcome, after: yield* instance!.snapshot.getSnapshot };
     }).pipe(
       // macOS logins live in the Keychain, where resets are never read.
@@ -767,7 +776,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
                 cedar_ember: {
                   eligible: true,
                   next_grant_id: "grant_a",
-                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+                  grants: [
+                    { id: "grant_a", resets_left: 1, usable_now: true, clears: ["seven_day"] },
+                  ],
                 },
               }),
             );
@@ -845,6 +856,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         const { outcome } = yield* redeemClaudeReset({
           result: "already_used",
           usageFailsAfterClaim: true,
+          creditId: "grant_a",
         });
         expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
       }),

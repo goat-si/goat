@@ -382,8 +382,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         const grantId =
           creditId === undefined
             ? credits?.nextCreditId
-            : credits?.options?.some((option) => option.creditId === creditId) ||
-                (!credits?.options && credits?.nextCreditId === creditId)
+            : credits?.options?.some((option) => option.creditId === creditId)
               ? creditId
               : undefined;
         if (!grantId || !current.version) return "noCredit" as const;

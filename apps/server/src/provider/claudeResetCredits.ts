@@ -170,15 +170,7 @@ export function claudeResetCreditsToContract(
     availableCount: next ? live.reduce((sum, grant) => sum + grant.resets_left, 0) : 0,
     ...(nextExpiresAt ? { nextExpiresAt } : {}),
     ...(next ? { nextCreditId: next.id } : {}),
-    ...(next &&
-    live.some(
-      (grant) =>
-        grant.type !== undefined ||
-        grant.clears !== undefined ||
-        grant.gives_back_weekly !== undefined,
-    )
-      ? { options }
-      : {}),
+    ...(next ? { options } : {}),
   };
 }
 
