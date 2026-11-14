@@ -125,12 +125,24 @@ it.effect(
           state: string;
         }>`SELECT state FROM remote_dispatches WHERE correlation_id = 'rr-old'`)[0]?.state,
       ).toBe("running");
-      expect((yield* claim("third").pipe(Effect.flip)).code).toBe("capability_denied");
-      yield* sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = 'rr-old'`;
-      yield* profiles.release("old", true);
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: { ...policy.profiles, manager: { ...policy.profiles.manager!, maxLanes: 2 } },
+        },
+      });
       expect((yield* claim("third").pipe(Effect.flip)).code).toBe("capability_denied");
       yield* sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = 'rr-new'`;
       yield* profiles.release("new", true);
+      yield* settings.updateSettings({
+        goatclaw: {
+          ...policy,
+          profiles: { ...policy.profiles, manager: { ...policy.profiles.manager!, maxLanes: 1 } },
+        },
+      });
+      expect((yield* claim("third").pipe(Effect.flip)).code).toBe("capability_denied");
+      yield* sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = 'rr-old'`;
+      yield* profiles.release("old", true);
       expect((yield* claim("third")).enabled).toBe(true);
     }).pipe(Effect.provide(fixture)),
 );
