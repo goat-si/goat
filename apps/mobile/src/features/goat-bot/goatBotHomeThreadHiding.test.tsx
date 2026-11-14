@@ -34,6 +34,9 @@ const fx = vi.hoisted(() => ({
   registry: undefined as unknown as import("effect/reactivity").AtomRegistry.AtomRegistry,
   atoms: {} as Record<string, import("effect/reactivity").Atom.Writable<any>>,
   config: undefined as unknown as (id: string) => import("effect/reactivity").Atom.Writable<any>,
+  connection: undefined as unknown as (
+    id: string,
+  ) => import("effect/reactivity").Atom.Writable<any>,
   openThread: vi.fn(),
 }));
 vi.mock("../../state/atom-registry", async () => {
@@ -61,14 +64,16 @@ vi.mock("../../../../../packages/client-runtime/src/state/environmentConnections
   const { Atom: A, AsyncResult: R } = await import("effect/reactivity");
   const Opt = await import("effect/Option");
   const family = A.family((_id: string) =>
-    A.make(R.success([{ phase: "connected" }, Opt.some({})] as const)),
+    A.make<unknown>(R.success([{ phase: "connected" }, Opt.some({})] as const)).pipe(A.keepAlive),
   );
+  fx.connection = family as never;
   return { environmentConnectionAtoms: () => family };
 });
 vi.mock("../../../../../packages/client-runtime/src/state/commandPermissions.ts", async () => {
   const { Atom: A } = await import("effect/reactivity");
-  const yes = A.make(true);
-  return { createCommandPermissions: () => ({ permissionAtom: () => yes }) };
+  const allowed = A.make(true).pipe(A.keepAlive);
+  fx.atoms.permission = allowed as never;
+  return { createCommandPermissions: () => ({ permissionAtom: () => allowed }) };
 });
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
@@ -367,6 +372,7 @@ const hiddenWork = () => {
 const setList = (result: unknown) =>
   fx.registry.set(fx.atoms["channel.listBotThreads"] as never, result as never);
 
+const connected = AsyncResult.success([{ phase: "connected" }, Option.some({})] as const);
 function setup() {
   vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   const target = (id: EnvironmentId) =>
@@ -400,6 +406,8 @@ function setup() {
     threads: [shell("r1", launch("coding", "ssh_thread_launch"))],
   } satisfies OrchestrationV2ShellSnapshot);
   fx.registry.set(fx.config("env"), configOf(env));
+  fx.registry.set(fx.connection("env"), connected);
+  fx.registry.set(fx.atoms.permission as never, true as never);
   fx.registry.set(fx.config("far"), configOf(far));
   fx.registry.set(
     fx.atoms.preferences as never,
@@ -508,6 +516,24 @@ it("lists Home's work again when its list read fails or a destination disconnect
   expect(hiddenWork()).toContain(key("far", "r1"));
   setList(AsyncResult.failure(new Error("offline") as never));
   expect(hiddenWork()).toEqual([]);
+});
+
+it("hides nothing from Home while its first list read is pending, offline, or not permitted", () => {
+  setup();
+  setList(AsyncResult.initial(true));
+  expect(hiddenWork()).toEqual([]);
+  setList(AsyncResult.success({ rows, remoteWork: [remote], mainMessageCount: 0 }));
+  expect(hiddenWork()).toContain(key("env", "c1"));
+  // Offline the bot is not eligible, so Home stops governing and the legacy rule decides.
+  fx.registry.set(
+    fx.connection("env"),
+    AsyncResult.success([{ phase: "disconnected" }, Option.none()]),
+  );
+  expect(hiddenWork()).not.toContain(key("env", "c1"));
+  fx.registry.set(fx.connection("env"), connected);
+  expect(hiddenWork()).toContain(key("env", "c1"));
+  fx.registry.set(fx.atoms.permission as never, false as never);
+  expect(hiddenWork()).not.toContain(key("env", "c1"));
 });
 
 it("returns Threads to the legacy rule when either visibility capability is withdrawn", () => {
