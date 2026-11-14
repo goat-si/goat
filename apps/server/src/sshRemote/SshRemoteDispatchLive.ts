@@ -3,6 +3,7 @@ import * as Layer from "effect/Layer";
 import * as BoatClient from "../cloudMachines/BoatClient.ts";
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as CloudMachineSsh from "../cloudMachines/sshConfig.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 
@@ -20,5 +21,5 @@ export const layerCloudMachines = CloudMachineService.layerWithoutDependencies.p
  */
 export const layer = SshRemoteDispatch.layer.pipe(
   Layer.provide(layerCloudMachines),
-  Layer.provide(LinkedHosts.layer),
+  Layer.provide(LinkedHosts.layer.pipe(Layer.provide(DisposableRouteGuard.layer))),
 );

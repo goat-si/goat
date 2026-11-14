@@ -21,6 +21,7 @@ import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 
 /**
  * goatclaw is on or off for the whole fleet (ADR-0021): turning it on or off on any machine
@@ -337,4 +338,4 @@ export const layer = Layer.effect(
     yield* scheduler.register("goatclaw-fleet-sync", service.reconcile);
     return service;
   }),
-).pipe(Layer.provide(LinkedHosts.layer));
+).pipe(Layer.provide(LinkedHosts.layer.pipe(Layer.provide(DisposableRouteGuard.layer))));
