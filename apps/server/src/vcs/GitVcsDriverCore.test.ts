@@ -6143,3 +6143,29 @@ it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", 
     assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), target);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("lists branches when the current branch refresh fails", () =>
+  Effect.gen(function* () {
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    let reads = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (
+        ChildProcess.isStandardCommand(command) &&
+        command.args.join(" ") === "symbolic-ref --quiet HEAD" &&
+        ++reads === 2
+      ) {
+        return Effect.die(new Error("symbolic-ref failed"));
+      }
+      return delegate.spawn(command);
+    });
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provide(layerServerConfig),
+    );
+    const result = yield* driver.listRefs({ cwd });
+    assert.isAtLeast(reads, 2);
+    assert.isTrue(result.refs.some((ref) => ref.name === initialBranch && ref.current));
+  }).pipe(Effect.provide(layerTest)),
+);

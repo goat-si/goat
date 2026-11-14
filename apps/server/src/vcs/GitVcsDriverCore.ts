@@ -3826,7 +3826,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const [snapshot, currentBranch] = yield* Effect.all(
         [
           resolveListRefsSnapshot(repositoryPaths.gitCommonDir, input.refresh === true),
-          readCurrentBranch("GitVcsDriver.listRefs.currentBranch", input.cwd),
+          readCurrentBranch("GitVcsDriver.listRefs.currentBranch", input.cwd).pipe(
+            Effect.orElseSucceed(() => repositoryPaths.currentBranch),
+          ),
         ],
         { concurrency: 2 },
       );
