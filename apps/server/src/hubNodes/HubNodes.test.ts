@@ -124,7 +124,6 @@ const fixture = Effect.gen(function* () {
       | Effect.Effect<EnvironmentId | null, SshRemoteDispatch.SshRemoteDispatchError>
       | undefined,
     disposable: [] as Array<DisposableRecord>,
-    /** The SSH host key each alias negotiates now, trusted or not. */
     hostKeys: {} as Record<string, string>,
     keyProbes: [] as Array<string>,
     penKnownHosts: "",
@@ -398,7 +397,6 @@ describe("HubNodes", () => {
           const byEnvironment = yield* service.add(sshInput("box"), options).pipe(Effect.flip);
           expect(byEnvironment.detail).toContain("disposable machine");
           expect(yield* repository.listRegistrations).toEqual([]);
-          // Once the record ends, the same machine may be added as kept.
           state.disposable = [{ ...disposableRecord(nodeId, remote), final: true }];
           expect((yield* service.add(sshInput("box"), options)).node.environmentId).toBe(remote);
         }),
@@ -464,12 +462,14 @@ describe("HubNodes", () => {
           state.disposable = [
             { ...disposableRecord("e".repeat(26), remote), sshdPin: "SHA256:pinned" },
           ];
-          state.hostKeys = { lab: "SHA256:pinned" };
-          const refused = yield* service.add(sshInput("lab"), options).pipe(Effect.flip);
+          state.hostKeys = { "lab.example": "SHA256:pinned" };
+          const viaHost = { ...sshInput("lab"), hostname: "lab.example" };
+          const refused = yield* service.add(viaHost, options).pipe(Effect.flip);
           expect(refused.detail).toContain("disposable machine");
           expect((yield* repository.listRegistrations).map((row) => row.routeId)).toEqual([
             "ssh:cc-01",
           ]);
+          state.hostKeys = { lab: "SHA256:pinned" };
           expect(yield* service.disposableRoute({ alias: "lab" })).toContain("disposable machine");
           state.keyProbes = [];
           expect(yield* service.disposableRoute({ alias: "lab", identify: false })).toBeUndefined();
