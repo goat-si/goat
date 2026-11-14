@@ -18,6 +18,9 @@ const forget = (linkId: string | null) =>
     : " If it is gone for good, a person on this hub runs ocx link recover --forget --link-id " +
       linkId +
       " --yes (refused from an agent).";
+// Forgetting leaves a pending removal's receipt behind, so a pending answer does not offer it.
+const forgetUnlessPending = (linkId: string | null, detach: Detach | undefined) =>
+  detach?.outcome === "link_retirement_pending" ? "" : forget(linkId);
 const resolve = (operationId: string) =>
   "ocx link operations resolve --operation-id " + operationId + " --yes";
 
@@ -180,12 +183,25 @@ const RECOVER_WAITS: Record<string, string> = {
   managed_child_missing:
     "the machine has no planted ocx-child, so only a person can confirm its cleanup.",
   link_retirement_pending:
-    "OpenCodex still holds an unfinished removal of its link; GOAT repeated it once and waits.",
+    "OpenCodex still holds an unfinished removal of its link; GOAT repeated it once. Once its fault is fixed, a person detaches it again in Settings → Hub on web or desktop, which repeats it once more.",
 };
 const waits = (detach: Detach | undefined) =>
   detach?.outcome !== undefined && RECOVER_WAITS[detach.outcome] !== undefined
     ? "; " + RECOVER_WAITS[detach.outcome]
     : ".";
+/** A forced removal waits on the resolve of the purge it replaced before recover runs. */
+const resolveOwed = (name: string, detach: Detach | undefined, inPen: boolean) =>
+  detach?.outcome === "resolve_owed" && detach.supersedes !== undefined
+    ? {
+        message:
+          name +
+          "'s link is gone, and GOAT is marking the purge it replaced resolved before it cleans the machine; it tries every 30 minutes, or a person runs " +
+          resolve(detach.supersedes) +
+          " on this hub." +
+          held(inPen, true),
+        nextAction: "A person may run the resolve command above on the hub.",
+      }
+    : undefined;
 
 export interface DetachView {
   readonly state: string;
@@ -324,17 +340,19 @@ export const detachMessage = (
           nextAction: null,
         };
       if (detach?.step === "recover")
-        return {
-          message:
-            name +
-            (detach.elsewhere === true
-              ? " is detaching: its link was removed outside GOAT, and GOAT asks OpenCodex every 30 minutes whether a cleanup of the machine waits"
-              : " is detaching: its link is gone, and GOAT cleans the lightweight Child once the machine answers, trying every 30 minutes") +
-            waits(detach) +
-            forget(linkId) +
-            held(view.inPen, true),
-          nextAction: null,
-        };
+        return (
+          resolveOwed(name, detach, view.inPen) ?? {
+            message:
+              name +
+              (detach.elsewhere === true
+                ? " is detaching: its link was removed outside GOAT, and GOAT asks OpenCodex every 30 minutes whether a cleanup of the machine waits"
+                : " is detaching: its link is gone, and GOAT cleans the lightweight Child once the machine answers, trying every 30 minutes") +
+              waits(detach) +
+              forgetUnlessPending(linkId, detach) +
+              held(view.inPen, true),
+            nextAction: null,
+          }
+        );
       if (detach?.outcome === "unreachable")
         return {
           message:
@@ -356,6 +374,8 @@ export const detachMessage = (
       };
     }
     case "retired":
+      if (resolveOwed(name, detach, view.inPen) !== undefined)
+        return resolveOwed(name, detach, view.inPen);
       if (detach?.step === "revoke")
         return {
           message:
@@ -370,7 +390,7 @@ export const detachMessage = (
           name +
           " did not answer for 24 hours, so GOAT removed its link without it and cleans the machine once it answers, trying every 30 minutes" +
           waits(detach) +
-          forget(linkId) +
+          forgetUnlessPending(linkId, detach) +
           held(view.inPen, true),
         nextAction: "Detach it to end the record once its cleanup is done.",
       };
@@ -391,17 +411,20 @@ export const detachMessage = (
             : detach?.outcome === "unproven"
               ? " is detached: OpenCodex lists no link of this attach, but link operation " +
                 (detach.operationId ?? "") +
-                " never settled, so the machine may still hold the planted Child (check with ocx-child connect status there)." +
+                " never settled, so the machine may hold the planted Child (see ~/.cache/opencodex/bin/ocx-child connect status --json there)." +
                 (detach.foreignLinkId === undefined
                   ? ""
-                  : " Link " +
-                    detach.foreignLinkId +
-                    " under its alias is not GOAT's; GOAT left it.")
+                  : " Link " + detach.foreignLinkId + " under its alias is not GOAT's.")
               : detach?.outcome === "elsewhere"
                 ? " is detached: its OpenCodex link was removed outside GOAT, so GOAT cannot tell whether the machine still holds the lightweight Child."
                 : " is detached: its OpenCodex link and lightweight Child are gone.") +
           leave(view.inPen),
-        nextAction: null,
+        nextAction:
+          detach?.outcome === "unproven" && detach.operationId !== undefined
+            ? "A person checks the machine, then runs " +
+              resolve(detach.operationId) +
+              " on this hub if the entry is unknown or residual."
+            : null,
       };
     case "failed":
       return detach?.outcome === "released"

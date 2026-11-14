@@ -226,10 +226,10 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
 
   /**
-   * Removes the link without the machine (ocx link revoke --force under its own operation id): a
-   * tombstone keeps what recover needs, and the record waits on step recover. A stored forced id is
-   * read first: committed goes on, a settled refusal or a resolved entry gets a new id (tombstone_limit
-   * repeats its own id once first, as OpenCodex asks), anything else is resumed under its id.
+   * Removes the link without the machine under its own operation id, leaving a tombstone recover
+   * settles. A stored forced id is read first: committed goes on, a settled refusal or a resolved
+   * entry gets a new id (tombstone_limit: the same id, then a new one in the same step), anything
+   * else is resumed under its id.
    */
   const forceStep = Effect.fn("DisposableDetach.force")(function* (row: Row, enroll: Enroll) {
     const linkId = row.link_id;
@@ -252,11 +252,9 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       if (purge.kind === "clean") return yield* finish(row, enroll, "purged");
       if (purge.kind === "open")
         return yield* note(row, withDetach(enroll, { ...before, outcome: "open" }));
-      if (
-        purge.kind === "unsettled" &&
-        purge.code === "remote_disconnect_failed" &&
-        !purge.resolved
-      )
+      // Any unknown purge the force replaces is resolved once the force commits, so no purge entry
+      // of this record stays unsettled on the Home.
+      if (purge.kind === "unsettled" && purge.state === "unknown" && !purge.resolved)
         supersedes = purgeId;
     }
     // OpenCodex asks for one more send of a committed id whose removal recover found pending.
@@ -428,6 +426,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       operationId,
       sends: repeat ? (before.sends ?? 1) + 1 : 1,
       triedAtMs: nowMs,
+      // A person's force that repeats an open purge stays a force once the purge settles.
+      ...(before.force === true ? { force: true as const } : {}),
     };
     if (!(yield* note(row, withDetach(enroll, admitted)))) return;
     const sent = yield* host.ocx(
@@ -565,7 +565,15 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
                 "link_foreign",
               );
         case "none":
-          return yield* finish(row, withDetach(enroll, { ...before, operationId }), "unproven");
+          return yield* finish(
+            row,
+            withDetach(enroll, {
+              ...before,
+              operationId,
+              ...(listed.aliasLinkId === undefined ? {} : { foreignLinkId: listed.aliasLinkId }),
+            }),
+            "unproven",
+          );
       }
     }
     switch (outcome.kind) {
@@ -611,7 +619,10 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     // record never ends while it is owed.
     const { supersedes, ...before } = stored;
     if (supersedes !== undefined && !(yield* resolveSuperseded(supersedes)))
-      return yield* note(row, withDetach(enroll, { ...stored, triedAtMs: nowMs }));
+      return yield* note(
+        row,
+        withDetach(enroll, { ...stored, triedAtMs: nowMs, outcome: "resolve_owed" }),
+      );
     if (linkId === null) return yield* finish(row, withDetach(enroll, before), "purged");
     const answer = recoverAnswer(
       yield* host.ocx(["link", "recover", "--link-id", linkId, "--json"], REVOKE_TIMEOUT_MS),
@@ -694,10 +705,12 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         forceId?.includes(".force.") === true
           ? yield* readEntry(forceId, row.link_id, true)
           : ({ kind: "not_found" } as const);
-      if (entry.kind === "unreadable") return;
+      // The journal cannot be read now: the check is recorded, and the read-back waits 30 minutes.
+      if (entry.kind === "unreadable")
+        return yield* note(row, { ...enroll, health: { failures: 0, checkedAtMs: nowMs } });
       if (entry.kind === "clean") {
         const { stop: _stop, ...going } = retirement;
-        return yield* note(
+        const moved = yield* note(
           row,
           {
             ...rest,
@@ -706,9 +719,14 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           },
           { state: "retired", step: "recover" },
         );
+        if (moved) yield* audit(row.attach_id, "hub.machine_detach", "retired");
+        return;
       }
       const owed = entry.kind === "open" || (entry.kind === "unsettled" && !entry.resolved);
-      if (!owed) kept = { step: "none", attempt: retirement.attempt };
+      // The live kind decides the text and what a person's detach does.
+      kept = owed
+        ? { ...retirement, outcome: entry.kind === "open" ? "open" : "unsettled" }
+        : { step: "none", attempt: retirement.attempt };
     }
     yield* note(row, {
       ...rest,

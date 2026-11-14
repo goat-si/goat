@@ -23,7 +23,7 @@ import {
   storageFailed,
 } from "./attachRow.ts";
 import type { AttachCaller } from "./DisposableAttach.ts";
-import { type Detach, onlyHostKeyConflict } from "./detachModel.ts";
+import { type Detach, onlyHostKeyConflict, retires } from "./detachModel.ts";
 import { decodeEnroll, encodeEnroll } from "./enrollModel.ts";
 import { PenInvites } from "./PenInvites.ts";
 
@@ -136,7 +136,10 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
               : row.link_operation_id !== null
                 ? "settle"
                 : "done";
-        const { stop: _stop, ...kept } = known ?? { step: stepFor, attempt: 0 };
+        const { stop: _stop, ...stopless } = known ?? { step: stepFor, attempt: 0 };
+        // A person's detach or force buys one more resend of a revoke recover found pending.
+        const { pendingResent: _pending, ...repending } = stopless;
+        const kept = person ? repending : stopless;
         // A person's force starts its sends afresh and reads the stored id again before any stop;
         // an open purge stays, as OpenCodex refuses any other revoke while it is open.
         const { sends: _sends, outcome, ...rest } = kept;
@@ -145,12 +148,16 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const resend =
           known?.stop === "revoke_unsettled" &&
           (outcome === "open" || outcome === "not_found" || outcome === "unreadable");
-        // A stopped retirement force goes on under its id while the machine fails or it is open.
+        // A stopped retirement force goes on under its id while it is open, or while the machine
+        // fails for a person, or for anyone once the failures would retire it; an agent's plain
+        // detach of a machine that answers starts a purge.
+        const failing = (enroll.health?.failures ?? 0) > 0;
         const retirement =
           row.state === "linked" &&
           known?.force === true &&
           known.stop !== undefined &&
-          ((enroll.health?.failures ?? 0) > 0 || outcome === "open");
+          (outcome === "open" ||
+            (failing && (person || retires(enroll.health, yield* Clock.currentTimeMillis))));
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true

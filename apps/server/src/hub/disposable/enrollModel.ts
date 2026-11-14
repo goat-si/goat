@@ -250,7 +250,7 @@ export const verifyLink = (
 
 export type ListedLink =
   | { readonly kind: "unreadable" }
-  | { readonly kind: "none" }
+  | { readonly kind: "none"; readonly aliasLinkId?: string }
   | { readonly kind: "ours"; readonly linkId: string }
   | { readonly kind: "foreign"; readonly linkId: string };
 /**
@@ -275,9 +275,11 @@ export const listedLink = (
   );
   if (expected.reservedLinkId !== undefined) {
     const reserved = named.find((link) => link.id === expected.reservedLinkId);
-    return reserved !== undefined && LINK_ID.test(reserved.id)
-      ? { kind: "ours", linkId: reserved.id }
-      : { kind: "none" };
+    if (reserved !== undefined && LINK_ID.test(reserved.id))
+      return { kind: "ours", linkId: reserved.id };
+    // Not this attach's link; it is named so a person sees what GOAT left.
+    const other = named.find((link) => LINK_ID.test(link.id));
+    return other === undefined ? { kind: "none" } : { kind: "none", aliasLinkId: other.id };
   }
   const ours = named.find(
     (link) =>
