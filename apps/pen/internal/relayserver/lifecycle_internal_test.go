@@ -394,13 +394,26 @@ func TestPendingEvictsFirstAcrossSessionIDWrap(t *testing.T) {
 // prelude drives each exit path once so every seed covers them, whatever its random steps do.
 func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	ctx := context.Background()
+	t.Cleanup(func() {
+		lv.mu.Lock()
+		conns := append([]*websocket.Conn(nil), lv.conns...)
+		lv.mu.Unlock()
+		for _, conn := range conns {
+			conn.CloseNow()
+		}
+	})
 	refused := lv.uplink(ids[1], false)
 	if refused == nil {
 		t.Fatal("prelude: an uplink failing authentication was refused before its challenge")
 	}
 	// Each exit below is awaited, so no random step that follows can end its socket another way first.
-	if err := <-refused.end; websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeRelayAuth) {
-		t.Fatalf("prelude: the uplink failing authentication ended %v, want 4403", err)
+	select {
+	case err := <-refused.end:
+		if websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeRelayAuth) {
+			t.Fatalf("prelude: the uplink failing authentication ended %v, want 4403", err)
+		}
+	case <-time.After(failsafe):
+		t.Fatal("prelude: the uplink failing authentication did not end")
 	}
 	old := lv.uplink(ids[0], true)
 	orphan := lv.dial("/v1/client/" + ids[0].NodeID())
@@ -418,7 +431,10 @@ func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 			t.Fatalf("prelude: the %s message before the node answered: %v", msg, err)
 		}
 	}
-	if _, _, err := twice.Read(ctx); websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeTimeout) {
+	readCtx, cancel := context.WithTimeout(ctx, failsafe)
+	_, _, err := twice.Read(readCtx)
+	cancel()
+	if websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeTimeout) {
 		t.Fatalf("prelude: a second message before the node answered ended %v, want 4408", err)
 	}
 	closed := lv.dial("/v1/client/" + ids[0].NodeID())
