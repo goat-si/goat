@@ -1,5 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
-import { BotRemoteWork, BotThreadRow, ChannelChildWorkGroup, EnvironmentId } from "@goat/contracts";
+import {
+  BotRemoteWork,
+  BotThreadRow,
+  ChannelChildWorkGroup,
+  ChannelTaskId,
+  EnvironmentId,
+  type ChannelTaskChip,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { botHomeWork, groupBotWork } from "./botWork.ts";
 
@@ -165,5 +172,46 @@ describe("botHomeWork", () => {
   it("leaves coding rows to their task, as the work groups do", () => {
     const home = botHomeWork([coding], [], EnvironmentId.make("env"));
     expect([...home.running, ...home.waiting, ...home.finished]).toEqual([]);
+  });
+
+  // Regression: Home said Working while the face and activity line said the task waits on you.
+  it("puts a task with work waiting on a person when its worker asks something, as the face counts it", () => {
+    const since = "2026-11-04T00:30:00.000Z";
+    const chip = (id: string, status: string, needs: ReadonlyArray<string>) =>
+      [
+        ChannelTaskId.make(id),
+        {
+          taskId: id,
+          taskVersion: 2,
+          status,
+          openQuestionCount: 0,
+          observed: { pullRequests: [], needsYou: needs.map((kind) => ({ kind, since })) },
+        } as unknown as ChannelTaskChip,
+      ] as const;
+    const home = botHomeWork(
+      [
+        statusRow("asks", "running", "2026-11-04T01:00:00.000Z"),
+        statusRow("approve", "running", "2026-11-04T02:00:00.000Z"),
+        statusRow("quiet", "running", "2026-11-04T03:00:00.000Z"),
+        statusRow("done", "completed", "2026-11-04T04:00:00.000Z"),
+        statusRow("marked", "running", "2026-11-04T05:00:00.000Z", "2026-11-04T05:30:00.000Z"),
+      ],
+      [],
+      EnvironmentId.make("env"),
+      [],
+      new Map([
+        chip("asks", "running", ["question"]),
+        chip("approve", "running", ["approval"]),
+        chip("quiet", "running", []),
+        chip("done", "completed", ["question"]),
+        chip("marked", "running", ["question"]),
+      ]),
+    );
+    const ids = (tasks: ReadonlyArray<{ row: { task: { taskId: string } } }>) =>
+      tasks.map((task) => task.row.task.taskId);
+    expect(ids(home.waiting)).toEqual(["approve", "asks"]);
+    expect(ids(home.running)).toEqual(["quiet"]);
+    // A finished task's stale question and a task the person marked done wait on nothing.
+    expect(ids(home.finished)).toEqual(["done", "marked"]);
   });
 });
