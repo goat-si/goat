@@ -281,7 +281,7 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
   const repeatFirstNext =
     "A person fixes what stopped that removal on the hub, then" +
     detachIt +
-    "; if it still reads unknown, they resolve it on the hub first.";
+    "; if it stays unknown, they resolve it on the hub and detach it again.";
   if (!failing) {
     if (outcome === "open")
       return {
