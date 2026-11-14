@@ -321,20 +321,18 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
       maxOutputBytes: 16 * 1024 * 1024,
     })
     .pipe(
-      Effect.catch((cause) => {
-        if (
+      Effect.catchIf(
+        (cause) =>
           cause._tag === "VcsProcessSpawnError" &&
           cause.cause instanceof PlatformError.PlatformError &&
-          cause.cause.reason._tag === "NotFound"
-        ) {
-          return Effect.tryPromise(() => NodeFSP.stat(cwd)).pipe(
+          cause.cause.reason._tag === "NotFound",
+        (cause) =>
+          Effect.tryPromise(() => NodeFSP.stat(cwd)).pipe(
             Effect.map((stat) => (stat.isDirectory() ? null : cause)),
-            Effect.catch(() => Effect.succeed(cause)),
+            Effect.orElseSucceed(() => cause),
             Effect.flatMap((error) => (error === null ? Effect.succeed(null) : Effect.fail(error))),
-          );
-        }
-        return Effect.fail(cause);
-      }),
+          ),
+      ),
       Effect.mapError(
         (cause) =>
           new WorkspaceSearchIndexCreateFailed({
