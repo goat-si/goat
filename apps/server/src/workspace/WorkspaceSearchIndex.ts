@@ -543,11 +543,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
           cause,
         }),
     ).pipe(Effect.catchTags({ WorkspaceSearchIndexScanTimedOut: () => Effect.void }));
-    ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows).pipe(
-      Effect.mapError(
-        (cause) => new WorkspaceSearchIndexRefreshFailed({ cwd, reason: cause.reason, cause }),
-      ),
-    );
+    ignoredPaths = yield* listGitIgnoredPaths(vcsProcess, cwd, hostIsWindows);
   });
 
   const list: WorkspaceSearchIndex["Service"]["list"] = Effect.fn("WorkspaceSearchIndex.list")(
