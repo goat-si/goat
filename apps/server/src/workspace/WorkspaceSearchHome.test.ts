@@ -3,9 +3,11 @@ import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 it.effect("refuses to index a workspace rooted at the home directory", () =>
   Effect.scoped(
@@ -34,5 +36,5 @@ it.effect("refuses to index a workspace rooted at the home directory", () =>
       );
       expect(result).toBe("WorkspaceSearchIndexCreateFailed");
     }),
-  ).pipe(Effect.provide(NodeServices.layer)),
+  ).pipe(Effect.provide(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );

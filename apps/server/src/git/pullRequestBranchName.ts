@@ -28,7 +28,7 @@ export const resolvePullRequestWorktreeLocalBranchName = Effect.fn(
 )(function* (
   cwd: string,
   pullRequest: {
-    readonly isCrossRepository?: boolean;
+    readonly isCrossRepository?: boolean | undefined;
     readonly headBranch: string;
     readonly number: number;
   },
