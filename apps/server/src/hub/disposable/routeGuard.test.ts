@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import type { DisposableRecord } from "./disposableClass.ts";
-import { claimedBy, refusalText } from "./routeGuard.ts";
+import { claimedBy, penAliases, refusalText } from "./routeGuard.ts";
 
 const node = "a".repeat(26);
 const record = (overrides: Partial<DisposableRecord> = {}): DisposableRecord => ({
@@ -48,5 +48,44 @@ describe("claimedBy", () => {
     expect(text).toContain("disposable machine");
     expect(text).toContain("Pen route");
     expect(text).toContain("Detach");
+    // pen revoke never ends a detaching record, and mobile has no Detach.
+    expect(text).toContain("Settings → Hub on web or desktop");
+    expect(text).not.toContain("pen revoke");
+  });
+});
+
+// A real ED25519 key and the fingerprint ssh-keygen -E sha256 prints for it.
+const KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJqQutSw0XQo7KOx5R7x4wcb2s6h3WPkcz2z6WIeJ3Re";
+const KEY_FINGERPRINT = "SHA256:WifIJ3Gg9d1V01c9+p+oi1SGRxLsJBBVzcaovKcEIAM";
+const line = (name: string, nodeId: string, type = "ssh-ed25519", key = KEY) =>
+  `pen-${name},pen-${nodeId} ${type} ${key}\n`;
+
+describe("Pen's own pen-<name> alias", () => {
+  it("is refused while its record has no pin and no environment yet, by the node Pen's known_hosts ties it to, in any case and with a trailing dot", () => {
+    const records = [record({ environmentId: null, sshdPin: null })];
+    const pen = penAliases(line("cc-07", node));
+    for (const alias of ["pen-cc-07", "PEN-CC-07", "pen-cc-07."])
+      expect(claimedBy(records, { alias }, pen)).toMatchObject({ by: "alias" });
+  });
+
+  it("is refused when the key Pen holds for it is an open record's pin, and a twin name is refused when any member it names is open", () => {
+    const rejoined = penAliases(line("cc-08", "b".repeat(26)));
+    expect(
+      claimedBy([record({ sshdPin: KEY_FINGERPRINT })], { alias: "pen-cc-08" }, rejoined),
+    ).toMatchObject({ by: "alias" });
+    const twins = penAliases(line("cc", "c".repeat(26)) + line("cc", node, "ssh-rsa", "AAAA"));
+    expect(claimedBy([record({ sshdPin: null })], { alias: "pen-cc" }, twins)).toMatchObject({
+      by: "alias",
+    });
+  });
+
+  it("leaves a kept member's pen-<name>, an ended record's, and a line Pen did not write alone", () => {
+    const pen = penAliases(line("cc-09", "d".repeat(26)) + `pen-cc-10 ssh-ed25519 ${KEY}\n`);
+    expect(claimedBy([record()], { alias: "pen-cc-09" }, pen)).toBeUndefined();
+    expect(
+      claimedBy([record({ sshdPin: KEY_FINGERPRINT })], { alias: "pen-cc-10" }, pen),
+    ).toBeUndefined();
+    const ended = penAliases(line("cc-07", node));
+    expect(claimedBy([record({ final: true })], { alias: "pen-cc-07" }, ended)).toBeUndefined();
   });
 });

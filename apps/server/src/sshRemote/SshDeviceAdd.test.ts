@@ -156,7 +156,24 @@ const fixture = (
               Effect.sync(() => {
                 calls.push("preflight");
                 checkedHosts.push(input.host);
-                return pinned && options.typed ? readyPreflight : report;
+                const answered = pinned && options.typed ? readyPreflight : report;
+                // What SshHostSetup.preflight answers for a disposable machine's offered key.
+                return options.disposable === "host_key"
+                  ? {
+                      ...answered,
+                      ready: false,
+                      steps: answered.steps.map((step) =>
+                        step.id === "host_key"
+                          ? {
+                              id: "host_key" as const,
+                              state: "failed" as const,
+                              summary:
+                                "This is a disposable machine; GOAT reaches it only through its Pen route.",
+                            }
+                          : step,
+                      ),
+                    }
+                  : answered;
               }),
             add: () =>
               Effect.sync(() => {
@@ -186,9 +203,7 @@ const fixture = (
           Layer.mock(HubNodes.HubNodes)({
             disposableRoute: (target) =>
               Effect.sync(() =>
-                (options.disposable === "alias" && target.alias === "build") ||
-                (options.disposable === "host_key" &&
-                  target.hostKeyFingerprint === "SHA256:private")
+                options.disposable === "alias" && target.alias === "build"
                   ? "build is a disposable machine (attach a-1, matched by its Pen alias)."
                   : undefined,
               ),
@@ -267,20 +282,32 @@ const fixture = (
       },
     };
   });
-it.effect.each(["alias", "host_key"] as const)(
-  "a disposable machine named by its %s is refused before any trust, catalog or hub save; its Pen alias even before preflight, so an offline one is refused too",
-  (by) =>
+it.effect(
+  "a disposable machine's Pen alias is refused before preflight reaches the network, so an offline one is refused too",
+  () =>
     Effect.gen(function* () {
-      const f = yield* fixture(
-        by === "alias"
-          ? { disposable: by, blocked: "failed" }
-          : { disposable: by, typed: true, fingerprint: true, blocked: "needs_review" },
-      );
+      const f = yield* fixture({ disposable: "alias", blocked: "failed" });
       const refused = yield* f.call();
-      expect(refused).toMatchObject({ saved: false, kind: "error", code: "unsupported" });
+      expect(refused).toMatchObject({ saved: false, kind: "error", code: "invalid_request" });
+      expect(JSON.stringify(refused)).toContain("disposable machine");
+      expect(f.calls).toEqual([]);
+    }),
+);
+it.effect(
+  "a preflight that refuses a disposable machine's offered key stops the add before any trust, catalog or hub save",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({
+        disposable: "host_key",
+        typed: true,
+        fingerprint: true,
+        blocked: "needs_review",
+      });
+      const refused = yield* f.call();
+      expect(refused).toMatchObject({ outcome: "failed" });
       expect(JSON.stringify(refused)).toContain("disposable machine");
       expect(JSON.stringify(refused)).not.toContain("SHA256:private");
-      expect(f.calls).toEqual(by === "alias" ? [] : ["preflight"]);
+      expect(f.calls).toEqual(["preflight"]);
     }),
 );
 it.effect("failed preflight creates no handoff and never dispatches", () =>

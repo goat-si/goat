@@ -152,12 +152,11 @@ const make = Effect.gen(function* () {
         saved: false as const,
         reason: message,
         kind: "error" as const,
-        code: "unsupported" as const,
+        code: "invalid_request" as const,
         message,
         fix: {
           actor: "human" as const,
-          instruction:
-            "Detach the disposable machine in Settings → Hub first, or remove it from Pen with pen revoke.",
+          instruction: "Detach the disposable machine in Settings → Hub on web or desktop first.",
         },
       });
       // A disposable machine's Pen alias is refused by name, before preflight reaches the network.
@@ -173,15 +172,15 @@ const make = Effect.gen(function* () {
         caller,
       );
       const preflight = toAgentReport(reviewed);
+      // Preflight itself refuses a disposable machine by its alias or the ED25519 key it offers.
       if (preflight.steps.some((step) => step.state === "failed"))
         return { outcome: "failed", preflight };
-      // A disposable machine is reached only through its own Pen route (design section 6): its
-      // alias, or a new host's offered key that is its sshd pin, is refused before any trust or save.
-      const offeredKey = reviewed.steps.find((step) => step.id === "host_key")?.fingerprint;
-      const disposable = yield* hub.disposableRoute({
-        ...(resolved.host === undefined ? {} : { alias: resolved.host }),
-        ...(offeredKey === undefined ? {} : { hostKeyFingerprint: offeredKey }),
-      });
+      // A disposable machine is reached only through its own Pen route (design section 6): the GOAT
+      // an alias reaches is checked too, before any trust or save.
+      const disposable =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, probeKey: false });
       if (disposable !== undefined) return { ...refusal(disposable), preflight };
       // Why the connection could not be saved, kept so a later denied step still explains it.
       let saveBlocked: string | undefined;

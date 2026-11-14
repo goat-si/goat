@@ -36,6 +36,8 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import type { DisposableRecord } from "./disposable/disposableClass.ts";
 import { DisposableMachineStore } from "./disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "./disposable/DisposableRouteGuard.ts";
+import { SshHostKeys } from "../sshRemote/SshHostKeys.ts";
 import * as HubMembership from "./HubMembership.ts";
 import {
   countLinkTunnels,
@@ -85,6 +87,8 @@ export interface Fixture {
   readonly profile?: string;
   readonly pin?: string;
   readonly offered?: string;
+  /** The key type OpenCodex's probe reports with `offered`; ED25519 by default. */
+  readonly offeredKeyType?: string;
   readonly direct?: boolean;
   /** Why the direct-alias check could not decide, as when Pen's files cannot be read. */
   readonly directFailure?: string;
@@ -141,6 +145,10 @@ export interface Fixture {
   readonly routesRun?: (args: ReadonlyArray<string>) => Effect.Effect<OcxOutput, HubOcxError>;
   /** Disposable machine records the hub holds; none by default. */
   readonly disposable?: ReadonlyArray<DisposableRecord>;
+  /** Pen's own known_hosts, as the route guard reads it offline. */
+  readonly penKnownHosts?: string;
+  /** The ED25519 sshd key fingerprint each alias offers to the route guard's own probe. */
+  readonly hostKeys?: Readonly<Record<string, string>>;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -196,7 +204,9 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       );
     }
     if (command === "probe")
-      return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
+      return Effect.succeed(
+        json({ alias, fingerprint: offered, keyType: fixture.offeredKeyType ?? "ssh-ed25519" }),
+      );
     if (group === "link" && command === "routes")
       return (
         fixture.routesRun?.(args) ??
@@ -319,9 +329,27 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   const context = yield* Layer.build(
     HubMembership.layerWithoutDependencies.pipe(
       Layer.provide(
-        Layer.mock(DisposableMachineStore)({
-          recordsOrKept: Effect.succeed(fixture.disposable ?? []),
-        }),
+        Layer.effect(
+          DisposableRouteGuard.DisposableRouteGuard,
+          DisposableRouteGuard.make(Effect.succeed(fixture.penKnownHosts ?? "")),
+        ).pipe(
+          Layer.provide(
+            Layer.mock(DisposableMachineStore)({
+              recordsOrKept: Effect.succeed(fixture.disposable ?? []),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              SshHostKeys,
+              SshHostKeys.of({
+                negotiatedFingerprint: (target) => {
+                  calls.push(`hostkey ${target.alias}`);
+                  return Effect.succeed(fixture.hostKeys?.[target.alias]);
+                },
+              }),
+            ),
+          ),
+        ),
       ),
       Layer.provide(
         ApprovalHandoffs.layer.pipe(

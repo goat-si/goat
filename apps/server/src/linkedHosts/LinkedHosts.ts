@@ -28,6 +28,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
+import { DisposableRouteGuard } from "../hub/disposable/DisposableRouteGuard.ts";
 
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
@@ -193,6 +194,7 @@ export class LinkedHosts extends Context.Service<
 
 const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const routeGuard = yield* DisposableRouteGuard;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const lock = yield* Semaphore.make(1);
@@ -274,108 +276,114 @@ const make = Effect.gen(function* () {
     return typeof text === "string" ? text.slice(0, 300) : undefined;
   };
 
-  /** The host's environment descriptor, read before anything is registered or spent there. */
-  const describe = Effect.fn("LinkedHosts.describe")(function* (target: LinkTarget) {
-    const descriptorResponse = yield* send(
-      HttpClientRequest.get(new URL(GOAT_ENVIRONMENT_PATH, target.baseUrl).toString()),
-    );
-    if (descriptorResponse.status !== 200)
-      return yield* fail(
-        "host_unavailable",
-        `${target.baseUrl} is not a GOAT server (HTTP ${descriptorResponse.status} for its environment descriptor).`,
-      );
-    return yield* decoded(
-      ExecutionEnvironmentDescriptor,
-      "its environment descriptor",
-    )(descriptorResponse.body);
-  });
-
   /** Spends the pairing code through the host's MCP OAuth endpoints. */
-  const exchange = Effect.fn("LinkedHosts.exchange")(function* (
-    target: LinkTarget,
-    access: AuthMcpClientAccess,
-    clientName: string,
-  ) {
-    const url = (path: string) => new URL(path, target.baseUrl).toString();
-    const registered = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
-        HttpClientRequest.bodyJsonUnsafe({
-          client_name: clientName.slice(0, LINK_CLIENT_NAME_MAX),
-          redirect_uris: [LINK_REDIRECT_URI],
-        }),
-      ),
-    );
-    const registeredBody = registered.body;
-    if (registered.status < 200 || registered.status >= 300)
-      return yield* fail(
-        "host_unavailable",
-        `GOAT on ${target.baseUrl} cannot link agents${registered.status === 404 ? "; update it" : `: ${refusal(registeredBody) ?? `HTTP ${registered.status}`}`}.`,
+  const exchange = Effect.fn("LinkedHosts.exchange")(
+    function* (target: LinkTarget, access: AuthMcpClientAccess, clientName: string) {
+      const url = (path: string) => new URL(path, target.baseUrl).toString();
+      const descriptorResponse = yield* send(HttpClientRequest.get(url(GOAT_ENVIRONMENT_PATH)));
+      if (descriptorResponse.status !== 200)
+        return yield* fail(
+          "host_unavailable",
+          `${target.baseUrl} is not a GOAT server (HTTP ${descriptorResponse.status} for its environment descriptor).`,
+        );
+      const descriptor = yield* decoded(
+        ExecutionEnvironmentDescriptor,
+        "its environment descriptor",
+      )(descriptorResponse.body);
+      // A disposable machine's GOAT is never linked (design section 6): refused before anything is spent.
+      const refused = yield* routeGuard.refusal(
+        { environmentId: descriptor.environmentId },
+        target.baseUrl,
       );
-    const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
+      if (refused !== undefined) return yield* fail("invalid_request", refused);
 
-    const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
-    const challenge = base64UrlEncode(
-      yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
-    );
-    const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
-    const resource = url("/mcp");
-    const decision = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(
-        HttpClientRequest.bodyJsonUnsafe({
-          authorization: {
-            response_type: "code",
-            client_id: client.client_id,
+      const registered = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            client_name: clientName.slice(0, LINK_CLIENT_NAME_MAX),
+            redirect_uris: [LINK_REDIRECT_URI],
+          }),
+        ),
+      );
+      const registeredBody = registered.body;
+      if (registered.status < 200 || registered.status >= 300)
+        return yield* fail(
+          "host_unavailable",
+          `GOAT on ${target.baseUrl} cannot link agents${registered.status === 404 ? "; update it" : `: ${refusal(registeredBody) ?? `HTTP ${registered.status}`}`}.`,
+        );
+      const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
+
+      const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+      const challenge = base64UrlEncode(
+        yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+      );
+      const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+      const resource = url("/mcp");
+      const decision = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            authorization: {
+              response_type: "code",
+              client_id: client.client_id,
+              redirect_uri: LINK_REDIRECT_URI,
+              code_challenge: challenge,
+              code_challenge_method: "S256",
+              state,
+              resource,
+            },
+            decision: { _tag: "pairing-code", access, code: target.code },
+          }),
+        ),
+      );
+      const decisionBody = decision.body;
+      if (decision.status < 200 || decision.status >= 300)
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. Create a new one on that host with goat auth pairing create.`,
+        );
+      const { redirectTo } = yield* decoded(AuthMcpApprovalRedirect, "the approval")(decisionBody);
+      const answer = URL.parse(redirectTo);
+      const authorizationCode = answer?.searchParams.get("code");
+      if (
+        answer === null ||
+        `${answer.origin}${answer.pathname}` !== LINK_REDIRECT_URI ||
+        answer.searchParams.get("state") !== state ||
+        !authorizationCode
+      )
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} did not approve the link: ${answer?.searchParams.get("error_description") ?? answer?.searchParams.get("error") ?? "no code came back"}.`,
+        );
+
+      const tokenResponse = yield* send(
+        HttpClientRequest.post(url("/oauth/mcp/token")).pipe(
+          HttpClientRequest.bodyUrlParams({
+            grant_type: "authorization_code",
+            code: authorizationCode,
             redirect_uri: LINK_REDIRECT_URI,
-            code_challenge: challenge,
-            code_challenge_method: "S256",
-            state,
+            client_id: client.client_id,
+            code_verifier: verifier,
             resource,
-          },
-          decision: { _tag: "pairing-code", access, code: target.code },
+          }),
+        ),
+      );
+      const tokenBody = tokenResponse.body;
+      if (tokenResponse.status !== 200)
+        return yield* fail(
+          "link_refused",
+          `${target.baseUrl} would not issue the session: ${refusal(tokenBody) ?? `HTTP ${tokenResponse.status}`}.`,
+        );
+      const token = yield* decoded(AuthMcpTokenResult, "the token request")(tokenBody);
+      return { descriptor, token };
+    },
+    (effect, target) =>
+      effect.pipe(
+        Effect.timeoutOrElse({
+          duration: LINK_EXCHANGE_TIMEOUT,
+          orElse: () => fail("host_unavailable", `${target.baseUrl} did not finish linking.`),
         }),
       ),
-    );
-    const decisionBody = decision.body;
-    if (decision.status < 200 || decision.status >= 300)
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} refused the pairing code: ${refusal(decisionBody) ?? `HTTP ${decision.status}`}. Create a new one on that host with goat auth pairing create.`,
-      );
-    const { redirectTo } = yield* decoded(AuthMcpApprovalRedirect, "the approval")(decisionBody);
-    const answer = URL.parse(redirectTo);
-    const authorizationCode = answer?.searchParams.get("code");
-    if (
-      answer === null ||
-      `${answer.origin}${answer.pathname}` !== LINK_REDIRECT_URI ||
-      answer.searchParams.get("state") !== state ||
-      !authorizationCode
-    )
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} did not approve the link: ${answer?.searchParams.get("error_description") ?? answer?.searchParams.get("error") ?? "no code came back"}.`,
-      );
-
-    const tokenResponse = yield* send(
-      HttpClientRequest.post(url("/oauth/mcp/token")).pipe(
-        HttpClientRequest.bodyUrlParams({
-          grant_type: "authorization_code",
-          code: authorizationCode,
-          redirect_uri: LINK_REDIRECT_URI,
-          client_id: client.client_id,
-          code_verifier: verifier,
-          resource,
-        }),
-      ),
-    );
-    const tokenBody = tokenResponse.body;
-    if (tokenResponse.status !== 200)
-      return yield* fail(
-        "link_refused",
-        `${target.baseUrl} would not issue the session: ${refusal(tokenBody) ?? `HTTP ${tokenResponse.status}`}.`,
-      );
-    const token = yield* decoded(AuthMcpTokenResult, "the token request")(tokenBody);
-    return token;
-  });
+  );
 
   const list: LinkedHosts["Service"]["list"] = read.pipe(
     Effect.map((catalog) =>
@@ -418,21 +426,7 @@ const make = Effect.gen(function* () {
         );
       const target = parseLinkTarget(input.url, input.code);
       if (typeof target === "string") return yield* fail("invalid_request", target);
-      // One deadline covers the whole exchange. A refused host is refused before its pairing code
-      // is spent or a client registered there.
-      const { descriptor, token } = yield* Effect.gen(function* () {
-        const described = yield* describe(target);
-        if (input.acceptDescriptor) yield* input.acceptDescriptor(described);
-        return {
-          descriptor: described,
-          token: yield* exchange(target, input.access, input.clientName),
-        };
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: LINK_EXCHANGE_TIMEOUT,
-          orElse: () => fail("host_unavailable", `${target.baseUrl} did not finish linking.`),
-        }),
-      );
+      const { descriptor, token } = yield* exchange(target, input.access, input.clientName);
       const now = yield* Clock.currentTimeMillis;
       const stored: StoredLink = {
         name,

@@ -144,3 +144,78 @@ it.effect(
       expect(changed(hub.calls)).toBe(false);
     }),
 );
+
+const KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJqQutSw0XQo7KOx5R7x4wcb2s6h3WPkcz2z6WIeJ3Re";
+const penLine = (name: string, nodeId: string) => `pen-${name},pen-${nodeId} ssh-ed25519 ${KEY}\n`;
+
+it.effect(
+  "Pen's own pen-<name> for a disposable machine with no pin and no environment yet is refused on either join transport, offline",
+  () =>
+    Effect.gen(function* () {
+      for (const transport of ["remote-link", "hub-client"] as const) {
+        const hub = yield* setup({
+          disposable: [record({ sshdPin: null, environmentId: null })],
+          penKnownHosts: penLine("cc-07", node),
+        });
+        const refused = yield* hub.membership.join(scope, { deviceAlias: "pen-cc-07", transport });
+        expect(refused.state).toBe("failed");
+        expect(refused.message).toContain("disposable machine");
+        expect(hub.calls.some((call) => call.includes("probe") || call.includes("identify"))).toBe(
+          false,
+        );
+        expect(changed(hub.calls)).toBe(false);
+      }
+    }),
+);
+
+it.effect("a kept member's pen-<name> joins as before", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      disposable: [record({ sshdPin: null, environmentId: null })],
+      penKnownHosts: penLine("cc-09", "d".repeat(26)),
+    });
+    const joined = yield* hub.membership.join(scope, { deviceAlias: "pen-cc-09" });
+    expect(joined.message).not.toContain("disposable machine");
+  }),
+);
+
+it.effect(
+  "a Hub-client join compares the ED25519 key the alias offers, since it has no OpenCodex probe",
+  () =>
+    Effect.gen(function* () {
+      const pinned = yield* setup({
+        disposable: [record({ environmentId: null })],
+        identities: { lab: "env-kept" },
+        hostKeys: { lab: PINNED },
+      });
+      const refused = yield* pinned.membership.join(scope, {
+        deviceAlias: "lab",
+        transport: "hub-client",
+      });
+      expect(refused.message).toContain("SSH host key it offered");
+      expect((yield* pinned.inboxItems).items).toEqual([]);
+      const other = yield* setup({
+        disposable: [record({ environmentId: null })],
+        identities: { lab: "env-kept" },
+        hostKeys: { lab: OTHER },
+      });
+      const kept = yield* other.membership.join(scope, {
+        deviceAlias: "lab",
+        transport: "hub-client",
+      });
+      expect(kept.message).not.toContain("disposable machine");
+    }),
+);
+
+it.effect(
+  "an OpenCodex probe key of another type than ED25519 is not compared with an ED25519 pin",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({
+        disposable: [record({ environmentId: null })],
+        offeredKeyType: "ecdsa-sha2-nistp256",
+      });
+      const joined = yield* hub.membership.join(scope, { deviceAlias: "mini" });
+      expect(joined.message).not.toContain("disposable machine");
+    }),
+);

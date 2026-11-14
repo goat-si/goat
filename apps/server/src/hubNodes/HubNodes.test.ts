@@ -26,6 +26,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import migration from "../persistence/Migrations/106_HubNodes.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
@@ -126,6 +127,7 @@ const fixture = Effect.gen(function* () {
     /** The SSH host key each alias negotiates now, trusted or not. */
     hostKeys: {} as Record<string, string>,
     keyProbes: [] as Array<string>,
+    penKnownHosts: "",
   };
   const disposableMachines = DisposableMachineStore.DisposableMachineStore.of({
     records: Effect.sync(() => state.disposable),
@@ -268,8 +270,7 @@ const fixture = Effect.gen(function* () {
       ),
     );
   });
-  const service = yield* HubNodes.make.pipe(
-    Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
+  const guard = yield* DisposableRouteGuard.make(Effect.sync(() => state.penKnownHosts)).pipe(
     Effect.provideService(DisposableMachineStore.DisposableMachineStore, disposableMachines),
     Effect.provideService(
       SshHostKeys.SshHostKeys,
@@ -281,6 +282,11 @@ const fixture = Effect.gen(function* () {
           }),
       }),
     ),
+  );
+  const service = yield* HubNodes.make.pipe(
+    Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
+    Effect.provideService(DisposableMachineStore.DisposableMachineStore, disposableMachines),
+    Effect.provideService(DisposableRouteGuard.DisposableRouteGuard, guard),
     Effect.provideService(LinkedHosts.LinkedHosts, linked),
     Effect.provideService(CloudMachineService.CloudMachineService, cloud),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
@@ -372,7 +378,7 @@ describe("HubNodes", () => {
     ),
   );
   it.effect(
-    "refuses an SSH or linked route to a disposable machine, by its Pen alias or the environment it reached, before saving anything",
+    "refuses an SSH route to a disposable machine, by its Pen alias (Pen's pen-<name> too, offline) or the environment it reached, before saving anything",
     () =>
       run(({ service, state, repository }) =>
         Effect.gen(function* () {
@@ -381,18 +387,17 @@ describe("HubNodes", () => {
           const byAlias = yield* service.add(sshInput("pen-" + nodeId), options).pipe(Effect.flip);
           expect(byAlias).toMatchObject({ reason: "refused" });
           expect(byAlias.detail).toContain("disposable machine");
+          state.disposable = [
+            { ...disposableRecord(nodeId, remote), environmentId: null, sshdPin: null },
+          ];
+          state.penKnownHosts = `pen-cc-07,pen-${nodeId} ssh-ed25519 AAAA\n`;
+          const byPenName = yield* service.add(sshInput("pen-cc-07"), options).pipe(Effect.flip);
+          expect(byPenName.detail).toContain("disposable machine");
           expect(state.identify).toEqual([]);
+          state.disposable = [disposableRecord(nodeId, remote)];
           const byEnvironment = yield* service.add(sshInput("box"), options).pipe(Effect.flip);
           expect(byEnvironment.detail).toContain("disposable machine");
-          const linkedTo = yield* service
-            .add(
-              { kind: "linked", name: "box", url: link.baseUrl, code: "c", access: "full-access" },
-              options,
-            )
-            .pipe(Effect.flip);
-          expect(linkedTo.detail).toContain("disposable machine");
           expect(yield* repository.listRegistrations).toEqual([]);
-          expect(state.links).toEqual([]);
           // Once the record ends, the same machine may be added as kept.
           state.disposable = [{ ...disposableRecord(nodeId, remote), final: true }];
           expect((yield* service.add(sshInput("box"), options)).node.environmentId).toBe(remote);
@@ -438,9 +443,9 @@ describe("HubNodes", () => {
             }),
           );
           expect(yield* service.disposableRoute({ alias: "cc-02" })).toBeUndefined();
-          // A new host's offered key that is a disposable machine's sshd pin names it too.
           state.disposable = [{ ...disposableRecord(nodeId, remote), sshdPin: "SHA256:pinned" }];
-          expect(yield* service.disposableRoute({ hostKeyFingerprint: "SHA256:pinned" })).toContain(
+          state.hostKeys = { "cc-03": "SHA256:pinned" };
+          expect(yield* service.disposableRoute({ alias: "cc-03" })).toContain(
             "disposable machine",
           );
         }),
@@ -466,7 +471,6 @@ describe("HubNodes", () => {
             "ssh:cc-01",
           ]);
           expect(yield* service.disposableRoute({ alias: "lab" })).toContain("disposable machine");
-          // An alias-only check reads nothing from the network.
           state.keyProbes = [];
           expect(yield* service.disposableRoute({ alias: "lab", identify: false })).toBeUndefined();
           expect(state.keyProbes).toEqual([]);

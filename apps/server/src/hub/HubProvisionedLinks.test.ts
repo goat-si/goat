@@ -13,7 +13,7 @@ import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as HubMembership from "./HubMembership.ts";
-import { DisposableMachineStore } from "./disposable/DisposableMachineStore.ts";
+import { DisposableRouteGuard } from "./disposable/DisposableRouteGuard.ts";
 import { HubOcx, HubOcxError, type OcxOutput } from "./HubOcx.ts";
 import * as HubParity from "./HubParity.ts";
 
@@ -101,7 +101,12 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
   };
   const context = yield* Layer.build(
     HubMembership.layerWithoutDependencies.pipe(
-      Layer.provide(Layer.mock(DisposableMachineStore)({ recordsOrKept: Effect.succeed([]) })),
+      Layer.provide(
+        Layer.succeed(DisposableRouteGuard, {
+          claim: () => Effect.undefined,
+          refusal: () => Effect.undefined,
+        }),
+      ),
       Layer.provide(
         Layer.succeed(
           HubOcx,
