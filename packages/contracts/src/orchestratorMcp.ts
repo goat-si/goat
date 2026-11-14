@@ -661,6 +661,7 @@ export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
 export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
 
 export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
   nextCursor: Schema.NullOr(Schema.String),
   /** Whether an environment had more matching threads than one search scans. */

@@ -372,7 +372,12 @@ const make = Effect.gen(function* () {
     } satisfies Page;
   });
 
-  return ThreadSearchMcpService.of({ search });
+  return ThreadSearchMcpService.of({
+    search: (scope, input) =>
+      search(scope, input).pipe(
+        Effect.map((result) => ({ ...result, currentThreadId: scope.thread?.threadId ?? null })),
+      ),
+  });
 });
 
 export const layer = Layer.effect(ThreadSearchMcpService, make);
