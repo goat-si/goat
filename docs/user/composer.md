@@ -257,7 +257,7 @@ composer's microphone (long-press on a touch screen, or press Shift+F10) to open
 dictation options. This sends recordings to that environment and uses a
 speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
-download, select, or remove models from **Manage voice models** in the same menu.
+download, select, or remove models from **Manage voice models** in the same menu. You can also use a verified model file already on the environment by entering its file or folder path; removing the model from GOAT leaves the original file in place.
 Connections through a hub do not currently support this option.
 Model speed figures are CPU and GPU reference measurements, not timings from your
 environment. When acceleration is automatic, both are shown because transcription

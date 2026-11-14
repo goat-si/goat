@@ -27,12 +27,14 @@ export class SpeechManagement extends Context.Service<
         size: number;
         installed: boolean;
         selected: boolean;
+        linkedFrom?: string;
         recommended: boolean;
         benchmark: { cpu: number | null; accelerated: number | null };
       }>,
       SpeechManagementError
     >;
     readonly download: (id: string) => Effect.Effect<void, SpeechManagementError>;
+    readonly link: (path: string) => Effect.Effect<void, SpeechManagementError>;
     readonly remove: (id: string) => Effect.Effect<void, SpeechManagementError>;
     readonly configure: (config: SpeechConfiguration) => Effect.Effect<void, SpeechManagementError>;
     readonly transcribe: (
@@ -73,14 +75,15 @@ const make = Effect.gen(function* () {
       return yield* Effect.forEach(
         SPEECH_MODELS,
         (model) =>
-          store.isReady(model).pipe(
-            Effect.map((installed) => ({
+          Effect.all([store.isReady(model), store.linkedFrom(model)]).pipe(
+            Effect.map(([installed, linkedFrom]) => ({
               id: model.id,
               name: model.name,
               description: model.description,
               size: model.size,
               installed,
               selected: model.id === current.speech.modelId,
+              ...(linkedFrom === undefined ? {} : { linkedFrom }),
               recommended: model.recommended,
               benchmark: model.benchmark.secondsPer30s,
             })),
@@ -94,6 +97,18 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const model = yield* definition(id);
           yield* store.download(model).pipe(Effect.timeout("30 minutes"));
+        }),
+      ),
+    ),
+    link: Effect.fn("SpeechManagement.link")((path) =>
+      exclusive(
+        "link",
+        Effect.gen(function* () {
+          const ids = yield* store.link(SPEECH_MODELS, path);
+          if (ids[0]) {
+            const current = yield* settings.getSettings;
+            yield* settings.updateSettings({ speech: { ...current.speech, modelId: ids[0] } });
+          }
         }),
       ),
     ),

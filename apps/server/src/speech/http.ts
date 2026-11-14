@@ -1,9 +1,11 @@
 import {
   AuthVoiceManageScope,
+  AuthFilesystemReadScope,
   base64ToUint8Array,
   EnvironmentHttpApi,
   SpeechConfiguration,
   SpeechModelRequest,
+  SpeechModelLinkRequest,
   validateCanonicalVoiceWav,
   VOICE_PREWARM_MAX_REQUEST_BODY_BYTES,
   VOICE_TRANSCRIPTION_MAX_REQUEST_BODY_BYTES,
@@ -21,6 +23,7 @@ import * as SpeechInference from "./SpeechInference.ts";
 import * as SpeechManagement from "./SpeechManagement.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
 
+const decodeLink = Schema.decodeEffect(Schema.fromJsonString(SpeechModelLinkRequest));
 const decodeModel = Schema.decodeEffect(Schema.fromJsonString(SpeechModelRequest));
 const decodeConfig = Schema.decodeEffect(Schema.fromJsonString(SpeechConfiguration));
 const decodeAudio = Schema.decodeEffect(Schema.fromJsonString(VoiceTranscriptionInput));
@@ -51,8 +54,13 @@ export const layerHttp = HttpApiBuilder.group(
       .handle(
         "models",
         Effect.fn("speech.http.models")(function* () {
-          yield* requireEnvironmentScope(AuthVoiceManageScope);
-          return { models: yield* mapError(speech.list) };
+          const session = yield* requireEnvironmentScope(AuthVoiceManageScope);
+          const models = yield* mapError(speech.list);
+          return {
+            models: session.scopes.has(AuthFilesystemReadScope)
+              ? models
+              : models.map(({ linkedFrom: _, ...model }) => model),
+          };
         }),
       )
       .handle(
@@ -74,6 +82,22 @@ export const layerHttp = HttpApiBuilder.group(
             Effect.mapError(VoiceTranscription.invalidAudio),
           );
           yield* mapError(speech.download(input.modelId));
+          return { ok: true as const };
+        }),
+      )
+      .handleRaw(
+        "link",
+        Effect.fn("speech.http.link")(function* ({ request }) {
+          yield* requireEnvironmentScope(AuthVoiceManageScope);
+          yield* requireEnvironmentScope(AuthFilesystemReadScope);
+          const body = yield* VoiceTranscription.readBoundedJsonRequestBody(
+            request,
+            VOICE_PREWARM_MAX_REQUEST_BODY_BYTES,
+          );
+          const input = yield* decodeLink(body).pipe(
+            Effect.mapError(VoiceTranscription.invalidAudio),
+          );
+          yield* mapError(speech.link(input.path));
           return { ok: true as const };
         }),
       )
