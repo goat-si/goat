@@ -364,9 +364,14 @@ export class ChannelLedger extends Context.Service<
       readonly deliveries: ReadonlyArray<ChannelOutboxInsert>;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
+    /** Lists pending forwards in sequence order within the requested bounds. */
     readonly listPendingForwards: (
       limit: number,
+      afterSequence?: number,
+      upToSequence?: number,
     ) => Effect.Effect<ReadonlyArray<ChannelPendingEvent>, ChannelLedgerError>;
+    /** Returns the last pending forward's sequence, or zero when none exists. */
+    readonly lastPendingForwardSequence: () => Effect.Effect<number, ChannelLedgerError>;
     /**
      * Records one worker run as it stands now; the newest write for a run wins. Deliveries commit
      * in that same write, so a stall notice cannot land without the status it describes.
@@ -796,14 +801,18 @@ const make = Effect.gen(function* () {
           : sql`${write.pendingAnswerMessageId}`;
       const hold =
         write.completionHold === undefined ? sql`completion_hold` : sql`${write.completionHold}`;
+      // A message may have moved updated_at past this write's clock; task activity never goes back.
+      const activeAt = sql`CASE WHEN julianday(updated_at) > julianday(${next.updatedAt})
+        THEN updated_at ELSE ${next.updatedAt} END`;
       const updated = yield* sql<{ readonly task_id: string }>`
         UPDATE channel_tasks SET
           status = ${next.status},
           version = ${next.version},
           generation = ${next.generation},
           worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = ${encodeTask(next)}, newest_ask_at = ${newestAskAt(next)},
-          updated_at = ${next.updatedAt},
+          task_json = json_set(${encodeTask(next)}, '$.updatedAt', ${activeAt}),
+          newest_ask_at = ${newestAskAt(next)},
+          updated_at = ${activeAt},
           pending_answer_message_id = ${pendingAnswer},
           completion_hold = ${hold}
         WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
@@ -1406,15 +1415,26 @@ const make = Effect.gen(function* () {
         )
         .pipe(Effect.mapError(toLedgerError("completeNarration"))),
 
-    listPendingForwards: (limit) =>
+    listPendingForwards: (limit, afterSequence = 0, upToSequence) =>
       sql<{ readonly sequence: number; readonly event_json: string }>`
         SELECT sequence, event_json FROM channel_task_events
-        WHERE forward_state = 'pending' ORDER BY sequence LIMIT ${limit}
+        WHERE forward_state = 'pending' AND sequence > ${afterSequence}
+          AND (${upToSequence ?? null} IS NULL OR sequence <= ${upToSequence ?? null})
+        ORDER BY sequence LIMIT ${limit}
       `.pipe(
         Effect.map((rows) =>
           rows.map((row) => ({ sequence: row.sequence, event: decodeEvent(row.event_json) })),
         ),
         Effect.mapError(toLedgerError("listPendingForwards")),
+      ),
+
+    lastPendingForwardSequence: () =>
+      sql<{ readonly sequence: number }>`
+        SELECT COALESCE(MAX(sequence), 0) AS sequence FROM channel_task_events
+        WHERE forward_state = 'pending'
+      `.pipe(
+        Effect.map((rows) => rows[0]?.sequence ?? 0),
+        Effect.mapError(toLedgerError("lastPendingForwardSequence")),
       ),
 
     upsertWorkerRun: (run, deliveries = []) =>
@@ -1651,6 +1671,7 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: (channel) => channel.wake,
       }),
+      changes.announce,
     ),
 
     getDeliveryState: (deliveryId) =>

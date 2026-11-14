@@ -331,6 +331,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AutomationHold from "./automationHold.ts";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import {
   resolveOpenDiscoveryForConfig,
   withLateEditorConfig,
@@ -1460,6 +1461,8 @@ export const layerWsRpc = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const sourceControlStarPrompt = yield* SourceControlStarPrompt.SourceControlStarPrompt;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
+      // The panel's reads for a pull request the user opened go out during a rate-limit pause.
+      const openedPullRequestRead = Effect.provideService(SourceControlRateLimit.Interactive, true);
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const updateSettings = yield* SettingsRpc.make(currentSession);
@@ -1614,6 +1617,7 @@ export const layerWsRpc = (
         currentSession.scopes.includes(AuthOrchestrationOperateScope)
           ? result
           : {
+              ...result,
               tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task),
             };
       const authorizeEffect = <A, E, R>(
@@ -2616,7 +2620,7 @@ export const layerWsRpc = (
                 detail: "This provider does not bank reset credits.",
               });
             }
-            const outcome = yield* instance.consumeResetCredit().pipe(
+            const outcome = yield* instance.consumeResetCredit(input.creditId).pipe(
               Effect.mapError(
                 (error) =>
                   new ProviderSetupError({
@@ -2884,13 +2888,13 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.pullRequestsDetail]: (input) =>
-          withPullRequestViewer(input, pullRequests.detail(input)),
+          withPullRequestViewer(input, openedPullRequestRead(pullRequests.detail(input))),
         [WS_METHODS.pullRequestsPreview]: (input) =>
           withPullRequestViewer(input, pullRequests.preview(input)),
         [WS_METHODS.pullRequestsChecks]: (input) =>
           withPullRequestViewer(input, pullRequests.checks(input)),
         [WS_METHODS.pullRequestsActivity]: (input) =>
-          withPullRequestViewer(input, pullRequests.activity(input)),
+          withPullRequestViewer(input, openedPullRequestRead(pullRequests.activity(input))),
         [WS_METHODS.pullRequestsReviewGuide]: (input) =>
           withPullRequestViewer(input, reviewGuides.get(input)),
         [WS_METHODS.pullRequestsGenerateReviewGuide]: (input) =>

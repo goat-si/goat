@@ -48,9 +48,11 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
+import { useGoatBotReplyAnnouncement } from "./useGoatBotReplyAnnouncement";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -257,21 +259,28 @@ function GoatBotChatViewContent({
       ? lastSource.identity
       : null) ??
     botIdentity;
+  const { announcement, onExposure } = useGoatBotReplyAnnouncement(timelineIdentity, source);
   const [local, setLocal] = useState<{
     identity: string;
     submissions: ReadonlyArray<GoatBotLocalSubmission>;
-  }>({ identity: timelineIdentity, submissions: [] });
+    sends: number;
+  }>({ identity: timelineIdentity, submissions: [], sends: 0 });
   if (local.identity !== timelineIdentity)
-    setLocal({ identity: timelineIdentity, submissions: [] });
+    setLocal({ identity: timelineIdentity, submissions: [], sends: 0 });
   const recordSubmission = (result: boolean | string | void) => {
-    if (typeof result === "string") {
-      const submission = { key: result };
+    if (result !== false) {
       setLocal((previous) => ({
         identity: timelineIdentity,
-        submissions: [
-          ...(previous.identity === timelineIdentity ? previous.submissions : []),
-          submission,
-        ],
+        submissions:
+          typeof result === "string"
+            ? [
+                ...(previous.identity === timelineIdentity ? previous.submissions : []),
+                { key: result },
+              ]
+            : previous.identity === timelineIdentity
+              ? previous.submissions
+              : [],
+        sends: previous.identity === timelineIdentity ? previous.sends + 1 : 1,
       }));
     }
     return result !== false;
@@ -475,13 +484,18 @@ function GoatBotChatViewContent({
               onClose={closeFile}
             />
           ) : null}
+          {/* Mounted before the first message, so the chat's first status is heard. */}
+          <GoatBotActivityStatus
+            key={`${timelineIdentity}:activity`}
+            replyingSince={removed ? null : replyingSince}
+          />
+          <GoatBotReplyStatus
+            key={`${timelineIdentity}:reply`}
+            announcement={announcement}
+            sends={local.identity === timelineIdentity ? local.sends : 0}
+          />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
-            {/* Mounted before the first message, so the chat's first status is heard. */}
-            <GoatBotActivityStatus
-              key={timelineIdentity}
-              replyingSince={removed ? null : replyingSince}
-            />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
               <GoatBotOpenFileContext value={fileOpening}>
@@ -492,6 +506,7 @@ function GoatBotChatViewContent({
                     rows={rows}
                     baselineIds={source.baselineIds}
                     sourceIds={source.sourceIds}
+                    onExposure={onExposure}
                     committedSends={source.committedSends}
                     submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}

@@ -19,6 +19,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { channelEnvironment } from "./channels";
+import { goatBotHomeEnvironmentIdAtom } from "./goatBotHome";
 import { environmentShell } from "./shell";
 
 export const threadFamilies = createThreadFamilyAtoms(
@@ -42,6 +43,7 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   snapshotAtom: threadEnvironment.snapshotAtom,
   goatBotListedWork: channelEnvironment.listedBotWork,
   goatBotHomeWork: channelEnvironment.homeCurrentOpenableWorkByEnvironment,
+  goatBotHomeEnvironmentId: goatBotHomeEnvironmentIdAtom,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,

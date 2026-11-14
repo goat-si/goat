@@ -19,6 +19,7 @@ export class EffectExecutionFences extends Context.Service<
     readonly snapshotWith: (input: { readonly startCapacity: number }) => Effect.Effect<{
       readonly fullLanes: ReadonlyArray<EffectLane>;
       readonly titleThreads: ReadonlyArray<string>;
+      readonly titleAtCapacity: boolean;
       readonly mainThreads: ReadonlyArray<string>;
     }>;
     readonly admissions: Effect.Effect<ReadonlyArray<OrchestrationEffectV2>>;
@@ -95,6 +96,7 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
               (lane === "general" ? generalCapacity : lane === "start" ? input.startCapacity : 1),
           ),
           titleThreads,
+          titleAtCapacity: generalCapacity > 1 && titleThreads.length >= generalCapacity - 1,
           mainThreads,
         };
       }),

@@ -81,6 +81,7 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
   title,
   status: "running",
   updatedAt: "2026-11-07T10:00:00.000Z",
+  openQuestions: [],
   ...(worker === undefined ? {} : { worker }),
 });
 function setup(data: unknown, failure: unknown = null) {
@@ -110,6 +111,29 @@ it("lists running work under the machine it runs on, GOAT Bot's own first", asyn
     input: { status: ["received", "dispatching", "running", "waiting_input"], limit: 100 },
   });
   expect(state.refresh).toHaveBeenCalledTimes(1);
+});
+
+// Regression: Machines said Working while the bot's face said the task waited on the person.
+it("says a running task waits for your approval when its worker asks for one", async () => {
+  setup({
+    tasks: [
+      {
+        ...task("a", "Deploy the site", {}),
+        observed: {
+          pullRequests: [],
+          needsYou: [{ kind: "approval", since: "2026-11-07T10:00:00.000Z" }],
+        },
+      },
+      task("b", "Tidy the notes", {}),
+    ],
+  });
+  await using screen = await render(<GoatBotComputer environmentId={environmentId} />);
+  await expect
+    .element(screen.getByRole("listitem").filter({ hasText: "Deploy the site" }))
+    .toMatchTextContent(/Waiting for your approval/);
+  await expect
+    .element(screen.getByRole("listitem").filter({ hasText: "Tidy the notes" }))
+    .toMatchTextContent(/Working/);
 });
 
 it("says when nothing is running", async () => {

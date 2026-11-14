@@ -1,3 +1,4 @@
+import * as Queue from "effect/Queue";
 import { describe, it, assert } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -368,6 +369,54 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(Layer.mergeAll(layerAlwaysRunTest, TestClock.layer()))),
   );
 
+  it.effect("rechecks a ready provider after one failed periodic check before publishing it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const initialCheckDone = yield* Deferred.make<void>();
+        const failedSnapshot: ServerProvider = {
+          ...refreshedSnapshot,
+          status: "error",
+          auth: { status: "unknown" },
+          message: "Codex app-server provider probe failed: workspace routing discovery timed out.",
+        };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(checkCalls, (count) => count + 1).pipe(
+            Effect.tap((count) =>
+              count === 1
+                ? Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)
+                : Effect.void,
+            ),
+            Effect.map((count) => (count === 2 ? failedSnapshot : refreshedSnapshot)),
+          ),
+          refreshInterval: "5 minutes",
+        });
+        yield* Deferred.await(initialCheckDone);
+        const published = yield* Ref.make<ReadonlyArray<ServerProvider>>([]);
+        yield* provider.streamChanges.pipe(
+          Stream.runForEach((snapshot) => Ref.update(published, (all) => [...all, snapshot])),
+          Effect.forkChild,
+        );
+
+        yield* TestClock.adjust("5 minutes");
+        assert.strictEqual((yield* provider.getSnapshot).status, "ready");
+        yield* TestClock.adjust("1 minute");
+        assert.isAtLeast(yield* Ref.get(checkCalls), 3);
+
+        assert.strictEqual((yield* provider.getSnapshot).status, "ready");
+        assert.deepStrictEqual(
+          (yield* Ref.get(published)).filter((snapshot) => snapshot.status === "error"),
+          [],
+        );
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(layerAlwaysRunTest, TestClock.layer()))),
+  );
+
   it.effect("reruns the provider check when streamed settings change", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -472,6 +521,60 @@ describe("makeManagedServerProvider", () => {
         assert.deepStrictEqual(yield* provider.getSnapshot, refreshedSnapshotSecond);
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect(
+    "rechecks an auth failure when settings are applied, even if this provider's did not change",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const settingsChanges = yield* Queue.unbounded<
+            TestSettings & { readonly revision: number }
+          >();
+          const checkCalls = yield* Ref.make(0);
+          const seenRevisions: Array<number> = [];
+          const credentialFixed = yield* Ref.make(false);
+          const markerApplied = yield* Deferred.make<void>();
+          const unauthenticatedSnapshot: ServerProvider = {
+            ...refreshedSnapshot,
+            status: "error",
+            auth: { status: "unauthenticated" },
+            message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+          };
+          const provider = yield* makeManagedServerProvider<
+            TestSettings & { readonly revision: number }
+          >({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true, revision: 0 }),
+            streamSettings: Stream.fromQueue(settingsChanges),
+            haveSettingsChanged: (previous, next) => {
+              seenRevisions.push(next.revision);
+              if (next.revision === 2) Deferred.doneUnsafe(markerApplied, Effect.void);
+              return previous.enabled !== next.enabled;
+            },
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            // The credential is fixed (e.g. `codex login`) after the first, failed probe.
+            checkProvider: Ref.update(checkCalls, (count) => count + 1).pipe(
+              Effect.andThen(Ref.get(credentialFixed)),
+              Effect.map((fixed) => (fixed ? refreshedSnapshot : unauthenticatedSnapshot)),
+            ),
+            refreshInterval: "1 hour",
+          });
+          yield* provider.refresh;
+          assert.deepStrictEqual(yield* provider.getSnapshot, unauthenticatedSnapshot);
+
+          // A settings apply that does not touch this provider's settings, then a marker:
+          // the consumer is sequential, so the first apply has finished once the marker is seen.
+          yield* Ref.set(credentialFixed, true);
+          yield* Queue.offer(settingsChanges, { enabled: true, revision: 1 });
+          yield* Queue.offer(settingsChanges, { enabled: true, revision: 2 });
+          yield* Deferred.await(markerApplied);
+
+          assert.deepStrictEqual(seenRevisions, [1, 2]);
+          assert.isAtLeast(yield* Ref.get(checkCalls), 2);
+          assert.deepStrictEqual((yield* provider.getSnapshot).auth, refreshedSnapshot.auth);
+        }),
+      ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 
   it.effect("streams supplemental snapshot updates after the base provider check completes", () =>

@@ -7,18 +7,21 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import * as ProcessRunner from "../processRunner.ts";
 import {
   ensurePinnedRuntimeInstalled,
+  listPinnedRuntimes,
   pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
   type PinnedRuntimeProgress,
   prunePinnedRuntimes,
+  removeUnusedPinnedRuntime,
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
@@ -65,6 +68,126 @@ const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: 
   });
 
 it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
+  it.effect("retries a release download that GitHub answers with a gateway timeout", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-retry-" });
+      const checksums = yield* validChecksums;
+      const requests: string[] = [];
+      const gatewayTimeoutServed = yield* Deferred.make<void>();
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          requests.push(request.url);
+          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          if (requests.length === 1) {
+            Deferred.doneUnsafe(gatewayTimeoutServed, Effect.void);
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response("", { status: 504 })),
+            );
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(isChecksums ? checksums : archiveBytes),
+            ),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(gatewayTimeoutServed);
+      yield* TestClock.adjust(Duration.seconds(2));
+      const paths = yield* Fiber.join(install);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.equal(requests.filter((url) => url.endsWith("/SHA256SUMS")).length, 2);
+    }),
+  );
+
+  it.effect("retries a release archive whose body fails after the host answered", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-retry-body-" });
+      const checksums = yield* validChecksums;
+      let archiveRequests = 0;
+      const archiveRequested = yield* Deferred.make<void>();
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          const isChecksums = request.url.endsWith("/SHA256SUMS");
+          const response = HttpClientResponse.fromWeb(
+            request,
+            new Response(isChecksums ? checksums : archiveBytes),
+          );
+          if (isChecksums || ++archiveRequests > 1) return Effect.succeed(response);
+          const failingBody = Stream.concat(
+            Stream.make(archiveBytes.slice(0, 4)),
+            Stream.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.DecodeError({ request, response }),
+              }),
+            ),
+          );
+          Deferred.doneUnsafe(archiveRequested, Effect.void);
+          // TestClock follows the work a woken sleep starts, so one adjust reaches the retry wait.
+          return Effect.sleep("1 second").pipe(
+            Effect.as<HttpClientResponse.HttpClientResponse>(
+              Object.create(response, { stream: { value: failingBody } }),
+            ),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(archiveRequested);
+      yield* TestClock.adjust(Duration.seconds(3));
+      const paths = yield* Fiber.join(install);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.equal(archiveRequests, 2);
+    }),
+  );
+
+  it.effect("fails at once when the release host cannot be reached", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-offline-" });
+      let requests = 0;
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make((request) => {
+          requests += 1;
+          return Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request }),
+            }),
+          );
+        }),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.die("must not validate without a download"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(requests, 1);
+    }),
+  );
+
   it.effect("reuses a verified cache only while its executable matches the install record", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -485,6 +608,97 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
     }),
   );
 
+  it.effect.each([
+    { name: "its directory is on PATH", onPath: true, recorded: false, linkedHome: false },
+    {
+      name: "an earlier prune recorded its entry as a launcher",
+      onPath: false,
+      recorded: true,
+      linkedHome: false,
+    },
+    {
+      name: "its real directory in a symlinked home is on PATH",
+      onPath: true,
+      recorded: false,
+      linkedHome: true,
+    },
+  ])("removes a runtime only its own entry names when $name", ({ onPath, recorded, linkedHome }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "1.1.0"]);
+      const binDir = path.join(baseDir, "bin");
+      yield* fs.makeDirectory(binDir);
+      yield* fs.symlink(path.join(versionsDir, "1.1.0", "goat"), path.join(binDir, "goat"));
+      const ownDir = path.join(versionsDir, "1.0.0");
+      if (recorded) {
+        yield* fs.writeFileString(
+          path.join(baseDir, "runtime", "launchers"),
+          `${path.join(ownDir, "goat")}\n`,
+        );
+      }
+
+      const home = linkedHome
+        ? path.join(yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-link-" }), "home")
+        : baseDir;
+      if (linkedHome) yield* fs.symlink(baseDir, home);
+
+      // The launch agent puts the running runtime's own directory on PATH.
+      const removed = yield* prunePinnedRuntimes({ baseDir: home, keep: ["2.0.0"] }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+        ),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, {
+          GOAT_INSTALL_BIN_DIR: binDir,
+          PATH: onPath ? `${ownDir}:/usr/bin:/bin` : "/usr/bin:/bin",
+        }),
+      );
+      assert.deepEqual(removed, ["1.0.0"]);
+    }),
+  );
+
+  it.effect.each([
+    { name: "a launcher inside the versions directory", via: "bin" as const },
+    { name: "a PATH directory linked to its version directory", via: "linked dir" as const },
+    {
+      name: "a PATH directory in the versions directory linked to its version directory",
+      via: "linked versions dir" as const,
+    },
+  ])("keeps a runtime $name names", ({ via }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "1.1.0"]);
+      let pathDirs = "/usr/bin:/bin";
+      if (via === "bin") {
+        // The installer accepts any bin directory, including one under the versions directory.
+        const binDir = path.join(versionsDir, "bin");
+        yield* fs.makeDirectory(binDir);
+        yield* fs.symlink(path.join(versionsDir, "1.0.0", "goat"), path.join(binDir, "goat"));
+        yield* fs.writeFileString(
+          path.join(baseDir, "runtime", "launchers"),
+          `${path.join(binDir, "goat")}\n`,
+        );
+      } else {
+        const linkedDir = path.join(via === "linked dir" ? baseDir : versionsDir, "current");
+        yield* fs.symlink(path.join(versionsDir, "1.0.0"), linkedDir);
+        pathDirs = `${linkedDir}:${pathDirs}`;
+      }
+
+      const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["2.0.0"] }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+        ),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, { PATH: pathDirs }),
+      );
+      assert.deepEqual(removed, ["1.1.0"]);
+    }),
+  );
+
   it.effect("matches a Windows shim whatever its casing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -564,5 +778,57 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
         );
         assert.deepEqual(removed, ["1.1.0"]);
       }),
+  );
+
+  // regression: #3277 storage cleanup deleted the runtime a stopped service starts
+  it.effect.each([
+    { name: "keeps the runtime a service unit names", unit: "names it", kept: "it is in use now" },
+    { name: "offers a runtime when no service unit exists", unit: "absent", kept: null },
+    {
+      name: "decides nothing when the service unit cannot be read",
+      unit: "unreadable",
+      kept: "whether it is in use could not be checked",
+    },
+  ] as const)("storage cleanup $name", ({ unit, kept }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0"]);
+      const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-user-" });
+      const agentsDir = path.join(userHome, "Library", "LaunchAgents");
+      yield* fs.makeDirectory(agentsDir, { recursive: true });
+      const plist = path.join(agentsDir, "si.goat.service.plist");
+      const program = path.join(versionsDir, "1.0.0", "goat");
+      if (unit === "names it") {
+        yield* fs.writeFileString(
+          plist,
+          `<plist><dict>\n<key>ProgramArguments</key>\n<array>\n<string>${program}</string>\n<string>__service-launcher</string>\n</array>\n</dict></plist>\n`,
+        );
+      }
+      // A folder where the plist belongs cannot be read as one.
+      if (unit === "unreadable") yield* fs.makeDirectory(plist);
+      const onHost = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.provideService(
+            ProcessRunner.ProcessRunner,
+            lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+          ),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.HomeDirectory, userHome),
+          Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: baseDir }),
+        );
+
+      const listed = yield* onHost(listPinnedRuntimes({ baseDir, keep: ["2.0.0"] }));
+      assert.equal(listed.decided, unit !== "unreadable");
+      assert.deepEqual(
+        listed.runtimes.map((runtime) => [runtime.version, runtime.unused]),
+        [["1.0.0", unit === "absent"]],
+      );
+      const removal = yield* onHost(
+        removeUnusedPinnedRuntime({ baseDir, keep: ["2.0.0"], version: "1.0.0" }),
+      );
+      assert.equal(removal, kept);
+      assert.equal(yield* fs.exists(path.join(versionsDir, "1.0.0")), kept !== null);
+    }),
   );
 });

@@ -12,7 +12,7 @@ import { cn } from "~/lib/utils";
 import { HOST_STATUS_REFRESH_MS, hostStatusAtom, refreshHostStatus } from "~/state/hostStatus";
 import { useEnvironmentScope } from "~/state/session";
 import { Badge } from "../ui/badge";
-import { LimitWindows } from "../usage/UsageLimits";
+import { LimitWindows, ZeroSpendCap } from "../usage/UsageLimits";
 import { EnvironmentRow } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { type HostCardView, type HostMeterView, hostCards, NOT_AVAILABLE } from "./hostStatusView";
@@ -55,7 +55,7 @@ function MeterBar({ meter }: { readonly meter: HostMeterView }) {
   );
 }
 
-function HostCard({
+export function HostCard({
   card,
   kind,
   now,
@@ -135,6 +135,7 @@ function HostCard({
                     now={now}
                   />
                 )}
+                {quota.limits.zeroSpendCap ? <ZeroSpendCap /> : null}
               </div>
             );
           })}

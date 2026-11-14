@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
+import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { SERVER_EXIT_CODE_DATABASE_AHEAD, SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
@@ -172,28 +173,6 @@ const runUntilActiveExits = (root: string, statePath: string) =>
       ),
     );
     return yield* Effect.promise(() => readServiceState(statePath));
-  });
-
-const writeFakeRuntime = (
-  fs: FileSystem.FileSystem,
-  path: Path.Path,
-  versionDir: string,
-  childSource: string,
-) =>
-  Effect.gen(function* () {
-    const entryPath = path.join(versionDir, "goat");
-    yield* fs.makeDirectory(versionDir, { recursive: true });
-    // Fixtures import TypeScript, which Node 22 runs only behind this flag.
-    yield* fs.writeFileString(
-      entryPath,
-      `#!${process.execPath} --experimental-strip-types\n${childSource}`,
-    );
-    yield* fs.chmod(entryPath, 0o755);
-    yield* fs.writeFileString(
-      path.join(versionDir, ".install-complete"),
-      `${path.basename(versionDir)}\n`,
-    );
-    return entryPath;
   });
 
 const refusalCases = [

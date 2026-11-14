@@ -1,0 +1,39 @@
+import { useRef } from "react";
+import { expect, it, vi } from "vite-plus/test";
+
+import { act, render } from "../../../test/render";
+import { useFocusComposerOnThreadOpen } from "./useFocusComposerOnThreadOpen";
+
+function ThreadProbe(props: { threadId: string }) {
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  useFocusComposerOnThreadOpen(props.threadId, true, () => composerRef.current?.focus());
+  return (
+    <>
+      <div data-sidebar-row="thread:beta">
+        <input aria-label="Thread title" />
+      </div>
+      <textarea aria-label="Message" ref={composerRef} />
+    </>
+  );
+}
+
+// regression: #27195 double-clicking another thread's row lost its rename field to the composer
+it("keeps the sidebar rename input when a double-click opens another thread", async () => {
+  const callbacks: FrameRequestCallback[] = [];
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+  await using screen = await render(<ThreadProbe threadId="alpha" />, {
+    // A bare hook probe; nothing here navigates.
+    router: false,
+  });
+  await act(() => callbacks.shift()?.(0));
+  await expect.element(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+
+  const renameInput = screen.getByRole("textbox", { name: "Thread title" });
+  renameInput.element().focus();
+  await screen.rerender(<ThreadProbe threadId="beta" />);
+  await act(() => callbacks.shift()?.(0));
+  await expect.element(renameInput).toHaveFocus();
+});

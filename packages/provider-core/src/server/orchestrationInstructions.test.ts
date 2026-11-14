@@ -113,6 +113,11 @@ describe("GOAT provider instructions", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Do not create ad-hoc worktrees or clones");
   });
 
+  it("tells agents how to settle their own thread", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "settle any thread, including this one");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`thread.organize`");
+  });
+
   it("keeps the always-injected text within its budget", () => {
     const injected = bytes(goatOrchestrationSystemPrompt(true) + GOAT_BROWSER_TOOL_INSTRUCTIONS);
     assert.isAtMost(

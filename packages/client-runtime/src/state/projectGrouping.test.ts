@@ -387,8 +387,8 @@ describe("project pins and archives", () => {
     buildProjectGroups({ projects, settings: settings("repository") })[0]!;
 
   it("keeps a project visible while its machines disagree", () => {
-    const local = makeProject("local", "/work/t3code");
-    const other = makeProject("remote", "/work/t3code", { environmentId: remote });
+    const local = makeProject("local", "/work/sample-repo");
+    const other = makeProject("remote", "/work/sample-repo", { environmentId: remote });
     const partial = group({ ...local, pinnedAt: at, archivedAt: at }, other);
     expect(partial).toMatchObject({ pinned: true, archived: false });
     expect(group({ ...local, archivedAt: at }, { ...other, archivedAt: at }).archived).toBe(true);

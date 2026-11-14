@@ -44,6 +44,7 @@ import {
   prunePinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
+import { bootServiceRuntimeReferences } from "./bootServiceRuntimeReferences.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
@@ -208,9 +209,12 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
     if (!input.managed && executablePath !== entryPath && executablePath !== realEntryPath) {
       return [];
     }
+    const references = yield* bootServiceRuntimeReferences();
+    if (references === undefined) return [];
     const removed = yield* prunePinnedRuntimes({
       baseDir: input.baseDir,
       keep: [packageJson.version],
+      references,
     });
     if (removed.length > 0) {
       yield* Effect.logInfo("Removed unused GOAT runtimes.", { versions: removed });

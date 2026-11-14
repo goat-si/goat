@@ -1086,7 +1086,11 @@ it.effect.each([
       Effect.provide(
         ThreadManagementService.layer.pipe(
           Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(layerReceiptsTest),
+          Layer.provide(
+            Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({
+              getByCommandId: () => Effect.succeedNone,
+            }),
+          ),
           Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
           Layer.provide(
             Layer.mock(Orchestrator.OrchestratorV2)({

@@ -1,3 +1,8 @@
+import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
+import { handoffSkillOffset, makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+export { makeClaudeUserMessage } from "./ClaudeUserMessage.ts";
+import { CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL } from "../PromptRefusal.ts";
+import { interruptUnlessClosed } from "./ClaudeStopTeardown.ts";
 import {
   claudePendingBackgroundTask,
   isClaudeOpaqueBackgroundTaskType,
@@ -16,6 +21,7 @@ import { blockedClaudeCuaServers } from "./goatClaudeMcpServers.ts";
 import { createClaudeReportedContext } from "../../provider/ClaudeReportedContext.ts";
 import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
+import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
@@ -118,6 +124,7 @@ import { fromLenientJson } from "@goat/shared/schemaJson";
 import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@goat/shared/model";
+import { claudeVersionError } from "./ClaudeVersionError.ts";
 import {
   CLAUDE_RESUME_COMPACTION_COMPACT_ANSWER,
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
@@ -353,8 +360,7 @@ const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 // The SDK has no control-request deadline; the CLI waits up to 30 s per MCP server.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
-// Claude can consume a subagent result before the launching turn ends, leaving
-// its notification with no native wake turn to answer the continuation.
+// A consumed subagent result can leave its notification without a native wake turn.
 const CLAUDE_WAKE_TURN_START_DEADLINE = "2 minutes";
 // Claude Code flushes transcript writes every 100 ms, so a workflow member's
 // reply can land after the progress frame that settles it. Its transcript
@@ -1388,20 +1394,29 @@ function claudeLiveSelectionFlagSettings(
 
 // A delegated child is its own SDK session, so Claude Code gives it the main-conversation cache
 // TTL. When the user sets Claude's subagentPromptCacheTtl, the child follows it like a native
-// subagent would. An explicit CLAUDE_CODE_PROMPT_CACHE_TTL on the instance still wins.
+// subagent would. A resumed session's first request otherwise goes out before its MCP servers
+// connect, and Claude Code tells the agent they disconnected. Explicit instance values still win.
 export function claudeQueryEnvironment(
   environment: NodeJS.ProcessEnv,
   appThread: Pick<OrchestrationV2AppThread, "lineage">,
   subagentPromptCacheTtl: "5m" | "1h" | undefined,
+  resume = false,
 ): NodeJS.ProcessEnv {
-  if (
-    appThread.lineage.relationshipToParent !== "subagent" ||
-    subagentPromptCacheTtl === undefined ||
-    environment.CLAUDE_CODE_PROMPT_CACHE_TTL !== undefined
-  ) {
+  const promptCacheTtl =
+    appThread.lineage.relationshipToParent === "subagent" &&
+    subagentPromptCacheTtl !== undefined &&
+    environment.CLAUDE_CODE_PROMPT_CACHE_TTL === undefined
+      ? subagentPromptCacheTtl
+      : undefined;
+  const blockingMcpConnect = resume && environment.MCP_CONNECTION_NONBLOCKING === undefined;
+  if (promptCacheTtl === undefined && !blockingMcpConnect) {
     return environment;
   }
-  return { ...environment, CLAUDE_CODE_PROMPT_CACHE_TTL: subagentPromptCacheTtl };
+  return {
+    ...environment,
+    ...(promptCacheTtl === undefined ? {} : { CLAUDE_CODE_PROMPT_CACHE_TTL: promptCacheTtl }),
+    ...(blockingMcpConnect ? { MCP_CONNECTION_NONBLOCKING: "0" } : {}),
+  };
 }
 
 // Claude Code's auto tool search sends every MCP schema in full while they fit under a share of the
@@ -1419,20 +1434,6 @@ export function claudeToolSearchOverride(value: string | undefined): "true" | un
 
 // Claude Code 2.1.310's integer parsing for auto:N. Scientific notation counts only when it is an
 // integer, grouped digits (1_000, 1,000, or 1 000) are joined, and anything else uses parseInt.
-const CLAUDE_SCIENTIFIC_INTEGER = /^[+-]?(\d+(\.\d*)?|\.\d+)[eE][+-]?\d+$/;
-const CLAUDE_GROUPED_INTEGER = /^[+-]?\d{1,3}([_,\u00A0\u202F ])\d{3}(?:\1\d{3})*$/;
-function parseClaudeInteger(text: string): number {
-  const value = text.trim();
-  if (value.length <= 32 && CLAUDE_SCIENTIFIC_INTEGER.test(value)) {
-    const number = Number(value);
-    return Number.isInteger(number) ? number : Number.NaN;
-  }
-  if (value.length <= 32 && CLAUDE_GROUPED_INTEGER.test(value)) {
-    return Number.parseInt(value.replace(/[_,\u00A0\u202F ]/g, ""), 10);
-  }
-  return Number.parseInt(value, 10);
-}
-
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -1500,19 +1501,23 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
-  const compactQuerySettings =
+  const autoCompactWindow =
     input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
+      ? undefined
+      : input.settings.autoCompactWindow;
+  const compactQuerySettings =
+    autoCompactWindow === undefined
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
-          autoCompactWindow: Number(input.settings.autoCompactWindow),
+          autoCompactWindow: Number(autoCompactWindow),
         } as ClaudeSdkSettings);
-  const flagEnvironment = {
-    ...input.flagEnvironment,
-    ...(input.toolSearchOverride === undefined
-      ? {}
-      : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
-  };
+  const flagEnvironment = claudeQueryFlagEnvironment({
+    environment: input.flagEnvironment,
+    model: compiledSelection.apiModelId,
+    autoCompactWindow,
+    toolSearchOverride: input.toolSearchOverride,
+  });
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
     Object.keys(flagEnvironment).length === 0 || typeof compactQuerySettings === "string"
@@ -2047,35 +2052,6 @@ function isSupportedClaudeImageMimeType(
   return supportedClaudeImageMimeTypes.has(mimeType);
 }
 
-export function makeClaudeUserMessage(input: {
-  readonly text: string;
-  readonly priority?: SDKUserMessage["priority"];
-  readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
-  readonly uuid?: SDKUserMessage["uuid"];
-}): SDKUserMessage {
-  // Claude expands a skill only when `/name` starts the last text block.
-  // Keep the whole request before that block; see ClaudeSkillDispatch.
-  const dispatch =
-    input.skills === undefined ? undefined : planClaudeSkillDispatch(input.text, input.skills);
-  return {
-    type: "user",
-    message: {
-      role: "user",
-      content: dispatch
-        ? [
-            ...(dispatch.leadingText === undefined
-              ? []
-              : [{ type: "text" as const, text: dispatch.leadingText }]),
-            { type: "text" as const, text: dispatch.commandText },
-          ]
-        : input.text,
-    },
-    parent_tool_use_id: null,
-    ...(input.priority === undefined ? {} : { priority: input.priority }),
-    ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
-  };
-}
-
 // Never decode streams just to enforce a provider limit. Only accept an explicit,
 // uncompressed page tree whose /Count agrees with the visible page objects.
 const estimateClaudePdfPages = (bytes: Buffer): number | null => {
@@ -2217,11 +2193,15 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly fileSystem: FileSystem.FileSystem;
   readonly pdfReservation: Effect.Success<ReturnType<typeof reserveClaudePdfBudget>>;
   readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
+  readonly skillMentionsFrom?: number;
 }) {
   if (input.attachments.length === 0) {
     const message = makeClaudeUserMessage({
       text: input.text,
       ...(input.skills === undefined ? {} : { skills: input.skills }),
+      ...(input.skillMentionsFrom === undefined
+        ? {}
+        : { skillMentionsFrom: input.skillMentionsFrom }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
     });
@@ -2245,7 +2225,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   const dispatch =
     input.skills === undefined
       ? undefined
-      : planClaudeSkillDispatch(textWithAttachmentPaths, input.skills);
+      : planClaudeSkillDispatch(textWithAttachmentPaths, input.skills, input.skillMentionsFrom);
   const content: Array<ClaudeUserContentBlock> = [];
   // Base64 adds a third to the payload. Leave room below Anthropic's 32 MB
   // request limit for text, instructions, and SDK framing. The SDK does not
@@ -3016,7 +2996,15 @@ function claudeCommandOutputText(output: ClaudeNativeToolOutput): string {
   return claudeNativeToolOutputText(output);
 }
 
+// Claude Code prefixes foreground Agent results with a note for the parent model, not the report.
+const CLAUDE_TOOLS_USED_NOTE =
+  /^\s*<tools-used-before-summary>[^<]*<\/tools-used-before-summary>\s*/;
+
 function claudeSubagentResultText(output: ClaudeNativeToolOutput): string {
+  return claudeSubagentRawResultText(output).replace(CLAUDE_TOOLS_USED_NOTE, "");
+}
+
+function claudeSubagentRawResultText(output: ClaudeNativeToolOutput): string {
   const value = claudeNativeToolOutputValue(output);
   const content = Array.isArray(value)
     ? value
@@ -3869,6 +3857,7 @@ interface ClaudeLiveQueryContext {
   openedPermissionMode: PermissionMode;
   receivedInit: boolean;
   reportedModel: string | undefined;
+  claudeCodeVersion: string | undefined;
   permissionMode: PermissionMode;
   stopping: boolean;
   readonly subagentsFromEarlierProcesses: ReadonlySet<ActiveClaudeSubagent>;
@@ -4504,7 +4493,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const events = yield* makeClaudeEventQueue();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
         const taskOutputTails = new Map<
           string,
@@ -4820,7 +4809,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               };
             }
           }
-          return Queue.offer(events, event).pipe(Effect.asVoid);
+          return events.offer(event);
         };
 
         const persistAttachmentBudget = Effect.fnUntraced(function* (nativeThreadId: string) {
@@ -6243,13 +6232,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             workflow === undefined
               ? undefined
               : withWorkflowMemberThreadIds(workflow, childThreadId);
-          const effort =
-            existingSubagent === undefined
-              ? (input.effort ??
-                input.owner?.effort ??
-                compileClaudeModelSelection(input.context.input.modelSelection, modelCatalog)
-                  .effort)
-              : existingSubagent.effort;
+          // Unstated effort stays unknown: a custom agent definition may override the owner's.
+          const effort = existingSubagent === undefined ? input.effort : existingSubagent.effort;
           const model = input.model ?? priorTask?.model ?? null;
           const task = {
             ...(priorTask ?? {
@@ -6867,8 +6851,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ordinal: toolCall.ordinal,
               output: input.output,
               status:
-                toolNonExecutionKind === "cancelled"
-                  ? "cancelled"
+                toolNonExecutionKind === "cancelled" || toolNonExecutionKind === "interrupted"
+                  ? toolNonExecutionKind
                   : isClaudeToolResultError(input.toolResult)
                     ? "failed"
                     : "completed",
@@ -9331,15 +9315,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (message.terminal_reason == null ||
                 message.terminal_reason === "api_error" ||
                 message.terminal_reason === "blocking_limit");
-            // The CLI also labels 403 authentication_failed; show its text because login cannot grant access.
             const permissionDenied =
               message.subtype === "success" && message.api_error_status === 403;
+            const rewrittenVersionError = yield* claudeVersionError(
+              message,
+              liveQuery.claudeCodeVersion,
+              adapterOptions.settings,
+              context.input.runtimePolicy.cwd ?? undefined,
+              adapterOptions.environment,
+            ).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            );
             const failureHint = permissionDenied
               ? message.result
               : (context.authenticationFailureMessage ??
                 (usageLimited
                   ? "Claude usage limit reached. Send the message again once the limit resets."
-                  : undefined));
+                  : rewrittenVersionError));
             // Usage-limited /compact reports success; fail it so queued messages wait for the limit to clear.
             const limitedCompaction =
               usageLimited && message.subtype === "success" && message.local_command === "compact"
@@ -10334,6 +10327,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               turnInput.appThread.lineage.relationshipToParent === "subagent"
                 ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
                 : undefined,
+              shouldResume,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...("disallowedTools" in openedSubagentPolicy
@@ -10411,6 +10405,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             openedPermissionMode: queryOptions.permissionMode,
             receivedInit: false,
             reportedModel: undefined,
+            claudeCodeVersion: undefined,
             permissionMode: queryOptions.permissionMode,
             stopping: false,
             handedOffSubagents: new Set(),
@@ -10448,6 +10443,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
+                    context.claudeCodeVersion = message.claude_code_version;
                   }
                   if (
                     message.type === "system" &&
@@ -10573,14 +10569,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               pdfBudgets.get(nativeThreadId)!,
               persistAttachmentBudget(nativeThreadId),
             );
+            const promptText = applyClaudePromptEffortPrefix(
+              turnInput.message.text,
+              compileClaudeModelSelection(turnInput.modelSelection, modelCatalog).promptEffort,
+            );
             const userMessage =
               promptUuid === null
                 ? null
                 : yield* makeClaudeUserMessageWithAttachments({
-                    text: applyClaudePromptEffortPrefix(
+                    text: promptText,
+                    ...handoffSkillOffset(
+                      promptText,
                       turnInput.message.text,
-                      compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
-                        .promptEffort,
+                      turnInput.inlineContextLength,
                     ),
                     attachments: turnInput.message.attachments,
                     attachmentsDir,
@@ -10599,6 +10600,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 model: compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
                   .apiModelId,
                 launchSettings: querySession.launchArgSettings,
+                environment: adapterOptions.environment,
                 files: yield* settingsFilesByPrecedence(querySession.settingsCwd),
                 fileSystem,
               }),
@@ -10661,7 +10663,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 yield* Ref.update(activeTurn, (current) => (current === context ? null : current));
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,
-                  detail: "Claude provider query ended before the turn could start.",
+                  detail: CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL,
                 });
               }
               if (
@@ -10924,8 +10926,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.add(turnInput.providerTurnId);
               return next;
             });
-            yield* existing.query.interrupt.pipe(Effect.timeoutOption("10 seconds"));
-            yield* existing.query.close.pipe(Effect.ignore);
+            yield* interruptUnlessClosed({
+              closed: existing.closed,
+              interrupt: existing.query.interrupt,
+              close: existing.query.close,
+            });
             const closed = yield* Deferred.await(existing.closed).pipe(
               Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
             );
@@ -11139,6 +11144,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const closeSession = Effect.fnUntraced(function* () {
           const existing = yield* Ref.get(queryContext);
           if (existing !== null) {
+            yield* Deferred.succeed(existing.closed, undefined);
             yield* existing.query.close.pipe(Effect.ignore);
           }
           yield* Effect.yieldNow;
@@ -11233,7 +11239,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession: session,
           getModelContextWindow: (selection) => resolveContextWindow(selection) ?? undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(events.take),
           backgroundTasksEndWithProcess: true,
           hasPendingBackgroundWork: Effect.gen(function* () {
             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {

@@ -1,10 +1,23 @@
+import { hasProviderUsageLimits, providersWithLimits } from "./usageLimitCommands.ts";
+export {
+  providersWithLimits,
+  USAGE_LIMITS_COMMAND,
+  isUsageLimitsCommand,
+  hasProviderUsageLimits,
+  sameUsageLimitCommandCoverage,
+  withUsageLimitsCommands,
+} from "./usageLimitCommands.ts";
+import { creditReportWins, newerCreditReport, shownCreditReport } from "./usageCreditSource.ts";
+import { formatDuration } from "./usageDuration.ts";
+export { formatDuration } from "./usageDuration.ts";
+export { resetCreditChoices, type ResetCreditChoice } from "./resetCreditChoices.ts";
+import { poolWeights } from "./usagePlanCapacity.ts";
+import { hasDuplicateCursorTotal } from "./cursorUsagePool.ts";
 import {
   type EnvironmentId,
   type UsageLimitsReport,
   type ProviderInstanceId,
   type ProviderConsumeResetCreditInput,
-  type ServerProviderSlashCommand,
-  isProviderAvailable,
   PROVIDER_DISPLAY_NAMES,
   type ServerProvider,
   type ServerProviderUsageLimits,
@@ -18,8 +31,6 @@ import * as DateTime from "effect/DateTime";
 import { accountRefOfSourceId, quotaPoolAccountName } from "./quotaAccountName.ts";
 
 const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
 export const CHATGPT_USAGE_LIMIT_CODE = "subscription_sharing_usage_limit_exceeded";
@@ -48,29 +59,22 @@ export const CURSOR_USAGE_WINDOWS = [
   {
     id: "apiPercentUsed",
     label: "Other Models",
-    description: "Claude, GPT, and Gemini use this pool. Grok and Composer fall back here.",
+    description: "Usage allowance for third-party models such as Claude, GPT, and Gemini.",
   },
 ] as const;
 
-export function cursorUsageWindowDetails(id: string) {
-  return CURSOR_USAGE_WINDOWS.find((window) => window.id === id);
+export function cursorUsageWindowDetails(id: string, pool?: LimitPool) {
+  const details = CURSOR_USAGE_WINDOWS.find((window) => window.id === id);
+  if (details && pool && hasDuplicateCursorTotal(pool))
+    return { ...details, label: "Usage", description: undefined };
+  return details && pool && pool.windows.length === 1 && id === "totalPercentUsed"
+    ? { ...details, label: null, description: undefined }
+    : details;
 }
 
 function cursorUsageWindowRank(id: string): number {
   const rank = CURSOR_USAGE_WINDOWS.findIndex((window) => window.id === id);
   return rank < 0 ? CURSOR_USAGE_WINDOWS.length : rank;
-}
-
-export function providersWithLimits(
-  providers: readonly ServerProvider[],
-): readonly ServerProvider[] {
-  return providers.filter(
-    (provider) =>
-      provider.enabled &&
-      provider.installed &&
-      isProviderAvailable(provider) &&
-      provider.usageLimits !== undefined,
-  );
 }
 
 /** Pool quota, or a pool GOAT could not read: never the instance's own login. */
@@ -225,26 +229,32 @@ export interface LimitAccount {
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
-  const hubRedeems = new Map<string, LimitAccount>();
+  const balanceSources = new Map<string, LimitAccount>();
   const planSources = new Map<string, LimitAccount>();
   const merge = (key: string, next: LimitAccount) => {
-    // Prefer hub redemption to clear its routing cooldown too; displayed balance still follows the freshest read.
-    const previousHub = hubRedeems.get(key);
-    if (
-      next.redeem &&
-      "sourceId" in next.redeem.input &&
-      (!previousHub || Date.parse(next.limits.checkedAt) > Date.parse(previousHub.limits.checkedAt))
-    ) {
-      hubRedeems.set(key, next);
-    }
     const previousCredit = creditSources.get(key);
     if (
       next.limits.resetCredits &&
-      (!previousCredit ||
-        Date.parse(next.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt))
+      creditReportWins(
+        { limits: next.limits, input: next.redeem?.input ?? null },
+        previousCredit
+          ? { limits: previousCredit.limits, input: previousCredit.redeem?.input ?? null }
+          : null,
+      )
     ) {
       creditSources.set(key, next);
     }
+    const previousBalance = balanceSources.get(key);
+    if (
+      next.limits.resetCredits &&
+      newerCreditReport(
+        { limits: next.limits, input: next.redeem?.input ?? null },
+        previousBalance
+          ? { limits: previousBalance.limits, input: previousBalance.redeem?.input ?? null }
+          : null,
+      )
+    )
+      balanceSources.set(key, next);
     const previousPlan = planSources.get(key);
     if (
       next.plan &&
@@ -268,6 +278,15 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     ];
     const winner = fresher ? next : previous;
     const creditSource = creditSources.get(key);
+    const balanceSource = balanceSources.get(key);
+    const shownCredits = shownCreditReport(
+      creditSource
+        ? { limits: creditSource.limits, input: creditSource.redeem?.input ?? null }
+        : null,
+      balanceSource
+        ? { limits: balanceSource.limits, input: balanceSource.redeem?.input ?? null }
+        : null,
+    );
     // A hub e-mail names the account better than the driver's default instance name.
     const hubEmail = [previous, next].some(
       (account) => account.environments.length === 0 && account.email,
@@ -292,18 +311,10 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
       sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
-      redeem:
-        hubRedeems.get(key)?.redeem ??
-        // A balance from a report that cannot redeem must not remove another report's target.
-        creditSource?.redeem ??
-        winner.redeem ??
-        previous.redeem ??
-        next.redeem,
+      redeem: creditSource ? creditSource.redeem : winner.redeem,
       limits: {
         ...winner.limits,
-        ...(creditSource?.limits.resetCredits
-          ? { resetCredits: creditSource.limits.resetCredits }
-          : { resetCredits: undefined }),
+        ...(shownCredits ? { resetCredits: shownCredits } : { resetCredits: undefined }),
       },
     });
   };
@@ -511,9 +522,9 @@ export function displayLimitWindows(pool: LimitPool) {
   if (pool.driver !== "cursor") return pool.windows;
   const hasAuto = pool.windows.some((window) => window.id === "autoPercentUsed");
   const hasApi = pool.windows.some((window) => window.id === "apiPercentUsed");
-  const hasBothPools = hasAuto && hasApi;
+  const hideTotal = (hasAuto && hasApi) || hasDuplicateCursorTotal(pool);
   return pool.windows
-    .filter((window) => !hasBothPools || window.id !== "totalPercentUsed")
+    .filter((window) => !hideTotal || window.id !== "totalPercentUsed")
     .sort((left, right) => cursorUsageWindowRank(left.id) - cursorUsageWindowRank(right.id));
 }
 
@@ -634,15 +645,23 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     const memberByAccount = new Map(all.map((member) => [member.account.key, member]));
     const first = members[0]!.window;
     const id = members[0]!.account.driver === "codex" ? key : first.id;
-    const usedPercent = members.reduce((sum, m) => sum + m.window.usedPercent, 0) / members.length;
+    // One unknown plan makes the pool incomparable by plan, so every member then counts once.
+    const { totalWeight, weightOf } = poolWeights(members, first.kind);
+    const usedPercent =
+      members.reduce((sum, m) => sum + m.window.usedPercent * weightOf(m), 0) / totalWeight;
     // Judge pace only for windows with reset clocks; others add spend without elapsed time.
     const timed = members.flatMap((m) => {
       const share = elapsedShare(m.window, now);
-      return share === null ? [] : [{ used: m.window.usedPercent, elapsed: share }];
+      return share === null
+        ? []
+        : [{ used: m.window.usedPercent, elapsed: share, weight: weightOf(m) }];
     });
-    const timedUsed = timed.reduce((sum, t) => sum + t.used, 0) / timed.length;
+    const timedWeight = timed.reduce((sum, t) => sum + t.weight, 0);
+    const timedUsed = timed.reduce((sum, t) => sum + t.used * t.weight, 0) / timedWeight;
     const meanElapsed =
-      timed.length > 0 ? timed.reduce((sum, t) => sum + t.elapsed, 0) / timed.length : null;
+      timed.length > 0
+        ? timed.reduce((sum, t) => sum + t.elapsed * t.weight, 0) / timedWeight
+        : null;
     const resets = members
       .flatMap((member) => {
         const at = resetMillis(member.window);
@@ -652,7 +671,9 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
               {
                 member,
                 at,
-                restoresPercent: Math.round(member.refillPercent / members.length),
+                restoresPercent: Math.round(
+                  (member.refillPercent * weightOf(member)) / totalWeight,
+                ),
               },
             ];
       })
@@ -682,7 +703,9 @@ export function limitsNotice(limits: ServerProviderUsageLimits): string | null {
     return limits.unavailable.message ?? "Could not read limits.";
   }
   const blocks = limits.availability?.some((block) => block.exhausted) === true;
-  return limits.windows.length === 0 && !blocks ? "No limits reported." : null;
+  return limits.windows.length === 0 && !blocks && !limits.zeroSpendCap
+    ? "No limits reported."
+    : null;
 }
 
 export function remainingPercent(window: ServerProviderUsageWindow): number {
@@ -726,96 +749,12 @@ function paceOfShares(usedPercent: number, elapsed: number): LimitPace {
   return "on";
 }
 
-export function formatDuration(ms: number): string {
-  const remaining = Math.max(0, ms);
-  const days = Math.floor(remaining / DAY);
-  const hours = Math.floor((remaining % DAY) / HOUR);
-  const minutes = Math.floor((remaining % HOUR) / MINUTE);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
 export function formatResetsIn(window: ServerProviderUsageWindow, now: number): string | null {
   const resetsAt = resetMillis(window);
   if (resetsAt === null) return null;
   if (resetsAt <= now) return "resets now";
   if (resetsAt - now < MINUTE) return "Resets momentarily";
   return `resets in ${formatDuration(resetsAt - now)}`;
-}
-
-export const USAGE_LIMITS_COMMAND = {
-  name: "usage-limits",
-  description: "Show this provider's usage limits",
-} satisfies ServerProviderSlashCommand;
-
-export function isUsageLimitsCommand(prompt: string): boolean {
-  return prompt.trim().toLowerCase() === "/usage-limits";
-}
-
-export function hasProviderUsageLimits(
-  driver: ServerProvider["driver"],
-  providers: readonly ServerProvider[],
-  sources: UsageLimitSourceSnapshots,
-): boolean {
-  return (
-    providersWithLimits(providers).some((provider) => provider.driver === driver) ||
-    sources.some(
-      (source) =>
-        source.accounts.some((account) => account.driver === driver) ||
-        (source.error !== undefined && source.accounts.length === 0),
-    )
-  );
-}
-
-export function sameUsageLimitCommandCoverage(
-  previous: UsageLimitSourceSnapshots,
-  next: UsageLimitSourceSnapshots,
-): boolean {
-  const coverage = (sources: UsageLimitSourceSnapshots) =>
-    new Set(
-      sources.flatMap((source) =>
-        source.error !== undefined && source.accounts.length === 0
-          ? ["*"]
-          : source.accounts.map((account) => String(account.driver)),
-      ),
-    );
-  const before = coverage(previous);
-  const after = coverage(next);
-  return before.size === after.size && [...before].every((driver) => after.has(driver));
-}
-
-/** Advertise on workspace catalogs too, which replace the global command list. */
-export function withUsageLimitsCommands(
-  providers: readonly ServerProvider[],
-  sources: UsageLimitSourceSnapshots,
-): ServerProvider[] {
-  const supportedDrivers = new Set([
-    ...providersWithLimits(providers).map((provider) => provider.driver),
-    ...sources.flatMap((source) => source.accounts.map((account) => account.driver)),
-  ]);
-  const unreadableSource = sources.some(
-    (source) => source.error !== undefined && source.accounts.length === 0,
-  );
-  return providers.map((provider) => {
-    if (!unreadableSource && !supportedDrivers.has(provider.driver)) return provider;
-    const commands = (items: readonly ServerProviderSlashCommand[]) => [
-      ...items.filter((command) => command.name !== USAGE_LIMITS_COMMAND.name),
-      USAGE_LIMITS_COMMAND,
-    ];
-    return {
-      ...provider,
-      slashCommands: commands(provider.slashCommands),
-      ...(provider.workspaceSnapshots
-        ? {
-            workspaceSnapshots: provider.workspaceSnapshots.map((snapshot) => ({
-              ...snapshot,
-              slashCommands: commands(snapshot.slashCommands),
-            })),
-          }
-        : {}),
-    };
-  });
 }
 
 export function collectProviderUsageLimits(
@@ -833,7 +772,7 @@ export function collectProviderUsageLimits(
   type NativeSnapshot = { provider: ServerProvider; limits: ServerProviderUsageLimits };
   const nativeByAccount = new Map<
     string,
-    { usage: NativeSnapshot; credits: NativeSnapshot | null }
+    { usage: NativeSnapshot; credits: NativeSnapshot | null; balance: NativeSnapshot | null }
   >();
   for (const provider of providersWithLimits(providers)) {
     if (provider.driver !== selected.driver || !provider.usageLimits) continue;
@@ -852,13 +791,28 @@ export function collectProviderUsageLimits(
     const previousCredit = previous?.credits;
     const credits =
       snapshot.limits.resetCredits &&
-      (!previousCredit ||
-        Date.parse(snapshot.limits.checkedAt) > Date.parse(previousCredit.limits.checkedAt))
+      creditReportWins(
+        { limits: snapshot.limits, input: { instanceId: provider.instanceId } },
+        previousCredit
+          ? {
+              limits: previousCredit.limits,
+              input: { instanceId: previousCredit.provider.instanceId },
+            }
+          : null,
+      )
         ? snapshot
         : (previousCredit ?? null);
     nativeByAccount.set(key, {
       usage: providerWins ? snapshot : previous.usage,
       credits,
+      balance:
+        snapshot.limits.resetCredits &&
+        newerCreditReport(
+          { limits: snapshot.limits, input: null },
+          previous?.balance ? { limits: previous.balance.limits, input: null } : null,
+        )
+          ? snapshot
+          : (previous?.balance ?? null),
     });
   }
   const native = [...nativeByAccount.values()];
@@ -873,10 +827,11 @@ export function collectProviderUsageLimits(
   for (const {
     usage: { provider, limits },
     credits,
+    balance,
   } of native) {
     const routed = routedThroughOpenCodex(limits);
     const key = resolveKey(nativeReport(provider));
-    const hubCredits = sources
+    const matchingHubCredits = sources
       .flatMap((source) => source.accounts.map((account) => ({ source, account })))
       .filter(
         ({ account }) =>
@@ -884,20 +839,70 @@ export function collectProviderUsageLimits(
           resolveKey(account) === key &&
           account.usageLimits.resetCredits &&
           !limitsNotice(account.usageLimits),
-      )
-      .sort(
-        (a, b) =>
-          Date.parse(b.account.usageLimits.checkedAt) - Date.parse(a.account.usageLimits.checkedAt),
-      )[0];
+      );
+    const hubBalance = [...matchingHubCredits].sort(
+      (a, b) =>
+        Date.parse(b.account.usageLimits.checkedAt) - Date.parse(a.account.usageLimits.checkedAt),
+    )[0];
+    const hubCredits = matchingHubCredits.sort((a, b) => {
+      const report = (entry: typeof a) => ({
+        limits: entry.account.usageLimits,
+        input: entry.account.usageLimits.resetCredits?.nextCreditId
+          ? {
+              sourceId: entry.source.id,
+              accountId: entry.account.id,
+              creditId: entry.account.usageLimits.resetCredits.nextCreditId,
+            }
+          : null,
+      });
+      return creditReportWins(report(a), report(b))
+        ? -1
+        : creditReportWins(report(b), report(a))
+          ? 1
+          : 0;
+    })[0];
     const hubCreditId = hubCredits?.account.usageLimits.resetCredits?.nextCreditId;
     const showHubCredits =
       hubCredits &&
-      (!credits ||
-        Date.parse(hubCredits.account.usageLimits.checkedAt) >
-          Date.parse(credits.limits.checkedAt));
-    const shownCredits = showHubCredits
-      ? hubCredits.account.usageLimits.resetCredits
-      : credits?.limits.resetCredits;
+      creditReportWins(
+        {
+          limits: hubCredits.account.usageLimits,
+          input: hubCreditId
+            ? {
+                sourceId: hubCredits.source.id,
+                accountId: hubCredits.account.id,
+                creditId: hubCreditId,
+              }
+            : null,
+        },
+        credits
+          ? { limits: credits.limits, input: { instanceId: credits.provider.instanceId } }
+          : null,
+      );
+    const chosenReport =
+      showHubCredits && hubCredits
+        ? {
+            limits: hubCredits.account.usageLimits,
+            input: hubCreditId
+              ? {
+                  sourceId: hubCredits.source.id,
+                  accountId: hubCredits.account.id,
+                  creditId: hubCreditId,
+                }
+              : null,
+          }
+        : credits
+          ? { limits: credits.limits, input: { instanceId: credits.provider.instanceId } }
+          : null;
+    const newestReport =
+      hubBalance &&
+      (!balance ||
+        Date.parse(hubBalance.account.usageLimits.checkedAt) > Date.parse(balance.limits.checkedAt))
+        ? { limits: hubBalance.account.usageLimits, input: null }
+        : balance
+          ? { limits: balance.limits, input: null }
+          : null;
+    const shownCredits = shownCreditReport(chosenReport, newestReport);
     accounts.push({
       id: provider.instanceId,
       driver: provider.driver,
@@ -915,16 +920,18 @@ export function collectProviderUsageLimits(
       instanceId: provider.instanceId,
       ...(routed
         ? {}
-        : {
-            resetCreditInput:
-              hubCreditId && hubCredits
-                ? {
-                    sourceId: hubCredits.source.id,
-                    accountId: hubCredits.account.id,
-                    creditId: hubCreditId,
-                  }
-                : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
-          }),
+        : showHubCredits && !hubCreditId
+          ? { redeemable: false }
+          : {
+              resetCreditInput:
+                showHubCredits && hubCreditId && hubCredits
+                  ? {
+                      sourceId: hubCredits.source.id,
+                      accountId: hubCredits.account.id,
+                      creditId: hubCreditId,
+                    }
+                  : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
+            }),
       ...(provider.displayName ? { displayName: provider.displayName } : {}),
       ...(provider.accentColor ? { accentColor: provider.accentColor } : {}),
       ...(!routed && provider.auth.email ? { email: provider.auth.email } : {}),

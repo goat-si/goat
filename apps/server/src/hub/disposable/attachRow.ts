@@ -21,6 +21,7 @@ import {
   stateMessage,
 } from "./attachModel.ts";
 import type * as Store from "./DisposableMachineStore.ts";
+import { detachMessage } from "./detachText.ts";
 import { decodeEnroll, enrollMessage, enrollSteps, leftPenMessage } from "./enrollModel.ts";
 import type { PenInviteRef } from "./PenInvites.ts";
 
@@ -42,6 +43,7 @@ export interface Row {
   readonly delegation_json: string;
   readonly grant_id: string;
   readonly invite_expires_at: string | null;
+  readonly created_at: string;
   readonly state: string;
   readonly step: string | null;
   readonly fence: number;
@@ -50,6 +52,7 @@ export interface Row {
   readonly route_json: string | null;
   readonly link_operation_id: string | null;
   readonly link_id: string | null;
+  readonly environment_id: string | null;
   readonly enroll_json: string;
   readonly request_key: string | null;
   readonly state_since: string;
@@ -123,10 +126,24 @@ export const status = (
   const enroll = decodeEnroll(row.enroll_json);
   const leftWithLink =
     row.pen_removed_at !== null && (row.link_id !== null || row.link_operation_id !== null);
+  const removal = detachMessage({
+    state: row.state,
+    name: row.name,
+    linkId: row.link_id,
+    detach: enroll.detach,
+    health: enroll.health,
+    linkKeyMoved: enroll.linkKeyMoved === true,
+    inPen: row.pen_admitted_at !== null && row.pen_removed_at === null,
+    stop: enroll.stop,
+  });
+  // A detach that still owes the link's cleanup speaks for the record, also out of Pen.
+  const removing = row.state === "detaching" || row.state === "retired" || row.state === "returned";
   const { message, nextAction } =
+    (removing ? removal : undefined) ??
     (leftWithLink
       ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
       : undefined) ??
+    removal ??
     (row.pen_admitted_at === null
       ? undefined
       : enrollMessage(
@@ -135,6 +152,7 @@ export const status = (
           enroll,
           row.pen_admitted_at < row.state_since,
           row.link_operation_id,
+          conflictCount(row.conflicts_json) > 0,
         )) ??
     stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);

@@ -11,6 +11,7 @@ import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -47,6 +48,19 @@ function samePullRequest(
     left.number === right.number &&
     left.url === right.url
   );
+}
+
+function pullRequestPredatesThread(
+  pullRequest: Pick<GitManager.GitBranchPullRequest, "state" | "closedAt" | "mergedAt">,
+  createdAt: DateTime.Utc,
+): boolean {
+  const terminalAt =
+    pullRequest.state === "merged"
+      ? pullRequest.mergedAt
+      : pullRequest.state === "closed"
+        ? pullRequest.closedAt
+        : null;
+  return terminalAt != null && Date.parse(terminalAt) < DateTime.toEpochMillis(createdAt);
 }
 
 function pullRequestRepository(
@@ -213,9 +227,20 @@ export const make = Effect.gen(function* () {
                 }
               : null;
 
+          const isHistoricalFor = (thread: (typeof group)[number]) =>
+            detected !== null &&
+            pullRequestPredatesThread(detected, thread.createdAt) &&
+            !samePullRequest(thread.branchPullRequest, detectedReference);
+          const dropsHistorical =
+            detected !== null &&
+            first.branch !== null &&
+            group.some(isHistoricalFor) &&
+            !(yield* git.checkedOutPullRequest({ cwd, branch: first.branch, url: detected.url }));
+
           const plans = yield* Effect.forEach(group, (thread) =>
             Effect.gen(function* () {
-              let branchPullRequest = detectedReference;
+              let branchPullRequest =
+                dropsHistorical && isHistoricalFor(thread) ? null : detectedReference;
               if (
                 detected === null &&
                 branchPullRequest === null &&

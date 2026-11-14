@@ -1,5 +1,4 @@
 import * as HostProcess from "@goat/shared/HostProcess";
-import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import { installProcessErrorNet } from "@goat/shared/processErrorNet";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -28,6 +27,7 @@ import {
 } from "../serverOwnerLock.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as AutomaticPort from "./automaticPort.ts";
+import { installServerOutputHandlers } from "./serverOutput.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 import {
   recoverServerWorkingDirectory,
@@ -55,6 +55,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly originalCwd?: string | undefined;
   },
 ) {
+  yield* Effect.sync(installServerOutputHandlers);
   // The net covers the whole process, so one unobserved error cannot end every session.
   yield* Effect.sync(installProcessErrorNet);
   // Before config resolution, which claims a port and creates directories.
@@ -114,15 +115,6 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
       yield* holdWorkspaceLeaseRegistry();
       const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
       const desktop = config.mode === "desktop" && config.desktopBootstrapToken !== undefined;
-      if (desktop) {
-        yield* Effect.sync(() => {
-          // The desktop launcher reads this process's stdout and stderr. Once it is gone,
-          // every log write fails, and Node turns an unhandled stream error into a crash
-          // that skips shutdown and leaves the ownership lock and runtime record behind.
-          process.stdout.on("error", ignoreClosedPipe);
-          process.stderr.on("error", ignoreClosedPipe);
-        });
-      }
       const running = desktop
         ? Effect.raceFirst(
             run,
@@ -190,14 +182,20 @@ export const startCommand = Command.make("start", { ...sharedServerCommandFlags 
   Command.withHandler((flags) => runServerCommand(flags, { rejectRunningServer: true })),
 );
 
-export const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
+const { autoBootstrapProjectFromCwd: _autoBootstrapProjectFromCwd, ...serveCommandFlags } =
+  sharedServerCommandFlags;
+
+export const serveCommand = Command.make("serve", serveCommandFlags).pipe(
   Command.withDescription(
     "Run the GOAT server without opening a browser and print headless pairing details.",
   ),
   Command.withHandler((flags) =>
-    runServerCommand(flags, {
-      startupPresentation: "headless",
-      forceAutoBootstrapProjectFromCwd: false,
-    }),
+    runServerCommand(
+      { ...flags, autoBootstrapProjectFromCwd: Option.none() },
+      {
+        startupPresentation: "headless",
+        forceAutoBootstrapProjectFromCwd: false,
+      },
+    ),
   ),
 );

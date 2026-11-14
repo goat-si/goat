@@ -5,9 +5,11 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import {
   HubMachineAttachInput,
+  HubMachineDetachInput,
   HubMachineList,
   HubMachineListInput,
   HubMachineReissueInput,
+  HubMachineReleaseInput,
   HubMachinesError,
   HubMachineStatus,
 } from "./disposableMachines.ts";
@@ -15,6 +17,8 @@ import {
 export const HUB_MACHINES_WS_METHODS = {
   hubMachinesAttach: "hub.machines.attach",
   hubMachinesReissue: "hub.machines.reissue",
+  hubMachinesDetach: "hub.machines.detach",
+  hubMachinesRelease: "hub.machines.release",
   hubMachinesList: "hub.machines.list",
 } as const;
 
@@ -35,9 +39,23 @@ const WsHubMachinesListRpc = Rpc.make(HUB_MACHINES_WS_METHODS.hubMachinesList, {
   success: HubMachineList,
   error: HubMachinesRpcError,
 });
+/** A person detaching a machine, or forcing it; agents use goat_hub_machine_detach. */
+const WsHubMachinesDetachRpc = Rpc.make(HUB_MACHINES_WS_METHODS.hubMachinesDetach, {
+  payload: HubMachineDetachInput,
+  success: HubMachineStatus,
+  error: HubMachinesRpcError,
+});
+/** A person only: frees the slot of an attach Pen cannot account for. */
+const WsHubMachinesReleaseRpc = Rpc.make(HUB_MACHINES_WS_METHODS.hubMachinesRelease, {
+  payload: HubMachineReleaseInput,
+  success: HubMachineStatus,
+  error: HubMachinesRpcError,
+});
 
 export const HubMachinesRpcs = RpcGroup.make(
   WsHubMachinesAttachRpc,
   WsHubMachinesReissueRpc,
   WsHubMachinesListRpc,
+  WsHubMachinesDetachRpc,
+  WsHubMachinesReleaseRpc,
 );

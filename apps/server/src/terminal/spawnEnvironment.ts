@@ -1,5 +1,5 @@
 import { isOwnedEnvName } from "@goat/contracts/legacyT3Names";
-import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import { expandHomeVariable } from "@goat/provider-core/server/pathExpansion";
 
 // The tmux/screen/Zellij keys name the multiplexer pane that launched the server,
 // so inheriting them points multiplexer-aware tools at that unrelated pane.
@@ -90,8 +90,11 @@ export function createTerminalSpawnEnv(
         platform === "win32"
           ? Object.keys(spawnEnv).find((candidate) => candidate.toLowerCase() === key.toLowerCase())
           : undefined;
-      spawnEnv[existingKey ?? key] =
-        key === "CODEX_HOME" || key === "CLAUDE_CONFIG_DIR" ? expandHomePath(value, home) : value;
+      spawnEnv[existingKey ?? key] = expandHomeVariable(
+        platform === "win32" ? key.toUpperCase() : key,
+        value,
+        home,
+      );
     }
   }
   if (!spawnEnv.COLORTERM && runtimeEnv?.COLORTERM === undefined) {

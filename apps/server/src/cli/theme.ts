@@ -29,6 +29,7 @@ import {
 } from "../environmentTheme.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { baseDirFlag } from "./config.ts";
+import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
 
 const SparseSettings = Schema.Record(Schema.String, Schema.Unknown);
 const decodeSettingsJson = Schema.decodeUnknownEffect(fromLenientJson(SparseSettings));
@@ -164,9 +165,17 @@ const resolveThemePaths = Effect.fn(function* (explicitBaseDir: Option.Option<st
   const envHome = Option.filter(yield* envGoatHome, (value) => value.trim().length > 0);
   const configuredBaseDir = Option.orElse(explicitBaseDir, () => envHome);
   const baseDir = yield* resolveBaseDir(Option.getOrUndefined(configuredBaseDir));
-  const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined, {
+  let derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined, {
     baseDirIsExplicit: Option.isSome(configuredBaseDir),
   });
+  if (
+    Option.isNone(configuredBaseDir) &&
+    Option.isNone(yield* readLiveServerRuntimeState(derivedPaths.serverRuntimeStatePath))
+  ) {
+    const devPaths = yield* ServerConfig.deriveServerPaths(baseDir, new URL("http://localhost"));
+    if (Option.isSome(yield* readLiveServerRuntimeState(devPaths.serverRuntimeStatePath)))
+      derivedPaths = devPaths;
+  }
   return {
     settingsPath: derivedPaths.settingsPath,
     themesDir: derivedPaths.environmentThemesDir,

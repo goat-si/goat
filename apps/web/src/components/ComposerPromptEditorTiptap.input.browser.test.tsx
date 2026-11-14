@@ -152,6 +152,57 @@ it.each([
 });
 
 it.each([
+  { mark: "bold", key: "b", marker: "**" },
+  { mark: "italic", key: "i", marker: "*" },
+])("toggles $mark with Mod+$key at a collapsed cursor", async ({ mark, key, marker }) => {
+  await using screen = await mountEditor("ship it");
+  const { editor } = screen;
+  const mod = isMacPlatform(navigator.platform) ? "Meta" : "Control";
+  const chord = `{${mod}>}${key}{/${mod}}`;
+  await act(async () => {
+    editor.commands.focus("end");
+  });
+  await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
+  await userEvent.keyboard(" ");
+  await userEvent.keyboard(chord);
+  await userEvent.keyboard("now");
+  await userEvent.keyboard(chord);
+  await userEvent.keyboard(" done");
+  await vi.waitFor(() =>
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(`ship it ${marker}now${marker} done`),
+  );
+  expect(textWithMark(editor, mark)).toEqual(["now"]);
+});
+
+it.each([
+  { key: "i", caret: 10, expected: "ship it **n*X*ow** done" },
+  { key: "i", caret: 9, expected: "ship it *X***now** done" },
+  { key: "e", caret: "{ArrowLeft>5/}", expected: "ship it **now**`X` done" },
+])(
+  "Mod+$key at $caret in a bold word styles the next typed text",
+  async ({ key, caret, expected }) => {
+    await using screen = await mountEditor("ship it **now** done");
+    const { editor } = screen;
+    const mod = isMacPlatform(navigator.platform) ? "Meta" : "Control";
+    // ProseMirror rewrites the DOM caret 20ms after focus. Run that now, or it
+    // can undo the first arrow key before ProseMirror reads the native move.
+    {
+      using _timers = fakeTimers();
+      await act(async () => {
+        if (typeof caret === "number") editor.commands.focus(caret);
+        else editor.commands.focus("end");
+      });
+      await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
+      vi.runOnlyPendingTimers();
+    }
+    if (typeof caret === "string") await userEvent.keyboard(caret);
+    await userEvent.keyboard(`{${mod}>}${key}{/${mod}}`);
+    await userEvent.keyboard("X");
+    await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
+  },
+);
+
+it.each([
   { word: "ship", prefix: "", source: ["**ship**"] },
   { word: "path\\", prefix: "", source: [] },
   { word: "2*3", prefix: "", source: [] },
@@ -169,7 +220,7 @@ it.each([
     code: ["path\\"],
   },
 ])(
-  "bolds $word after '$prefix' with Mod+B only when text is selected",
+  "bolds $word after '$prefix' with Mod+B over a selection",
   async ({ word, prefix, prefixText = prefix, source, code = [] }) => {
     const value = `${prefix}${word} it`;
     await using screen = await mountEditor(value);
@@ -179,10 +230,6 @@ it.each([
       editor.commands.focus("end");
     });
     await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
-    await userEvent.keyboard(modB);
-    // Without the guard, Tiptap stores bold for the next typed text.
-    expect(editor.state.storedMarks).toBeNull();
-
     await act(async () => {
       editor.commands.setTextSelection({
         from: prefixText.length + 1,
@@ -320,6 +367,41 @@ it("keeps unknown dollar names editable when restoring and pasting a draft", asy
   expect(editor.state.doc.textContent).toBe(value.replace("$babysit", ""));
   expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
 });
+
+// regression: #25180 Tiptap's paste rules styled the pasted text a second time
+it.each([
+  "Read https://example.com/_handle_/status/1 and open src/__test__.tsx",
+  "see `**x**` now",
+])("sends pasted %s as pasted", async (pasted) => {
+  await using screen = await mountEditor("");
+  const { editor } = screen;
+  await act(async () => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", pasted);
+    editor.view.dom.dispatchEvent(new ClipboardEvent("paste", { clipboardData, cancelable: true }));
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe(pasted);
+});
+
+it.each(["x\r\n\r\ny", "x\r\ry"])(
+  "pastes %j with the same blank line as x\\n\\ny",
+  async (text) => {
+    await using screen = await mountEditor("");
+    const { editor } = screen;
+    await act(async () => {
+      editor.commands.focus("end");
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", text);
+      editor.view.dom.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData, cancelable: true }),
+      );
+    });
+    const paragraphs: string[] = [];
+    editor.state.doc.forEach((node) => paragraphs.push(node.textContent));
+    expect(paragraphs).toEqual(["x", "", "y"]);
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("x\n\ny");
+  },
+);
 
 it("keeps the caret inside unknown dollar text across rich and plain remounts", async () => {
   const value = "echo $HOME now";
@@ -463,6 +545,31 @@ describe("Markdown markers around styled text", () => {
       keys: "{Shift>}{Enter}{/Shift}",
       expected: "**bo**\n**ld** after",
       marks: { bold: ["bo", "ld"] },
+    },
+    {
+      name: "a line break after typed inline code leaves the next line plain",
+      value: "",
+      caret: 1,
+      keys: "`Test`{Shift>}{Enter}{/Shift}f",
+      expected: "`Test`\nf",
+      marks: { code: ["Test"] },
+    },
+    {
+      name: "a line break after typed bold leaves the next line plain",
+      value: "",
+      caret: 1,
+      keys: "**Test**{Shift>}{Enter}{/Shift}f",
+      expected: "**Test**\nf",
+      marks: { bold: ["Test"] },
+    },
+    {
+      name: "bold turned on after typed bold carries across a line break",
+      value: "",
+      caret: 1,
+      keys: `**Test**${isMacPlatform(navigator.platform) ? "{Meta>}b{/Meta}" : "{Control>}b{/Control}"}{Shift>}{Enter}{/Shift}f`,
+      expected: "**Test**\n**f**",
+      // The caret beside f shows it as source.
+      marks: { bold: ["Test"] },
     },
     {
       name: "splitting a list item inside bold keeps both halves bold",
@@ -821,4 +928,16 @@ describe("an Arabic line", () => {
       box.left + box.width / 2,
     );
   });
+});
+
+it("formats selected text as inline code when typed backticks surround it", async () => {
+  await using screen = await mountEditor("hello tail");
+  const { editor } = screen;
+  await act(async () => {
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    typeText(editor, 1, 6, "`");
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe("`hello` tail");
+  await act(async () => editor.commands.setTextSelection(editor.state.doc.content.size - 1));
+  expect(textWithMark(editor, "code")).toEqual(["hello"]);
 });

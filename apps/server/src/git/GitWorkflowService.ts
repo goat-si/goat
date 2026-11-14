@@ -48,7 +48,7 @@ const leaseUnavailable =
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
-    readonly isRepository: (cwd: string) => Effect.Effect<boolean, GitManagerServiceError>;
+    readonly repositoryRoot: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly hasCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -64,6 +64,14 @@ export class GitWorkflowService extends Context.Service<
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
+    readonly upstreamDivergence: (cwd: string) => Effect.Effect<
+      {
+        readonly refName: string;
+        readonly aheadCount: number;
+        readonly behindCount: number;
+      } | null,
+      GitManagerServiceError
+    >;
     readonly remoteStatus: (
       input: VcsStatusInput,
       options?: GitManager.GitRemoteStatusOptions,
@@ -328,13 +336,13 @@ export const make = Effect.gen(function* () {
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
   return GitWorkflowService.of({
-    isRepository: Effect.fn("GitWorkflowService.isRepository")(function (cwd) {
+    repositoryRoot: Effect.fn("GitWorkflowService.repositoryRoot")(function (cwd) {
       return registry.detect({ cwd }).pipe(
-        Effect.map((handle) => handle?.kind === "git"),
+        Effect.map((handle) => (handle?.kind === "git" ? handle.repository.rootPath : null)),
         Effect.mapError(
           (cause) =>
             new GitManagerError({
-              operation: "GitWorkflowService.isRepository",
+              operation: "GitWorkflowService.repositoryRoot",
               cwd,
               detail: "Failed to detect a VCS repository for this Git workflow.",
               cause,
@@ -416,6 +424,16 @@ export const make = Effect.gen(function* () {
         stderrLength: result.stderr.length,
         detail: "Failed to read the checked-out branch.",
       });
+    }),
+    upstreamDivergence: Effect.fn("GitWorkflowService.upstreamDivergence")(function* (cwd) {
+      const details = yield* git.statusDetailsRemote(cwd, { refreshUpstream: false });
+      return details.hasUpstream && details.branch !== null
+        ? {
+            refName: details.branch,
+            aheadCount: details.aheadCount,
+            behindCount: details.behindCount,
+          }
+        : null;
     }),
     remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function (input, options) {
       return detectGitRepositoryForStatus("GitWorkflowService.remoteStatus", input.cwd).pipe(

@@ -628,6 +628,7 @@ export const mockExecution = () => ({
   snapshotWith: () =>
     Effect.succeed({
       fullLanes: [],
+      titleAtCapacity: false,
       titleThreads: [],
       mainThreads: [],
       stoppingThreads: [],

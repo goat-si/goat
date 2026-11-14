@@ -65,7 +65,9 @@ export function MobileTaskHeader(props: {
 }) {
   const { lookup, canUpdate, retried } = props.screen;
   const onUpdate = (input: ChannelUpdateTaskViewInput) => void props.screen.update(input);
-  useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null);
+  useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null, {
+    onMount: true,
+  });
   const found =
     props.task === undefined && (lookup.state === "known" || lookup.state === "unavailable");
   const task = props.task ?? (lookup.state === "known" ? lookup.task : undefined);
