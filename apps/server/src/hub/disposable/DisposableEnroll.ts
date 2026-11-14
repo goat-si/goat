@@ -279,7 +279,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
             noisePub: row.expected_noise_pub,
             proxyCommand: route.proxyCommand,
             user: route.user,
-            knownHostsFile: route.knownHostsFile,
+            // The file just written at the current state path: a stored one outlives a home move.
+            knownHostsFile: pinned?._tag === "Success" ? pinned.success : route.knownHostsFile,
             identityFile: key.value.privateKeyFile,
           });
     const at = yield* nowIso;
@@ -492,7 +493,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     pass: Contracts | undefined,
   ) {
     const contracts = yield* pass ?? home.contracts;
-    // A Home without explicit routes can be updated; no release takes the key with a route yet.
+    // Either contract arrives with an OpenCodex update; the key with the route came in 2.100.3.
     const missing = !declares(contracts, LINK_CONTRACTS)
       ? "opencodex_unsupported"
       : !declares(contracts, [LINK_IDENTITY_CONTRACT])

@@ -59,7 +59,7 @@ export const LINK_CONTRACTS = ["link.route/1", "link.operation/1", "link.recover
 /**
  * Without this contract an explicit route carries no identity and the Home offers its own agent and
  * default keys. A disposable machine trusts only the hub's machine key, so the link waits for a Home
- * that takes it with the route (opencodex#8714; on OpenCodex dev, in no release yet).
+ * that takes it with the route (opencodex#8714, released in OpenCodex 2.100.3).
  */
 export const LINK_IDENTITY_CONTRACT = "link.route/2";
 export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file", identityFile];
@@ -289,11 +289,11 @@ const WAITING: Record<string, string> = {
   key_dir_unreadable:
     "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --base-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
   machine_key_unusable:
-    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, or its folder is a symlink.",
+    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, its folder is a symlink, or it is not the plain ed25519 key file GOAT made.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:
-    "No OpenCodex release can link a machine with the hub's machine key yet, so updating OpenCodex does not help; the machine waits here until one can.",
+    "This hub's OpenCodex cannot link a machine with the hub's machine key; update OpenCodex on the hub to 2.100.3 or later.",
   journal_unreadable: "OpenCodex's link operation journal could not be read; GOAT asks again.",
   open: "OpenCodex is still running the link operation.",
   not_started: "OpenCodex did not record the link operation; GOAT sends it again on a later pass.",
