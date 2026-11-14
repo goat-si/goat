@@ -364,3 +364,25 @@ export function prepareTurnAttachments(input: {
     }),
   );
 }
+
+export function notifyDirectAnnotationAttached(isDirect: boolean) {
+  if (!isDirect) return;
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: "Annotation attached to draft",
+      description: "Sending is unavailable right now. Finish the current action, then send.",
+    }),
+  );
+}
+
+export function notifySendBusy(isDirect: boolean) {
+  if (isDirect) return notifyDirectAnnotationAttached(true);
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: "Still sending your previous message.",
+      description: "Send again once it goes through or fails.",
+    }),
+  );
+}

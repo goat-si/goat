@@ -111,6 +111,8 @@ import {
 } from "@goat/shared/composerContextReferences";
 import {
   draftSendState,
+  notifyDirectAnnotationAttached,
+  notifySendBusy,
   type MultipleModelTarget,
   resolveMultipleModelTargets,
   prepareTurnAttachments,
@@ -636,29 +638,21 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
 
-    const notifyDirectAnnotationAttached = () => {
-      if (!directAnnotation) return;
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Annotation attached to draft",
-          description: "Sending is unavailable right now. Finish the current action, then send.",
-        }),
-      );
-    };
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
-      (isSendBusy && !sendQueuesBehindSetup) ||
       isConnecting ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       readPendingEnvironmentChange() !== null ||
-      sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
+      return;
+    }
+    if ((isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
+      notifySendBusy(directAnnotation !== undefined);
       return;
     }
     if (needsLoadBalancing) {
@@ -692,7 +686,7 @@ export function useComposerSend(input: ComposerSendInput) {
     const sendCtx = composerRef.current?.getSendContext();
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       if (directAnnotation) {
-        notifyDirectAnnotationAttached();
+        notifyDirectAnnotationAttached(directAnnotation !== undefined);
         return;
       }
       onAdvanceActivePendingUserInput();
@@ -841,7 +835,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (!sendCtx?.providerAvailable) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
