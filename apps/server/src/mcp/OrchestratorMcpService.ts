@@ -2241,9 +2241,9 @@ const make = Effect.gen(function* () {
       // follow: unbinding a root-strategy task would otherwise run loose
       // prompts in the shared project checkout.
       const workspaceStrategy =
-        input.bindToCurrentThread === undefined
+        (threadId === null) === (existing.threadId === null)
           ? existing.workspaceStrategy
-          : input.bindToCurrentThread
+          : threadId !== null
             ? { type: "root" as const }
             : {
                 type: "worktree" as const,
