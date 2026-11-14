@@ -293,6 +293,9 @@ it.effect(
         );
         yield* enroll;
         expect(yield* listed(first.attachId)).toMatchObject({ class: "conflict", state: "paused" });
+        // Detach refuses a record a conflict stopped, so nothing tells anyone to detach it.
+        expect((yield* listed(first.attachId))?.nextAction).toContain("pen revoke");
+        expect((yield* listed(first.attachId))?.nextAction).not.toContain("Detach");
         expect(linkAdds(host.control.calls)).toEqual([]);
       }),
     ),

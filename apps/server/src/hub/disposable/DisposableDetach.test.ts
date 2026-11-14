@@ -577,7 +577,7 @@ it.effect(
         yield* TestClock.adjust(11 * 60 * 1000);
         pen.control.membersUnreadable = true;
         const unreadable = yield* release(PERSON, first.attachId, "r-1").pipe(Effect.flip);
-        expect(unreadable.reason).toBe("storage_failed");
+        expect(unreadable.reason).toBe("pen_unavailable");
         pen.control.membersUnreadable = false;
         pen.members.add(key(1));
         const joinedAnyway = yield* release(PERSON, first.attachId, "r-2").pipe(Effect.flip);
