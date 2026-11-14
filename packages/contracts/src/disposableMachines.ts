@@ -381,6 +381,7 @@ export const HubMachinesErrorReason = Schema.Literals([
   "storage_failed",
   "person_required",
   "hold_unsupported",
+  "pen_unavailable",
 ]);
 export type HubMachinesErrorReason = typeof HubMachinesErrorReason.Type;
 

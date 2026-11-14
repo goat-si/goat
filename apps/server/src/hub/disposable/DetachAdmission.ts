@@ -117,7 +117,9 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         if (conflictCount(row.conflicts_json) > 0 && !forcePastHostKey)
           return yield* fail(
             "conflict",
-            "A conflict blocks the detach; a person resolves it first.",
+            onlyHostKeyConflict(row.conflicts_json)
+              ? "The machine presents another SSH host key; only a person's force detaches it, in Settings → Hub on web or desktop."
+              : "A conflict stopped this record, so detach cannot run; a person removes the machine from Pen with pen revoke.",
           );
         if (row.environment_id !== null)
           return yield* fail(
@@ -198,7 +200,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
 
   /**
    * A person frees the slot of an attach whose invite Pen lost or used without a saved admit
-   * (state unknown, or paused with no admit). The machine may have joined anyway; the text says so.
+   * (state unknown, no admit), once its invite expired and Pen's member list shows the key absent.
    */
   const release = Effect.fn("DisposableDetach.release")(function* (
     caller: AttachCaller,
@@ -248,7 +250,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const second = yield* pen.members;
         if (first === undefined || second === undefined)
           return yield* fail(
-            "storage_failed",
+            "pen_unavailable",
             "Pen's member list could not be read, so nothing was released; try again.",
           );
         if (first.has(row.expected_sign_pub) || second.has(row.expected_sign_pub)) {
@@ -267,7 +269,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
           );
           return yield* fail(
             "conflict",
-            "The machine joined Pen after all, so it keeps its slot. Detach it, or remove it from Pen with pen revoke.",
+            "The machine joined Pen after all, so it keeps its slot: detach it to remove what it left, and remove it from Pen with pen revoke to free the slot.",
           );
         }
         const now = yield* nowIso;

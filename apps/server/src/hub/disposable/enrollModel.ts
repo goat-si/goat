@@ -438,7 +438,7 @@ export const leftPenMessage = (
         " for it; the link and the Child on the machine stay. Remove the link on the hub with ocx link revoke --link-id " +
         linkId +
         " (add --force --yes if the machine is gone).",
-      nextAction: "Run the ocx link revoke command above on the hub.",
+      nextAction: "A person runs the ocx link revoke command above on the hub.",
     };
   return {
     message:
@@ -473,6 +473,8 @@ export const enrollMessage = (
   pausedAfterJoin = false,
   /** The record's link operation, named in a stop about it. */
   operationId: string | null = null,
+  /** A conflict stopped the record, which detach refuses. */
+  conflicted = false,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   // Both clients show the message, so what a person must do is in it.
   const keyStep =
@@ -488,7 +490,9 @@ export const enrollMessage = (
           ? " Link operation " + operationId + "."
           : "") +
         leave,
-      nextAction: "Detach it to remove what it left; resuming an attach is not available yet.",
+      nextAction: conflicted
+        ? "A person removes the machine from Pen with pen revoke; a record a conflict stopped cannot be detached."
+        : "Detach it to remove what it left; resuming an attach is not available yet.",
     };
   if (state === "paused" && pausedAfterJoin)
     return {

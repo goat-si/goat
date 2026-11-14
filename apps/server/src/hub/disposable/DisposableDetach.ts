@@ -382,7 +382,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       ["link", "revoke", "--link-id", linkId, "--purge", "--operation-id", operationId, "--json"],
       REVOKE_TIMEOUT_MS,
     );
-    // Removed without a purge receipt: someone else revoked it, so recover proves the Child clean.
+    // Removed without a purge receipt: someone else revoked it; recover asks whether a cleanup of
+    // the machine waits.
     if (sent?.refusal?.code === "link_not_found")
       return yield* note(
         row,

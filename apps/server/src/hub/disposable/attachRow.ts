@@ -152,6 +152,7 @@ export const status = (
           enroll,
           row.pen_admitted_at < row.state_since,
           row.link_operation_id,
+          conflictCount(row.conflicts_json) > 0,
         )) ??
     stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);
