@@ -262,7 +262,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
   // Launch settings bind the refresh command to the signed-in profile. The registry
   // already wraps openSession in withAccess, so resolve without re-entering it.
   const orchestrationAdapter = yield* createCodexAdapterV2(input, {
-    onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+    sessionUsage: () => Effect.succeed(snapshot.applyUsageLimits),
     offeredModels: snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
     resolveRuntime: runtime.resolve,
   }).pipe(

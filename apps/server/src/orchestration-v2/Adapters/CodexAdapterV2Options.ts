@@ -37,11 +37,11 @@ export interface CodexAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
-  /** `sessionHome` is the home the reporting session runs under; absent for a reattached process. */
-  readonly onUsageLimits?: (
-    update: Parameters<ManagedServerProvider["applyUsageLimits"]>[0],
-    sessionHome?: string,
-  ) => ReturnType<ManagedServerProvider["applyUsageLimits"]>;
+  /**
+   * Called once per session after it connects, with the home it runs under (none for a process GOAT
+   * reattached to); returns where that session's usage reports go.
+   */
+  readonly sessionUsage?: (home: string | undefined) => Effect.Effect<CodexUsageReporter>;
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly compatibility?: (
     version: string,
@@ -63,8 +63,22 @@ export interface CodexAdapterV2Options {
 /** What a Codex driver adds to the adapter it builds. */
 export type CodexAdapterV2Hooks = Pick<
   CodexAdapterV2Options,
-  "onUsageLimits" | "resolveRuntime" | "compatibility" | "offeredModels" | "currentEnvironment"
+  "sessionUsage" | "resolveRuntime" | "compatibility" | "offeredModels" | "currentEnvironment"
 >;
+
+export type CodexUsageReporter = ManagedServerProvider["applyUsageLimits"];
+
+const ignoreUsage: CodexUsageReporter = () => Effect.void;
+
+/** A session's usage reporter, made once it is known whether its process was reattached. */
+export const codexSessionUsage = (
+  options: Pick<CodexAdapterV2Options, "sessionUsage">,
+  process: { readonly connection: { readonly reattached: boolean } } | undefined,
+  route: { readonly execution: { readonly home: string } },
+): Effect.Effect<CodexUsageReporter> =>
+  options.sessionUsage?.(
+    process?.connection.reattached === true ? undefined : route.execution.home,
+  ) ?? Effect.succeed(ignoreUsage);
 
 /** The environment a new session opens with: its managed runtime's, else the host's as it is now. */
 export const codexSessionEnvironment = (

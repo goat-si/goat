@@ -5,11 +5,13 @@ import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as CodexAdapter from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
+import { CodexDetachedAppServers } from "../CodexDetachedAppServerLive.ts";
 import { CODEX_TEST_RUNTIME_POLICY } from "../../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
 import {
   codexReplayPreamble,
@@ -47,8 +49,16 @@ const usageTranscript = (name: string, usedPercent: number) => {
   });
 };
 
-/** An instance with an unrelated variable whose sessions replay `usage` by session name. */
-const usageHarness = (host: NodeJS.ProcessEnv, usage: Readonly<Record<string, number>>) =>
+/**
+ * An instance with an unrelated variable whose sessions replay `usage` by session name. The factory
+ * always starts a fresh process; `preservedRecord` lists a kept record as if one had exited.
+ */
+const usageHarness = (input: {
+  readonly host: NodeJS.ProcessEnv;
+  readonly usage: Readonly<Record<string, number>>;
+  readonly homeDirectory?: string;
+  readonly preservedRecord?: boolean;
+}) =>
   Effect.gen(function* () {
     const instanceId = ProviderInstanceId.make("usage-home");
     const threadId = ThreadId.make("usage-home-thread");
@@ -66,14 +76,25 @@ const usageHarness = (host: NodeJS.ProcessEnv, usage: Readonly<Record<string, nu
           compatibility: () => Effect.sync(() => undefined),
         }),
       ),
-      Effect.provideService(HostProcess.Environment, host),
-      Effect.provideService(HostProcess.HomeDirectory, "/fixture"),
+      (effect) =>
+        input.preservedRecord === true
+          ? Effect.provide(
+              effect,
+              Layer.mock(CodexDetachedAppServers)({
+                socketTransportEnabled: false,
+                listPreservedForSession: () => Effect.succeed(["codex-exited"]),
+                keptStartedAt: () => Effect.sync(() => undefined),
+              }),
+            )
+          : effect,
+      Effect.provideService(HostProcess.Environment, input.host),
+      Effect.provideService(HostProcess.HomeDirectory, input.homeDirectory ?? "/fixture"),
       Effect.provideService(CodexAdapter.CodexAppServerClientFactory, {
-        open: (input) =>
+        open: (open) =>
           Effect.gen(function* () {
-            const usedPercent = usage[input.providerSessionId];
+            const usedPercent = input.usage[open.providerSessionId];
             if (usedPercent === undefined) return yield* Effect.die("unknown session");
-            const transcript = usageTranscript(input.providerSessionId, usedPercent);
+            const transcript = usageTranscript(open.providerSessionId, usedPercent);
             const driver = yield* CodexReplay.makeReplayDriver(transcript);
             const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
             return Context.get(context, CodexClient.CodexAppServerClient);
@@ -82,13 +103,14 @@ const usageHarness = (host: NodeJS.ProcessEnv, usage: Readonly<Record<string, nu
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
                   driver: CodexAdapter.CODEX_DRIVER_KIND,
-                  providerSessionId: input.providerSessionId,
+                  providerSessionId: open.providerSessionId,
                   cause,
                 }),
             ),
           ),
       }),
     );
+    /** Opens a session; the returned effect lets it report its usage. */
     const open = (name: string, cwd?: string) => {
       const runtimePolicy =
         cwd === undefined ? CODEX_TEST_RUNTIME_POLICY : { ...CODEX_TEST_RUNTIME_POLICY, cwd };
@@ -108,24 +130,31 @@ const usageHarness = (host: NodeJS.ProcessEnv, usage: Readonly<Record<string, nu
     const percents = Effect.map(instance.snapshot.getSnapshot, (snapshot) =>
       (snapshot.usageLimits?.windows ?? []).map((window) => window.usedPercent),
     );
-    return { open, percents };
+    /** A status check that commits under the host's current home. */
+    const check = instance.snapshot.refresh.pipe(Effect.asVoid);
+    return { open, percents, check };
   });
 
 it.layer(layerTest)("Codex usage and the session's home", (it) => {
-  it.effect(
-    "usage from a session opened under an earlier home does not replace the current home's usage",
-    () =>
-      Effect.gen(function* () {
-        const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
-        const { open, percents } = yield* usageHarness(host, { a: 10, b: 50 });
-        const ensureA = yield* open("a");
-        host.CODEX_HOME = "/fixture/b";
-        const ensureB = yield* open("b");
-        yield* ensureA;
-        expect(yield* percents).not.toContain(10);
-        yield* ensureB;
-        expect(yield* percents).toContain(50);
-      }).pipe(Effect.scoped),
+  it.effect("usage counts only for the home of the last committed check", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
+      const { open, percents, check } = yield* usageHarness({
+        host,
+        usage: { a: 10, b: 50, b2: 60 },
+      });
+      yield* check;
+      const reportA = yield* open("a");
+      host.CODEX_HOME = "/fixture/b";
+      const reportB = yield* open("b");
+      yield* reportB;
+      expect(yield* percents).not.toContain(50);
+      yield* check;
+      yield* reportA;
+      expect(yield* percents).not.toContain(10);
+      yield* yield* open("b2");
+      expect(yield* percents).toContain(60);
+    }).pipe(Effect.scoped),
   );
 
   it.effect(
@@ -133,8 +162,74 @@ it.layer(layerTest)("Codex usage and the session's home", (it) => {
     () =>
       Effect.gen(function* () {
         const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "account" };
-        const { open, percents } = yield* usageHarness(host, { elsewhere: 10 });
+        const { open, percents, check } = yield* usageHarness({ host, usage: { elsewhere: 10 } });
+        yield* check;
         yield* yield* open("elsewhere", "/fixture/workspace");
+        expect(yield* percents).not.toContain(10);
+      }).pipe(Effect.scoped),
+  );
+
+  // The fixture uses a symlink.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a session opened through a link to the checked home reports into it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        yield* fs.makeDirectory(`${root}/home`);
+        yield* fs.symlink(`${root}/home`, `${root}/alias`);
+        const host: NodeJS.ProcessEnv = { HOME: root, CODEX_HOME: `${root}/home` };
+        const { open, percents, check } = yield* usageHarness({
+          host,
+          usage: { linked: 30 },
+          homeDirectory: root,
+        });
+        yield* check;
+        host.CODEX_HOME = `${root}/alias`;
+        const report = yield* open("linked");
+        host.CODEX_HOME = `${root}/home`;
+        yield* report;
+        expect(yield* percents).toContain(30);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a usage report reads no environment", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const host = new Proxy<NodeJS.ProcessEnv>(
+        { HOME: "/fixture", CODEX_HOME: "/fixture/a" },
+        {
+          ownKeys: (target) => {
+            reads += 1;
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
+      const { open, percents, check } = yield* usageHarness({ host, usage: { a: 10 } });
+      yield* check;
+      const report = yield* open("a");
+      const before = reads;
+      yield* report;
+      expect(yield* percents).toContain(10);
+      expect(reads).toBe(before);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a fresh process started after an exited kept record reports its home like any other",
+    () =>
+      Effect.gen(function* () {
+        const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
+        const { open, percents, check } = yield* usageHarness({
+          host,
+          usage: { fresh: 10 },
+          preservedRecord: true,
+        });
+        yield* check;
+        const report = yield* open("fresh");
+        host.CODEX_HOME = "/fixture/b";
+        yield* check;
+        yield* report;
         expect(yield* percents).not.toContain(10);
       }).pipe(Effect.scoped),
   );

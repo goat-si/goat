@@ -217,6 +217,22 @@ export const CodexDriver: ProviderDriver<
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     const homeOf = (env: NodeJS.ProcessEnv) =>
       codexHomeFor(env, { platform, homeDirectory, sep: pathService.sep });
+    // The home a check or session process runs under, and its filesystem identity, found once per
+    // check and once per session; a failed lookup keeps the path, so both sides fall back alike.
+    const executionHome = (env: NodeJS.ProcessEnv) =>
+      HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+        home: effectiveConfig.homePath,
+        cwd: process.cwd(),
+        environment: env,
+      });
+    const homeIdentity = (home: string) =>
+      ResetCreditCoordinator.canonicalLoginDirectory(home).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, pathService),
+        Effect.orElseSucceed(() => home),
+      );
+    /** The home identity of the last committed status check. */
+    let checkedHome: string | undefined;
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,
@@ -313,19 +329,17 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        // Usage from a session running under another home than a check would use is not this home's.
-        onUsageLimits: (update, sessionHome) =>
-          sessionHome === undefined
-            ? snapshot.applyUsageLimits(update)
-            : currentEnvironment.pipe(
-                Effect.flatMap((env) =>
-                  HomeRoute.codexExecutionHome(pathService, homeDirectory, {
-                    home: effectiveConfig.homePath,
-                    cwd: process.cwd(),
-                    environment: env,
-                  }) === sessionHome
-                    ? snapshot.applyUsageLimits(update)
-                    : Effect.void,
+        // A session's usage counts only for the home of the last committed check; others are dropped
+        // silently (the next check restores the windows). Unknown homes and the first check pass.
+        sessionUsage: (home) =>
+          home === undefined
+            ? Effect.succeed(snapshot.applyUsageLimits)
+            : homeIdentity(home).pipe(
+                Effect.map(
+                  (identity) => (update: Parameters<typeof snapshot.applyUsageLimits>[0]) =>
+                    checkedHome === undefined || checkedHome === identity
+                      ? snapshot.applyUsageLimits(update)
+                      : Effect.void,
                 ),
               ),
         // New sessions read the same environment the status check uses.
@@ -361,7 +375,16 @@ export const CodexDriver: ProviderDriver<
         Effect.zipWith(
           currentEnvironment.pipe(
             Effect.flatMap((env) =>
-              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
+              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(
+                provideHomeRoute,
+                Effect.tap(() =>
+                  homeIdentity(executionHome(env)).pipe(
+                    Effect.map((identity) => {
+                      checkedHome = identity;
+                    }),
+                  ),
+                ),
+              ),
             ),
           ),
           currentCatalog,
