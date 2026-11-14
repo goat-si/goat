@@ -156,18 +156,18 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           return fs.stat(path);
         },
       };
-      const instance = yield* create().pipe(
+      // A disabled instance never starts snapshot enrichment and its status check returns before
+      // resolving the executable, so the lookup below is the only work that checks it.
+      const instance = yield* create({}, false).pipe(
         Effect.provideService(HostProcess.Environment, { PATH: root, HOME: root }),
         Effect.provideService(FileSystem.FileSystem, countingFs),
       );
-      // Settle the instance's own status probe so only the maintenance lookup is counted.
-      yield* instance.snapshot.refresh;
       const before = checks;
       assert.strictEqual(
         (yield* instance.snapshot.resolveMaintenance({ fresh: true })).update?.executable,
         executable,
       );
-      assert.strictEqual(checks - before, 3);
+      assert.strictEqual(checks - before, 2);
     }).pipe(Effect.scoped),
   );
 
