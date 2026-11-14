@@ -44,6 +44,7 @@ import { makeWorktreeShipping } from "./storageCleanupShipping.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import { MAX_OVERDUE_ARM_MS } from "./orchestration-v2/usageLimitRecoveryPolicy.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
@@ -137,7 +138,8 @@ function heldForLimitRecovery(
   // Like the worker, skip a reset that had already passed when the run ended.
   if (
     !Number.isFinite(resetMs) ||
-    resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)
+    resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt) ||
+    now - resetMs > MAX_OVERDUE_ARM_MS
   )
     return false;
   return settings.autoResumeLimitedThreads || (settings.snoozeLimitedThreads && resetMs > now);
