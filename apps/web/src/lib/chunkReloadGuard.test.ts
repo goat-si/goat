@@ -25,21 +25,29 @@ describe("reloadOnceForChunkLoadError", () => {
     const storage = createStorageStub();
     const reload = vi.fn();
 
-    expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(true);
+    expect(reloadOnceForChunkLoadError(() => storage, reload, "1.0.0")).toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
 
-    expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(false);
+    expect(reloadOnceForChunkLoadError(() => storage, reload, "1.0.0")).toBe(false);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("reloads again after a successful boot cleared the guard", () => {
     const storage = createStorageStub();
     const reload = vi.fn();
-
     reloadOnceForChunkLoadError(() => storage, reload);
     clearChunkReloadGuard(() => storage);
-
     expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads again once a deploy changed the build", () => {
+    const storage = createStorageStub();
+    const reload = vi.fn();
+
+    reloadOnceForChunkLoadError(() => storage, reload, "1.0.0");
+
+    expect(reloadOnceForChunkLoadError(() => storage, reload, "1.0.1")).toBe(true);
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
