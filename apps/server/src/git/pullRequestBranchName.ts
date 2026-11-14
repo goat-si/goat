@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
 /** Find a branch name that does not conflict with another ref's parent or child. */
-export function choosePullRequestBranch(
+function choosePullRequestBranch(
   preferred: string,
   number: number,
   suffix: string,
