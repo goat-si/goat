@@ -231,7 +231,11 @@ export const CodexDriver: ProviderDriver<
     ) =>
       resolveProviderMaintenanceCapabilitiesEffect(
         makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
-        { binaryPath: effectiveConfig.binaryPath, env, resolvedCommandPath },
+        {
+          binaryPath: effectiveConfig.binaryPath,
+          env,
+          ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
+        },
       ).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
