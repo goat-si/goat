@@ -118,7 +118,7 @@ describe("MessagesTimeline work rows", () => {
       expect(viewport.scrollHeight).toBeGreaterThan(height + 500);
       expect(heading.element().getBoundingClientRect().top).toBeCloseTo(top, 0);
       expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeGreaterThan(
-        200,
+        500,
       );
     });
   });
@@ -731,7 +731,7 @@ describe("MessagesTimeline attachments", () => {
       ],
       props,
     );
-    screen.container.style.height = "300px";
+    screen.container.style.height = "600px";
     screen.container.scrollIntoView({ block: "start" });
     await vi.waitFor(
       async () => {
