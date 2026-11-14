@@ -14,6 +14,7 @@ vi.mock("../state/presentation", () => ({ useEnvironmentShellSync: () => sync })
 vi.mock("../state/threads", async () => {
   const { EMPTY_ENVIRONMENT_THREAD_STATE } = await import("@goat/client-runtime/state/threads");
   return {
+    threadFamilies: { mount: () => () => undefined },
     useEnvironmentThread: (
       _environmentId: EnvironmentId | null,
       threadId: ThreadId | null,
