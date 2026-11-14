@@ -146,7 +146,7 @@ const STOPS: Record<string, Stop> = {
       outcome === "owner_open" && detach.owner !== undefined
         ? "GOAT's earlier revoke " +
           detach.owner +
-          " of its link is still open in OpenCodex, which refuses every other revoke meanwhile. A person fixes what stopped it on this hub (for example the journal's disk), then detaches again" +
+          " of its link is still open in OpenCodex, which refuses every other revoke meanwhile (link_operation_open). A person fixes what stopped it on this hub (such as the journal's disk), then detaches again" +
           WHERE +
           ": GOAT repeats it."
         : detach.refusal === "link_operation_open"
@@ -320,6 +320,17 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
         nextAction: repeatFirstNext,
       };
     // The read-back could not read the journal: nothing is known to be owed yet.
+    if (detach.refusal === "link_operation_open")
+      return {
+        message:
+          name +
+          " answers again; its earlier removal (operation " +
+          operationId +
+          ") met link_operation_open: another revoke of its link was open, which a plain force cannot pass. A person's Detach" +
+          WHERE +
+          " reads it again first and repeats what OpenCodex still holds.",
+        nextAction: "A person fixes what stopped that removal on the hub, then" + detachIt + ".",
+      };
     return {
       message:
         name +

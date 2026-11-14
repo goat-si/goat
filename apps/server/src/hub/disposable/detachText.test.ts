@@ -196,3 +196,50 @@ it("a resolve owed for GOAT's earlier forced revoke is not called the purge it r
   expect(shown?.message).toContain("earlier forced revoke");
   expect(shown?.message).not.toContain("purge it replaced");
 });
+
+it("an owner left open whose new id met link_operation_open names that code", () => {
+  const shown = detachMessage({
+    state: "detaching",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 2,
+      operationId: "a.force.2",
+      force: true,
+      stop: "link_retirement_owned",
+      outcome: "owner_open",
+      refusal: "link_operation_open",
+      owner: "a.force.1",
+    },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("a.force.1");
+  expect(shown?.message).toContain("link_operation_open");
+});
+
+it("a linked machine that answers again after its retirement met link_operation_open names that code and offers no plain force", () => {
+  const shown = detachMessage({
+    state: "linked",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 2,
+      operationId: "a.force.2",
+      force: true,
+      stop: "link_retirement_owned",
+      outcome: "not_found",
+      refusal: "link_operation_open",
+    },
+    health: { failures: 0, checkedAtMs: 0 },
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("link_operation_open");
+  expect(shown?.message).not.toContain("--force --yes");
+});
