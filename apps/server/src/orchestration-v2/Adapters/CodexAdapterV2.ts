@@ -1548,17 +1548,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
+        const sessionEnvironment =
+          resolvedRuntime?.environment ??
+          (yield* adapterOptions.currentEnvironment ?? Effect.succeed(adapterOptions.environment));
         const routeInput = yield* HomeRoute.resolveCodexRouteContext({
           settings: launchSettings,
           binaryPath: launchSettings.binaryPath,
           home: launchSettings.homePath,
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: sessionEnvironment,
           configArgv: codexExecLaunchArgs(
-            resolveCodexLaunchArgs(
-              launchSettings.launchArgs,
-              resolvedRuntime?.environment ?? adapterOptions.environment,
-            ),
+            resolveCodexLaunchArgs(launchSettings.launchArgs, sessionEnvironment),
           ),
         }).pipe(Effect.provideService(Path.Path, path), toOpenSessionError);
         const routeArgs =
@@ -7283,7 +7283,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             catalog: {
               cwd,
               fileSystem,
-              home: adapterOptions.environment.HOME,
+              home: sessionEnvironment.HOME,
               readConfig: ensureInitialized.pipe(
                 Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
               ),

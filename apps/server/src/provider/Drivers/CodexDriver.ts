@@ -312,6 +312,8 @@ export const CodexDriver: ProviderDriver<
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        // New sessions read the same environment the status check uses.
+        currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
         offeredModels: Effect.suspend(() => snapshot.getSnapshot).pipe(
           Effect.map((value) => value.models),
