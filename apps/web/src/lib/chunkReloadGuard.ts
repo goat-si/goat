@@ -21,14 +21,6 @@ export function reloadOnceForChunkLoadError(
   return true;
 }
 
-export function clearChunkReloadGuard(getStorage: () => Storage = () => window.sessionStorage) {
-  try {
-    migratingStorage(getStorage()).removeItem(CHUNK_RELOAD_GUARD_KEY);
-  } catch {
-    // Blocked storage never held the flag.
-  }
-}
-
 // Browsers cache a failed dynamic import per document, so only a reload can retry it.
 const CHUNK_LOAD_ERROR_PREFIXES = [
   "Failed to fetch dynamically imported module", // Chromium

@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import {
-  clearChunkReloadGuard,
-  isChunkLoadError,
-  reloadOnceForChunkLoadError,
-} from "./chunkReloadGuard";
+import { isChunkLoadError, reloadOnceForChunkLoadError } from "./chunkReloadGuard";
+
 function createStorageStub(): Storage {
   const store = new Map<string, string>();
   return {
@@ -35,15 +32,6 @@ describe("reloadOnceForChunkLoadError", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("reloads again after a successful boot cleared the guard", () => {
-    const storage = createStorageStub();
-    const reload = vi.fn();
-    reloadOnceForChunkLoadError(() => storage, reload);
-    clearChunkReloadGuard(() => storage);
-    expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(true);
-    expect(reload).toHaveBeenCalledTimes(2);
-  });
-
   it("reloads again once a deploy changed the build", () => {
     const storage = createStorageStub();
     const reload = vi.fn();
@@ -62,7 +50,6 @@ describe("reloadOnceForChunkLoadError", () => {
 
     expect(reloadOnceForChunkLoadError(blocked, reload)).toBe(false);
     expect(reload).not.toHaveBeenCalled();
-    expect(() => clearChunkReloadGuard(blocked)).not.toThrow();
   });
 });
 
