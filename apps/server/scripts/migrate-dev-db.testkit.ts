@@ -1,10 +1,27 @@
+import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 import { runMigrations } from "../src/persistence/Migrations.ts";
+
+const scriptsSchema = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      command: Schema.String,
+      icon: Schema.String,
+      runOnWorktreeCreate: Schema.Boolean,
+      runOnSettle: Schema.optional(Schema.Boolean),
+    }),
+  ),
+);
+const encodeScripts = Schema.encodeSync(scriptsSchema);
+const decodeScripts = Schema.decodeUnknownSync(scriptsSchema);
 
 export const withDatabase = <A, E>(
   databasePath: string,
@@ -29,7 +46,23 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
       yield* sql`INSERT INTO projection_projects
         (project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at)
         VALUES
-        ('project-kept', 'Kept', '/tmp/kept', '[]', '2026-08-01', '2026-08-01', NULL),
+        ('project-kept', 'Kept', '/tmp/kept', ${encodeScripts([
+          {
+            id: "lint",
+            name: "Lint",
+            command: "vp lint",
+            icon: "lint",
+            runOnWorktreeCreate: false,
+          },
+          {
+            id: "teardown",
+            name: "Teardown",
+            command: "./teardown",
+            icon: "configure",
+            runOnWorktreeCreate: false,
+            runOnSettle: true,
+          },
+        ])}, '2026-08-01', '2026-08-01', NULL),
         ('project-deleted', 'Deleted', '/tmp/deleted', '[]', '2026-08-01', '2026-08-02', '2026-08-02')`;
 
       const forkPayload =
@@ -116,4 +149,36 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
     }),
   );
   return databasePath;
+});
+
+export const assertCopiedScripts = Effect.fn("assertCopiedScripts")(function* (
+  source: string,
+  destination: string,
+  expected: string,
+) {
+  assert.equal(destination, expected);
+  const read = (database: string) =>
+    withDatabase(
+      database,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [project] = yield* sql<{
+          scripts_json: string;
+        }>`SELECT scripts_json FROM projection_projects WHERE project_id = 'project-kept'`;
+        return decodeScripts(project?.scripts_json ?? "[]");
+      }),
+    );
+  const scripts = yield* read(source);
+  const copied = yield* read(destination);
+  assert.deepStrictEqual(copied, [
+    { id: "lint", name: "Lint", command: "vp lint", icon: "lint", runOnWorktreeCreate: false },
+    {
+      id: "teardown",
+      name: "Teardown",
+      command: "./teardown",
+      icon: "configure",
+      runOnWorktreeCreate: false,
+    },
+  ]);
+  assert.isTrue(scripts[1]?.runOnSettle);
 });

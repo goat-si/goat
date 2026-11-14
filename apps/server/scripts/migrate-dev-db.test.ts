@@ -13,7 +13,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../src/persistence/Migrations.ts";
 import { runMigrateDevDb } from "./migrate-dev-db.ts";
-import { createFixtureSource, withDatabase } from "./migrate-dev-db.testkit.ts";
+import {
+  assertCopiedScripts,
+  createFixtureSource,
+  withDatabase,
+} from "./migrate-dev-db.testkit.ts";
 
 const isWindows = HostProcess.Platform.defaultValue() === "win32";
 const permissions = (file: string) => NodeFS.statSync(file).mode & 0o777;
@@ -295,7 +299,11 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         { sharedHome: sourceDir },
       );
 
-      assert.equal(result.databasePath, path.join(destDir, "userdata", "statev2.sqlite"));
+      yield* assertCopiedScripts(
+        source,
+        result.databasePath,
+        path.join(destDir, "userdata", "statev2.sqlite"),
+      );
       const kept = yield* withDatabase(
         result.databasePath,
         Effect.gen(function* () {
