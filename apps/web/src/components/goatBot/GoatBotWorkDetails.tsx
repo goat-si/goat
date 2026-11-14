@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   groupBotWork,
   resolveRemoteBotWork,
@@ -13,12 +14,17 @@ import type {
 } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
+import { useThreadShell } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
 import { Button } from "../ui/button";
 
 const NOT_OPENABLE = Atom.make(false).pipe(Atom.withLabel("goat-bot-remote-work:no-environment"));
+const LINK = "min-w-0 max-w-full truncate underline";
+
+/** A work thread's link text: its own title, so two threads never read the same. */
+const workThreadName = (title: string | undefined) => title || "Open work thread";
 
 /** A thread the bot launched on another machine: a link while this client can open it there. */
 function GoatBotRemoteWork({
@@ -39,6 +45,9 @@ function GoatBotRemoteWork({
     item,
     (environmentId) => environmentId === item.environmentId && (openable ?? connected),
   );
+  const shell = useThreadShell(
+    target.kind === "open" ? scopeThreadRef(target.ref.environmentId, target.ref.threadId) : null,
+  );
   if (target.kind === "unavailable")
     return (
       <span className="rounded-full border border-border px-2 py-1">
@@ -50,9 +59,9 @@ function GoatBotRemoteWork({
       to="/$environmentId/$threadId"
       params={target.ref}
       onClick={onHomeNavigate}
-      className="underline"
+      className={LINK}
     >
-      Open work thread on {target.host}
+      {shell?.title || "Open work thread"} on {target.host}
     </Link>
   );
 }
@@ -113,6 +122,14 @@ export function GoatBotWorkDetails({
     currentLinks === null
       ? task.threads
       : [...currentLinks.filter((link) => link.kind !== "remote"), ...extraChildren];
+  const titles = new Map(
+    rows.flatMap((row) =>
+      row.kind === "coding" && row.taskId === taskId && row.title
+        ? [[JSON.stringify([row.environmentId, row.threadId]), row.title] as const]
+        : [],
+    ),
+  );
+  const worker = task.row.worker;
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       {task.subagents.map((agent) => (
@@ -126,9 +143,11 @@ export function GoatBotWorkDetails({
           to="/$environmentId/$threadId"
           params={thread}
           onClick={onHomeNavigate}
-          className="underline"
+          className={LINK}
         >
-          Open work thread
+          {worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId
+            ? "Open work thread"
+            : workThreadName(titles.get(JSON.stringify([thread.environmentId, thread.threadId])))}
         </Link>
       ))}
       {task.remote.map((item) => (
@@ -169,9 +188,9 @@ export function GoatBotUnavailableWork({ work }: { work: BotWorkResult }) {
             key={`${row.environmentId}:${row.threadId}`}
             to="/$environmentId/$threadId"
             params={row}
-            className="underline"
+            className={LINK}
           >
-            {row.title ?? "Open work thread"}
+            {workThreadName(row.title)}
           </Link>
         ))}
         {work.remoteWork.map((item) => (

@@ -218,11 +218,13 @@ const taskWithThreads = [
     mainMessagesSinceQuiet: 0,
     worker: { environmentId: "env-studio", threadId: "worker-1" },
   }),
-  ...[
-    ["coding-a", "Fix the build"],
-    ["coding-b", "Write the release notes for the port 3774 restart and its rollback plan"],
-    ["coding-c", undefined],
-  ].map(([threadId, title]) =>
+  ...(
+    [
+      ["coding-a", "Fix the build"],
+      ["coding-b", "Write the release notes for the port 3774 restart and its rollback plan"],
+      ["coding-c", undefined],
+    ] as ReadonlyArray<readonly [string, string | undefined]>
+  ).map(([threadId, title]) =>
     decodeRow({
       kind: "coding",
       taskId: "task-1",
