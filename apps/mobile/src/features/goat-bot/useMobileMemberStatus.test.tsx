@@ -10,7 +10,14 @@ const member = vi.hoisted(() => ({
   refresh: vi.fn(),
   // A refresh that failed after an earlier answer: the query keeps that answer beside the error.
   error: null as string | null,
+  capabilities: {} as Record<string, boolean>,
 }));
+const visitAware = {
+  goatBotMembers: true,
+  goatBotStatus: true,
+  goatBotWaitingRead: true,
+  threadVisitedTracking: true,
+};
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
@@ -18,7 +25,9 @@ vi.mock("../../state/environments", () => ({
         "env",
         {
           connection: { phase: "connected" },
-          serverConfig: { environment: { capabilities: { goatBotMembers: true } } },
+          serverConfig: {
+            environment: { capabilities: { ...visitAware, ...member.capabilities } },
+          },
         },
       ],
     ]),
@@ -101,4 +110,20 @@ it("a waiting count whose latest read failed is unavailable, not the earlier ans
   await show();
   expect(value?.waitingState).toBe("unavailable");
   member.error = null;
+});
+
+it("a waiting count from a server that cannot count by visit is unavailable", async () => {
+  let value: ReturnType<typeof useMobileMemberStatus> | undefined;
+  function Probe() {
+    value = useMobileMemberStatus(scout);
+    return null;
+  }
+  for (const missing of ["goatBotStatus", "goatBotWaitingRead", "threadVisitedTracking"]) {
+    member.capabilities = { [missing]: false };
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(<Probe />));
+    await act(async () => root.unmount());
+    expect(value?.waitingState, missing).toBe("unavailable");
+  }
+  member.capabilities = {};
 });
