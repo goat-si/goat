@@ -14,9 +14,9 @@ import {
 } from "./DisposableDetach.flow.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
 
-// Every detach stop, left by doing what the row says. Not walked: a removal owned by an operation
-// GOAT did not start (link_retirement_owned), left to a person on the Home; link_foreign without a
-// force, which needs an unsettled entry with no reserved id, never journalled at v2.100.3.
+// Every detach stop, left by doing what the row says. Not walked: link_foreign without a force,
+// which needs an unsettled entry with no reserved id, never journalled at v2.100.3. The owner
+// walks of link_retirement_owned are in DisposableDetach.owner.test.ts.
 
 /** What the row says now: its message and next action. */
 const says = (attachId: string) =>
@@ -45,9 +45,9 @@ interface Walk {
   /** What its next action tells a person to do. */
   readonly next: string;
   /** What reaches the stop on a linked machine, before the detach. */
-  readonly arrange: (ocx: Home) => void;
+  readonly arrange: (ocx: Home, linkId: string) => void;
   /** What the stop's text tells a person to do: fix it on the machine or hub, then a detach or a force. */
-  readonly leave: (ocx: Home, attachId: string) => { readonly force: boolean };
+  readonly leave: (ocx: Home, attachId: string, linkId: string) => { readonly force: boolean };
   /** Detach or force (the person's first click) that reaches the stop. */
   readonly start?: "force";
 }
@@ -118,6 +118,15 @@ const WALKS: ReadonlyArray<Walk> = [
     start: "force",
     leave: (ocx) => ((ocx.tombstoneLimit = false), { force: true }),
   },
+  {
+    stop: "link_retirement_owned",
+    says: "an unfinished removal holds its link",
+    next: "detaches again",
+    // A journalled revoke GOAT did not start failed at commit and owns the removal.
+    arrange: (ocx, linkId) => ocx.outsideOwner(linkId),
+    // The person finishes it with a plain force on the Home, as the text names.
+    leave: (ocx, _attachId, linkId) => (ocx.plainForce(linkId), { force: false }),
+  },
 ];
 
 it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk) =>
@@ -125,14 +134,14 @@ it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk
     Effect.gen(function* () {
       const ocx = fakeDetachHome(host);
       const { attachId, linkId } = yield* linked(pen, home, host, 1);
-      walk.arrange(ocx);
+      walk.arrange(ocx, linkId);
       yield* detach(PERSON, attachId, "d-1", walk.start === "force");
       for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
       const stopped = yield* says(attachId);
       expect(stopped.message).toContain(walk.says);
       expect(stopped.next).toContain(walk.next);
       // The way out matches what the text names: a force, or a detach again.
-      const { force } = walk.leave(ocx, attachId);
+      const { force } = walk.leave(ocx, attachId, linkId);
       expect(force).toBe(walk.next.includes("forces"));
       yield* detach(PERSON, attachId, "d-2", force);
       yield* detachPass;
@@ -150,7 +159,7 @@ it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk
 );
 
 it.effect(
-  "revoke_unsettled on an open purge: the person fixes the Home and detaches again, GOAT repeats that id; the recovered entry is resolved and forced, as its text says",
+  "revoke_unsettled on an open purge: the person fixes the Home and detaches again, GOAT repeats that id; the recovered entry is forced, as its text says, and GOAT resolves it once the force is done",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -168,18 +177,18 @@ it.effect(
         yield* detachPass;
         expect(ocx.sent.at(-1)).toBe(purge1(attachId));
         const recovered = yield* says(attachId);
-        expect(recovered.message).toContain("could not tell what the revoke did");
-        expect(recovered.next).toContain("forces the detach");
-        resolved(ocx.revokes.get(purge1(attachId)));
+        expect(recovered.message).toContain("could not tell what the revoke");
+        expect(recovered.next).toContain("checks the machine, then forces the detach");
         yield* detach(PERSON, attachId, "d-3", true);
         yield* settle(attachId);
+        expect(ocx.resolved).toContain(purge1(attachId));
         expect((yield* listed(attachId))?.state).toBe("purged");
       }),
     ),
 );
 
 it.effect(
-  "a force on an open purge repeats that id, never a force id, and stays a force: the replaced purge is resolved once the force commits",
+  "a force on an open purge repeats that id before any force id, and goes on by itself once it settles: the replaced purge is resolved once the force commits",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -189,13 +198,11 @@ it.effect(
         yield* detach(PERSON, attachId, "d-1");
         for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
         ocx.purgeOpen = false;
+        const before = ocx.sent.length;
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
-        expect(ocx.sent.filter((id) => id.includes(".force."))).toEqual([]);
-        expect(ocx.sent.at(-1)).toBe(purge1(attachId));
-        // The recovered entry is unknown; its text says force, which resolves it once committed.
-        expect((yield* says(attachId)).next).toContain("forces the detach");
-        yield* detach(PERSON, attachId, "d-3", true);
+        // The open purge goes first; once it settles unknown the person's force goes on, no second click.
+        expect(ocx.sent.slice(before)).toEqual([purge1(attachId), attachId + ".force.2"]);
         yield* settle(attachId);
         expect(ocx.resolved).toContain(purge1(attachId));
         expect((yield* listed(attachId))?.state).toBe("purged");

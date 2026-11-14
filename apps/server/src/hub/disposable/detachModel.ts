@@ -35,6 +35,8 @@ export const Detach = Schema.Struct({
   foreignLinkId: Schema.optionalKey(Schema.String),
   /** The forced id was sent once more after recover found its removal pending. */
   pendingResent: Schema.optionalKey(Schema.Literal(true)),
+  /** GOAT's earlier revoke of the link, repeated once if this id is refused link_retirement_owned. */
+  owner: Schema.optionalKey(Schema.String),
 });
 export type Detach = typeof Detach.Type;
 

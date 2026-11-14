@@ -11,7 +11,9 @@ import { type Columns, type Row } from "./attachRow.ts";
 import {
   makeForceStep,
   refusalOf,
+  repeatOwner,
   REVOKE_TIMEOUT_MS,
+  revokeArgs,
   withDetach,
   withoutTry,
 } from "./DetachForce.ts";
@@ -224,15 +226,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       (answer) => readRevoke(answer, { operationId, linkId, force }),
     );
 
-  const forceStep = makeForceStep({
-    note,
-    halt,
-    audit,
-    finish,
-    readEntry,
-    resolveSuperseded,
-    ocx: host.ocx,
-  });
+  const ops = { note, halt, audit, finish, readEntry, resolveSuperseded, ocx: host.ocx };
+  const forceStep = makeForceStep(ops);
 
   /**
    * A journalled purge revoke; clean only with the Child's purged receipt for this link id. A silent
@@ -279,6 +274,12 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       repeat && before.operationId !== undefined
         ? before.operationId
         : revokeOperationId(row.attach_id, "purge", attempt);
+    // GOAT's previous purge goes once more if this id meets an unfinished removal it may own.
+    const owner = repeat
+      ? before.owner
+      : before.operationId?.includes(".purge.") === true
+        ? before.operationId
+        : before.owner;
     const admitted: Detach = {
       step: "revoke",
       attempt,
@@ -287,12 +288,21 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       triedAtMs: nowMs,
       // A person's force that repeats an open purge stays a force once the purge settles.
       ...(before.force === true ? { force: true as const } : {}),
+      ...(owner === undefined ? {} : { owner }),
     };
     if (!(yield* note(row, withDetach(enroll, admitted)))) return;
-    const sent = yield* host.ocx(
-      ["link", "revoke", "--link-id", linkId, "--purge", "--operation-id", operationId, "--json"],
-      REVOKE_TIMEOUT_MS,
-    );
+    const sent = yield* host.ocx([...revokeArgs(linkId, operationId), "--json"], REVOKE_TIMEOUT_MS);
+    if (sent?.refusal?.code === "link_retirement_owned") {
+      const resumed = yield* repeatOwner(ops, linkId, owner);
+      if (resumed.kind === "clean")
+        return yield* finish(row, withDetach(enroll, admitted), "purged");
+      return yield* halt(
+        row,
+        enroll,
+        { ...admitted, outcome: "retirement_owned", refusal: "link_retirement_owned" },
+        "link_retirement_owned",
+      );
+    }
     // Removed without a purge receipt: someone else revoked it; recover asks whether a cleanup of
     // the machine waits.
     if (sent?.refusal?.code === "link_not_found")
@@ -311,6 +321,9 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       case "clean":
         return yield* finish(row, withDetach(enroll, admitted), "purged");
       case "failed_clean": {
+        // A person forced while this purge was open: now that it settled, the force goes on.
+        if (before.force === true)
+          return yield* forceStep(row, withDetach(enroll, { ...admitted, outcome: outcome.code }));
         if (outcome.code !== "remote_disconnect_failed")
           return yield* halt(row, enroll, { ...admitted, outcome: outcome.code }, "revoke_refused");
         const hint = sent?.refusal?.hint;
@@ -328,13 +341,22 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         // Resolved meanwhile: the next pass sends a new id.
         if (outcome.resolved)
           return yield* note(row, withDetach(enroll, { ...admitted, outcome: "resolved" }));
-        if (outcome.code !== "remote_disconnect_failed")
+        if (before.force === true)
+          return yield* forceStep(row, withDetach(enroll, { ...admitted, outcome: outcome.state }));
+        if (outcome.code !== "remote_disconnect_failed") {
+          // OpenCodex's order for an unknown revoke: the same id once more, which resumes a removal
+          // it claimed before failing (a silent machine's purge never claims one).
+          yield* host.ocx([...revokeArgs(linkId, operationId), "--json"], REVOKE_TIMEOUT_MS);
+          const again = yield* readEntry(operationId, linkId, false);
+          if (again.kind === "clean")
+            return yield* finish(row, withDetach(enroll, admitted), "purged");
           return yield* halt(
             row,
             enroll,
             { ...admitted, outcome: outcome.state },
             "revoke_unsettled",
           );
+        }
         // The CLI prints no hint for a Child that answered but kept its binary: GOAT's own
         // handshake tells a machine that answers from a silent one.
         const shaken = yield* handshake(row);
@@ -553,23 +575,36 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const keyState =
       row.link_id === null ? "unknown" : linkKeyState(yield* reads.status, row.link_id, keyFile);
     const { linkKeyMoved: _moved, detach, ...rest } = enroll;
+    const moved = keyState === "moved" ? { linkKeyMoved: true as const } : {};
     // A retirement force that stopped is read once the machine answers: committed goes on to
     // recover, still open or unsettled waits for a person, anything else is dropped so a later
     // silence retires it again under a new id.
     const retirement = detach?.force === true && detach.stop !== undefined ? detach : undefined;
     let kept = detach;
     if (retirement !== undefined && row.link_id !== null) {
-      const forceId = retirement.operationId;
+      // Refused for an unfinished removal: GOAT's own earlier revoke is what may still be owed.
+      const { owner, ...unowned } = retirement;
+      const owned = retirement.stop === "link_retirement_owned" ? owner : undefined;
+      const readId = owned ?? retirement.operationId;
       const entry =
-        forceId?.includes(".force.") === true
-          ? yield* readEntry(forceId, row.link_id, true)
-          : ({ kind: "not_found" } as const);
+        readId === undefined
+          ? ({ kind: "not_found" } as const)
+          : yield* readEntry(readId, row.link_id, readId.includes(".force."));
       // The journal cannot be read now: the check is recorded, and the read-back waits 30 minutes.
       if (entry.kind === "unreadable")
-        return yield* note(row, { ...enroll, health: { failures: 0, checkedAtMs: nowMs } });
+        return yield* note(row, {
+          ...rest,
+          detach: retirement,
+          ...moved,
+          health: { failures: 0, checkedAtMs: nowMs },
+        });
+      // GOAT's own purge finished the removal meanwhile, with the Child's receipt.
+      if (entry.kind === "clean" && readId?.includes(".purge.") === true)
+        return yield* finish(row, enroll, "purged");
       if (entry.kind === "clean") {
-        const { stop: _stop, ...going } = retirement;
-        const moved = yield* note(
+        const { stop: _stop, ...going } =
+          owned === undefined ? retirement : { ...unowned, operationId: owned };
+        const retired = yield* note(
           row,
           {
             ...rest,
@@ -578,19 +613,22 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           },
           { state: "retired", step: "recover" },
         );
-        if (moved) yield* audit(row.attach_id, "hub.machine_detach", "retired");
+        if (retired) yield* audit(row.attach_id, "hub.machine_detach", "retired");
         return;
       }
       const owed = entry.kind === "open" || (entry.kind === "unsettled" && !entry.resolved);
       // The live kind decides the text and what a person's detach does.
       kept = owed
-        ? { ...retirement, outcome: entry.kind === "open" ? "open" : "unsettled" }
+        ? {
+            ...(owned === undefined ? retirement : { ...unowned, operationId: owned }),
+            outcome: entry.kind === "open" ? "open" : "unsettled",
+          }
         : { step: "none", attempt: retirement.attempt };
     }
     yield* note(row, {
       ...rest,
       ...(kept === undefined ? {} : { detach: kept }),
-      ...(keyState === "moved" ? { linkKeyMoved: true as const } : {}),
+      ...moved,
       health: { failures: 0, checkedAtMs: nowMs },
     });
   });

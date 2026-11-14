@@ -75,6 +75,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     busy: 0,
     /** The next journal reads fail, as a lost answer would. */
     loseRead: 0,
+    /** The next revokes never reach the Home (GOAT stopped while sending): no answer, nothing recorded. */
+    dropSends: 0,
     revokes,
     tombstones,
     resolved: [] as Array<string>,
@@ -87,6 +89,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     plainForce: (linkId: string) => {
       for (const entry of revokes.values()) if (entry.linkId === linkId) delete entry.ownsReceipt;
       if (!host.control.links.has(linkId)) return;
+      remember(linkId);
       tombstones.add(linkId);
       host.control.links.delete(linkId);
     },
@@ -106,6 +109,10 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
   const option = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1] ?? "";
   // Each link's alias, kept past its removal so recover knows which machine it reaches.
   const aliases = new Map<string, string>();
+  const remember = (linkId: string) => {
+    const alias = host.control.links.get(linkId)?.alias;
+    if (typeof alias === "string") aliases.set(linkId, alias);
+  };
   const nodeOf = (linkId: string) => (aliases.get(linkId) ?? "").replace(/^pen-/u, "");
   const answers = (linkId: string) => control.machineAnswers && host.control.inPen(nodeOf(linkId));
   host.control.silent = () => !control.machineAnswers;
@@ -132,6 +139,10 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     const linkId = option(args, "--link-id");
     const operationId = option(args, "--operation-id");
     const force = args.includes("--force");
+    if (control.dropSends > 0) {
+      control.dropSends -= 1;
+      return { code: 1, stdout: "" };
+    }
     control.sent.push(operationId);
     const known = revokes.get(operationId);
     // A repeat of an open entry recovers it (link-operation.ts replayOperation, recoverRevoke).
@@ -185,8 +196,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     )
       return refused(5, { code: "link_retirement_owned" });
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
-    const alias = host.control.links.get(linkId)?.alias;
-    if (typeof alias === "string") aliases.set(linkId, alias);
+    remember(linkId);
     const entry: RevokeEntry = { operationId, linkId, force, state: "open" };
     revokes.set(operationId, entry);
     if (force) {

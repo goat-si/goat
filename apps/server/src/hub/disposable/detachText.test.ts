@@ -22,6 +22,9 @@ const OUTCOMES = [
   "not_found",
   "unreadable",
   "unsettled",
+  "retirement_owned",
+  "resolve_owed",
+  "retirement_pending",
 ];
 const STOPS = [
   undefined,
@@ -37,46 +40,50 @@ const STOPS = [
   "link_foreign",
   "link_open",
   "tombstone_limit",
+  "link_retirement_owned",
 ];
 
 it("every detach text fits the wire's 500 characters with the longest name and operation id", () => {
   const name = "m".repeat(63);
-  const operationId = "a".repeat(64) + ".force.99";
+  const ids = ["a".repeat(64) + ".force.99", "a".repeat(64) + ".purge.99"];
   let seen = 0;
-  for (const state of STATES)
-    for (const step of STEPS)
-      for (const outcome of OUTCOMES)
-        for (const stop of STOPS)
-          for (const inPen of [true, false])
-            for (const recordStop of [undefined, "host_key_changed"])
-              for (const elsewhere of [true, false])
-                for (const failures of [47, 0])
-                  for (const forced of [true, false]) {
-                    const shown = detachMessage({
-                      state,
-                      name,
-                      linkId: "lnk_0123456789abcdef",
-                      detach: {
-                        step,
-                        attempt: 99,
-                        operationId,
-                        ...(forced ? { force: true as const } : {}),
-                        refusal: "o".repeat(40),
-                        foreignLinkId: "lnk_fedcba9876543210",
-                        ...(outcome === undefined ? {} : { outcome }),
-                        ...(stop === undefined ? {} : { stop }),
-                        ...(elsewhere ? { elsewhere: true as const } : {}),
-                      },
-                      health: { failures, checkedAtMs: 0 },
-                      linkKeyMoved: false,
-                      inPen,
-                      stop: recordStop,
-                    });
-                    if (shown === undefined) continue;
-                    seen += 1;
-                    expect(shown.message.length).toBeLessThanOrEqual(500);
-                    expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
-                  }
+  for (const operationId of ids)
+    for (const state of STATES)
+      for (const step of STEPS)
+        for (const outcome of OUTCOMES)
+          for (const stop of STOPS)
+            for (const inPen of [true, false])
+              for (const recordStop of [undefined, "host_key_changed"])
+                for (const elsewhere of [true, false])
+                  for (const failures of [47, 0])
+                    for (const forced of [true, false]) {
+                      const shown = detachMessage({
+                        state,
+                        name,
+                        linkId: "lnk_0123456789abcdef",
+                        detach: {
+                          step,
+                          attempt: 99,
+                          operationId,
+                          ...(forced ? { force: true as const } : {}),
+                          refusal: "o".repeat(40),
+                          foreignLinkId: "lnk_fedcba9876543210",
+                          owner: "a".repeat(64) + ".purge.98",
+                          supersedes: "a".repeat(64) + ".purge.98",
+                          ...(outcome === undefined ? {} : { outcome }),
+                          ...(stop === undefined ? {} : { stop }),
+                          ...(elsewhere ? { elsewhere: true as const } : {}),
+                        },
+                        health: { failures, checkedAtMs: 0 },
+                        linkKeyMoved: false,
+                        inPen,
+                        stop: recordStop,
+                      });
+                      if (shown === undefined) continue;
+                      seen += 1;
+                      expect(shown.message.length).toBeLessThanOrEqual(500);
+                      expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
+                    }
   expect(seen).toBeGreaterThan(100);
 });
 
@@ -92,4 +99,6 @@ it("an unproven detach names the planted ocx-child by the path a person can run 
     stop: undefined,
   });
   expect(shown?.message).toContain("~/.cache/opencodex/bin/ocx-child connect status --json");
+  // Resolve refuses an open entry, so the next action does not send a person there for one.
+  expect(shown?.nextAction).toContain("an open entry cannot be resolved");
 });

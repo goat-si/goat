@@ -2,9 +2,17 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
-import { listed, world } from "./DisposableAttach.testkit.ts";
+import { listed, rows, world } from "./DisposableAttach.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
-import { detach, detachPass, HOUR, linked, THREAD } from "./DisposableDetach.flow.testkit.ts";
+import {
+  detach,
+  detachPass,
+  HOUR,
+  linked,
+  PERSON,
+  THREAD,
+} from "./DisposableDetach.flow.testkit.ts";
+import { decodeEnroll } from "./enrollModel.ts";
 
 type Host = Parameters<Parameters<typeof world>[0]>[3];
 
@@ -83,6 +91,75 @@ it.effect(
         yield* detachPass;
         expect(forces()).toBe(before);
         expect(ocx.sent.at(-1)).toContain(".purge.");
+      }),
+    ),
+);
+
+it.effect(
+  "a stopped retirement that cannot be read back once the machine answers never claims it is still open, and a person's detach then purges, as the text says",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId, linkId } = yield* linked(pen, home, host, 1);
+        const silent = silencer(host, ocx, nodeId);
+        silent(true);
+        ocx.tombstoneLimit = true;
+        yield* silentDay;
+        expect((yield* listed(attachId))?.message).toContain("too many links removed");
+        silent(false);
+        ocx.tombstoneLimit = false;
+        ocx.loseRead = 100;
+        // GOAT's home moved meanwhile: the unreadable read-back still records it.
+        const record = host.control.links.get(linkId);
+        host.control.links.set(linkId, {
+          ...record,
+          explicitRoute: {
+            ...(record?.explicitRoute as object),
+            identityFile: "/old/goat/machine_ed25519",
+          },
+        });
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        const shown = yield* listed(attachId);
+        expect(shown?.message).not.toContain("still open");
+        expect(shown?.message).toContain("reads it again within 30 minutes");
+        expect(shown?.message).toContain("removes the link together with the machine");
+        const row = (yield* rows).find((one) => one.attach_id === attachId);
+        expect(decodeEnroll(String(row?.enroll_json)).linkKeyMoved).toBe(true);
+        ocx.loseRead = 0;
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        expect(ocx.sent.at(-1)).toContain(".purge.");
+      }),
+    ),
+);
+
+it.effect(
+  "a forced retirement that reads unknown once the machine answers is repeated first by a person's detach, as its text says",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+        const silent = silencer(host, ocx, nodeId);
+        silent(true);
+        ocx.commitFails = 4;
+        yield* silentDay;
+        for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+        silent(false);
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        const shown = yield* listed(attachId);
+        expect(shown?.message).toContain("reads unknown in OpenCodex");
+        expect(shown?.message).toContain("which repeats it first");
+        // The fault is fixed: the person's detach repeats the forced id, which finishes the removal.
+        ocx.commitFails = 0;
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        expect(ocx.sent.at(-1)).toBe(attachId + ".force.1");
+        expect(ocx.tombstones.size).toBe(1);
+        expect((yield* listed(attachId))?.message).toContain("its link is gone");
       }),
     ),
 );

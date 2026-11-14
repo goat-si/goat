@@ -141,22 +141,27 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const { pendingResent: _pending, ...repending } = stopless;
         const kept = person ? repending : stopless;
         // A person's force starts its sends afresh and reads the stored id again before any stop;
-        // an open purge stays, as OpenCodex refuses any other revoke while it is open.
+        // an open purge stays, as OpenCodex refuses any other revoke while it is open, and so does
+        // a resolve still owed.
         const { sends: _sends, outcome, ...rest } = kept;
-        const fresh = outcome === "open" ? { ...rest, outcome } : rest;
-        // A revoke OpenCodex left open or never recorded goes again under its id after a detach.
+        const fresh =
+          outcome === "open" || outcome === "resolve_owed" ? { ...rest, outcome } : rest;
+        // A revoke OpenCodex left open or never recorded goes again under its id after a detach, as
+        // does one refused for an unfinished removal: GOAT then repeats its own earlier one again.
         const resend =
-          known?.stop === "revoke_unsettled" &&
-          (outcome === "open" || outcome === "not_found" || outcome === "unreadable");
-        // A stopped retirement force goes on under its id while it is open, or while the machine
-        // fails for a person, or for anyone once the failures would retire it; an agent's plain
-        // detach of a machine that answers starts a purge.
+          (known?.stop === "revoke_unsettled" &&
+            (outcome === "open" || outcome === "not_found" || outcome === "unreadable")) ||
+          known?.stop === "link_retirement_owned";
+        // A stopped retirement force goes on under its id while it is open; for a person while it
+        // is unknown (OpenCodex repeats it first) or the machine fails; for anyone once the failures
+        // would retire it. An agent's plain detach of a machine that answers starts a purge.
         const failing = (enroll.health?.failures ?? 0) > 0;
         const retirement =
           row.state === "linked" &&
           known?.force === true &&
           known.stop !== undefined &&
           (outcome === "open" ||
+            (person && outcome === "unsettled") ||
             (failing && (person || retires(enroll.health, yield* Clock.currentTimeMillis))));
         const next: Detach =
           row.state === "detaching" || row.state === "retired"

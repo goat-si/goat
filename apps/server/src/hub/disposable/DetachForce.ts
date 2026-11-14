@@ -16,6 +16,12 @@ export const withoutTry = ({ triedAtMs: _tried, ...rest }: Detach): Detach => re
 export const refusalOf = (sent: OcxOutput | undefined) =>
   sent?.refusal?.code === undefined ? {} : { refusal: sent.refusal.code };
 
+/** ocx link revoke under an operation id: a purge, or a force that leaves a tombstone. */
+export const revokeArgs = (linkId: string, operationId: string) =>
+  operationId.includes(".force.")
+    ? ["link", "revoke", "--link-id", linkId, "--force", "--yes", "--operation-id", operationId]
+    : ["link", "revoke", "--link-id", linkId, "--purge", "--operation-id", operationId];
+
 /** What the detach pass shares with its force step. */
 export interface DetachOps {
   /** Stores what GOAT observed under the record's fence; false when another step moved it. */
@@ -48,10 +54,26 @@ export interface DetachOps {
 }
 
 /**
+ * A new id refused link_retirement_owned: an unfinished removal holds the link (OpenCodex v2.100.3
+ * answers it before the journal). GOAT repeats its own earlier revoke of the link once, which
+ * resumes the removal if that id owns it and only replays otherwise; not_found when it has none.
+ */
+export const repeatOwner = (
+  ops: DetachOps,
+  linkId: string,
+  owner: string | undefined,
+): Effect.Effect<RevokeOutcome> =>
+  owner === undefined
+    ? Effect.succeed({ kind: "not_found" })
+    : Effect.flatMap(ops.ocx([...revokeArgs(linkId, owner), "--json"], REVOKE_TIMEOUT_MS), () =>
+        ops.readEntry(owner, linkId, owner.includes(".force.")),
+      );
+
+/**
  * Removes the link without the machine under its own operation id, leaving a tombstone recover
  * settles. A stored forced id is read first: committed goes on, a settled refusal or a resolved
  * entry gets a new id (tombstone_limit: the same id, then a new one in the same step), anything
- * else is resumed under its id.
+ * else is resumed under its id. A new id carries GOAT's previous one as its owner.
  */
 export const makeForceStep = (ops: DetachOps) =>
   Effect.fn("DisposableDetach.force")(function* (row: Row, enroll: Enroll) {
@@ -68,6 +90,8 @@ export const makeForceStep = (ops: DetachOps) =>
     // is open is repeated (OpenCodex refuses any other revoke meanwhile); a silent machine's stays
     // unknown and keeps the link suspended until resolved, which waits for the force to commit.
     let supersedes = before.supersedes;
+    // GOAT's own earlier revoke of the link, repeated when a new id is refused link_retirement_owned.
+    let owner = before.owner;
     const purgeId =
       before.operationId?.includes(".purge.") === true ? before.operationId : undefined;
     if (purgeId !== undefined) {
@@ -76,6 +100,8 @@ export const makeForceStep = (ops: DetachOps) =>
       if (purge.kind === "clean") return yield* finish(row, enroll, "purged");
       if (purge.kind === "open")
         return yield* note(row, withDetach(enroll, { ...before, outcome: "open" }));
+      // An unknown purge may own the removal (it failed after claiming it), resolved or not.
+      if (purge.kind === "unsettled") owner = purgeId;
       // Any unknown purge the force replaces is resolved once the force commits, so no purge entry
       // of this record stays unsettled on the Home.
       if (purge.kind === "unsettled" && purge.state === "unknown" && !purge.resolved)
@@ -108,6 +134,7 @@ export const makeForceStep = (ops: DetachOps) =>
       operationId: string,
       attempt: number,
       sends: number,
+      ownedBy: string | undefined,
     ) {
       const admitted: Detach = {
         step: "revoke",
@@ -117,20 +144,12 @@ export const makeForceStep = (ops: DetachOps) =>
         force: true,
         triedAtMs,
         ...(supersedes === undefined ? {} : { supersedes }),
+        // Stored with the new id, so a restart or a moved fence between the sends keeps it.
+        ...(ownedBy === undefined ? {} : { owner: ownedBy }),
       };
       if (!(yield* note(row, withDetach(enroll, admitted)))) return undefined;
       const sent = yield* ops.ocx(
-        [
-          "link",
-          "revoke",
-          "--link-id",
-          linkId,
-          "--force",
-          "--yes",
-          "--operation-id",
-          operationId,
-          "--json",
-        ],
+        [...revokeArgs(linkId, operationId), "--json"],
         REVOKE_TIMEOUT_MS,
       );
       // Gone without a tombstone of GOAT's: someone else removed it, as on the purge path.
@@ -144,26 +163,42 @@ export const makeForceStep = (ops: DetachOps) =>
       readonly outcome: { readonly kind: string; readonly code?: string };
     }) => answer.outcome.kind === "failed_clean" && answer.outcome.code === "tombstone_limit";
     const attempt = reuse ? before.attempt : before.attempt + 1;
+    const reused = reuse && stored !== undefined;
     let result = yield* send(
-      reuse && stored !== undefined ? stored : revokeOperationId(row.attach_id, "force", attempt),
+      reused ? stored : revokeOperationId(row.attach_id, "force", attempt),
       attempt,
       reuse ? (before.sends ?? 0) + 1 : 1,
+      reused ? owner : (stored ?? owner),
     );
     if (result === undefined) return;
     // OpenCodex's order for tombstone_limit (cli/link.ts): the same id first, which resumes a removal
-    // it still owns and otherwise only replays; then a new id; one refused link_retirement_owned goes
-    // back to the id that owns the removal.
-    if (reuse && stored !== undefined && limited(result)) {
+    // it still owns and otherwise only replays; then a new id.
+    if (reused && limited(result)) {
       const next = before.attempt + 1;
-      const fresh = yield* send(revokeOperationId(row.attach_id, "force", next), next, 1);
-      if (fresh === undefined) return;
-      result =
-        fresh.sent?.refusal?.code === "link_retirement_owned"
-          ? yield* send(stored, before.attempt, 1)
-          : fresh;
+      result = yield* send(revokeOperationId(row.attach_id, "force", next), next, 1, stored);
       if (result === undefined) return;
     }
-    const { admitted, sent, elsewhere, outcome } = result;
+    const { sent, elsewhere } = result;
+    let { admitted, outcome } = result;
+    // An unfinished removal holds the link: GOAT's previous id goes once more, and a stop names the
+    // owner's way out when that does not finish it.
+    if (sent?.refusal?.code === "link_retirement_owned") {
+      const ownedBy = admitted.owner;
+      const resumed = yield* repeatOwner(ops, linkId, ownedBy);
+      if (resumed.kind !== "clean" || ownedBy === undefined)
+        return yield* halt(
+          row,
+          enroll,
+          { ...admitted, outcome: "retirement_owned", refusal: "link_retirement_owned" },
+          "link_retirement_owned",
+        );
+      // GOAT's purge finished the removal with the Child's receipt.
+      if (!ownedBy.includes(".force."))
+        return yield* finish(row, withDetach(enroll, admitted), "purged");
+      const { owner: _owner, ...going } = admitted;
+      admitted = { ...going, operationId: ownedBy };
+      outcome = resumed;
+    }
     if (outcome.kind === "clean") {
       // After the one resend recover asked for, the next recover keeps its 30-minute wait.
       const settled = pending
