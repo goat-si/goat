@@ -1813,6 +1813,11 @@ const make = Effect.gen(function* () {
     }
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
+      if (tab.control.agentId === null)
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          "This tab has no agent owner. Ask the user to close it in the browser panel.",
+        );
       if (tab.control.agentId !== request.agentSessionId)
         throw new BrowserControlInterrupted(
           "Only the agent session that opened this tab can close it.",

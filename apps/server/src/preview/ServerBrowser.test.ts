@@ -1,3 +1,4 @@
+import { assertUnclaimedClose } from "./UnclaimedTabAssertions.testkit.ts";
 import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.testkit.ts";
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
@@ -219,7 +220,7 @@ const testThread = {
   providerSessionId: "agent-a",
   providerInstanceId: ProviderInstanceId.make("codex"),
 };
-const scope = {
+export const scope = {
   environmentId: EnvironmentId.make("browser-test-environment"),
   thread: testThread,
   client: undefined,
@@ -1010,6 +1011,7 @@ it.live("enforces provider ownership and explicit targets when a session has mul
       });
       expect(result).toBe("evaluated");
       expect(contexts).toHaveLength(2);
+      yield* assertUnclaimedClose(broker, scope, tabId);
     }),
   ).pipe(Effect.provide(layer)),
 );
