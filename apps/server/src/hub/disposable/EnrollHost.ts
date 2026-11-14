@@ -1,5 +1,7 @@
 import { ServerConfig } from "../../config.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a temporary name per write.
+import * as NodeCrypto from "node:crypto";
 import { resolveSshCommand } from "@goat/ssh/command";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -13,6 +15,7 @@ import * as ProcessRunner from "../../processRunner.ts";
 import * as Settings from "../../serverSettings.ts";
 import { HubOcx, type OcxOutput, type PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
+import { goatFolders, type KeyPathAnswer, keyPathFor } from "./keyPath.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 
 /** How a reach ended; ssh's own lines decide it, and none of them is kept. */
@@ -60,10 +63,68 @@ export const journalServed = Effect.fn("EnrollHost.journalServed")(
   Effect.orElseSucceed(() => false),
 );
 
+const IDENTITY_HINTS: ReadonlySet<string> = new Set([
+  "identity_file_missing",
+  "identity_file_not_regular",
+  "identity_file_permissions",
+  "identity_file_directory",
+  "identity_file_ancestor",
+  "identity_file_unreadable",
+  "identity_file_unsupported_platform",
+]);
+/**
+ * OpenCodex's refusal of the key file, from a failed ocx only; phaseOf reads it from the CLI's own
+ * "(code invalid_identity_file, hint …)" line, never from a bare word.
+ */
+export const identityHintOf = (output: { readonly code: number; readonly phase?: string }) =>
+  output.code !== 0 && output.phase !== undefined && IDENTITY_HINTS.has(output.phase)
+    ? output.phase
+    : undefined;
+
 /** The machine's known_hosts holds another key (changed), or could not be written (unwritable). */
 export class KnownHostsError extends Data.TaggedError("KnownHostsError")<{
   readonly reason: "changed" | "unwritable";
 }> {}
+
+/**
+ * Writes a machine's one-line known_hosts once, through a temporary file linked into place, so a
+ * failed write never leaves a partial file; a file holding anything else is "changed".
+ */
+export const writeKnownHostsOnce = Effect.fn("EnrollHost.writeKnownHostsOnce")(
+  function* (directory: string, attachId: string, line: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const file = path.join(directory, attachId);
+    // One step per record runs at a time, so a temporary file of this record is a crash's leftover.
+    for (const name of yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => [])))
+      if (name.startsWith(attachId + ".new-"))
+        yield* Effect.ignore(fs.remove(path.join(directory, name)));
+    const compare = (existing: string) =>
+      existing === line
+        ? Effect.succeed(file)
+        : Effect.fail(new KnownHostsError({ reason: "changed" }));
+    // Only a missing file is written; one GOAT cannot read is never replaced.
+    const existing = yield* fs.readFileString(file).pipe(
+      Effect.asSome,
+      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    );
+    if (existing._tag === "Some") return yield* compare(existing.value);
+    yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
+    const temporary = file + ".new-" + NodeCrypto.randomUUID();
+    yield* fs.writeFileString(temporary, line, { mode: 0o600 });
+    // link refuses an existing name, so a file that appeared meanwhile is compared, never replaced.
+    const published = yield* fs.link(temporary, file).pipe(
+      Effect.as(true),
+      Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
+      Effect.ensuring(Effect.ignore(fs.remove(temporary))),
+    );
+    if (!published) return yield* compare(yield* fs.readFileString(file));
+    return file;
+  },
+  Effect.catchTags({
+    PlatformError: () => Effect.fail(new KnownHostsError({ reason: "unwritable" })),
+  }),
+);
 
 /**
  * What enrollment does outside GOAT's own records: read Pen's route for a node, keep the machine's
@@ -81,6 +142,8 @@ export class EnrollHost extends Context.Service<
     readonly reach: (route: DisposableRoute) => Effect.Effect<ReachAnswer>;
     /** Whether this Home's OpenCodex serves its link operation journal. */
     readonly journalServed: Effect.Effect<boolean>;
+    /** Whether OpenCodex can use the machine key at this path, GOAT's own folders tightened. */
+    readonly keyPath: (keyFile: string) => Effect.Effect<KeyPathAnswer>;
     /** ocx on this Home; undefined when it could not be run. */
     readonly ocx: (
       args: ReadonlyArray<string>,
@@ -101,7 +164,9 @@ export const layer = Layer.effect(
     const runner = yield* ProcessRunner.ProcessRunner;
     const inventory = yield* Inventory.OpenCodexInventory;
     const environment = yield* HostProcess.Environment;
-    const directory = path.join((yield* ServerConfig).stateDir, "disposable", "known_hosts");
+    const config = yield* ServerConfig;
+    const directory = path.join(config.stateDir, "disposable", "known_hosts");
+    const own = goatFolders(config);
     return EnrollHost.of({
       route: Effect.fn("EnrollHost.route")(
         function* (node) {
@@ -111,22 +176,17 @@ export const layer = Layer.effect(
         },
         Effect.orElseSucceed(() => undefined),
       ),
-      knownHosts: Effect.fn("EnrollHost.knownHosts")(
-        function* (attachId, line) {
-          const file = path.join(directory, attachId);
-          const existing = yield* fs.readFileString(file).pipe(Effect.option);
-          if (existing._tag === "Some")
-            return existing.value === line
-              ? file
-              : yield* new KnownHostsError({ reason: "changed" });
-          yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-          yield* fs.writeFileString(file, line, { mode: 0o600 });
-          return file;
-        },
-        Effect.catchTags({
-          PlatformError: () => Effect.fail(new KnownHostsError({ reason: "unwritable" })),
-        }),
-      ),
+      keyPath: Effect.fn("EnrollHost.keyPath")(function* (keyFile) {
+        return yield* keyPathFor(keyFile, own).pipe(
+          Effect.orElseSucceed((): KeyPathAnswer => ({ kind: "unreadable" })),
+        );
+      }),
+      knownHosts: Effect.fn("EnrollHost.knownHosts")(function* (attachId, line) {
+        return yield* writeKnownHostsOnce(directory, attachId, line).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        );
+      }),
       reach: Effect.fn("EnrollHost.reach")(
         function* (route) {
           const options = disposableSshExecOptions(route);

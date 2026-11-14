@@ -114,6 +114,7 @@ vi.mock("~/state/channels", () => ({
     },
     listChildWork: () => null,
     remoteWorkOpenable: () => Atom.make(false),
+    homeCurrentOpenableWorkAtom: () => Atom.make({ eligible: false, list: "pending", links: [] }),
     slackSettings: () => null,
   },
 }));
@@ -742,9 +743,13 @@ it("opens the worker and the chores that thread lists leave to the bot from its 
   await userEvent.click(page.getByRole("menuitem", { name: "Show work" }));
   // The menu hands focus back to the button that opened it.
   await expect.element(rowActions).toHaveFocus();
-  const links = screen.getByRole("link", { name: "Open work thread" });
-  await expect.element(links.nth(0)).toHaveAttribute("href", "/env/channel-worker%3Aa");
-  await expect.element(links.nth(1)).toHaveAttribute("href", "/env/channel-child-work%3Achore");
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread" }))
+    .toHaveAttribute("href", "/env/channel-worker%3Aa");
+  // The chore's own thread is named by its title, as the sidebar's child row named it.
+  await expect
+    .element(screen.getByRole("link", { name: "Stop goat serve" }))
+    .toHaveAttribute("href", "/env/channel-child-work%3Achore");
 });
 
 it("shows a denied task read from the roster without retry", async () => {

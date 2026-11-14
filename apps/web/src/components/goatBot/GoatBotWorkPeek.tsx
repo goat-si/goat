@@ -1,6 +1,6 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 
 import { ChevronLeftIcon } from "~/components/solar";
 
@@ -10,6 +10,7 @@ import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
+import { rememberHomeOrigin } from "./goatBotHomeRequest";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -48,6 +49,7 @@ export function GoatBotWorkPeek({
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
+  const router = useRouter();
   // Opening a task acknowledges its activity, as its task view does.
   useAcknowledgeTaskRead({ environmentId, taskId, readThrough: unreadThrough, onAcknowledged });
   return (
@@ -103,7 +105,21 @@ export function GoatBotWorkPeek({
         <Button
           className="w-full"
           render={
-            <Link to="/bot" search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }} />
+            <Link
+              to="/bot"
+              search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }}
+              onClick={(event) => {
+                if (
+                  !event.defaultPrevented &&
+                  event.button === 0 &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  !event.altKey
+                )
+                  rememberHomeOrigin(router, environmentId, member?.botId ?? null, taskId);
+              }}
+            />
           }
         >
           Go to thread

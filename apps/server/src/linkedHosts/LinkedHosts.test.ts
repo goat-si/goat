@@ -19,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Etag from "effect/http/Etag";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpPlatform from "effect/http/HttpPlatform";
@@ -233,6 +234,31 @@ const expectUnavailable = <A>(exit: Exit.Exit<A, LinkedHosts.LinkedHostError>) =
     if (Option.isSome(error)) expect(error.value).toMatchObject({ reason: "host_unavailable" });
   }
 };
+
+it.effect("explains a refused host discovery without saving a link", () =>
+  Effect.gen(function* () {
+    const fixture = clientFixture(
+      HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }),
+            }),
+          }),
+        ),
+      ),
+    );
+    const error = yield* LinkedHosts.LinkedHosts.pipe(
+      Effect.flatMap((links) => links.link(LINK_INPUT)),
+      Effect.flip,
+      Effect.provide(fixture.layer),
+    );
+    expect(error.reason).toBe("host_unavailable");
+    expect(error.message).toContain("ECONNREFUSED");
+    expect(fixture.writes()).toBe(0);
+  }),
+);
 
 describe("LinkedHosts deadlines", () => {
   it.effect.each(STAGES)("times out a linked-host $name body without saving credentials", (stage) =>

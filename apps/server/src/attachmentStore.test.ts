@@ -204,6 +204,30 @@ describe("threadHtmlRenderAttachmentIds", () => {
     ).toEqual([own]);
   });
 
+  it("includes pages an OpenCode Code Mode execute script returned", () => {
+    const own = createAttachmentId("thread-a", "html")!;
+    const other = createAttachmentId("thread-b", "html")!;
+    expect(
+      threadHtmlRenderAttachmentIds("thread-a", [
+        {
+          toolName: "execute",
+          output: JSON.stringify({
+            htmlRender: { attachmentId: own, title: "x", height: 300 },
+            message: "Shown to the reader above your reply.",
+          }),
+        },
+        {
+          toolName: "execute",
+          output: { htmlRender: { attachmentId: other, title: "x", height: 300 } },
+        },
+        {
+          toolName: "execute",
+          output: { isError: true, htmlRender: { attachmentId: own, title: "x", height: 300 } },
+        },
+      ]),
+    ).toEqual([own]);
+  });
+
   it("includes captured MCP App documents from any tool", () => {
     const app = createAttachmentId("thread-a", "html")!;
     expect(

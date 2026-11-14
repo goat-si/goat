@@ -21,9 +21,13 @@ const Enroll = Schema.Struct({
       sends: Schema.optionalKey(Schema.Number),
       /** When GOAT first read the entry as open. */
       openSinceMs: Schema.optionalKey(Schema.Number),
+      /** When the journal first could not be read, since the last answer it gave. */
+      unreadableSinceMs: Schema.optionalKey(Schema.Number),
       outcome: Schema.optionalKey(Schema.String),
     }),
   ),
+  /** The folder or symlink on the key's path that holds the link (key_dir_*, key_symlink_foreign). */
+  keyDir: Schema.optionalKey(Schema.String),
   /** Why the attach stopped and only a person can move it on. */
   stop: Schema.optionalKey(Schema.String),
 });
@@ -55,7 +59,7 @@ export const LINK_CONTRACTS = ["link.route/1", "link.operation/1", "link.recover
 /**
  * Without this contract an explicit route carries no identity and the Home offers its own agent and
  * default keys. A disposable machine trusts only the hub's machine key, so the link waits for a Home
- * that takes it with the route (opencodex#8714; on OpenCodex dev, in no release yet).
+ * that takes it with the route (opencodex#8714, released in OpenCodex 2.100.3).
  */
 export const LINK_IDENTITY_CONTRACT = "link.route/2";
 export const linkIdentityArgs = (identityFile: string) => ["--ssh-identity-file", identityFile];
@@ -110,6 +114,8 @@ const Operation = Schema.Struct({
   state: Schema.String,
   reserved: Schema.optionalKey(Schema.Struct({ linkId: Schema.String })),
   error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
+  /** The Child may still hold an enrollment or a plant, whatever the outcome says of the Home. */
+  childResidual: Schema.optionalKey(Schema.Boolean),
 });
 const decodeOperation = Schema.decodeUnknownOption(Schema.fromJsonString(Operation));
 
@@ -147,6 +153,7 @@ export const readOperation = (
         : { kind: "unreadable" };
     }
     case "failed_clean": {
+      if (operation.childResidual === true) return { kind: "unsettled", state: "residual" };
       const code = operation.error?.code;
       return {
         kind: "failed_clean",
@@ -216,6 +223,21 @@ const STOPS: Record<string, string> = {
   sshd_pin_shared:
     "Another disposable machine presents the same SSH host key, so GOAT cannot tell them apart.",
   pin_changed: "Pen now advertises another SSH host key for this machine than GOAT recorded.",
+  identity_file_missing: "OpenCodex refused this hub's machine key file: it could not find it.",
+  identity_file_not_regular:
+    "OpenCodex refused this hub's machine key file: it is not a regular file.",
+  identity_file_permissions:
+    "OpenCodex refused this hub's machine key file's owner or permissions; OpenCodex on this hub may run as another user than GOAT.",
+  identity_file_directory:
+    "OpenCodex refused this hub's machine key file: the folder holding it is not private to the user OpenCodex runs as, which may not be GOAT's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
+  identity_file_ancestor:
+    "OpenCodex refused this hub's machine key file: a folder above it or a symlink on its path is writable by others or belongs to another user than OpenCodex's. Run OpenCodex as GOAT's user, or move GOAT's home (GOAT_HOME or --base-dir) to a path that passes; never change a shared or system folder or another user's symlink, even as root.",
+  identity_file_unreadable:
+    "OpenCodex refused this hub's machine key file: it cannot read it or a folder on its path; OpenCodex on this hub may run as another user than GOAT.",
+  identity_file_unsupported_platform:
+    "OpenCodex refused this hub's machine key file: a Windows hub cannot use one.",
+  known_hosts_edited:
+    "GOAT's known_hosts file for this machine no longer holds only the host key Pen recorded; it was edited or damaged on the hub.",
   host_key_changed: "The machine presented another SSH host key than the one Pen recorded for it.",
   route_other_pen: "Pen's route for this machine names another Pen than the one confirmed here.",
   route_unsafe_pen_path: "The confirmed Pen's path cannot be passed to ssh unchanged.",
@@ -231,7 +253,7 @@ const STOPS: Record<string, string> = {
   link_stuck_open:
     "OpenCodex left the link operation open and did not settle it when GOAT repeated it.",
   link_not_started:
-    "OpenCodex refused the link three times before recording it: the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
+    "OpenCodex refused the link three times before recording it: it may not accept this hub's machine key file (OpenCodex running as another user, or a folder on the key's path others can write), the hub may already hold a link for this machine, its SSH host key may not match, or the link journal is full.",
   operation_lost:
     "OpenCodex no longer has the link operation GOAT started more than two hours ago, so GOAT cannot tell whether it linked the machine.",
   link_residual: "The link operation may have left an enrollment or a plant on the machine.",
@@ -256,12 +278,22 @@ const WAITING: Record<string, string> = {
     "ssh found no host key in GOAT's known_hosts for this machine; GOAT writes it again on the next pass.",
   unusable:
     "GOAT cannot pass this machine's route or key to ssh unchanged (a space or % in GOAT's state folder path).",
+  key_symlink_foreign:
+    "OpenCodex refuses a key whose path passes a symlink another user owns. Move GOAT's home (GOAT_HOME or --base-dir) to a path without it; never change another user's symlink, even as root.",
+  key_dir_unsafe:
+    "A folder of yours on the path of this hub's machine key can be written by its group or others, and its path is too long to show here. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass.",
+  key_dir_shared:
+    "A folder on the path of this hub's machine key can be written by its group or others, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root.",
+  key_dir_foreign:
+    "A folder on the path of this hub's machine key belongs to another user, so OpenCodex refuses the key. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change another user's folder, even as root.",
+  key_dir_unreadable:
+    "GOAT could not read a folder on the path of this hub's machine key, or the path passes too many symlinks. Move GOAT's home (GOAT_HOME or --base-dir) to a path this user can read without symlink loops; fix read access only on your own folders. GOAT tries again on the next pass.",
   machine_key_unusable:
-    "This hub's machine key cannot be used: GOAT cannot read it, or others can.",
+    "This hub's machine key cannot be used: GOAT cannot read or make it, others can read it, its folder is a symlink, or it is not the plain ed25519 key file GOAT made.",
   opencodex_unsupported:
     "This hub's OpenCodex cannot record explicit routes and link operations; update OpenCodex on the hub.",
   identity_unsupported:
-    "No OpenCodex release can link a machine with the hub's machine key yet, so updating OpenCodex does not help; the machine waits here until one can.",
+    "This hub's OpenCodex cannot link a machine with the hub's machine key; update OpenCodex on the hub to 2.100.3 or later.",
   journal_unreadable: "OpenCodex's link operation journal could not be read; GOAT asks again.",
   open: "OpenCodex is still running the link operation.",
   not_started: "OpenCodex did not record the link operation; GOAT sends it again on a later pass.",
@@ -269,6 +301,47 @@ const WAITING: Record<string, string> = {
 };
 const waitingText = (outcome: string | undefined) =>
   outcome === undefined ? undefined : WAITING[outcome];
+
+/**
+ * Texts naming the folder or symlink on the key's path, with the longest path each can carry within
+ * the wire's 500 characters. chmod is offered only for the user's own folder (key_dir_unsafe).
+ */
+const PATH_TEXTS: Record<string, { readonly cap: number; readonly text: (at: string) => string }> =
+  {
+    key_dir_unsafe: {
+      cap: 140,
+      text: (at) =>
+        at +
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. If only you use it, run chmod go-w " +
+        at +
+        " on the hub; if you share it on purpose, move GOAT's home (GOAT_HOME or --base-dir).",
+    },
+    key_dir_shared: {
+      cap: 240,
+      text: (at) =>
+        at +
+        " can be written by its group or others, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change a shared or system folder, even as root. GOAT tries again on the next pass.",
+    },
+    key_dir_foreign: {
+      cap: 240,
+      text: (at) =>
+        at +
+        " belongs to another user, so OpenCodex refuses the machine key under it. Move GOAT's home (GOAT_HOME or --base-dir) to a path whose folders pass; never change another user's folder, even as root. GOAT tries again on the next pass.",
+    },
+    key_symlink_foreign: {
+      cap: 240,
+      text: (at) =>
+        "OpenCodex refuses a key whose path passes a symlink another user owns, " +
+        at +
+        ", who could point it elsewhere. Move GOAT's home (GOAT_HOME or --base-dir) to a path without it; never change another user's symlink, even as root.",
+    },
+  };
+const pathText = (outcome: string | undefined, at: string | undefined) => {
+  const entry = outcome === undefined ? undefined : PATH_TEXTS[outcome];
+  return entry === undefined || at === undefined || at.length > entry.cap
+    ? undefined
+    : entry.text(at);
+};
 
 /** A machine that left Pen while this hub's OpenCodex held, or was making, a link for it. */
 export const leftPenMessage = (
@@ -309,29 +382,47 @@ export const leftPenMessage = (
  * The fixed text for an admitted attach (design section 2, "What the caller sees"); undefined for a
  * state the invite texts cover.
  */
+/** Stops about the link operation itself; their text names its id. */
+const OPERATION_STOPS: ReadonlySet<string> = new Set([
+  "journal_unreadable",
+  "operation_lost",
+  "link_residual",
+  "link_unknown",
+  "link_stuck_open",
+]);
+
 export const enrollMessage = (
   state: string,
   name: string,
   enroll: Enroll,
   /** The record was paused after its machine joined, not by a join after the withdrawal. */
   pausedAfterJoin = false,
+  /** The record's link operation, named in a stop about it. */
+  operationId: string | null = null,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   // Both clients show the message, so what a person must do is in it.
   const keyStep =
-    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet; Settings → Hub shows it with the machine on web and desktop, and goat_hub_machine_list returns it as machineKey.";
+    "Add this hub's machine key to authorized_keys of the machine's SSH user if it is not there yet; Settings → Hub shows it with the machine on web and desktop.";
+  const leave = " It stays a Pen member until a person removes it with pen revoke.";
   if (enroll.stop !== undefined && (state === "paused" || state === "unknown"))
     return {
-      message: name + " joined Pen; its attach stopped: " + stopText(enroll.stop),
-      nextAction:
-        "A person decides what happens to it. Detaching is not available yet; it stays a Pen member until a person removes it from Pen.",
+      message:
+        name +
+        " joined Pen; its attach stopped: " +
+        stopText(enroll.stop) +
+        (operationId !== null && OPERATION_STOPS.has(enroll.stop)
+          ? " Link operation " + operationId + "."
+          : "") +
+        leave,
+      nextAction: "Resuming or detaching an attach is not available yet.",
     };
   if (state === "paused" && pausedAfterJoin)
     return {
       message:
         name +
-        " joined Pen; its attach then lost its authority (the consent changed or ended, or the provisioner's grant did) before it was linked.",
-      nextAction:
-        "If it should not stay, remove it from Pen with pen revoke. Resuming an attach is not available yet.",
+        " joined Pen; its attach then lost its authority (the consent changed or ended, or the provisioner's grant did) before it was linked." +
+        leave,
+      nextAction: "Resuming an attach is not available yet.",
     };
   switch (state) {
     case "admitted":
@@ -354,6 +445,7 @@ export const enrollMessage = (
         };
       return {
         message:
+          pathText(enroll.link?.outcome, enroll.keyDir) ??
           waitingText(enroll.link?.outcome) ??
           "Linking " + name + " to this hub's OpenCodex as a lightweight Child.",
         nextAction: null,

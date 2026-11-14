@@ -44,6 +44,8 @@ import {
   prunePinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
+import { bootServiceProgramOf } from "./systemdValues.ts";
+import { bootServiceUnitPaths } from "./bootServiceUnitPaths.ts";
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
@@ -208,9 +210,42 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
     if (!input.managed && executablePath !== entryPath && executablePath !== realEntryPath) {
       return [];
     }
+    const references: string[] = [];
+    const unitPaths = yield* bootServiceUnitPaths();
+    if (unitPaths === undefined) {
+      yield* Effect.logWarning(
+        "Could not determine the systemd unit directory; skipping runtime pruning",
+      );
+      return [];
+    }
+    for (const unitPath of unitPaths) {
+      const unit = yield* fs.readFileString(unitPath).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.reason._tag === "NotFound",
+          () => Effect.succeed(Option.none<string>()),
+        ),
+        Effect.result,
+      );
+      if (unit._tag === "Failure") {
+        yield* Effect.logWarning("Could not inspect the service unit; skipping runtime pruning", {
+          unitPath,
+          cause: unit.failure,
+        });
+        return [];
+      }
+      const program = Option.flatMapNullishOr(unit.success, bootServiceProgramOf);
+      if (Option.isSome(program)) {
+        references.push(
+          program.value,
+          yield* fs.realPath(program.value).pipe(Effect.orElseSucceed(() => program.value)),
+        );
+      }
+    }
     const removed = yield* prunePinnedRuntimes({
       baseDir: input.baseDir,
       keep: [packageJson.version],
+      references,
     });
     if (removed.length > 0) {
       yield* Effect.logInfo("Removed unused GOAT runtimes.", { versions: removed });

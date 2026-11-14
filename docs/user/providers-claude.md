@@ -79,6 +79,10 @@ state. Claude does not have Codex's shared-home and shadow-home arrangement.
 For presets that differ only in API keys or endpoints, use the instance's
 **Environment variables**. Variable assignments do not belong in **Launch arguments**.
 
+File paths in the `--settings` and `--append-system-prompt-file` launch arguments
+can start with `~` for the home directory of the machine running GOAT. Any
+other relative path is read from the thread's project folder, or its worktree.
+
 Claude Code's verbose mode can stay enabled when you use Claude for text generation, including
 thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,
 GOAT uses the Claude configuration on the connected server.
@@ -124,11 +128,12 @@ Claude skills come from the config directory's `skills` folder and the project's
 `.claude/skills` folder. If both define the same name, the config-directory copy
 wins. Skills disabled in Claude's settings do not appear in the composer.
 
-Use `$` in the composer to select a skill. Enabled installed Claude plugins also
-contribute skills under names such as `plugin:review`. Skills marked `disable-model-invocation`
-can still be started by you. Invoke those one per message: Claude directly runs
-only the last named skill and may try to start earlier ones through its Skill
-tool, which refuses skills reserved for manual invocation.
+Use `$` in the composer to select a skill. Enabled installed Claude plugins,
+and plugins synced from your claude.ai account, also contribute skills under
+names such as `plugin:review`. Skills marked `disable-model-invocation` can
+still be started by you. Invoke those one per message: Claude directly runs only
+the last named skill and may try to start earlier ones through its Skill tool,
+which refuses skills reserved for manual invocation.
 
 ## Task lists
 

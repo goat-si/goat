@@ -12,7 +12,7 @@ import { makeAuthority } from "./attachAuthority.ts";
 import { conflictCount } from "./attachModel.ts";
 import { type Columns, IN_PEN, type Row, samePolicy } from "./attachRow.ts";
 import * as Store from "./DisposableMachineStore.ts";
-import { EnrollHost } from "./EnrollHost.ts";
+import { EnrollHost, identityHintOf } from "./EnrollHost.ts";
 import {
   decodeEnroll,
   decodeRoute,
@@ -35,14 +35,13 @@ import {
   verifyLink,
 } from "./enrollModel.ts";
 import { declares, HomeContracts } from "./features.ts";
+import type { KeyPathAnswer } from "./keyPath.ts";
 import { MachineKey } from "./machineKey.ts";
 import { disposableKnownHosts } from "./routeContract.ts";
 
 // ocx link add gives up at 360 s; the margin lets it report before GOAT stops waiting.
 const LINK_ADD_TIMEOUT_MS = 400_000;
 const LINK_READ_TIMEOUT_MS = 30_000;
-/** The identity file form OpenCodex accepts (link.route/2): absolute, of letters, digits and ._+/-. */
-const OPENCODEX_KEY_PATH = /^\/[A-Za-z0-9._+/-]+$/u;
 type Contracts = Effect.Effect<ReadonlySet<string> | undefined>;
 // Bounded: the cap allows few admitted machines, and each step runs at most one ssh or ocx.
 const ENROLL_LIMIT = 100;
@@ -268,8 +267,9 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       line === undefined
         ? undefined
         : yield* host.knownHosts(row.attach_id, line).pipe(Effect.result);
+    // Pen still advertises the pin, so a mismatch is GOAT's own file edited or damaged.
     if (pinned?._tag === "Failure" && pinned.failure.reason === "changed")
-      return yield* conflict(row, enroll, "pin_changed");
+      return yield* stop(row, enroll, "known_hosts_edited");
     const key = yield* machineKey.identity.pipe(Effect.option);
     const reached =
       key._tag === "None"
@@ -279,7 +279,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
             noisePub: row.expected_noise_pub,
             proxyCommand: route.proxyCommand,
             user: route.user,
-            knownHostsFile: route.knownHostsFile,
+            // The file just written at the current state path: a stored one outlives a home move.
+            knownHostsFile: pinned?._tag === "Success" ? pinned.success : route.knownHostsFile,
             identityFile: key.value.privateKeyFile,
           });
     const at = yield* nowIso;
@@ -329,8 +330,16 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     outcome: LinkOutcome,
     sent: boolean,
   ) {
-    const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
+    const { unreadableSinceMs, ...answered } = enroll.link ?? { attempt: 1, intentAtMs: 0 };
+    // Any answer the journal gave ends a run of unreadable reads.
+    const link =
+      outcome.kind === "unreadable" && unreadableSinceMs !== undefined
+        ? { ...answered, unreadableSinceMs }
+        : answered;
     const as = (result: string): Enroll => ({ ...enroll, link: { ...link, outcome: result } });
+    // Branches below may write nothing, so the end of a failed-read run is stored here.
+    if (outcome.kind !== "unreadable" && unreadableSinceMs !== undefined)
+      yield* note(row, { ...enroll, link });
     switch (outcome.kind) {
       case "committed":
         if (yield* note(row, as("committed"), { link_id: outcome.linkId, step: "verify" }))
@@ -364,14 +373,23 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         }
         return "resend" as const;
       }
-      case "unreadable":
-        // The same bound as "not found": past 2 hours a person reads the journal instead.
-        if ((yield* Clock.currentTimeMillis) - link.intentAtMs >= OPERATION_REPLAY_MS) {
-          yield* stop(row, as("journal_unreadable"), "journal_unreadable", { state: "unknown" });
+      case "unreadable": {
+        // A person reads the journal once it has failed for 2 hours and the id is 2 hours old.
+        const nowMs = yield* Clock.currentTimeMillis;
+        if (unreadableSinceMs === undefined) {
+          yield* note(row, {
+            ...enroll,
+            link: { ...link, outcome: "journal_unreadable", unreadableSinceMs: nowMs },
+          });
           return "done" as const;
         }
-        if (link.outcome !== "journal_unreadable") yield* note(row, as("journal_unreadable"));
+        if (
+          nowMs - unreadableSinceMs >= OPERATION_REPLAY_MS &&
+          nowMs - link.intentAtMs >= OPERATION_REPLAY_MS
+        )
+          yield* stop(row, as("journal_unreadable"), "journal_unreadable", { state: "unknown" });
         return "done" as const;
+      }
       case "not_found": {
         const age = (yield* Clock.currentTimeMillis) - link.intentAtMs;
         // After 2 hours the journal may have dropped a settled entry, so the id says nothing.
@@ -402,7 +420,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
   ) {
     const key = yield* machineKey.identity.pipe(Effect.option);
     if (key._tag === "None") return;
-    yield* host.ocx(
+    const added = yield* host.ocx(
       linkAddArgs({
         alias: `pen-${row.node_id}`,
         route,
@@ -411,7 +429,60 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
       }),
       LINK_ADD_TIMEOUT_MS,
     );
-    yield* record(row, enroll, yield* readBack(row, operationId), true);
+    // OpenCodex refuses a key file it cannot use before its journal opens and names why; the
+    // journal is read first, so an operation an earlier send recorded is never stopped over.
+    const outcome = yield* readBack(row, operationId);
+    const refused = added === undefined ? undefined : identityHintOf(added);
+    if (outcome.kind === "not_found" && refused !== undefined)
+      return yield* stop(row, enroll, refused);
+    yield* record(row, enroll, outcome, true);
+  });
+
+  /**
+   * Whether OpenCodex can use the machine key's path, checked with its own rule before an id is
+   * stored or sent (keyPath.ts). A folder others can write holds the link until it is fixed; a path
+   * OpenCodex can never take stops it.
+   */
+  const keyUsable = Effect.fn("DisposableEnroll.keyUsable")(function* (row: Row, enroll: Enroll) {
+    const key = yield* machineKey.identity.pipe(Effect.option);
+    const answer: KeyPathAnswer =
+      key._tag === "None"
+        ? { kind: "key", problem: "missing" }
+        : yield* host.keyPath(key.value.privateKeyFile);
+    if (answer.kind === "ok") return true;
+    if (answer.kind === "form") {
+      yield* stop(row, enroll, "machine_key_path");
+      return false;
+    }
+    // A run of failed reads belongs to the journal reads; record() ends it.
+    const { unreadableSinceMs: _run, ...link } = { attempt: 0, intentAtMs: 0, ...enroll.link };
+    const outcome =
+      answer.kind === "directory"
+        ? answer.chmod
+          ? "key_dir_unsafe"
+          : answer.problem === "writable"
+            ? "key_dir_shared"
+            : "key_dir_foreign"
+        : answer.kind === "unreadable"
+          ? "key_dir_unreadable"
+          : answer.kind === "symlink"
+            ? "key_symlink_foreign"
+            : "machine_key_unusable";
+    const keyDir =
+      answer.kind === "directory"
+        ? answer.directory
+        : answer.kind === "symlink"
+          ? answer.path
+          : undefined;
+    // A folder an earlier answer named is dropped, or the record would differ and write every pass.
+    const { keyDir: _named, ...rest } = enroll;
+    if (link.outcome !== outcome || enroll.keyDir !== keyDir)
+      yield* note(row, {
+        ...rest,
+        ...(keyDir === undefined ? {} : { keyDir }),
+        link: { ...link, outcome },
+      });
+    return false;
   });
 
   const linkStep = Effect.fn("DisposableEnroll.link")(function* (
@@ -422,7 +493,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     pass: Contracts | undefined,
   ) {
     const contracts = yield* pass ?? home.contracts;
-    // A Home without explicit routes can be updated; no release takes the key with a route yet.
+    // Either contract arrives with an OpenCodex update; the key with the route came in 2.100.3.
     const missing = !declares(contracts, LINK_CONTRACTS)
       ? "opencodex_unsupported"
       : !declares(contracts, [LINK_IDENTITY_CONTRACT])
@@ -437,10 +508,6 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         });
       return;
     }
-    // OpenCodex refuses any other identity path at probe, before its journal opens.
-    const key = yield* machineKey.identity.pipe(Effect.option);
-    if (key._tag === "Some" && !OPENCODEX_KEY_PATH.test(key.value.privateKeyFile))
-      return yield* stop(row, enroll, "machine_key_path");
     const pin = yield* pinHolds(row, route);
     if (pin === "changed") return yield* conflict(row, enroll, "pin_changed");
     if (pin === "unknown") return;
@@ -448,21 +515,23 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     if (stored !== null) {
       // A stored id is read back first; it is sent again only when OpenCodex never journalled it.
       const settled = yield* record(row, enroll, yield* readBack(row, stored), false);
-      if (settled !== "resend") return;
+      if (settled !== "resend" || !(yield* keyUsable(row, enroll))) return;
       // A resend is a new effect: admitted again, with the authority as it is now.
       const current = yield* settingsNow;
       if (current === undefined) return;
       const ended = yield* authorityEnded(row, current);
       if (ended !== undefined) return yield* exclusive(pause(row, ended));
       const link = enroll.link ?? { attempt: 1, intentAtMs: 0 };
-      // The 2-hour window counts from the id's first store, whatever was resent since.
-      const { openSinceMs: _seen, ...rest } = link;
+      // The 2-hour window counts from the id's first store, whatever was resent since; the answer
+      // that led here ended any run of failed reads.
+      const { openSinceMs: _seen, unreadableSinceMs: _run, ...rest } = link;
       const resent = { ...enroll, link: { ...rest, sends: (link.sends ?? 1) + 1 } };
       if ((yield* forward(row, current, resent, {})) !== "committed") return;
       const again = yield* read(row.attach_id);
       if (again !== undefined && due(again)) yield* dispatch(again, resent, route, stored);
       return;
     }
+    if (!(yield* keyUsable(row, enroll))) return;
     // Effect admission: the operation id is stored under the settings lock before ocx starts.
     const attempt = (enroll.link?.attempt ?? 0) + 1;
     const operationId = linkOperationId(row.attach_id, attempt);
@@ -524,9 +593,13 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     const outcome =
       row.link_id === null && operationId !== null ? yield* readBack(row, operationId) : undefined;
     const linkId = outcome?.kind === "committed" ? outcome.linkId : row.link_id;
-    // An operation that left nothing (failed_clean, or never journalled) is not named afterwards.
+    // An operation that left nothing (failed_clean, or never journalled while the journal still keeps
+    // every entry, 2 hours from the id's store) is not named afterwards.
+    const storedAtMs = decodeEnroll(row.enroll_json).link?.intentAtMs ?? 0;
+    const fresh = (yield* Clock.currentTimeMillis) - storedAtMs < OPERATION_REPLAY_MS;
     const leftNothing =
-      linkId === null && (outcome?.kind === "failed_clean" || outcome?.kind === "not_found");
+      linkId === null &&
+      (outcome?.kind === "failed_clean" || (outcome?.kind === "not_found" && fresh));
     const now = yield* nowIso;
     const settled = yield* exclusive(
       sql`UPDATE disposable_machines SET state = 'failed', final_at = ${now}, state_since = ${now},

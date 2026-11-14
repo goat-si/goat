@@ -6,6 +6,7 @@ import type { OcxOutput, PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "../penSshRoute.ts";
 import { EnrollHost, KnownHostsError, type ReachAnswer } from "./EnrollHost.ts";
 import { MachineKey } from "./machineKey.ts";
+import type { KeyPathAnswer } from "./keyPath.ts";
 import type { DisposableRoute } from "./routeContract.ts";
 
 export const MACHINE_KEY_FILE = "/srv/goat/disposable/machine_ed25519";
@@ -46,7 +47,9 @@ export type AddScript =
   | "residual"
   | "unknown"
   /** The Home stopped mid-operation: the entry stays open until the same id is repeated. */
-  | "open";
+  | "open"
+  /** The Home refuses the key file before its journal opens, naming the hint. */
+  | { readonly identityRefused: string; readonly journalled?: true };
 
 /** Holds a call until released; `arrived` completes once `want` calls wait. */
 export interface Hold {
@@ -99,17 +102,23 @@ export const fakeEnrollHost = () => {
     statusUnreadable: false,
     keysMade: 0,
     keyFile: MACHINE_KEY_FILE,
+    /** What the check of the key's path for OpenCodex answers. */
+    keyPath: { kind: "ok" } as KeyPathAnswer,
     /** Hold Pen's route read, the reach, or the journal read until a test releases them. */
     holdRoute: undefined as Hold | undefined,
     holdReach: undefined as Hold | undefined,
     holdKnownHosts: undefined as Hold | undefined,
     knownHostsUnwritable: false,
+    /** Where GOAT's state folder keeps known_hosts now; a moved home changes it. */
+    knownHostsDir: "/srv/goat/disposable/known_hosts/",
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
     journalUnreadable: false,
     /** A repeat of an open entry leaves it open, as a Home that keeps failing to recover it would. */
     openStaysOpen: false,
+    /** Runs as each link add arrives, before it answers. */
+    onAdd: undefined as (() => void) | undefined,
     holdOperations: undefined as Hold | undefined,
     journal,
     links,
@@ -120,6 +129,7 @@ export const fakeEnrollHost = () => {
   const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
   const output = (code: number, stdout = ""): OcxOutput => ({ code, stdout });
   const add = (args: ReadonlyArray<string>) => {
+    control.onAdd?.();
     const alias = args[2] ?? "";
     const operationId = args[args.indexOf("--operation-id") + 1] ?? "";
     const known = journal.get(operationId);
@@ -130,10 +140,28 @@ export const fakeEnrollHost = () => {
     }
     const script = control.adds.shift() ?? "commit";
     if (script === "not_journalled") return output(1);
+    if (typeof script === "object" && "identityRefused" in script) {
+      if (script.journalled === true) {
+        const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
+        journal.set(operationId, { operationId, alias, state: "committed", linkId });
+        links.set(linkId, {
+          id: linkId,
+          alias,
+          childKind: "ephemeral",
+          exclusive: true,
+          explicitRoute: {
+            proxyCommand: args[args.indexOf("--proxy-command") + 1],
+            user: args[args.indexOf("--ssh-user") + 1],
+            port: Number(args[args.indexOf("--ssh-port") + 1]),
+          },
+        });
+      }
+      return { code: 1, stdout: "", phase: script.identityRefused };
+    }
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);
-    if (typeof script === "object") {
+    if (typeof script === "object" && "failedClean" in script) {
       operation.state = "failed_clean";
       operation.code = script.failedClean;
       return output(1);
@@ -161,6 +189,7 @@ export const fakeEnrollHost = () => {
         Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
+    keyPath: () => Effect.sync(() => control.keyPath),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
@@ -171,7 +200,7 @@ export const fakeEnrollHost = () => {
             if (known !== undefined && known !== line)
               return Effect.fail(new KnownHostsError({ reason: "changed" }));
             control.knownHosts.set(attachId, line);
-            return Effect.succeed("/srv/goat/disposable/known_hosts/" + attachId);
+            return Effect.succeed(control.knownHostsDir + attachId);
           }),
         ),
       ),
@@ -180,6 +209,8 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.reached.push(route);
+            // ssh finds no host key in a file under a home that moved away.
+            if (!route.knownHostsFile.startsWith(control.knownHostsDir)) return "host_key_unknown";
             return (
               control.reachAnswers.get(route.nodeId) ??
               (control.unreachable.has(route.nodeId) ? "key_refused" : "ok")

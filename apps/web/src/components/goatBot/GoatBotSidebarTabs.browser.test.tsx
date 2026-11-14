@@ -23,8 +23,12 @@ const bots = vi.hoisted(() => ({
   supportsMembers: false,
   memberShell: null as object | null,
   error: null as string | null,
+  eligible: false,
+  rosterKnown: true,
 }));
 const channels = vi.hoisted(() => ({
+  homeCurrentOpenableWorkAtom: () => "current-work",
+  homeCurrentUnreadAtom: () => "unread-count",
   updateTaskView: { permissionAtom: () => null },
   createBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -74,7 +78,14 @@ vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: tru
 vi.mock("./useGoatBotWaitingCount", () => ({ useGoatBotWaitingCount: () => 3 }));
 vi.mock("./useGoatBotMemberStatus", () => ({
   useGoatBotMemberWaitingCount: () => 0,
-  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, sidebarWaitingCount: 0, latest: undefined }),
+}));
+vi.mock("~/state/environments", async (original) => ({
+  ...(await original<typeof import("~/state/environments")>()),
+  useEnvironment: () => ({
+    connection: { phase: "connected" },
+    serverConfig: { environment: { capabilities: { goatBotProfileEdit: true } } },
+  }),
 }));
 vi.mock("~/state/entities", async (original) => {
   const entities = await original<typeof import("~/state/entities")>();
@@ -92,7 +103,14 @@ vi.mock("./GoatBotSidebarRow", () => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) =>
+    atom === "governed"
+      ? bots.rosterKnown && bots.eligible
+      : atom === "unread-count"
+        ? 0
+        : atom === "current-work"
+          ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
+          : true,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
@@ -102,6 +120,7 @@ vi.mock("~/localApi", () => {
   const api = () => ({ contextMenu: { show: actions.show } });
   return { readLocalApi: api, ensureLocalApi: api };
 });
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
 vi.mock("../ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -205,6 +224,8 @@ function setup() {
   bots.supportsMembers = false;
   bots.memberShell = null;
   bots.error = null;
+  bots.eligible = false;
+  bots.rosterKnown = true;
   actions.create.mockReset();
   navigation.pathname = "/";
   navigation.environmentId = "";
@@ -456,4 +477,34 @@ it("draws a member bot's face from its own session, never the main bot's waiting
     bots.members = [];
     bots.memberShell = null;
   }
+});
+
+it("removes legacy child rows when eligible and restores them when eligibility is withdrawn", async () => {
+  setup();
+  bots.eligible = true;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to inspect the sidebar without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByText("Helper Main")).toBeVisible();
+  expect(screen.getByText("Review work").query()).toBeNull();
+  expect(screen.getByRole("button", { name: "Actions for Review work" }).query()).toBeNull();
+  bots.eligible = false;
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Actions for Review work" }))
+    .toBeVisible();
+});
+
+it("keeps legacy child rows while the member roster is unknown, even with every listed bot eligible", async () => {
+  setup();
+  bots.eligible = true;
+  bots.rosterKnown = false;
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to inspect the sidebar without the application route tree.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  bots.rosterKnown = true;
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await vi.waitFor(() => expect(screen.getByText("Review work").query()).toBeNull());
 });

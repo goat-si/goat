@@ -164,7 +164,7 @@ function GroupTable({
               Status
             </th>
             {group.windows.map((window) => {
-              const cursor = cursorUsageWindowDetails(window.id);
+              const cursor = cursorUsageWindowDetails(window.id, group.pool);
               return (
                 <th
                   key={`${window.kind}:${window.id}`}
@@ -178,7 +178,7 @@ function GroupTable({
                         <TooltipPopup>{cursor.description}</TooltipPopup>
                       </Tooltip>
                     ) : (
-                      window.label
+                      (cursor?.label ?? window.label)
                     )}
                     <span className="font-medium text-foreground tabular-nums">
                       {window.remainingPercent}% left

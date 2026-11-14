@@ -28,8 +28,27 @@ A new worktree sets itself up. When `git worktree add` creates a checkout, the
 `.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
 or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
-When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
-`npx vite-plus`, and prints which tool it ran.
+
+Setup needs the Node release pinned in root `package.json` (or a later release of the same major).
+With another Node, setup uses `vp env exec` to rerun under the pin only with vite-plus 0.2.2 or later.
+The [0.2.2 release notes](https://github.com/voidzero-dev/vite-plus/releases/tag/v0.2.2) describe
+verification of Node's clearsigned `SHASUMS256.txt.asc` against the bundled release keyring before
+checking the archive's SHA-256; unsigned sources such as some musl builds and custom mirrors fall
+back to checksum-only verification. The [vite-plus guide](https://github.com/voidzero-dev/vite-plus/blob/main/docs/guide/env.md#nodejs-signature-verification)
+describes custom mirrors set with `VP_NODE_DIST_MIRROR` and `VP_NODE_SKIP_SIGNATURE_VERIFY`, which
+bypasses the signature check but still checks SHA-256 and prints a warning. Setup refuses the rerun
+when the latter is set to [any non-empty value](https://github.com/voidzero-dev/vite-plus/blob/main/rfcs/verify-node-shasums-signature.md#escape-hatch-skipping-signature-verification).
+
+A machine with unsupported Node and vp older than 0.2.2, including some Cursor cloud VMs, stops
+setup instead of downloading through npx. Run `vp upgrade` or install the supported Node from
+nodejs.org, fnm, or volta, then run `node scripts/setup-worktree.ts` again. On Windows, unsupported
+Node always stops before the rerun. Set `GOAT_SETUP_NO_NODE_DOWNLOAD=1` to prevent setup from
+fetching Node; the installer can still fetch packages it lacks.
+
+Setup installs dependencies with `vp i --frozen-lockfile`. Without vp it uses pnpm already on PATH
+without checking its version; a Corepack shim may fetch the pinned pnpm when invoked. If neither
+installer is available, or a Corepack shim's launcher is missing, install [vp](../../README.md#install-vp)
+or the pnpm release named in `packageManager` and rerun setup.
 
 Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
