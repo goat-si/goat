@@ -6,6 +6,7 @@ import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -78,6 +79,8 @@ const usageHarness = (input: {
     let catalogGate:
       | { reached: Deferred.Deferred<void>; release: Deferred.Deferred<void> }
       | undefined;
+    // While set, every check stops at its catalog read: it ran its probe and never publishes.
+    let abandoning = false;
     const instance = yield* CodexDriver.create({
       instanceId,
       displayName: "Usage home test",
@@ -108,6 +111,7 @@ const usageHarness = (input: {
         ...catalog,
         current: (kind) =>
           Effect.suspend(() => {
+            if (abandoning) return Effect.interrupt;
             const gate = catalogGate;
             catalogGate = undefined;
             return gate === undefined
@@ -174,7 +178,11 @@ const usageHarness = (input: {
       catalogGate = gate;
       return gate;
     });
-    return { open, percents, check, holdNextCheck };
+    const abandonChecks = (on: boolean) =>
+      Effect.sync(() => {
+        abandoning = on;
+      });
+    return { open, percents, check, holdNextCheck, abandonChecks };
   });
 
 it.layer(layerTest)("Codex usage and the session's home", (it) => {
@@ -354,5 +362,24 @@ it.layer(layerTest)("Codex usage and the session's home", (it) => {
         yield* yield* open("after");
         expect(yield* percents).not.toContain(40);
       }).pipe(Effect.scoped),
+  );
+  it.effect("the published check's home survives later checks that never publish", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
+      const { open, percents, check, abandonChecks } = yield* usageHarness({
+        host,
+        usage: { b: 50 },
+      });
+      yield* check;
+      host.CODEX_HOME = "/fixture/b";
+      yield* abandonChecks(true);
+      for (let attempt = 0; attempt < 16; attempt += 1) {
+        const abandoned = yield* Fiber.await(yield* check.pipe(Effect.forkChild));
+        expect(Exit.hasInterrupts(abandoned)).toBe(true);
+      }
+      yield* abandonChecks(false);
+      yield* yield* open("b");
+      expect(yield* percents).not.toContain(50);
+    }).pipe(Effect.scoped),
   );
 });

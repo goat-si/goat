@@ -234,29 +234,34 @@ export const CodexDriver: ProviderDriver<
         Effect.orElseSucceed(() => home),
       );
     // The home each check ran under, by its checkedAt: a report is judged by the snapshot shown now,
-    // so a check counts once its snapshot is published. Bounded; old checks are no longer shown.
+    // so a check counts once its snapshot is published. Bounded, never dropping the shown check's
+    // entry; a shown snapshot with no entry and not the initial one counts for no home.
     const checkHomes = new Map<string, string>();
-    const rememberCheckHome = (checkedAt: string, identity: string) => {
+    let initialCheckedAt: string | undefined;
+    const rememberCheckHome = (checkedAt: string, identity: string, shownAt: string) => {
       checkHomes.delete(checkedAt);
       checkHomes.set(checkedAt, identity);
       for (const stale of checkHomes.keys()) {
         if (checkHomes.size <= MAX_REMEMBERED_CHECKS) break;
-        checkHomes.delete(stale);
+        if (stale !== shownAt) checkHomes.delete(stale);
       }
     };
-    const publishedHome: Effect.Effect<string | undefined> = Effect.suspend(
+    const homeShownBy = (checkedAt: string) =>
+      checkHomes.get(checkedAt) ?? (checkedAt === initialCheckedAt ? undefined : UNESTABLISHED);
+    const publishedCheckedAt: Effect.Effect<string> = Effect.suspend(
       () => snapshot.getSnapshot,
-    ).pipe(Effect.map((shown) => checkHomes.get(shown.checkedAt)));
+    ).pipe(Effect.map((shown) => shown.checkedAt));
     const ignoreUsage: CodexUsageReporter = () => Effect.void;
     const reportUsageFor =
       (identity: string): CodexUsageReporter =>
       (update) =>
-        publishedHome.pipe(
-          Effect.flatMap((shown) =>
-            shown === undefined || shown === identity
+        publishedCheckedAt.pipe(
+          Effect.flatMap((shownAt) => {
+            const shown = homeShownBy(shownAt);
+            return shown === undefined || shown === identity
               ? snapshot.applyUsageLimits(update)
-              : Effect.void,
-          ),
+              : Effect.void;
+          }),
         );
     const stampIdentity = withInstanceIdentity({
       instanceId,
@@ -412,10 +417,11 @@ export const CodexDriver: ProviderDriver<
                   env,
                 ).pipe(provideHomeRoute);
                 const identity = before === (yield* homeIdentity(home)) ? before : UNESTABLISHED;
-                const shown = yield* publishedHome;
+                const shownAt = yield* publishedCheckedAt;
+                const shown = homeShownBy(shownAt);
                 lastCheckAt = Math.max(Date.parse(status.checkedAt), lastCheckAt + 1);
                 const checkedAt = DateTime.formatIso(DateTime.makeUnsafe(lastCheckAt));
-                rememberCheckHome(checkedAt, identity);
+                rememberCheckHome(checkedAt, identity, shownAt);
                 return withoutOtherHomeUsage(
                   { ...status, checkedAt },
                   identity === UNESTABLISHED
@@ -447,6 +453,14 @@ export const CodexDriver: ProviderDriver<
           makePendingCodexProvider(settings.provider),
           currentCatalog,
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+        ).pipe(
+          // Shown before any check: usage counts for it, and no check may share its checkedAt.
+          Effect.tap((initial) =>
+            Effect.sync(() => {
+              initialCheckedAt = initial.checkedAt;
+              lastCheckAt = Math.max(lastCheckAt, Date.parse(initial.checkedAt));
+            }),
+          ),
         ),
       checkProvider,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
