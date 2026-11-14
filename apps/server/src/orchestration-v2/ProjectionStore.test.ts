@@ -767,13 +767,13 @@ it.effect("shells flag a latest run triggered by a provider background wake", ()
         yield* store.getThreadShell(threadId),
         ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId)),
       ];
-      assert.deepEqual(
-        shells.map((shell) => shell?.latestRunBackgroundWake),
-        [expected, expected],
-        id,
+      // Shells leave the flag out unless it is set, as they do for a held start.
+      const flags = shells.map((shell) =>
+        shell && "latestRunBackgroundWake" in shell ? shell.latestRunBackgroundWake : "omitted",
       );
+      assert.deepEqual(flags, expected ? [true, true] : ["omitted", "omitted"], id);
       const awareness = yield* store.getAgentAwarenessSnapshot(threadId);
-      assert.equal(awareness.threads[0]?.latestRunBackgroundWake, expected);
+      assert.equal(awareness.threads[0]?.latestRunBackgroundWake, expected || undefined);
     }
   }).pipe(Effect.provide(layerTest)),
 );

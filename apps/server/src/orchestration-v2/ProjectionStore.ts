@@ -1775,8 +1775,9 @@ export function threadShellFromProjection(
       projection.turnItems.some(
         (item) => item.runId === latestRun.id && item.type === "run_interrupt_request",
       ),
-    latestRunBackgroundWake:
-      latestRun != null && isBackgroundWakeRunForShell(latestRun, projection),
+    ...(latestRun != null && isBackgroundWakeRunForShell(latestRun, projection)
+      ? { latestRunBackgroundWake: true }
+      : {}),
     activeRunId: activeRun?.id ?? null,
     blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
     activityRunStatus: activityRun?.status ?? null,
@@ -2060,7 +2061,7 @@ function shellFromState(input: {
       : { markedUnreadCompletionAt: input.state.thread.markedUnreadCompletionAt }),
     latestRunStopRequested: input.state.latestRunStopRequested,
     ...(input.state.latestRunStartHeld ? { latestRunStartHeld: true } : {}),
-    latestRunBackgroundWake: input.state.latestRunBackgroundWake,
+    ...(input.state.latestRunBackgroundWake ? { latestRunBackgroundWake: true } : {}),
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
     activityRunStatus: input.state.activityRunStatus,
