@@ -39,6 +39,8 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import type { DisposableRecord } from "../hub/disposable/disposableClass.ts";
+import { DisposableMachineStore } from "../hub/disposable/DisposableMachineStore.ts";
 
 export const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 export const threadId = ThreadId.make("caller-thread");
@@ -119,6 +121,8 @@ export const run = <A, E>(
     readonly opencodexRead?: Effect.Effect<OpenCodexInventorySnapshot>;
     /** SSH hosts the hub offers the Child setup switch for, and whether it is on. */
     readonly optIns?: Readonly<Record<string, boolean>>;
+    /** Disposable machine records on this hub; host.status reports a host's class from them. */
+    readonly disposable?: ReadonlyArray<DisposableRecord>;
     readonly hostCall?: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -148,7 +152,12 @@ export const run = <A, E>(
   const providers = { current: options.providers ?? [] };
   const interrupted = { value: false };
   const makeLayer = (probes: Probes) =>
-    HostStatusMcpService.layer.pipe(
+    HostStatusMcpService.layerWithoutDependencies.pipe(
+      Layer.provide(
+        Layer.mock(DisposableMachineStore)({
+          recordsOrKept: Effect.succeed(options.disposable ?? []),
+        }),
+      ),
       Layer.provide(ServerSettings.layerTest(options.settings)),
       Layer.provide(
         Layer.mock(HubParity.HubParity)({

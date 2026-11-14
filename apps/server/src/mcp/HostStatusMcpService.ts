@@ -41,6 +41,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import { disposableClasses } from "../hub/disposable/disposableClass.ts";
+import {
+  DisposableMachineStore,
+  layer as DisposableMachineStoreLayer,
+} from "../hub/disposable/DisposableMachineStore.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { PlacementAdmissionEnabled } from "../fleet/admission/PlacementKey.ts";
 import {
@@ -141,6 +146,8 @@ const make = Effect.gen(function* () {
   const childBootstrap = yield* Effect.serviceOption(
     OpenCodexChildBootstrap.OpenCodexChildBootstrap,
   );
+  // Optional so layers built for one tool need not read disposable machine records.
+  const disposable = yield* Effect.serviceOption(DisposableMachineStore);
   /** This machine's view of the host: whether its goatclaw policy reached it, and its Child setup. */
   const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
     if (entry.host === null) return entry;
@@ -152,11 +159,15 @@ const make = Effect.gen(function* () {
     const child = Option.isSome(childBootstrap)
       ? yield* childBootstrap.value.status(entry.host)
       : undefined;
+    const machineClass = Option.isSome(disposable)
+      ? disposableClasses(yield* disposable.value.recordsOrKept).forAlias(entry.host)
+      : undefined;
     return {
       ...entry,
       ...(goatclaw === undefined ? {} : { goatclaw }),
       ...(child === undefined ? {} : { opencodexChild: child }),
       ...(optIn === undefined ? {} : { opencodexChildOptIn: optIn }),
+      ...(machineClass === undefined ? {} : { machineClass }),
     } satisfies HostStatusEntry;
   });
   const clock = yield* Clock.Clock;
@@ -514,4 +525,6 @@ const make = Effect.gen(function* () {
   return HostStatusMcpService.of({ read, readForClient });
 });
 
-export const layer = Layer.effect(HostStatusMcpService, make);
+export const layerWithoutDependencies = Layer.effect(HostStatusMcpService, make);
+// Host status only reads disposable records, so its own store instance takes no shared lock.
+export const layer = layerWithoutDependencies.pipe(Layer.provide(DisposableMachineStoreLayer));

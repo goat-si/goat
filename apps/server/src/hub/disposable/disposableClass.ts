@@ -103,5 +103,21 @@ export const disposableClasses = (records: ReadonlyArray<DisposableRecord>) => {
       projected.class === "disposable"
     );
   };
-  return { forNode, actionAllowed };
+  /** The class of the machine an SSH host alias reaches, as host.status reports it per host. */
+  const forAlias = (alias: string) =>
+    forNode({
+      environmentId: null,
+      routes: [
+        {
+          routeId: "ssh:" + alias,
+          source: "registered",
+          target: { kind: "ssh", alias, hostname: null, username: null, port: null },
+          status: "unknown",
+          checkedAt: null,
+          lastSeenAt: null,
+          lastError: null,
+        },
+      ],
+    });
+  return { forNode, forAlias, actionAllowed };
 };

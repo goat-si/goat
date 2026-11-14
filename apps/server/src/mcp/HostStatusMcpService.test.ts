@@ -127,6 +127,48 @@ it.effect("says which SSH hosts this hub joins as Children after their setup", (
   }),
 );
 
+it.effect(
+  "reports the class and state of a host that is a disposable machine; a kept host has none",
+  () =>
+    Effect.gen(function* () {
+      const nodeId = "d".repeat(26);
+      const { value } = yield* run(
+        {
+          hosts: ["pen-" + nodeId, "box"],
+          disposable: [
+            {
+              attachId: "a-1",
+              nodeId,
+              state: "linked",
+              stateSince: "2026-11-14T00:00:00.000Z",
+              createdAt: "2026-11-14T00:00:00.000Z",
+              provisioner: { kind: "person" },
+              final: false,
+              environmentId: null,
+              machineInstallId: null,
+              sshdPin: null,
+              linkId: null,
+              conflicts: [],
+              penMember: true,
+            },
+          ],
+          hostCall: () => Effect.succeed(remoteOk(9)),
+        },
+        (service) => service.read(scope, {}),
+      );
+      expect(value._tag).toBe("Success");
+      if (value._tag !== "Success") return;
+      const hosts = decode(value.success).hosts;
+      expect(hosts.find((host) => host.host === "pen-" + nodeId)?.machineClass).toMatchObject({
+        class: "disposable",
+        state: "linked",
+        penMember: true,
+      });
+      expect(hosts.find((host) => host.host === "box")?.machineClass).toBeUndefined();
+      expect(hosts.find((host) => host.host === null)?.machineClass).toBeUndefined();
+    }),
+);
+
 it.effect("fans out to this machine and each connected host, sorted", () =>
   Effect.gen(function* () {
     const { value, calls, queries, refreshes } = yield* run(
