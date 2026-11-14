@@ -482,7 +482,10 @@ export const CodexDriver: ProviderDriver<
             new ProviderDriverError({
               driver: DRIVER_KIND,
               instanceId,
-              detail: "Codex could not redeem the reset credit.",
+              detail:
+                cause._tag === "ResetCreditAccountLimitError"
+                  ? cause.message
+                  : "Codex could not redeem the reset credit.",
               cause,
             }),
         ),
