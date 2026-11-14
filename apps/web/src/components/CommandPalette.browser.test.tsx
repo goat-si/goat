@@ -4,6 +4,8 @@ import { page } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
+import { LAST_USED_PROJECT_STORAGE_KEY } from "../hooks/useHandleNewThread";
+import { removeLocalStorageItem } from "../hooks/useLocalStorage";
 import { makeThreadFixture } from "../test-fixtures";
 import type { Thread } from "../types";
 import type { Project } from "../types";
@@ -20,6 +22,7 @@ vi.mock(import("../state/entities"), async (original) => ({
 }));
 
 function setup(input: { threads?: ReadonlyArray<Thread> } = {}) {
+  removeLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY);
   state.threads = input.threads ?? [];
   state.projects = [
     {
