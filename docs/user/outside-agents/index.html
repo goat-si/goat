@@ -244,11 +244,11 @@ following it: the run keeps going, and you cancel it from its page in the provid
 <span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> send</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$id</span><span style="color:#9ECBFF">"</span><span style="color:#9ECBFF"> "Now fix it"</span><span style="color:#79B8FF"> --wait</span></span>
 <span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> show</span><span style="color:#9ECBFF"> "</span><span style="color:#E1E4E8">$id</span><span style="color:#9ECBFF">"</span></span>
 <span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> thread</span><span style="color:#9ECBFF"> list</span></span></code></pre>
-<p><code>.</code> means the project that contains the current folder; a project id also
-works. A new thread uses the project’s default model and permission mode, and
-runs in the project folder unless you pass <code>--worktree &lt;base-branch&gt;</code>. <code>send</code>
-never interrupts: a busy thread gets the message as its next turn. Pass <code>-</code> as
-the message to read it from stdin.</p>
+<p><code>.</code> means the project that contains the current folder, or a git worktree of
+its repository; a project id also works. A new thread uses the project’s
+default model and permission mode, and runs in the project folder unless you
+pass <code>--worktree &lt;base-branch&gt;</code>. <code>send</code> never interrupts: a busy thread gets
+the message as its next turn. Pass <code>-</code> as the message to read it from stdin.</p>
 <p><code>--wait</code> prints the agent’s reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add <code>--json</code> for a
 result that always includes the thread id.</p>

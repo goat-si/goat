@@ -168,13 +168,15 @@ pass <code>--fix</code> to run the recommended ones without a prompt (for script
 <code>--dry-run</code> to only report. An installed background service for the same data
 directory is stopped for the repair and started again afterwards, also when
 the repair fails. Quit a server you started by hand, or the desktop app, first:
-the repair refuses to touch a database that is in use. Use <code>--base-dir</code> for a
-different data directory.</p>
-<p>The repair can take several minutes on a large database. It rebuilds the
-database through a temporary copy, so it needs free space of about the
-database’s size twice over: once in the system temporary directory (<code>TMPDIR</code>
-or <code>/tmp</code> on Linux and macOS) and once next to the database for its
-write-ahead log.</p>
+the repair refuses to touch a database that is in use and names the server
+process when it can. A server started for the same data directory waits or is
+refused until the repair ends. Use <code>--base-dir</code> for a different data directory.</p>
+<p>The repair’s time grows with the size of the whole database and can exceed an
+hour on a large database or a slow disk; <code>goat doctor</code> shows each step as it
+runs. It rebuilds the database through a temporary copy, so it needs free
+space of about the database’s size twice over: once in the system temporary
+directory (<code>TMPDIR</code> or <code>/tmp</code> on Linux and macOS) and once next to the
+database for its write-ahead log.</p>
 <p>If you upgraded from a version before 0.1.0, its database (<code>state.sqlite</code>) is
 still kept next to the current one so you can roll back. <code>goat doctor</code> offers to
 delete it, but never selects that repair for you and <code>--fix</code> skips it: once it
