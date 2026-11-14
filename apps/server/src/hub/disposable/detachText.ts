@@ -308,11 +308,11 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
         name +
         " answers again; GOAT could not yet read its earlier removal of the link without it (operation " +
         operationId +
-        ") and reads it again within 30 minutes. A Detach" +
+        ") and reads it again within 30 minutes. A person's Detach" +
         WHERE +
-        " now removes the link together with the machine.",
+        " reads it first: it repeats that removal if OpenCodex still holds it, and otherwise removes the link together with the machine.",
       nextAction:
-        "Detach it to remove the link together with the machine, or let GOAT read that removal again within 30 minutes.",
+        "A person may detach it, which repeats that removal if OpenCodex still holds it and otherwise removes the link together with the machine.",
     };
   }
   const code = detach.refusal ?? (detach.stop === "revoke_refused" ? outcome : undefined);

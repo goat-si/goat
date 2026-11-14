@@ -33,7 +33,7 @@ const silentDay = Effect.gen(function* () {
 });
 
 it.effect(
-  "a stopped retirement force read back open once the machine answers says so, and a detach goes on with that removal",
+  "a stopped retirement force read back open once the machine answers says so; a thread's detach is refused and a person's goes on with that removal",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -55,9 +55,12 @@ it.effect(
         yield* TestClock.adjust(HOUR / 2);
         yield* detachPass;
         expect((yield* listed(attachId))?.message).toContain("is still open in OpenCodex");
-        // OpenCodex refuses every other revoke while that one is open: even a thread's detach repeats it.
         ocx.forceOpen = false;
-        yield* detach(THREAD, attachId, "d-1");
+        // Repeating it may resume a removal without the machine: only a person goes on with it.
+        const refused = yield* detach(THREAD, attachId, "d-1").pipe(Effect.flip);
+        expect(refused.reason).toBe("person_required");
+        expect((yield* listed(attachId))?.state).toBe("linked");
+        yield* detach(PERSON, attachId, "d-2");
         yield* detachPass;
         expect(ocx.sent.filter((id) => id.includes(".purge."))).toEqual([]);
         expect(ocx.sent.at(-1)).toBe(force1);
@@ -66,7 +69,7 @@ it.effect(
 );
 
 it.effect(
-  "an agent's detach never continues a forced removal of a machine that answered and then failed one check: it starts a purge",
+  "an agent's detach of a machine that answered and then failed one check is refused while its forced removal reads unknown: it neither continues it nor drops its id",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
@@ -87,10 +90,46 @@ it.effect(
         yield* TestClock.adjust(HOUR / 2);
         yield* detachPass;
         const before = forces();
-        yield* detach(THREAD, attachId, "d-1");
+        const refused = yield* detach(THREAD, attachId, "d-1").pipe(Effect.flip);
+        expect(refused.reason).toBe("person_required");
         yield* detachPass;
         expect(forces()).toBe(before);
-        expect(ocx.sent.at(-1)).toContain(".purge.");
+        expect(ocx.sent.filter((id) => id.includes(".purge."))).toEqual([]);
+        expect((yield* listed(attachId))?.message).toContain(attachId + ".force.1");
+      }),
+    ),
+);
+
+it.effect(
+  "a person's detach after an unreadable read-back reads the forced removal first: one OpenCodex still holds is repeated, never replaced by a purge",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+        const force1 = attachId + ".force.1";
+        const silent = silencer(host, ocx, nodeId);
+        silent(true);
+        // The force claims its removal and fails at commit: unknown, owning it.
+        ocx.commitFails = 100;
+        yield* silentDay;
+        yield* detachPass;
+        // The third send's reads are lost, so the stop keeps an unreadable outcome.
+        ocx.loseRead = 2;
+        yield* detachPass;
+        yield* detachPass;
+        silent(false);
+        ocx.loseRead = 100;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        expect((yield* listed(attachId))?.message).toContain("reads it again within 30 minutes");
+        ocx.loseRead = 0;
+        ocx.commitFails = 0;
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        expect(ocx.sent.filter((id) => id.includes(".purge."))).toEqual([]);
+        expect(ocx.sent.at(-1)).toBe(force1);
+        expect(ocx.tombstones.size).toBe(1);
       }),
     ),
 );

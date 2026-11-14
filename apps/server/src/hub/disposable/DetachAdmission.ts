@@ -32,6 +32,8 @@ const NOT_PROVISIONER =
   "Only the thread that attached this machine, while the switch names it, or a person may detach it.";
 // A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
 const RELEASABLE = new Set(["unknown"]);
+/** Outcomes of a stopped retirement force that OpenCodex may still hold: open, unknown, or unread. */
+const MAY_OWE = new Set(["open", "unsettled", "not_found", "unreadable", "retirement_owned"]);
 // Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const DETACHABLE = new Set([
@@ -152,17 +154,23 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
           (known?.stop === "revoke_unsettled" &&
             (outcome === "open" || outcome === "not_found" || outcome === "unreadable")) ||
           known?.stop === "link_retirement_owned";
-        // A stopped retirement force goes on under its id while it is open; for a person while it
-        // is unknown (OpenCodex repeats it first) or the machine fails; for anyone once the failures
-        // would retire it. An agent's plain detach of a machine that answers starts a purge.
+        // A stopped retirement force goes on under its id for a person while OpenCodex may still
+        // hold it or the machine fails, and for anyone once the failures would retire it. Below
+        // that, an agent neither goes on with a removal without the machine nor drops its id.
         const failing = (enroll.health?.failures ?? 0) > 0;
-        const retirement =
-          row.state === "linked" &&
-          known?.force === true &&
-          known.stop !== undefined &&
-          (outcome === "open" ||
-            (person && outcome === "unsettled") ||
-            (failing && (person || retires(enroll.health, yield* Clock.currentTimeMillis))));
+        const retiring = retires(enroll.health, yield* Clock.currentTimeMillis);
+        const stoppedForce =
+          row.state === "linked" && known?.force === true && known.stop !== undefined;
+        const mayOwe = outcome !== undefined && MAY_OWE.has(outcome);
+        if (stoppedForce && mayOwe && !person && !retiring)
+          return yield* fail(
+            "person_required",
+            "This machine's removal without it is unfinished in OpenCodex; only a person goes on with it, in Settings → Hub on web or desktop.",
+          );
+        const retirement = stoppedForce && (person ? mayOwe || failing : retiring);
+        // Not read since it stopped, on a machine that answers: the force step reads it first.
+        const check =
+          retirement && !failing && (outcome === "not_found" || outcome === "unreadable");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true
@@ -171,7 +179,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
                 ? fresh
                 : kept
             : retirement
-              ? { ...fresh, force: true as const }
+              ? { ...fresh, force: true as const, ...(check ? { outcome: "check" } : {}) }
               : {
                   step: stepFor,
                   attempt: known?.attempt ?? 0,

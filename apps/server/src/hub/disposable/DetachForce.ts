@@ -112,8 +112,16 @@ export const makeForceStep = (ops: DetachOps) =>
     let reuse = false;
     if (stored !== undefined) {
       const known = yield* readEntry(stored, linkId, true);
+      // A person's detach after an unreadable read-back: what the id still owes decides.
+      if (before.outcome === "check") {
+        if (known.kind === "unreadable") return;
+        if (known.kind === "failed_clean" || known.kind === "not_found")
+          return yield* note(row, withDetach(enroll, { step: "revoke", attempt: before.attempt }));
+      }
       if (known.kind === "clean" && !pending) {
-        if (yield* note(row, withDetach(enroll, { ...before, step: "recover" }), recovering))
+        const { outcome: _checked, ...going } = before;
+        const done = before.outcome === "check" ? going : before;
+        if (yield* note(row, withDetach(enroll, { ...done, step: "recover" }), recovering))
           yield* audit(row.attach_id, "hub.machine_detach", retire ? "retired" : "forced");
         return;
       }
