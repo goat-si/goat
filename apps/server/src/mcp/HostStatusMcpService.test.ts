@@ -128,28 +128,40 @@ it.effect("says which SSH hosts this hub joins as Children after their setup", (
 );
 
 it.effect(
-  "reports the class and state of a host that is a disposable machine; a kept host has none",
+  "reports the class Hub devices shows for a host whose alias routes to a disposable machine, under any alias; a kept host has none",
   () =>
     Effect.gen(function* () {
-      const nodeId = "d".repeat(26);
+      const route = (alias: string) => ({
+        routeId: "ssh:" + alias,
+        source: "registered" as const,
+        target: { kind: "ssh" as const, alias, hostname: null, username: null, port: null },
+        status: "online" as const,
+        checkedAt: null,
+        lastSeenAt: null,
+        lastError: null,
+      });
       const { value } = yield* run(
         {
-          hosts: ["pen-" + nodeId, "box"],
-          disposable: [
+          hosts: ["lab", "box"],
+          nodes: [
             {
-              attachId: "a-1",
-              nodeId,
-              state: "linked",
-              stateSince: "2026-11-14T00:00:00.000Z",
-              createdAt: "2026-11-14T00:00:00.000Z",
-              provisioner: { kind: "person" },
-              final: false,
-              environmentId: null,
-              machineInstallId: null,
-              sshdPin: null,
-              linkId: null,
-              conflicts: [],
-              penMember: true,
+              nodeId: EnvironmentId.make("env-lab"),
+              environmentId: EnvironmentId.make("env-lab"),
+              label: "lab",
+              kind: "ssh",
+              routes: [route("pen-" + "d".repeat(26)), route("lab")],
+              status: "online",
+              lastSeenAt: null,
+              addedBy: null,
+              machineClass: {
+                class: "conflict",
+                attachId: "a-1",
+                state: "linked",
+                stateSince: "2026-11-14T00:00:00.000Z",
+                provisioner: { kind: "person" },
+                penMember: true,
+                conflicts: ["other_route"],
+              },
             },
           ],
           hostCall: () => Effect.succeed(remoteOk(9)),
@@ -159,8 +171,8 @@ it.effect(
       expect(value._tag).toBe("Success");
       if (value._tag !== "Success") return;
       const hosts = decode(value.success).hosts;
-      expect(hosts.find((host) => host.host === "pen-" + nodeId)?.machineClass).toMatchObject({
-        class: "disposable",
+      expect(hosts.find((host) => host.host === "lab")?.machineClass).toMatchObject({
+        class: "conflict",
         state: "linked",
         penMember: true,
       });
@@ -168,7 +180,6 @@ it.effect(
       expect(hosts.find((host) => host.host === null)?.machineClass).toBeUndefined();
     }),
 );
-
 it.effect("fans out to this machine and each connected host, sorted", () =>
   Effect.gen(function* () {
     const { value, calls, queries, refreshes } = yield* run(

@@ -37,15 +37,6 @@ const node = (environmentId: string | null, routes: HubNode["routes"]) => ({
 });
 
 describe("disposable machine class", () => {
-  it("names the class of the machine an SSH host alias reaches, as host.status reports it per host", () => {
-    const classes = disposableClasses([record({ attachId: "a-1" })]);
-    expect(classes.forAlias("pen-" + NODE_A)).toMatchObject({
-      class: "disposable",
-      attachId: "a-1",
-    });
-    expect(classes.forAlias("cc-01")).toBeUndefined();
-  });
-
   it("is absent for a machine no record matches, so it reads kept", () => {
     const classes = disposableClasses([record({ attachId: "a1" })]);
     expect(classes.forNode(node("env-other", [ssh("cc-01")]))).toBeUndefined();
