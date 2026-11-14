@@ -232,6 +232,16 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   const forceStep = makeForceStep(ops);
 
   /**
+   * GOAT's own owner revoke finished the removal: a purge owner did so with the Child's receipt; a
+   * force owner removed the link without the machine, so its tombstone goes to recover.
+   */
+  const ownerDone = (row: Row, enroll: Enroll, admitted: Detach, owner: string) => {
+    if (!owner.includes(".force.")) return finish(row, withDetach(enroll, admitted), "purged");
+    const { owner: _owner, ...going } = admitted;
+    return forceStep(row, withDetach(enroll, { ...going, operationId: owner, force: true }));
+  };
+
+  /**
    * A journalled purge revoke; clean only with the Child's purged receipt for this link id. A silent
    * machine's purge settles unknown with remote_disconnect_failed (OpenCodex v2.100.3): that counts
    * as one failed check, the next purge waits 30 minutes under a new id once the old one is resolved,
@@ -296,8 +306,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const sent = yield* host.ocx([...revokeArgs(linkId, operationId), "--json"], REVOKE_TIMEOUT_MS);
     if (ownerHolds(sent?.refusal?.code, owner)) {
       const resumed = yield* repeatOwner(ops, linkId, owner);
-      if (resumed.kind === "clean")
-        return yield* finish(row, withDetach(enroll, admitted), "purged");
+      if (resumed.kind === "clean") return yield* ownerDone(row, enroll, admitted, owner);
       return yield* halt(
         row,
         enroll,
@@ -309,10 +318,13 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         "link_retirement_owned",
       );
     }
-    // Gone while GOAT's own purge finished it (during a restart or a click), with its receipt.
-    if (sent?.refusal?.code === "link_not_found" && owner !== undefined)
-      if ((yield* readEntry(owner, linkId, false)).kind === "clean")
-        return yield* finish(row, withDetach(enroll, admitted), "purged");
+    // Gone while GOAT's own revoke finished it (during a restart or a click): read that first.
+    if (sent?.refusal?.code === "link_not_found" && owner !== undefined) {
+      const finished = yield* readEntry(owner, linkId, owner.includes(".force."));
+      // Unread: the next pass sends this id again and reads the owner then.
+      if (finished.kind === "unreadable") return;
+      if (finished.kind === "clean") return yield* ownerDone(row, enroll, admitted, owner);
+    }
     // Removed without a purge receipt: someone else revoked it; recover asks whether a cleanup of
     // the machine waits.
     if (sent?.refusal?.code === "link_not_found")
@@ -363,8 +375,17 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           return yield* halt(
             row,
             enroll,
-            // The repeat's own answer: a resume that could not settle leaves the entry open.
-            { ...admitted, outcome: again.kind === "open" ? "open" : outcome.state },
+            // The repeat's own answer: a resume that could not settle leaves the entry open, and an
+            // unread one is not called unknown.
+            {
+              ...admitted,
+              outcome:
+                again.kind === "unsettled"
+                  ? again.state
+                  : again.kind === "failed_clean"
+                    ? again.code
+                    : again.kind,
+            },
             "revoke_unsettled",
           );
         }

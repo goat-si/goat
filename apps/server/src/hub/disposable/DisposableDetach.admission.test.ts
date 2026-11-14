@@ -135,3 +135,39 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a person's detach after an unrecorded stop keeps a resolved owner that still holds the removal, and GOAT repeats it",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, linkId } = yield* linked(pen, home, host, 1);
+        const force1 = attachId + ".force.1";
+        ocx.revokes.set(force1, {
+          operationId: force1,
+          linkId,
+          force: true,
+          state: "unknown",
+          code: "key_revoke_failed",
+          ownsReceipt: true,
+          resolvedAt: "2026-11-15T00:00:00.000Z",
+        });
+        yield* store(attachId, {
+          step: "revoke",
+          attempt: 2,
+          operationId: attachId + ".force.2",
+          sends: 3,
+          force: true,
+          stop: "revoke_unsettled",
+          outcome: "not_found",
+          owner: force1,
+        });
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        yield* detachPass;
+        expect(ocx.sent).toContain(force1);
+        expect(ocx.tombstones.size).toBe(1);
+      }),
+    ),
+);

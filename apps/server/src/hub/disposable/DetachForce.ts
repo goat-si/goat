@@ -147,7 +147,15 @@ export const makeForceStep = (ops: DetachOps) =>
           held !== undefined &&
           (held.kind === "open" || (held.kind === "unsettled" && !held.resolved));
         if ((known.kind === "failed_clean" || known.kind === "not_found") && !owes)
-          return yield* note(row, withDetach(enroll, { step: "revoke", attempt: before.attempt }));
+          return yield* note(
+            row,
+            withDetach(enroll, {
+              step: "revoke",
+              attempt: before.attempt,
+              // A resolved owner may still hold the removal's receipt: a purge refused for it repeats it.
+              ...(held?.kind === "unsettled" && ownedBy !== undefined ? { owner: ownedBy } : {}),
+            }),
+          );
       }
       if (known.kind === "clean" && !pending) {
         const { outcome: _checked, ...going } = before;
@@ -223,6 +231,8 @@ export const makeForceStep = (ops: DetachOps) =>
     if (elsewhere && admitted.owner !== undefined) {
       const ownedBy = admitted.owner;
       const finished = yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
+      // Unread: the next pass sends the new id again and reads the owner then.
+      if (finished.kind === "unreadable") return;
       if (finished.kind === "clean" && !ownedBy.includes(".force."))
         return yield* finish(row, withDetach(enroll, admitted), "purged");
       if (finished.kind === "clean") {

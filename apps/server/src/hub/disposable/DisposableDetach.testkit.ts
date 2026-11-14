@@ -77,6 +77,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     busy: 0,
     /** The next journal reads fail, as a lost answer would. */
     loseRead: 0,
+    /** A transient fault the test aims at one journal read: true fails that read. */
+    readFails: undefined as ((operationId: string) => boolean) | undefined,
     /** The next revokes never reach the Home (GOAT stopped while sending): no answer, nothing recorded. */
     dropSends: 0,
     revokes,
@@ -296,6 +298,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     if (args[1] === "operations") {
       const entry = revokes.get(option(args, "--operation-id"));
       if (entry === undefined) return undefined;
+      if (control.readFails?.(entry.operationId) === true) return { code: 1, stdout: "" };
       if (control.loseRead > 0) {
         control.loseRead -= 1;
         return { code: 1, stdout: "" };

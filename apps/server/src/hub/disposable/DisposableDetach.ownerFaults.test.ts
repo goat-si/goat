@@ -89,9 +89,9 @@ it.effect("a purge that GOAT's own repeat left open is described as running, not
   ),
 );
 
-it.effect(
-  "an owner purge that finished meanwhile ends the record purged, not removed outside GOAT",
-  () =>
+it.effect.each([false, true])(
+  "an owner purge that finished meanwhile ends the record purged, not removed outside GOAT (its first read lost: %s)",
+  (lose) =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
         const ocx = fakeDetachHome(host);
@@ -111,6 +111,11 @@ it.effect(
           delete entry.code;
         }
         host.control.links.delete(linkId);
+        // The owner's read right after the new id met link_not_found fails once.
+        let lost = 0;
+        if (lose)
+          ocx.readFails = (id) =>
+            id === purge && ocx.sent.at(-1)?.includes(".force.") === true && lost++ === 0;
         yield* detach(PERSON, attachId, "d-3");
         yield* settle(attachId);
         const done = yield* listed(attachId);
@@ -118,4 +123,56 @@ it.effect(
         expect(done?.message).not.toContain("outside GOAT");
       }),
     ),
+);
+
+it.effect(
+  "a new purge that finds the link gone reads its purge owner again when that read is lost, and ends purged",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, linkId } = yield* linked(pen, home, host, 1);
+        const purge = attachId + ".purge.1";
+        ocx.commitFails = 2;
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        const entry = ocx.revokes.get(purge);
+        expect(entry?.state).toBe("unknown");
+        if (entry === undefined) return;
+        // A person resolves it, then someone repeats it on the Home: it finishes with its receipt.
+        entry.resolvedAt = "2026-11-15T00:00:00.000Z";
+        entry.state = "committed";
+        delete entry.ownsReceipt;
+        delete entry.code;
+        host.control.links.delete(linkId);
+        let lost = 0;
+        ocx.readFails = (id) =>
+          id === purge && ocx.sent.at(-1) === attachId + ".purge.2" && lost++ === 0;
+        yield* detach(PERSON, attachId, "d-2");
+        yield* settle(attachId);
+        expect(lost).toBeGreaterThan(0);
+        const done = yield* listed(attachId);
+        expect(done?.state).toBe("purged");
+        expect(done?.message).not.toContain("outside GOAT");
+      }),
+    ),
+);
+
+it.effect("a purge whose repeat cannot be read back says so, instead of calling it unknown", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      const purge = attachId + ".purge.1";
+      ocx.commitFails = 2;
+      let lost = 0;
+      ocx.readFails = (id) =>
+        id === purge && ocx.sent.filter((sent) => sent === purge).length === 2 && lost++ === 0;
+      yield* detach(PERSON, attachId, "d-1");
+      yield* detachPass;
+      const stopped = yield* listed(attachId);
+      expect(stopped?.message).toContain("no readable answer");
+      expect(stopped?.message).not.toContain("could not tell");
+    }),
+  ),
 );
