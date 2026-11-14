@@ -193,9 +193,10 @@ trusted or not (`SshHostKeys` asks for that type). Callers: `LinkedHosts.link` (
 before the pairing code is spent), `HubNodes.add` and import, SSH preflight
 (`disposablePreflight.ts`, so the Settings and agent SSH adds stop before trust or save),
 `SshDeviceAdd`, and HubMembership's join (both transports; the Hub-client join compares the key
-itself), move and repair re-link (`hubProbe.ts`). Web's Add route refuses a disposable Hub device
-from the hub snapshot. An unreadable table or Pen file reads as kept. A client's own pairing with
-the machine's GOAT is not seen by the hub. `host.status` and Hub nodes carry the projected class.
+itself), move and repair re-link (`hubProbe.ts`). Web's Add route and Remote launches Connect
+refuse a disposable Hub device from the hub snapshot (`client-runtime` `hubNodes.ts`). An
+unreadable table or Pen file reads as kept. A client's own pairing with the machine's GOAT is not
+seen by the hub. `host.status` and Hub nodes carry the projected class.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
