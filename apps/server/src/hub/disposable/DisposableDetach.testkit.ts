@@ -36,6 +36,18 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
      * carries no hint for either.
      */
     purgeIncomplete: false,
+    /** A purge refused failed_clean with this code (the Child changed nothing). */
+    purgeRefusal: undefined as string | undefined,
+    /**
+     * The Home cannot settle a purge (its journal's disk is full): the entry stays open. A repeat of
+     * an open id then recovers it as recoverRevoke does: unknown, operation_interrupted, as the
+     * cleanup was intended.
+     */
+    purgeOpen: false,
+    /** The next revokes are refused before the journal (operation_journal_full): never recorded. */
+    journalRefuses: 0,
+    /** The next resolves fail, as an unreadable journal would. */
+    resolveFails: 0,
     /** Recover answers this refusal while the machine answers. */
     recoverRefusal: undefined as string | undefined,
     /** A forced revoke is refused, as OpenCodex does at 256 waiting tombstones. */
@@ -83,6 +95,13 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     const force = args.includes("--force");
     control.sent.push(operationId);
     const known = revokes.get(operationId);
+    // A repeat of an open entry recovers it (link-operation.ts replayOperation, recoverRevoke).
+    if (known !== undefined && known.state === "open") {
+      if (control.purgeOpen) return refused(1, { code: "operation_journal_failed" });
+      known.state = "unknown";
+      known.code = "operation_interrupted";
+      return answer(known);
+    }
     // A purge id replays; a forced one resumes unless it settled.
     if (
       known !== undefined &&
@@ -94,6 +113,16 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       control.busy -= 1;
       return refused(5, { code: "link_operation_in_progress" });
     }
+    if (control.journalRefuses > 0) {
+      control.journalRefuses -= 1;
+      return refused(5, { code: "operation_journal_full" });
+    }
+    // An open revoke of this link refuses every other revoke of it (openRevokeConflict).
+    if (
+      known === undefined &&
+      [...revokes.values()].some((entry) => entry.linkId === linkId && entry.state === "open")
+    )
+      return refused(5, { code: "link_operation_open" });
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
     const alias = host.control.links.get(linkId)?.alias;
     if (typeof alias === "string") aliases.set(linkId, alias);
@@ -111,15 +140,19 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       delete entry.code;
       return answer(entry);
     }
+    if (control.purgeOpen) {
+      entry.state = "open";
+      return refused(1, { code: "operation_journal_failed" });
+    }
+    if (control.purgeRefusal !== undefined) {
+      entry.state = "failed_clean";
+      entry.code = control.purgeRefusal;
+      return answer(entry);
+    }
     if (!answers(linkId) || control.purgeIncomplete) {
       entry.state = "unknown";
       entry.code = "remote_disconnect_failed";
       return answer(entry);
-    }
-    if (control.childRefusal === "child_disconnect_pending") {
-      entry.state = "unknown";
-      entry.code = "remote_disconnect_failed";
-      return answer(entry, control.childRefusal);
     }
     if (control.childRefusal !== undefined || control.childMissing) {
       entry.state = "failed_clean";
@@ -143,6 +176,10 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     return { code: 0, stdout: json({ linkId, outcome: "clean", purged: true }) };
   };
   const resolve = (operationId: string): OcxOutput => {
+    if (control.resolveFails > 0) {
+      control.resolveFails -= 1;
+      return { code: 1, stdout: "" };
+    }
     const entry = revokes.get(operationId);
     if (entry === undefined) return refused(4, { code: "operation_not_found" });
     if (entry.state !== "unknown" && entry.state !== "residual")
