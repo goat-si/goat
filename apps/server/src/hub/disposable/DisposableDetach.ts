@@ -306,7 +306,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const sent = yield* host.ocx([...revokeArgs(linkId, operationId), "--json"], REVOKE_TIMEOUT_MS);
     if (ownerHolds(sent?.refusal?.code, owner)) {
       const resumed = yield* repeatOwner(ops, linkId, owner);
-      if (resumed.kind === "clean") return yield* ownerDone(row, enroll, admitted, owner);
+      if (resumed.kind === "clean" && owner !== undefined)
+        return yield* ownerDone(row, enroll, admitted, owner);
       return yield* halt(
         row,
         enroll,
