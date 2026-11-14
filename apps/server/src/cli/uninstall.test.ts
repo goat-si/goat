@@ -100,6 +100,38 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)
       }),
     );
 
+    it.effect("names another home's service without uninstalling it", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-uninstall-other-" });
+        let removed = false;
+        vi.spyOn(BootService, "layer").mockReturnValue(
+          Layer.succeed(
+            BootService.BootService,
+            BootService.BootService.of({
+              ...absentService,
+              status: Effect.succeed({
+                supported: true,
+                installed: false,
+                current: false,
+                installedBaseDir: "/home/me/other home",
+                unitPath: "/unit",
+                logPath: "/log",
+              }),
+              uninstall: Effect.sync(() => {
+                removed = true;
+                return true;
+              }),
+            }),
+          ),
+        );
+        yield* run(baseDir);
+        const output = (yield* TestConsole.logLines).join("\n");
+        expect(removed).toBe(false);
+        expect(output).toContain("--base-dir '/home/me/other home'");
+      }),
+    );
+
     it.effect("removes service state left beside the downloaded runtime", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;

@@ -39,6 +39,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hubNodesDismissNotice]: "hubNodes",
   [WS_METHODS.hubMachinesAttach]: "hubMachines",
   [WS_METHODS.hubMachinesReissue]: "hubMachines",
+  [WS_METHODS.hubMachinesDetach]: "hubMachines",
+  [WS_METHODS.hubMachinesRelease]: "hubMachines",
   [WS_METHODS.hubMachinesList]: "hubMachines",
   [WS_METHODS.notesList]: "notes",
   [WS_METHODS.notesRead]: "notes",

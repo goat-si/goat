@@ -270,6 +270,16 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     // Pen still advertises the pin, so a mismatch is GOAT's own file edited or damaged.
     if (pinned?._tag === "Failure" && pinned.failure.reason === "changed")
       return yield* stop(row, enroll, "known_hosts_edited");
+    // ssh reads only the file this pass wrote or compared with Pen's route: a stored path may name a
+    // file under a home that moved away, which nothing checked.
+    if (pinned?._tag !== "Success") {
+      if (enroll.reach?.outcome !== "known_hosts_unwritable")
+        yield* note(row, {
+          ...enroll,
+          reach: { outcome: "known_hosts_unwritable", at: yield* nowIso },
+        });
+      return;
+    }
     const key = yield* machineKey.identity.pipe(Effect.option);
     const reached =
       key._tag === "None"
@@ -279,8 +289,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
             noisePub: row.expected_noise_pub,
             proxyCommand: route.proxyCommand,
             user: route.user,
-            // The file just written at the current state path: a stored one outlives a home move.
-            knownHostsFile: pinned?._tag === "Success" ? pinned.success : route.knownHostsFile,
+            knownHostsFile: pinned.success,
             identityFile: key.value.privateKeyFile,
           });
     const at = yield* nowIso;
@@ -347,7 +356,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         // The link exists whoever moved the fence; its id is a fact the record must not lose.
         else
           yield* sql`UPDATE disposable_machines SET link_id = ${outcome.linkId}
-            WHERE attach_id = ${row.attach_id} AND link_id IS NULL`;
+            WHERE attach_id = ${row.attach_id} AND link_id IS NULL AND final_at IS NULL`;
         return "done" as const;
       case "failed_clean":
         if (FINAL_LINK_CODES.has(outcome.code)) yield* stop(row, as(outcome.code), outcome.code);
@@ -654,5 +663,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     );
   }).pipe(Effect.withSpan("DisposableEnroll.pass"));
 
-  return { advance, pass };
+  /** Whether a step of this record runs now; a detach waits for it before it reads what is left. */
+  const busy = (attachId: string) => Effect.map(Ref.get(running), (set) => set.has(attachId));
+
+  return { advance, pass, busy };
 });

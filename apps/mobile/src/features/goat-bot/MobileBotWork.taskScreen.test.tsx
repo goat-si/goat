@@ -198,6 +198,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     // One list per computer and bot, so a test can count each one's refreshes.
     listBotThreads: (key: { environmentId: string; input: { botId?: string } }) =>
       `task:${key.environmentId}:${key.input.botId ?? "main"}`,
@@ -254,7 +256,8 @@ vi.mock("../../state/environments", () => {
   };
 });
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
   pickMobileGoatBotEnvironment: () => ({
     environmentId: state.environmentId,
     connected: state.connected,
@@ -611,4 +614,127 @@ it("a Pin that completes after the task screen closed refreshes no list and read
   await act(async () => sent.settle(AsyncResult.success({})));
   expect(refreshes("env", "main")).toBe(0);
   expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a refresh that returns the task while its lookup is out shows the row, and the late answer is ignored", async () => {
+  reset();
+  const read = deferred();
+  state.lookup.mockReturnValueOnce(read.promise);
+  await show("task-old");
+  Object.assign(state.task, { isPending: true });
+  await show("task-old");
+  Object.assign(state.task, {
+    isPending: false,
+    data: { rows: [listRow("task-old", "Summarize the README now")] },
+  });
+  await show("task-old");
+  expect(text()).toContain("Summarize the README now");
+  await act(async () => read.settle(AsyncResult.success(lookedUp("completed", { pinnedAt: at }))));
+  expect(text()).toContain("Summarize the README now");
+  expect(button("Unpin")).toBeUndefined();
+  expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a refresh that fails while the lookup is out leaves the read running, and its answer lands", async () => {
+  reset();
+  const read = deferred();
+  state.lookup.mockReturnValueOnce(read.promise);
+  await show("task-old");
+  Object.assign(state.task, { isPending: true });
+  await show("task-old");
+  // The failed refresh keeps the last successful list, as the real query does.
+  Object.assign(state.task, { isPending: false, isSuccess: false, error: "failed" });
+  await show("task-old");
+  await act(async () => read.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(button("Pin")).toBeDefined();
+  expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a Pin that completes while the next task's lookup is out refreshes nothing and leaves that read alone", async () => {
+  reset();
+  const pinned = deferred();
+  const nextRead = deferred();
+  state.lookup
+    .mockResolvedValueOnce(AsyncResult.success(lookedUp("completed")))
+    .mockReturnValueOnce(nextRead.promise);
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  await show("task-b");
+  expect(lookups("env", "main", "task-b")).toBe(1);
+  const before = refreshes("env", "main");
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  await settleList("task-b");
+  expect(refreshes("env", "main")).toBe(before);
+  expect(lookups("env", "main", "task-b")).toBe(1);
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => nextRead.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(button("Pin")).toBeDefined();
+});
+
+it.each(["Retry", "read mark"] as const)(
+  "a %s that completes after the task screen closed refreshes no list and reads nothing",
+  async (kind) => {
+    reset();
+    const sent = deferred();
+    if (kind === "Retry") {
+      state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("failed")));
+      state.retry.mockReturnValueOnce(sent.promise);
+      await show("task-old");
+      await press("Retry");
+    } else {
+      state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed", { unread: true })));
+      state.update.mockReturnValueOnce(sent.promise);
+      await show("task-old");
+      expect(state.update).toHaveBeenCalled();
+    }
+    await act(async () => root?.unmount());
+    root = undefined;
+    await act(async () =>
+      sent.settle(AsyncResult.success(kind === "Retry" ? { status: "started" } : {})),
+    );
+    expect(refreshes("env", "main")).toBe(0);
+    expect(lookups("env", "main", "task-old")).toBe(1);
+  },
+);
+
+it("a Pin sent while the task was listed, landing after a refresh dropped it and before any read, leads to one read", async () => {
+  reset();
+  Object.assign(state.task, { data: { rows: [listRow("task-old", "Summarize the README")] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed", { pinnedAt: at })));
+  const pinned = deferred();
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  // A refresh dropped the task, and the list is being read again, so no lookup has started yet.
+  Object.assign(state.task, { isPending: true, data: { rows: [] } });
+  await show("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(0);
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  expect(lookups("env", "main", "task-old")).toBe(0);
+  await settleList("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  expect(button("Unpin")).toBeDefined();
+});
+
+it("a Pin sent while the task was listed, landing during the first read after it left, reads once more after it", async () => {
+  reset();
+  Object.assign(state.task, { data: { rows: [listRow("task-old", "Summarize the README")] } });
+  const first = deferred();
+  state.lookup
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValue(AsyncResult.success(lookedUp("completed", { pinnedAt: at })));
+  const pinned = deferred();
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  Object.assign(state.task, { data: { rows: [] } });
+  await show("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  await settleList("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => first.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(lookups("env", "main", "task-old")).toBe(2);
+  expect(button("Unpin")).toBeDefined();
 });

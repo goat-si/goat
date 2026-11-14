@@ -114,6 +114,26 @@ export const hubEntries = {
       "The service records each reissue's request key on its mint and answers a repeat without minting or returning a token.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.machine_detach": entry({
+    resource: "hub",
+    verb: "machine_detach",
+    name: "goat_hub_machine_detach",
+    toolkit: "hostStatus",
+    summary: "Detach a disposable machine: remove its OpenCodex link and lightweight Child.",
+    description:
+      "Start the detach of a disposable machine this thread attached: GOAT fences the record, removes its OpenCodex link and the lightweight Child with a journalled purge, and the record ends purged. The machine stays a Pen member until a person removes it with pen revoke; its cap slot stays taken until the detach has ended and it has left Pen. Read goat_hub_machine_list for its progress.",
+    guide:
+      "Only the thread that attached the machine, while Attach disposable machines still names it, or a person may detach it; hub.manage for pen-<nodeId> when goatclaw is on. Use a new clientRequestId per detach; a repeat answers the record. The removal runs in 30-second passes. A machine that does not answer keeps its link: GOAT tries again every 30 minutes and, after 24 hours without an answer counted while this hub's Pen answers its member list, removes the link without the machine and cleans the machine once it answers; GOAT itself resolves the purges it gives up on. A Child that refuses the purge, a machine that answers while its purge stays unknown, or a revoke OpenCodex leaves unsettled, holds the detach for a person; the record's message says what they do. force (removing the link now, without the machine) is a person's step: a thread gets person_required. A machine that presents another SSH host key is a conflict only a person's force passes. Refusals: not_found, provisioner_refused, person_required, invalid_request (a clientRequestId this caller used to detach another machine), conflict (not admitted, already finished, a conflict on the record, or it changed), hold_unsupported (the machine runs GOAT, which this version cannot hold), storage_failed.",
+    effect: "write",
+    capability: "hub.manage",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "The service keys each detach by its caller and clientRequestId and answers a repeat from the stored record.",
+    annotations: { idempotentHint: false, destructiveHint: true, openWorldHint: true },
+  }),
   "hub.machine_list": entry({
     resource: "hub",
     verb: "machine_list",

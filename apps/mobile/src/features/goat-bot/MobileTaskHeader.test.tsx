@@ -208,3 +208,10 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
   ]);
   await act(async () => root.unmount());
 });
+
+it("a status already showing when the header mounts is told to the screen reader once", async () => {
+  spoken.lines = [];
+  const root = await render({ state: "denied" });
+  expect(spoken.lines).toEqual(["Permission to read this task is unavailable."]);
+  await act(async () => root.unmount());
+});

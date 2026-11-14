@@ -5,6 +5,7 @@ import {
   type DeviceId,
   type DevicePlatform,
   type DeviceSummary,
+  type DeviceServiceState,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
   type ThreadId,
@@ -106,7 +107,7 @@ export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
 });
 
 const pickDevice = Effect.fn("handlers.pickDevice")(function* (
-  devices: ReadonlyArray<DeviceSummary>,
+  state: Pick<DeviceServiceState, "devices" | "hostStatuses">,
   input: {
     readonly deviceId?: DeviceId | undefined;
     readonly platform?: DevicePlatform | undefined;
@@ -114,13 +115,16 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   },
 ): Effect.fn.Return<DeviceSummary, DeviceToolUnavailableError> {
   const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
+  const devices = state.devices;
+  const status = state.hostStatuses[hostId];
+  const failure = status?.status === "failed" ? status.detail : undefined;
   if (input.deviceId !== undefined) {
     const match = devices.find(
       (device) => device.hostId === hostId && device.id === input.deviceId,
     );
     if (match) return match;
     return yield* new DeviceToolUnavailableError({
-      reason: `No device ${input.deviceId} on host ${hostId}. Call goat_device_list for current ids.`,
+      reason: `No device ${input.deviceId} on host ${hostId}. ${failure ? `${failure} ` : ""}Call goat_device_list for current ids.`,
     });
   }
   const candidates = devices.filter(
@@ -131,9 +135,10 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   if (candidates.length === 0) {
     return yield* new DeviceToolUnavailableError({
       reason:
-        input.platform === undefined
+        failure ??
+        (input.platform === undefined
           ? "No simulators or emulators were found. Call goat_device_list to see why."
-          : `No ${input.platform} devices were found on host ${hostId}. Call goat_device_list to see why.`,
+          : `No ${input.platform} devices were found on host ${hostId}. Call goat_device_list to see why.`),
     });
   }
   const platforms = new Set(candidates.map((device) => device.platform));
@@ -200,7 +205,7 @@ const handlers = {
         yield* authorizeThread(scope.thread.threadId);
         yield* McpToolAccess.admit(input);
         // Android boot replaces an AVD name with a serial; replay must precede discovery by id.
-        const target = yield* pickDevice(state.devices, { ...input, hostId });
+        const target = yield* pickDevice(state, { ...input, hostId });
         const session = yield* devices.open(
           {
             threadId: scope.thread.threadId,

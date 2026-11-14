@@ -1137,6 +1137,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     "child run completion",
     "child question",
     "child approval",
+    "Node fetch timeout",
   ] as const)("a task wait still returns on %s", (wake) =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
@@ -1242,6 +1243,20 @@ describe("OrchestratorMcpService provider resolution", () => {
           .delegateTask(scope, { task: "Review the change.", mode: "wait" })
           .pipe(Effect.forkChild);
         yield* Deferred.await(subscribed);
+        if (wake === "Node fetch timeout") {
+          const beforeTimeout = yield* Fiber.join(waiting).pipe(
+            Effect.timeoutOption(Duration.seconds(299)),
+            Effect.forkChild,
+          );
+          yield* TestClock.adjust(Duration.seconds(299));
+          const result = yield* Fiber.join(beforeTimeout);
+          assert.isTrue(Option.isSome(result));
+          if (Option.isSome(result)) {
+            assert.equal(result.value.taskId, taskId);
+            assert.isTrue(result.value.waitTimedOut);
+          }
+          return;
+        }
         ready = true;
         if (wake === "parent completion") {
           yield* Queue.offer(events, {
@@ -2261,6 +2276,96 @@ describe("OrchestratorMcpService provider resolution", () => {
     );
   });
 
+  it.effect.each(["already advertised", "newly advertised", "still unavailable"] as const)(
+    "rechecks a delegated model that is %s",
+    (availability) =>
+      Effect.gen(function* () {
+        const museInstanceId = ProviderInstanceId.make("muse");
+        const model = "muse-wonder-1.0";
+        const provider = (advertisedModel: string) =>
+          providerSnapshot({
+            instanceId: museInstanceId,
+            driver: ProviderDriverKind.make("muse"),
+            model: advertisedModel,
+          });
+        const commands: Array<unknown> = [];
+        const refreshedInstances: Array<ProviderInstanceId> = [];
+        const task = {
+          id: taskId,
+          threadId: parentThreadId,
+          origin: "app_owned",
+          childThreadId,
+          providerInstanceId: museInstanceId,
+          model,
+          status: "running",
+          result: null,
+        };
+        const dependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            hasReceipt: () => Effect.succeed(false),
+            getThreadRecords: (threadId) =>
+              Effect.succeed(
+                threadId === parentThreadId
+                  ? parentProjection(commands.length > 0 ? [task] : [])
+                  : childProjection,
+              ),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return {
+                  sequence: 1,
+                  storedEvents: [{ event: { type: "subagent.updated", payload: task } }],
+                } as never;
+              }),
+          }),
+          ServerSettings.layerTest(),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([
+              provider(availability === "already advertised" ? model : "muse-spark-1.3"),
+            ]),
+            refreshInstance: (instanceId) =>
+              Effect.sync(() => {
+                refreshedInstances.push(instanceId);
+                return [provider(availability === "still unavailable" ? "muse-spark-1.3" : model)];
+              }),
+          }),
+          adapterRegistryLayer([museInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const delegation = service.delegateTask(scope, {
+            task: "Review the change.",
+            target: { providerInstanceId: museInstanceId, model },
+            mode: "async",
+            clientRequestId: availability,
+          });
+          if (availability === "still unavailable") {
+            const error = yield* delegation.pipe(Effect.flip);
+            assert.equal(error.code, "model_unavailable");
+            assert.deepEqual(commands, []);
+          } else {
+            const result = yield* delegation;
+            assert.equal(result.model, model);
+            assert.equal(commands.length, 1);
+            assert.deepEqual((commands[0] as { modelSelection: unknown }).modelSelection, {
+              instanceId: museInstanceId,
+              model,
+            });
+          }
+          assert.deepEqual(
+            refreshedInstances,
+            availability === "already advertised" ? [] : [museInstanceId],
+          );
+        }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(dependencies))));
+      }),
+  );
+
   it.effect("rejects delegation to a provider without a registered adapter", () =>
     Effect.gen(function* () {
       const forkOnlyInstanceId = ProviderInstanceId.make("forkOnly");
@@ -3052,6 +3157,14 @@ describe("OrchestratorMcpService provider resolution", () => {
     { name: "terminal-message", delayed: false, terminal: true, wakeFails: false, timeout: false },
     { name: "failed-upgrade", delayed: false, terminal: false, wakeFails: true, timeout: false },
     {
+      name: "cancelled-wait",
+      delayed: true,
+      terminal: false,
+      wakeFails: false,
+      timeout: false,
+      cancelled: true,
+    },
+    {
       name: "timeout-question-race",
       delayed: true,
       terminal: false,
@@ -3203,6 +3316,17 @@ describe("OrchestratorMcpService provider resolution", () => {
         .pipe(Effect.forkChild);
       if (scenario.delayed) {
         yield* Deferred.await(subscribed);
+        if ("cancelled" in scenario) {
+          yield* Fiber.interrupt(fiber);
+          assert.isTrue(
+            commands.some(
+              (command) =>
+                command.type === "delegated_task.wake-policy" &&
+                command.completionWake === "always",
+            ),
+          );
+          return;
+        }
         pending = true;
         if (scenario.timeout) yield* TestClock.adjust(Duration.millis(1000));
         else
@@ -3536,6 +3660,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     const service = (
       git: Partial<GitVcsDriver.GitVcsDriver["Service"]>,
       saved: Ref.Ref<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>,
+      task: ScheduledTask = existing,
     ) =>
       OrchestratorMcpService.layer.pipe(
         Layer.provide(layerNoFleetSync),
@@ -3546,7 +3671,9 @@ describe("OrchestratorMcpService provider resolution", () => {
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
-            Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: () => Effect.succeed(null),
+            }),
             ServerSettings.layerTest(),
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
             Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
@@ -3562,7 +3689,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             }),
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
-              list: () => Effect.succeed({ tasks: [existing] }),
+              list: () => Effect.succeed({ tasks: [task] }),
               upsert: (input) =>
                 Ref.update(saved, (strategies) => [...strategies, input.workspaceStrategy]).pipe(
                   Effect.as({ task: existing }),
@@ -3596,7 +3723,12 @@ describe("OrchestratorMcpService provider resolution", () => {
       Effect.gen(function* () {
         const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
-          Effect.provide(service(masterRepository, saved)),
+          Effect.provide(
+            service(masterRepository, saved, {
+              ...existing,
+              threadId: ThreadId.make("thread:scheduled-base"),
+            }),
+          ),
         );
         yield* mcp.updateScheduledTask(client, {
           scheduledTaskId: existing.id,
@@ -3605,6 +3737,20 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.deepEqual(yield* Ref.get(saved), [
           { type: "worktree", baseRef: "origin/master", startFromOrigin: true },
         ]);
+      }),
+    );
+
+    it.effect("keeps the saved workspace when an unbound task stays unbound", () =>
+      Effect.gen(function* () {
+        const saved = yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]);
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(service(masterRepository, saved)),
+        );
+        yield* mcp.updateScheduledTask(client, {
+          scheduledTaskId: existing.id,
+          bindToCurrentThread: false,
+        });
+        assert.deepEqual(yield* Ref.get(saved), [{ type: "root" }]);
       }),
     );
 
@@ -3820,6 +3966,17 @@ describe("OrchestratorMcpService provider resolution", () => {
             expected: { ...inherited, options: [] },
           },
           {
+            name: "same model by alias",
+            target: { model: "GPT" },
+            expected: { ...inherited, model: "GPT" },
+          },
+          {
+            name: "parent named the same model by alias",
+            parent: { ...inherited, model: "gpt" },
+            target: { model: inherited.model },
+            expected: inherited,
+          },
+          {
             name: "change model",
             target: { model: "other-model" },
             expected: { instanceId: codexInstanceId, model: "other-model" },
@@ -3850,7 +4007,10 @@ describe("OrchestratorMcpService provider resolution", () => {
               getThreadRecords: (threadId) =>
                 Effect.succeed(
                   threadId === parentThreadId
-                    ? parentProjection(commands.length > 0 ? [task] : [], inherited)
+                    ? parentProjection(
+                        commands.length > 0 ? [task] : [],
+                        "parent" in testCase ? testCase.parent : inherited,
+                      )
                     : childProjection,
                 ),
               dispatch: (command) =>
@@ -3875,6 +4035,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                   name: model,
                   isCustom: false,
                   capabilities: null,
+                  ...(model === inherited.model ? { aliases: ["gpt"] } : {}),
                 })),
               },
               providerSnapshot({ instanceId: peerId, driver, model: inherited.model }),

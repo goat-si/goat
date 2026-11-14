@@ -24,6 +24,8 @@ function measurer(rect: () => Rect): { measureInWindow: Measure } {
     },
   };
 }
+// Home's work signals on bot rows are not under test here.
+vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
