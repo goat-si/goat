@@ -22,7 +22,7 @@ import * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import type { Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
@@ -237,6 +237,9 @@ import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { AsyncResult } from "effect/reactivity";
+import * as Effect from "effect/Effect";
+import { Persistence } from "@goat/client-runtime/platform";
+import { layer as storageLayer } from "~/connection/storage";
 
 const environmentId = EnvironmentId.make("g1-sync-snapshot-test");
 const at = DateTime.makeUnsafe("2026-10-12T09:40:00Z");
@@ -625,6 +628,51 @@ it("guard: a synchronized empty mounted chat has an empty baseline and status", 
   expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
     "",
   );
+});
+
+it("baselines persisted cached history when the mounted chat becomes live", async () => {
+  const id = ThreadId.make("cached-history");
+  const threadRef = setup(id, [turnItem(id, "cached-reply", "assistant", "Cached reply", 1)]);
+  const projection = mocks.server.threads.get(threadRef.threadId);
+  if (!projection) throw new Error("missing cached snapshot");
+  const save = Atom.runtime(storageLayer).atom(
+    Effect.gen(function* () {
+      const store = yield* Persistence.EnvironmentCacheStore;
+      yield* store.saveThread(environmentId, { snapshotSequence: 1, projection });
+    }),
+  );
+  const saved = await nextAtom(
+    save,
+    (result) => result._tag === "Success" || result._tag === "Failure",
+  );
+  if (saved._tag === "Failure") throw new Error("could not seed cached thread");
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <MemberChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const details = mocks.details;
+  if (!details) throw new Error("thread details were not installed");
+  await nextAtom(details.visibleTurnItemsAtom(threadRef), (items) =>
+    items.some(({ item }) => item.id === "cached-reply"),
+  );
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Cached reply"));
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  expect(status?.textContent).toBe("");
+  const socket = await mocks.server.socket;
+  await act(async () => {
+    Queue.offerUnsafe(socket, { kind: "synchronized" });
+    await nextAtom(details.statusAtom(threadRef), (value) => value === "live");
+  });
+  expect(status?.textContent).toBe("");
+  await deliver(
+    socket,
+    details,
+    threadRef,
+    turnItem(threadRef.threadId, "catch-up", "assistant", "Catch-up reply", 2),
+    2,
+  );
+  expect(status?.textContent).toMatch(/Research replied\.|New reply from Research\./);
 });
 
 it.each(["above", "following"] as const)(
