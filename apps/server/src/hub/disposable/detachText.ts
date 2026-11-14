@@ -64,12 +64,12 @@ const unknownRevoke = (operationId: string) =>
       ": GOAT repeats it if it still holds the link, then resolves it.";
 /** Another revoke of the link is still open (link_operation_open): OpenCodex refuses other new ids. */
 const OPEN_ELSEWHERE =
-  "another revoke of its link is still open in OpenCodex (link_operation_open), which refuses other revokes meanwhile. A person on this hub finds it with ocx link operations --json and fixes what stopped it";
+  "another revoke of its link is still open in OpenCodex (link_operation_open), which refuses any revoke under a new operation id meanwhile. A person on this hub finds it with ocx link operations --json and fixes what stopped it";
 /** GOAT's own earlier revoke of the link is still open (link_operation_open). */
 const openOwner = (owner: string) =>
   "GOAT's earlier revoke " +
   owner +
-  " of its link is still open in OpenCodex (link_operation_open), which refuses other revokes meanwhile. A person fixes what stopped it on this hub";
+  " of its link is still open in OpenCodex (link_operation_open), which refuses any revoke under a new operation id meanwhile. A person fixes what stopped it on this hub";
 /** An unfinished removal holds the link (link_retirement_owned): the owner's way out on the Home. */
 const ownerWayOut = (linkId: string) =>
   "A person on this hub repeats the revoke that owns it (see ocx link operations --json) or runs ocx link revoke --link-id " +
@@ -131,13 +131,11 @@ const STOPS: Record<string, Stop> = {
           ? outcome === "unreadable" &&
             detach.refusal === "link_not_found" &&
             detach.owner !== undefined
-            ? "the revoke " +
-              operationId +
-              " found its link gone (link_not_found), and GOAT could not read its earlier revoke " +
+            ? "its link is gone (link_not_found), and GOAT could not read its earlier revoke " +
               detach.owner +
-              " to tell whether that removed it. A person fixes what stops reading the journal on this hub, then detaches again" +
+              ". A person fixes the journal read on this hub, then detaches again" +
               WHERE +
-              ": GOAT reads it again."
+              "."
             : "OpenCodex " +
               (outcome === "not_found" ? "never recorded" : "gave no readable answer for") +
               " the revoke " +
@@ -341,7 +339,7 @@ const retirementStopped = (name: string, detach: Detach, failing: boolean, linkI
           name +
           " answers again; its earlier removal (operation " +
           operationId +
-          ") met link_operation_open: another revoke of its link was open, which a plain force cannot pass. A person's Detach" +
+          ") met link_operation_open: another revoke of its link was open, which refuses a revoke under a new operation id. A person's Detach" +
           WHERE +
           " reads it again first and repeats what OpenCodex still holds.",
         nextAction: "A person fixes what stopped that removal on the hub, then" + detachIt + ".",

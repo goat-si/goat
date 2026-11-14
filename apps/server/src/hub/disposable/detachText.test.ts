@@ -58,7 +58,11 @@ it("every detach text fits the wire's 500 characters with the longest name and o
                 for (const elsewhere of [true, false])
                   for (const failures of [47, 0])
                     for (const forced of [true, false])
-                      for (const refusal of ["o".repeat(40), "link_operation_open"]) {
+                      for (const refusal of [
+                        "o".repeat(40),
+                        "link_operation_open",
+                        "link_not_found",
+                      ]) {
                         const shown = detachMessage({
                           state,
                           name,
