@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -70,6 +71,8 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
     const closers = new Map<string, () => void>();
     const reread = new Map<string, () => void>();
     const held = new Map<string, Promise<void>>();
+    // A held version probe: `started` resolves once the probe for that PATH is waiting.
+    const heldProbes = new Map<string, { started: () => void; gate: Promise<void> }>();
     const json = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown) =>
       Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body)));
     const http = HttpClient.make((request) => {
@@ -106,10 +109,18 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
     });
     const runtime = {
       runOpenCodeCommand: ({ environment }: { readonly environment?: NodeJS.ProcessEnv }) =>
-        Effect.succeed({
-          stdout: `opencode v${launches.probe[environment?.PATH ?? "/a"]}`,
-          stderr: "",
-          code: 0,
+        Effect.suspend(() => {
+          const path = environment?.PATH ?? "/a";
+          const answer = Effect.succeed({
+            stdout: `opencode v${launches.probe[path]}`,
+            stderr: "",
+            code: 0,
+          });
+          const hold = heldProbes.get(path);
+          if (hold === undefined) return answer;
+          heldProbes.delete(path);
+          hold.started();
+          return Effect.promise(() => hold.gate).pipe(Effect.andThen(answer));
         }),
       startOpenCodeServerProcess: ({
         environment,
@@ -173,12 +184,21 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
           release();
         });
       });
+    /** Holds the next version probe under that PATH; the first effect waits until it has begun. */
+    const holdProbe = (path: string) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let release = () => {};
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        heldProbes.set(path, { started: () => Deferred.doneUnsafe(started, Effect.void), gate });
+        return { started: Deferred.await(started), release: Effect.sync(() => release()) };
+      });
     const stopServer = (path: string) => Effect.sync(() => running.set(PORTS[path] ?? "0", false));
     const supportsGoals = Effect.map(
       instance.orchestrationAdapter.getCapabilities(),
       (capabilities) => capabilities.turns.supportsNativeGoals === true,
     );
-    return { instance, open, dropStream, holdOpen, stopServer, supportsGoals };
+    return { instance, open, dropStream, holdOpen, holdProbe, stopServer, supportsGoals };
   });
 
 const plain: Launches = {
@@ -235,6 +255,25 @@ it.layer(layer)("OpenCode native goal support", (it) => {
         yield* open("goals-b");
         assert.isTrue(yield* supportsGoals);
         yield* release;
+        yield* Fiber.join(opening);
+        assert.isTrue(yield* supportsGoals);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "an older session's late version probe does not leave the current launch without an answer",
+    () =>
+      Effect.gen(function* () {
+        const host: NodeJS.ProcessEnv = { PATH: "/a", HOME: "/fixture" };
+        const { open, holdProbe, supportsGoals } = yield* goalHarness(host, plain);
+        const probe = yield* holdProbe("/a");
+        const opening = yield* open("goals-a").pipe(Effect.forkChild({ startImmediately: true }));
+        yield* probe.started;
+        host.PATH = "/b";
+        yield* open("goals-b");
+        assert.isTrue(yield* supportsGoals);
+        // A's probe finishes last and is recorded in the one-entry probe cache, evicting B's.
+        yield* probe.release;
         yield* Fiber.join(opening);
         assert.isTrue(yield* supportsGoals);
       }).pipe(Effect.scoped),

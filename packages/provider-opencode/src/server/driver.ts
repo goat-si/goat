@@ -154,21 +154,23 @@ function selectOpenCodeRuntimeAdapter(input: {
   /** The version of the server already running for the current launch, if one is. */
   readonly runningVersion: Effect.Effect<string | undefined>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
-  const pick = <PE>(probed: Effect.Effect<ProbedOpenCode | undefined, PE>) =>
-    byOpenCodeRuntime(probed, { v1: Effect.succeed(input.v1), v2: Effect.succeed(input.v2) });
-  const hot = pick(Effect.map(input.probe.lastSuccess, Option.getOrUndefined));
+  // What a new session would launch: the server already running for the current launch answers
+  // first, since a shim's probe can miss its version and a late probe for an earlier launch can
+  // evict the current one from the probe cache; otherwise the probe decides.
+  const current = Effect.gen(function* () {
+    const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
+    const running = probed?.generation === "v1" ? undefined : yield* input.runningVersion;
+    const v2 = running !== undefined || probed?.generation === "v2";
+    const version = running ?? (probed?.generation === "v2" ? probed.version : undefined);
+    return { adapter: v2 ? input.v2 : input.v1, version };
+  });
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
     getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
-      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
-      const adapter = yield* pick(Effect.succeed(probed));
+      const { adapter, version } = yield* current;
       const capabilities = yield* adapter.getCapabilities();
-      // What a new session would launch: the server already running for the current launch
-      // reports its own version, which a shim's probe can miss; otherwise the probe decides.
-      const version =
-        probed?.generation === "v2" ? ((yield* input.runningVersion) ?? probed.version) : undefined;
       return {
         ...capabilities,
         turns: {
@@ -179,7 +181,7 @@ function selectOpenCodeRuntimeAdapter(input: {
       };
     }),
     planSelectionTransition: (transition) =>
-      Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
+      Effect.flatMap(current, ({ adapter }) => adapter.planSelectionTransition(transition)),
     openSession: (session) =>
       input.currentEnvironment.pipe(
         Effect.flatMap((environment) =>
