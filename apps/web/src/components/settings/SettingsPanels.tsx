@@ -128,6 +128,7 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 };
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
+
 export function useSettingsRestore(onRestored?: () => void) {
   const {
     theme,
