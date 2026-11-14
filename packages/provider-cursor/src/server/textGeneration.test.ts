@@ -199,6 +199,35 @@ beforeEach(() => {
 });
 
 describe("CursorTextGeneration", () => {
+  it.effect("refuses text generation when the selected backend differs", () =>
+    Effect.gen(function* () {
+      const backend = process.env.CURSOR_BACKEND_URL;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (backend === undefined) delete process.env.CURSOR_BACKEND_URL;
+          else process.env.CURSOR_BACKEND_URL = backend;
+        }),
+      );
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh";
+      const environment = { CURSOR_API_KEY: "key", CURSOR_BACKEND_URL: "https://custom.invalid" };
+      const generation = yield* makeCursorTextGeneration(cursorSettings, environment);
+      const input = {
+        cwd: process.cwd(),
+        branch: "test",
+        stagedSummary: "M file",
+        stagedPatch: "diff",
+        modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+      };
+      expect((yield* generation.generateCommitMessage(input).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(cursorSdkMock.create).not.toHaveBeenCalled();
+      environment.CURSOR_BACKEND_URL = "https://api2.cursor.sh/";
+      yield* generation.generateCommitMessage(input);
+      expect(cursorSdkMock.create).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("resolves the browser credential for every request after an account change", () =>
     Effect.gen(function* () {
       let apiKey = "first-browser-key";

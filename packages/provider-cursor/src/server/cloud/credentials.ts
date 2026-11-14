@@ -11,8 +11,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
-export const sdkBackendMatches = () =>
-  (process.env.CURSOR_BACKEND_URL ?? PRODUCTION_BACKEND).replace(/\/+$/, "") === PRODUCTION_BACKEND;
+export const sdkBackendMatches = (backend = PRODUCTION_BACKEND) =>
+  (process.env.CURSOR_BACKEND_URL ?? PRODUCTION_BACKEND).replace(/\/+$/, "") ===
+  backend.replace(/\/+$/, "");
 export const BACKEND_MISMATCH =
   "Cursor Cloud cannot use this key: set the server's CURSOR_BACKEND_URL to https://api2.cursor.sh or unset it, then restart the server.";
 const Credentials = Schema.fromJsonString(

@@ -82,7 +82,6 @@ export function makeCursorAgentOptions(input: {
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy, input.platform);
   const mcpServers = cursorMcpServers(input.mcpSession);
-  // The SDK takes no environment: it reads CURSOR_BACKEND_URL from the server process; instance and session environments select only the key.
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `GOAT ${input.threadId}`,

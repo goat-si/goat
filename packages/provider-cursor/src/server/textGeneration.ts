@@ -1,3 +1,4 @@
+import { sdkBackendMatches } from "./cloud/credentials.ts";
 import {
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
@@ -93,6 +94,12 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const { operation, prompt, modelSelection } = input;
       const isMemory = TextGenerationOperations.isMemoryOperation(operation);
       const apiKey = yield* resolveCursorApiKey(operation);
+      if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: "CURSOR_BACKEND_URL differs from the selected Cursor backend.",
+        });
+      }
       const { Agent } = yield* Effect.try(sdk.load);
       // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
       if (yield* fs.exists(`${yield* HostProcess.HomeDirectory}/.cursor/sandbox.json`)) {
@@ -116,7 +123,6 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         ),
         (store) => Effect.tryPromise(() => store.dispose()).pipe(Effect.ignore({ log: true })),
       );
-      // The SDK takes no environment: it reads CURSOR_BACKEND_URL from the server process; instance and session environments select only the key.
       const agentOptions = {
         apiKey,
         mode: "plan",
@@ -132,8 +138,16 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           enableAgentRetries: !isMemory,
         },
       } satisfies AgentOptions;
-      const createCursorAgent = (sandboxEnabled: boolean) =>
-        Effect.tryPromise((signal) =>
+      const createCursorAgent = Effect.fn("CursorTextGeneration.createAgent")(function* (
+        sandboxEnabled: boolean,
+      ) {
+        if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: "CURSOR_BACKEND_URL differs from the selected Cursor backend.",
+          });
+        }
+        return yield* Effect.tryPromise((signal) =>
           Agent.create(
             sandboxEnabled
               ? agentOptions
@@ -160,6 +174,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               }),
           ),
         );
+      });
 
       const request = Effect.gen(function* () {
         // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.

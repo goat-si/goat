@@ -1,3 +1,4 @@
+import { sdkBackendMatches } from "./cloud/credentials.ts";
 import type { ProviderInstanceEnvironment, ProviderSetupError } from "@goat/contracts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -42,6 +43,18 @@ export const forSession = (source: Source, auth: SessionAuth = {}) =>
           apiKey,
           validate: (auth.validateSessionApiKey?.(apiKey, environmentKey) ?? Effect.void).pipe(
             Effect.mapError((cause) => new CursorAgentSdkRunnerError({ method: "open", cause })),
+            Effect.andThen(
+              Effect.suspend(() =>
+                sdkBackendMatches(copy.CURSOR_BACKEND_URL)
+                  ? Effect.void
+                  : Effect.fail(
+                      new CursorAgentSdkRunnerError({
+                        method: "open",
+                        cause: new Error("CURSOR_BACKEND_URL differs from the session backend."),
+                      }),
+                    ),
+              ),
+            ),
           ),
         })),
       );
