@@ -7,7 +7,9 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeHarness } from "./adapter.testkit.ts";
-import { resolveKey, makeCursorCloudCredentials } from "./credentials.ts";
+import { resolveKey, makeCursorCloudCredentials, cloudSdkBackendMatches } from "./credentials.ts";
+import { currentCloudSdkBackend } from "../sdkBackend.ts";
+import { loadCursorSdk } from "../sdk.ts";
 
 const instanceId = ProviderInstanceId.make("cursorCloud-test");
 const siblingId = ProviderInstanceId.make("cursor-account-2");
@@ -20,6 +22,42 @@ const stored = (apiKey: string, apiKeyExpiresAtMs?: number) => ({
 });
 
 const decodeSettings = Schema.decodeEffect(ServerSettings);
+
+it.live("Cloud guard agrees with the SDK request destination", () =>
+  Effect.promise(async () => {
+    const previous = process.env.CURSOR_BACKEND_URL;
+    const fetch = vi.fn(
+      async (_url: string | URL | Request) => new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      for (const backend of [
+        undefined,
+        "https://api.cursor.com",
+        "",
+        "https://example.invalid",
+        "https://api2.cursor.sh",
+        "https://api.cursor.com/",
+      ]) {
+        if (backend === undefined) delete process.env.CURSOR_BACKEND_URL;
+        else process.env.CURSOR_BACKEND_URL = backend;
+        fetch.mockClear();
+        await loadCursorSdk()
+          .Agent.list({ runtime: "cloud", apiKey: "fixture", limit: 1 })
+          .catch(() => undefined);
+        const url = String(fetch.mock.calls.at(-1)?.[0]);
+        expect(url).toBe(`${currentCloudSdkBackend()}/v1/agents?limit=1`);
+        expect(cloudSdkBackendMatches(), `backend ${backend}, request ${url}`).toBe(
+          url.startsWith("https://api.cursor.com/v1/"),
+        );
+      }
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+      else process.env.CURSOR_BACKEND_URL = previous;
+      vi.unstubAllGlobals();
+    }
+  }),
+);
 
 const credentialFixture = (
   settings: ServerSettings,

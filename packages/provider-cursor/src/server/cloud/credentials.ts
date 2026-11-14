@@ -11,9 +11,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 export { sdkBackendMatches } from "../sdkBackend.ts";
+export { cloudSdkBackendMatches } from "../sdkBackend.ts";
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
 export const BACKEND_MISMATCH =
-  "Cursor Cloud cannot use this key: set the server's CURSOR_BACKEND_URL to https://api2.cursor.sh or unset it, then restart the server.";
+  "Cursor Cloud cannot use this key: set the server's CURSOR_BACKEND_URL to https://api.cursor.com or unset it, then restart the server.";
 const Credentials = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.Literal(1),

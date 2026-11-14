@@ -23,7 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
-import { BACKEND_MISMATCH, sdkBackendMatches } from "./credentials.ts";
+import { BACKEND_MISMATCH, cloudSdkBackendMatches } from "./credentials.ts";
 import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
@@ -279,7 +279,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     request: () => Promise<A>,
   ) =>
     Effect.suspend(() =>
-      sdkBackendMatches()
+      cloudSdkBackendMatches()
         ? CursorCloudSdk.request(operation, request).pipe(
             Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
           )
