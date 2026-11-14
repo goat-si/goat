@@ -18,6 +18,19 @@ export function resetCreditChoices(
   compact = false,
 ): ReadonlyArray<ResetCreditChoice> {
   const expiresIn = (at: string | undefined) => (at ? formatDuration(Date.parse(at) - now) : null);
+  if (credits.options && "sourceId" in input) {
+    return [
+      {
+        key: "unsupported",
+        summary:
+          "This hub cannot select a reset grant. Redeem through the account's local connection.",
+        actionLabel: "Use",
+        confirmDescription: "",
+        availableCount: 0,
+        input,
+      },
+    ];
+  }
   if (credits.options && "instanceId" in input) {
     return credits.options.map((option) => {
       const expires = expiresIn(option.expiresAt);

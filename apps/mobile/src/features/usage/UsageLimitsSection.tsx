@@ -13,7 +13,6 @@ import {
   type ResetCreditChoice,
   resetCreditChoices,
   formatResetsIn,
-  limitsNotice,
   paceOf,
   paceRemainingPercent,
   remainingPercent,
@@ -36,6 +35,7 @@ import {
   refreshEnvironmentLimits,
 } from "./usageLimitsRefresh";
 import { usageProviderKind, useProviderColors } from "./usageProviders";
+import { UsageLimitDetails } from "./UsageLimitDetails";
 
 const PACE_LABEL = { ahead: "ahead of pace", on: "on pace", under: "under pace" } as const;
 
@@ -171,7 +171,6 @@ export function AccountLimits(props: {
   const { limits, now, dense = false } = props;
   const color = useBarColor(props.driver);
   if (!limits) return null;
-  const notice = limitsNotice(limits);
   const externalUsage = limits.externalUsage;
   const padding = dense ? "px-4 py-3" : "p-4";
   return (
@@ -195,15 +194,11 @@ export function AccountLimits(props: {
         </View>
         {props.trailing}
       </View>
-      {notice ? (
-        <Text className="text-sm text-foreground-muted">{notice}</Text>
-      ) : (
-        <View className="gap-3">
-          {limits.windows.map((window) => (
-            <WindowRow key={window.id} window={window} color={color} now={now} />
-          ))}
-        </View>
-      )}
+      <UsageLimitDetails limits={limits}>
+        {limits.windows.map((window) => (
+          <WindowRow key={window.id} window={window} color={color} now={now} />
+        ))}
+      </UsageLimitDetails>
       {externalUsage ? (
         <Pressable
           accessibilityRole="link"

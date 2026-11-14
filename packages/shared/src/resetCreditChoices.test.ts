@@ -33,5 +33,6 @@ it("keeps legacy and source-account redemption inputs intact", () => {
   const local = { instanceId: ProviderInstanceId.make("claude") };
   expect(resetCreditChoices(legacy, local, 0)[0]?.input).toEqual(local);
   const source = { sourceId: UsageLimitSourceId.make("home"), accountId: "a", creditId: "weekly" };
-  expect(resetCreditChoices(credits, source, 0)[0]?.input).toEqual(source);
+  expect(resetCreditChoices(credits, source, 0)[0]?.summary).toContain("cannot select");
+  expect(resetCreditChoices(credits, source, 0)[0]?.availableCount).toBe(0);
 });

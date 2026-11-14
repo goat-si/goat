@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Switch } from "../ui/switch";
 import {
   NumberField,
@@ -25,6 +25,13 @@ export function RetentionControl({
   unit?: string;
   offLabel?: string;
 }) {
+  const revision = useRef(0);
+  const currentValue = useRef(value);
+  // oxlint-disable-next-line goat/react-effect-budget -- invalidate pending callbacks when saved settings change
+  useEffect(() => {
+    currentValue.current = value;
+    revision.current++;
+  }, [value]);
   const [draft, setDraft] = useState(value);
   const [savedValue, setSavedValue] = useState(value);
   // Saving an age can start a cleanup sweep, so turning a rule on only opens a draft.
@@ -48,12 +55,15 @@ export function RetentionControl({
   const row = useRef<HTMLDivElement>(null);
 
   const commit = (next: number) => {
+    const submittedRevision = ++revision.current;
     const days = Math.min(maximum, Math.max(minimum, Math.round(next)));
     setDraft(days);
     setHeld(false);
     if (days === pending?.days) return;
     if (value !== null) {
-      onChange(days, () => {});
+      onChange(days, () => {
+        if (revision.current === submittedRevision) setDraft(currentValue.current);
+      });
       return;
     }
     const submission = { days };
@@ -62,6 +72,7 @@ export function RetentionControl({
   };
 
   const switchOff = () => {
+    revision.current++;
     setDraft(value);
     setHeld(false);
     setEnabling(null);
@@ -89,6 +100,7 @@ export function RetentionControl({
           size="sm"
           className="w-auto"
           onValueChange={(next) => {
+            revision.current++;
             setDraft(next);
             setEnabling((current) => (current === "draft" ? "edited" : current));
           }}
@@ -115,7 +127,10 @@ export function RetentionControl({
               className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right"
               // Any typed or pasted edit replaces a held age: NumberField commits it on blur itself,
               // and text it cannot parse yet must not leave the held age to be saved.
-              onChange={() => setHeld(false)}
+              onChange={() => {
+                revision.current++;
+                setHeld(false);
+              }}
               onPaste={() => setHeld(false)}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing || event.keyCode === 229) return;

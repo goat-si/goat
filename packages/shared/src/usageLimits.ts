@@ -226,18 +226,8 @@ export interface LimitAccount {
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
-  const hubRedeems = new Map<string, LimitAccount>();
   const planSources = new Map<string, LimitAccount>();
   const merge = (key: string, next: LimitAccount) => {
-    // Prefer hub redemption to clear its routing cooldown too; displayed balance still follows the freshest read.
-    const previousHub = hubRedeems.get(key);
-    if (
-      next.redeem &&
-      "sourceId" in next.redeem.input &&
-      (!previousHub || Date.parse(next.limits.checkedAt) > Date.parse(previousHub.limits.checkedAt))
-    ) {
-      hubRedeems.set(key, next);
-    }
     const previousCredit = creditSources.get(key);
     if (
       next.limits.resetCredits &&
@@ -293,13 +283,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
       sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
-      redeem:
-        hubRedeems.get(key)?.redeem ??
-        // A balance from a report that cannot redeem must not remove another report's target.
-        creditSource?.redeem ??
-        winner.redeem ??
-        previous.redeem ??
-        next.redeem,
+      redeem: creditSource ? creditSource.redeem : winner.redeem,
       limits: {
         ...winner.limits,
         ...(creditSource?.limits.resetCredits
@@ -910,13 +894,15 @@ export function collectProviderUsageLimits(
         ? {}
         : {
             resetCreditInput:
-              hubCreditId && hubCredits
+              showHubCredits && hubCreditId && hubCredits
                 ? {
                     sourceId: hubCredits.source.id,
                     accountId: hubCredits.account.id,
                     creditId: hubCreditId,
                   }
-                : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
+                : showHubCredits
+                  ? undefined
+                  : { instanceId: credits?.provider.instanceId ?? provider.instanceId },
           }),
       ...(provider.displayName ? { displayName: provider.displayName } : {}),
       ...(provider.accentColor ? { accentColor: provider.accentColor } : {}),

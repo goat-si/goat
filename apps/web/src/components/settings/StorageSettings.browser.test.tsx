@@ -330,3 +330,22 @@ it("keeps a newer pending age open when an older first save fails", async () => 
   await expect.element(daysInput(screen)).toHaveValue("60");
   await expect.element(ruleSwitch(screen)).toBeChecked();
 });
+
+it("restores a saved age on failure without overwriting newer submissions or edits", async () => {
+  setup();
+  withSavedAge(30);
+  await using screen = await render(panel());
+  await userEvent.fill(daysInput(screen), "40");
+  await userEvent.keyboard("{Enter}");
+  await failSave(0);
+  await expect.element(daysInput(screen)).toHaveValue("30");
+  await userEvent.fill(daysInput(screen), "40");
+  await userEvent.keyboard("{Enter}");
+  await userEvent.fill(daysInput(screen), "60");
+  await userEvent.keyboard("{Enter}");
+  await failSave(1);
+  await expect.element(daysInput(screen)).toHaveValue("60");
+  await userEvent.fill(daysInput(screen), "70");
+  await failSave(2);
+  await expect.element(daysInput(screen)).toHaveValue("70");
+});
