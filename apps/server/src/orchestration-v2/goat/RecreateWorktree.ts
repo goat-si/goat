@@ -125,8 +125,6 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       });
       yield* gitWorkflow.pruneWorktrees({ cwd });
       const localBranchNames = yield* gitWorkflow.listLocalBranchNames(cwd);
-      const remotes = parseRemoteNamesInGitOrder(yield* runGit(["remote"]));
-      const remoteName = remotes.includes("origin") ? "origin" : (remotes[0] ?? null);
       let restoredFrom: "snapshot" | "branch" | "remote-branch" | "base";
       let refName: string;
       let newRefName: string | undefined;
@@ -160,20 +158,24 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       } else if (localBranchNames.includes(branch)) {
         refName = branch;
         restoredFrom = "branch";
-      } else if (
-        remoteName !== null &&
-        (yield* gitWorkflow.hasCommit({ cwd, refName: `refs/remotes/${remoteName}/${branch}` }))
-      ) {
-        refName = `refs/remotes/${remoteName}/${branch}`;
-        newRefName = branch;
-        restoredFrom = "remote-branch";
       } else {
-        const base = yield* resolveRecreateBase(cwd, remoteName);
-        if (base === null) return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
-        refName = base.refName;
-        baseRefName = base.baseRefName;
+        const remotes = parseRemoteNamesInGitOrder(yield* runGit(["remote"]));
+        const remoteName = remotes.includes("origin") ? "origin" : (remotes[0] ?? null);
+        if (
+          remoteName !== null &&
+          (yield* gitWorkflow.hasCommit({ cwd, refName: `refs/remotes/${remoteName}/${branch}` }))
+        ) {
+          refName = `refs/remotes/${remoteName}/${branch}`;
+          restoredFrom = "remote-branch";
+        } else {
+          const base = yield* resolveRecreateBase(cwd, remoteName);
+          if (base === null)
+            return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
+          refName = base.refName;
+          baseRefName = base.baseRefName;
+          restoredFrom = "base";
+        }
         newRefName = branch;
-        restoredFrom = "base";
       }
       yield* gitWorkflow.createWorktree({
         cwd,
