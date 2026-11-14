@@ -1,3 +1,5 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveCommandPath } from "@goat/shared/shell";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import {
   XAiPromptFailureText,
@@ -233,6 +235,11 @@ export function grokLaunchRuntimeMode(
     : "approval-required";
 }
 
+interface GrokSessionLaunch {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly executable: string;
+}
+
 export function makeGrokAcpAdapterFlavor(
   options: GrokAdapterV2Options,
   homeDirectory: string,
@@ -252,13 +259,15 @@ export function makeGrokAcpAdapterFlavor(
     supportsCompaction: true,
     // Grok expands only a leading `/name`, while the `$` picker inserts `$name` from the
     // `grok inspect` catalog. Ask that catalog again so other `$` text is left alone.
-    rewriteUserText: (text, turnInput) => {
+    rewriteUserText: (text, turnInput, session) => {
       const mention = leadingGrokSkillMention(text);
       if (mention === undefined) return Effect.succeed(text);
-      return (options.currentEnvironment ?? Effect.succeed(options.environment)).pipe(
-        Effect.flatMap((env) =>
-          discoverGrokSkills(options.settings, env, turnInput.runtimePolicy.cwd ?? undefined),
-        ),
+      const launch = session?.launch as GrokSessionLaunch | undefined;
+      return discoverGrokSkills(
+        launch ? { binaryPath: launch.executable } : options.settings,
+        launch?.environment ?? session?.environment ?? options.environment,
+        turnInput.runtimePolicy.cwd ?? undefined,
+      ).pipe(
         Effect.map((skills) =>
           skills.some((skill) => skill.enabled && skill.name === mention.name)
             ? `/${mention.name}${mention.rest}`
@@ -300,22 +309,28 @@ export function makeGrokAcpAdapterFlavor(
         mapError: (cause) => cause,
       });
     }),
+    resolveSessionLaunch: Effect.fn("GrokAdapter.resolveSessionLaunch")(function* (environment) {
+      const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
+      const effectiveEnvironment = applyStoredGrokApiKey(environment, stored);
+      const command = options.settings.binaryPath || "grok";
+      const executable = yield* resolveCommandPath(command, { env: effectiveEnvironment }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(HostProcess.Platform, options.hostPlatform),
+      );
+      return { environment: effectiveEnvironment, executable: executable ?? command };
+    }),
     makeRuntime:
       options.makeRuntime ??
-      (({ runtimePolicy, ...input }) =>
-        Effect.gen(function* () {
-          const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
-          const environment = yield* (
-            options.currentEnvironment ?? Effect.succeed(options.environment)
-          );
-          return yield* makeGrokAcpRuntime({
-            ...input,
-            interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
-            grokSettings: options.settings,
-            environment: applyStoredGrokApiKey(environment, stored),
-            runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
-          });
-        })),
+      (({ runtimePolicy, ...input }) => {
+        const launch = input.sessionLaunch as GrokSessionLaunch;
+        return makeGrokAcpRuntime({
+          ...input,
+          interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
+          grokSettings: { ...options.settings, binaryPath: launch.executable },
+          environment: launch.environment,
+          runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+        });
+      }),
     // Auto prompts represent classifier refusals and must reach the user.
     permissionDisposition: (policy, request) =>
       grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
@@ -366,6 +381,7 @@ export const makeGrokAdapterV2 = Effect.fn("makeGrokAdapterV2")(function* (
     instanceId: options.instanceId,
     flavor: makeGrokAcpAdapterFlavor(options, yield* HostProcess.HomeDirectory),
     selfInvocation: options.selfInvocation,
+    currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.continuationRequests === undefined
       ? {}
