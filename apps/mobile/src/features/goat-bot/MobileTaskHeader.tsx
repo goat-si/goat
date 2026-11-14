@@ -10,6 +10,7 @@ import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
+import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
 import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
 import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { useMobileStatusAnnouncement } from "./useMobileStatusAnnouncement";
@@ -40,6 +41,8 @@ import { lookedUpTitle } from "./lookedUpTitle";
  */
 export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
+  /** The conversation's newest task chips, which say what the task's worker asks. */
+  readonly chips: MobileTaskChips;
   /** The by-id read for a task the current list does not hold, and the task's actions. */
   readonly screen: Pick<
     ReturnType<typeof useMobileTaskScreen>,
@@ -86,7 +89,7 @@ export function MobileTaskHeader(props: {
           ? lookedUpTitle(unavailable.task.task.title, unavailable.task.task.titleTruncated)
           : (props.title ?? "Task thread");
   const status = task
-    ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label
+    ? mobileBotTaskStatus(task.row, props.chips)
     : unavailable
       ? presentTaskStatus(unavailable.task.task.status).label
       : null;

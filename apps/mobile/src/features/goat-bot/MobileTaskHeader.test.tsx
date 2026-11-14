@@ -66,6 +66,7 @@ async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = 
     root.render(
       <MobileTaskHeader
         task={undefined}
+        chips={new Map()}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
         botName="GOAT Bot"
@@ -176,6 +177,7 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
       root.render(
         <MobileTaskHeader
           task={undefined}
+          chips={new Map()}
           screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
           title="Old report"
           botName="GOAT Bot"

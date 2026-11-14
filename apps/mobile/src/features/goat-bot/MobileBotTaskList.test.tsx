@@ -1,6 +1,11 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BotThreadRow, ChannelTaskId, type ChannelUpdateTaskViewInput } from "@goat/contracts";
+import {
+  BotThreadRow,
+  ChannelTaskChip,
+  ChannelTaskId,
+  type ChannelUpdateTaskViewInput,
+} from "@goat/contracts";
 import type { BotWorkTask, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import * as Schema from "effect/Schema";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -95,6 +100,7 @@ function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
 
 const at = "2026-11-11T02:00:00.000Z";
 const decode = Schema.decodeUnknownSync(BotThreadRow);
+const decodeChip = Schema.decodeUnknownSync(ChannelTaskChip);
 const task = decode({
   kind: "task",
   task: { taskId: "task-1", title: "Review", status: "waiting_input", updatedAt: at },
@@ -154,6 +160,7 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
     root?.render(
       <TaskList
         botName="GOAT Bot"
+        chips={new Map()}
         canUpdate
         expanded={new Set()}
         details={() => []}
@@ -174,13 +181,42 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
   return calls;
 }
 
+it("a task marked done reads Done, whatever its worker still asks", async () => {
+  const done = decode({
+    kind: "task",
+    task: { taskId: "task-done", title: "Ship", status: "running", updatedAt: at },
+    view: { taskId: "task-done", pinnedAt: null, doneAt: at, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+  }) as Extract<BotThreadRow, { kind: "task" }>;
+  const asks = decodeChip({
+    taskId: "task-done",
+    conversationId: "conversation",
+    taskVersion: 2,
+    title: "Ship",
+    status: "running",
+    originKind: "goat",
+    requesterLabel: "You",
+    createdAt: at,
+    updatedAt: at,
+    openQuestionCount: 1,
+  });
+  await show({
+    work: { running: [], waiting: [], finished: [{ ...listedTask, row: done }] },
+    rows: [done],
+    chips: new Map([[ChannelTaskId.make("task-done"), asks]]),
+  });
+  expect(container.querySelector('[aria-label="Ship, Done"]')).not.toBeNull();
+});
+
 it("lists a task with its status, unread and pinned state, and the actions the bot list had", async () => {
   const calls = await show({ work: work([listedTask]), rows: [task] });
-  const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
+  const row = container.querySelector('[aria-label="Review, Waiting for you, unread, pinned"]');
   expect(row).not.toBeNull();
   // Assistive actions are the menu's own choices.
   expect(row?.getAttribute("data-actions")).toBe("Show work,Unpin,Mark done,Mark read");
-  expect(container.textContent).toContain("Needs your input · Unread");
+  expect(container.textContent).toContain("Waiting for you · Unread");
   await act(async () =>
     row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
   );
@@ -210,7 +246,7 @@ it("lists a task with its status, unread and pinned state, and the actions the b
 
 it("opens the same row actions on a long press of the task, as the bot list did", async () => {
   const calls = await show({ work: work([listedTask]), rows: [task] });
-  const row = container.querySelector('[aria-label="Review, Needs your input, unread, pinned"]');
+  const row = container.querySelector('[aria-label="Review, Waiting for you, unread, pinned"]');
   await act(async () =>
     row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
   );

@@ -1,8 +1,4 @@
-import {
-  presentTaskStatus,
-  taskAttemptLabel,
-  type BotWorkTask,
-} from "@goat/client-runtime/goatBot";
+import { taskAttemptLabel, type BotWorkTask } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Pressable, ScrollView, Text, View } from "react-native";
@@ -12,6 +8,7 @@ import { useThreadDetail, useThreadVisibleTurnItems } from "../../state/use-thre
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 const PEEK_MESSAGES = 20;
@@ -23,6 +20,7 @@ const PEEK_MESSAGES = 20;
  */
 export function MobileBotPeek(props: {
   readonly entry: BotWorkTask;
+  readonly chips: MobileTaskChips;
   readonly rows: ReadonlyArray<BotThreadRow>;
   /** Whether this phone is connected to the bot's machine, where its work threads live. */
   readonly connected: boolean;
@@ -36,7 +34,7 @@ export function MobileBotPeek(props: {
   const { row } = entry;
   const first = entry.threads[0] ?? null;
   const attempt = taskAttemptLabel(row.task.generation);
-  const status = presentTaskStatus(row.task.status, row.view.doneAt).label;
+  const status = mobileBotTaskStatus(row, props.chips);
   const titleOf = (thread: { environmentId: EnvironmentId; threadId: ThreadId }) => {
     const coding = props.rows.find(
       (candidate) =>
