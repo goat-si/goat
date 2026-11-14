@@ -1,6 +1,7 @@
 import {
   BOT_RUNNING_TASK_STATUSES,
   botComputers,
+  goatBotTaskWait,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
 import {
@@ -102,7 +103,11 @@ export function GoatBotComputer({
               <li key={task.taskId}>
                 {task.title}
                 <span className="block text-xs text-muted-foreground">
-                  {presentTaskStatus(task.status, null).label}
+                  {goatBotTaskWait({
+                    status: task.status,
+                    openQuestionCount: task.openQuestions.length,
+                    observed: task.observed,
+                  }) ?? presentTaskStatus(task.status, null).label}
                 </span>
               </li>
             ))}

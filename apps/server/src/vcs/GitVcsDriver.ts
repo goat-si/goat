@@ -36,7 +36,7 @@ import {
   type WorktreeSubmodules,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isMissingExecutable } from "@goat/source-control-core/server/discovery";
+import { checkpointCommitResult, workTreeProbeResult } from "./gitRepositoryProbe.ts";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -598,21 +598,29 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     ignoreClassifier: "native" as const,
   };
 
+  const probeWorkTree = (
+    operation: string,
+    cwd: string,
+    args: ReadonlyArray<string>,
+    maxOutputBytes: number,
+  ) =>
+    workTreeProbeResult(
+      cwd,
+      fileSystem,
+      gitCommand(vcsProcess, operation, cwd, args, {
+        env: { LC_ALL: "C" },
+        allowNonZeroExit: true,
+        timeoutMs: 5_000,
+        maxOutputBytes,
+      }),
+    );
   const isInsideWorkTree: VcsDriver.VcsDriver["Service"]["isInsideWorkTree"] = (cwd) =>
-    gitCommand(
-      vcsProcess,
+    probeWorkTree(
       "GitVcsDriver.isInsideWorkTree",
       cwd,
       ["rev-parse", "--is-inside-work-tree"],
-      {
-        allowNonZeroExit: true,
-        timeoutMs: 5_000,
-        maxOutputBytes: 4_096,
-      },
-    ).pipe(
-      Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
-      Effect.catchIf(isMissingExecutable, () => Effect.succeed(false)),
-    );
+      4_096,
+    ).pipe(Effect.map((stdout) => stdout?.trim() === "true"));
 
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
@@ -631,19 +639,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     "detectRepository",
   )(function* (cwd) {
     // One spawn answers all three; outside a work tree it exits non-zero or prints "false".
-    const result = yield* gitCommand(
-      vcsProcess,
+    const stdout = yield* probeWorkTree(
       "GitVcsDriver.detectRepository",
       cwd,
       ["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-common-dir"],
-      {
-        allowNonZeroExit: true,
-        timeoutMs: 5_000,
-        maxOutputBytes: 16_384,
-      },
-    ).pipe(Effect.catchIf(isMissingExecutable, () => Effect.succeed(null)));
-    if (result === null || result.exitCode !== 0) return null;
-    const lines = result.stdout.replace(/\r?\n$/u, "").split(/\r?\n/u);
+      16_384,
+    );
+    if (stdout === null) return null;
+    const lines = stdout.replace(/\r?\n$/u, "").split(/\r?\n/u);
     if (lines[0]?.trim() !== "true") return null;
     // A newline inside a path breaks the line framing; ask for each path on its own.
     const rootPath = lines[1];
@@ -844,16 +847,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       operation: "GitVcsDriver.checkpoints.resolveCheckpointCommit",
       cwd,
       args: ["rev-parse", "--verify", "--quiet", `${checkpointRef}^{commit}`],
+      env: { LC_ALL: "C" },
       allowNonZeroExit: true,
-    }).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        const commit = result.stdout.trim();
-        return commit.length > 0 ? commit : null;
-      }),
-    );
+    }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
 
   // Git reports relative paths from the physical cwd, which can differ from a symlink.
   const resolveGitCommonDir = Effect.fn("GitVcsDriver.resolveGitCommonDir")(function* (
@@ -921,7 +917,6 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const indexId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
     const tempIndexPath = path.join(gitCommonDir, `goat-checkpoint-index-${indexId}`);
     const commitEnv: NodeJS.ProcessEnv = {
-      ...process.env,
       GIT_INDEX_FILE: tempIndexPath,
       GIT_AUTHOR_NAME: "GOAT",
       GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
@@ -1149,7 +1144,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
-      const workspaceIgnored = (yield* filterIgnoredPaths(input.cwd, ["."])).length === 0;
+      const prefix = (yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: ["rev-parse", "--show-prefix"],
+      })).stdout.replace(/\n$/, "");
+      const workspaceIgnored =
+        prefix !== "" &&
+        (yield* filterIgnoredPaths(input.cwd, [`../${prefix.slice(0, -1).split("/").at(-1)}`]))
+          .length === 0;
       if (workspaceIgnored && !input.strict) {
         // HEAD omits staged-only paths. Seed just this workspace's additions, keeping
         // unrelated staged changes and the scratch index's sparse flags untouched.

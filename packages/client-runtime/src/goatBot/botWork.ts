@@ -4,10 +4,13 @@ import {
   type BotThreadRow,
   type ChannelChildWork,
   type ChannelTaskId,
+  type ChannelTaskChip,
   type ChannelChildWorkGroup,
   type EnvironmentId,
   type ThreadId,
 } from "@goat/contracts";
+
+import { goatBotTaskWait } from "./activity.ts";
 
 export interface BotWorkTask {
   readonly row: Extract<BotThreadRow, { readonly kind: "task" }>;
@@ -92,26 +95,47 @@ export interface BotHomeWork {
 const byActivity = (a: BotWorkTask, b: BotWorkTask) =>
   Date.parse(b.row.lastActivityAt) - Date.parse(a.row.lastActivityAt);
 
+const NO_CHIPS: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = new Map();
+
 /**
- * Home's Work groups. A task a person marked done is finished whatever its run says, and a task
- * whose worker asks for an answer waits. Running is newest first; finished keeps the server's
- * order, so recent work reads top to bottom.
+ * What a listed task waits on the person for, or null: the row's status with the needs of the
+ * task's newest chip in the conversation, which the face and activity line read. Without a chip
+ * only waiting_input waits. A task the person marked done waits on nothing.
+ */
+export function botTaskWait(
+  row: BotWorkTask["row"],
+  chip: ChannelTaskChip | undefined,
+): string | null {
+  if (row.view.doneAt !== null) return null;
+  return goatBotTaskWait({
+    status: row.task.status,
+    openQuestionCount: chip?.openQuestionCount ?? 0,
+    observed: chip?.observed,
+  });
+}
+
+/**
+ * Home's Work groups. A task a person marked done is finished whatever its run says; otherwise a
+ * task waits when botTaskWait names something it asks of the person, including a running task
+ * whose worker asks and finished work with an approval still open. Running and waiting are newest
+ * first; finished keeps the server's order, so recent work reads top to bottom.
  */
 export function botHomeWork(
   rows: ReadonlyArray<BotThreadRow>,
   groups: ReadonlyArray<ChannelChildWorkGroup>,
   environmentId: EnvironmentId,
   remoteWork: ReadonlyArray<BotRemoteWork> = [],
+  chips: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = NO_CHIPS,
 ): BotHomeWork {
   const work = groupBotWork(rows, groups, environmentId, remoteWork);
   const running: BotWorkTask[] = [];
   const waiting: BotWorkTask[] = [];
-  for (const task of [...work.inProgress].sort(byActivity)) {
-    if (task.row.view.doneAt === null && task.row.task.status === "waiting_input")
-      waiting.push(task);
-    else running.push(task);
-  }
-  return { running, waiting, finished: work.done };
+  const finished: BotWorkTask[] = [];
+  const waits = (task: BotWorkTask) =>
+    botTaskWait(task.row, chips.get(task.row.task.taskId)) !== null;
+  for (const task of work.inProgress) (waits(task) ? waiting : running).push(task);
+  for (const task of work.done) (waits(task) ? waiting : finished).push(task);
+  return { running: running.sort(byActivity), waiting: waiting.sort(byActivity), finished };
 }
 
 /** Finished work past this many rows waits behind Show more. */
@@ -123,8 +147,9 @@ export function workRowCollapsed(
   environmentId: EnvironmentId,
   remoteWork: ReadonlyArray<BotRemoteWork>,
   taskId: ChannelTaskId,
+  chips: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = NO_CHIPS,
 ): boolean {
-  return botHomeWork(rows, [], environmentId, remoteWork)
+  return botHomeWork(rows, [], environmentId, remoteWork, chips)
     .finished.slice(COLLAPSED_FINISHED)
     .some((task) => task.row.task.taskId === taskId);
 }
