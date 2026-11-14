@@ -745,6 +745,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [isWorkspaceFileDragActive]);
   const prefersPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const isMobileViewport = useMediaQuery("max-sm");
+  const isCoarsePointer = useMediaQuery({ pointer: "coarse" });
   const [workspaceLayoutElement, setWorkspaceLayoutElement] = useState<HTMLDivElement | null>(null);
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const [terminalUiLaunchContext, setTerminalUiLaunchContext] =
@@ -2280,12 +2281,13 @@ export default function ChatView(props: ChatViewProps) {
   });
   useFocusComposerOnThreadOpen(
     activeThread?.id,
-    !terminalUiState.terminalOpen,
+    !terminalUiState.terminalOpen && !isCoarsePointer,
     focusComposerStable,
   );
   useEffect(() => {
     if (embedded) return;
-    if (!activeThread?.id || terminalUiState.terminalOpen || isMobileViewport) return;
+    if (!activeThread?.id || terminalUiState.terminalOpen || isMobileViewport || isCoarsePointer)
+      return;
     let frame: number | null = null;
     const onWindowFocus = () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
@@ -2307,6 +2309,7 @@ export default function ChatView(props: ChatViewProps) {
     embedded,
     activeThread?.id,
     focusComposerStable,
+    isCoarsePointer,
     isMobileViewport,
     terminalUiState.terminalOpen,
   ]);
