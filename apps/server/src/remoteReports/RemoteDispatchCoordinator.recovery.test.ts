@@ -17,6 +17,16 @@ import Migration0068 from "../persistence/Migrations/086_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.ts";
 import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
 import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
+import Migration0137 from "../persistence/Migrations/137_RemoteDispatchDeleteIntent.ts";
+import Migration0143 from "../persistence/Migrations/143_RemoteDispatchHostOutage.ts";
+import { recordUnreachable } from "./remoteDispatchOutage.ts";
+import { publicRow } from "./remoteDispatchModel.ts";
+import { decodeRemoteDispatchRows } from "./remoteDispatchRow.ts";
+import {
+  probeUnreachableThreads,
+  reopenUnreachable,
+  resolveLostThreadLaunches,
+} from "./remoteDispatchRecovery.ts";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
 import * as Coordinator from "./RemoteDispatchCoordinator.ts";
 
@@ -34,6 +44,10 @@ const fixture = Effect.gen(function* () {
     yield* migration;
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
   for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
+  yield* Migration0137;
+  yield* Migration0143;
+  const notices: Array<string> = [];
+  let reportsAnswer = false;
   const asked: Array<Ssh.SshHostToolCall> = [];
   let answer: Answer = Effect.die("The fixture was not told how to answer resolve.");
   const dependencies = Layer.mergeAll(
@@ -41,10 +55,16 @@ const fixture = Effect.gen(function* () {
     Layer.mock(LaunchWatchService.LaunchWatchService)({}),
     Layer.mock(Threads.ThreadManagementService)({
       getThreadShell: () => Effect.succeed(liveThreadShell(origin)),
+      dispatch: (command) =>
+        Effect.sync(() => {
+          if (command.type === "message.dispatch") notices.push(command.text);
+          return { sequence: 1, storedEvents: [] };
+        }),
     }),
     Layer.mock(Ssh.SshRemoteDispatch)({
       launchThread: () => Effect.die("A lost launch must never be launched again."),
       callHostTool: (call) => {
+        if (call.tool === "goat_origin_reports_wait") return reportsAnswer ? answer : Effect.never;
         if (call.tool !== "goat_origin_resolve_binding") return Effect.never;
         asked.push(call);
         return answer;
@@ -59,6 +79,11 @@ const fixture = Effect.gen(function* () {
         'Launch outcome unknown; check goat_thread_list with host.', ${updatedAt}, ${updatedAt})`;
   return {
     layer: Coordinator.layer.pipe(Layer.provide(dependencies)),
+    dependencies,
+    notices,
+    answerReports: () => {
+      reportsAnswer = true;
+    },
     asked,
     answer: (value: Answer) => {
       answer = value;
@@ -274,3 +299,136 @@ test("a row another writer settles while the destination answers is left as that
     assert.strictEqual(record?.state, "settled");
     assert.isNull(record?.remoteThreadId);
   }));
+
+const offline = Effect.fail(
+  new Ssh.SshRemoteDispatchError({ reason: "host_unavailable", message: "offline" }),
+);
+const resolve = () => resolveLostThreadLaunches({ retryAt: new Map(), start: () => Effect.void });
+const ended = (f: Effect.Success<typeof fixture>) => f.sql`UPDATE remote_dispatches SET
+  end_reason = 'host_unreachable', ended_at = '1969-12-31T23:30:00.000Z',
+  host_unavailable_since = '1969-12-31T22:00:00.000Z', host_last_failed_at = '1969-12-31T23:00:00.000Z'
+  WHERE correlation_id = ${id}`;
+
+it.effect(
+  "regression #3092: an unknown launch whose host stays unreachable for a day ends and tells its origin once",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      f.answer(offline);
+      yield* Effect.gen(function* () {
+        yield* resolve();
+        for (let i = 0; i < 144; i++) {
+          yield* TestClock.adjust("10 minutes");
+          yield* resolve();
+        }
+        const rows = yield* f.sql<{
+          end_reason: string | null;
+          ended_at: string | null;
+        }>`SELECT end_reason, ended_at FROM remote_dispatches WHERE correlation_id = ${id}`;
+        assert.equal(rows[0]?.end_reason, "host_unreachable");
+        assert.isNotNull(rows[0]?.ended_at);
+        assert.lengthOf(f.notices, 1);
+        assert.include(f.notices[0], "the launch may still start there");
+        yield* resolve();
+        assert.lengthOf(f.notices, 1);
+      }).pipe(Effect.provide(f.dependencies));
+    }).pipe(Effect.provide(database)),
+);
+
+it.effect.each(["fenced", "bound"] as const)(
+  "regression #3092: an ended unknown launch is fenced or rebound when its host answers again (%s)",
+  (kind) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      yield* ended(f);
+      f.answer(
+        Effect.succeed(
+          kind === "fenced"
+            ? { _tag: "fenced" }
+            : {
+                _tag: "bound",
+                threadId: remoteThread,
+                originThreadId: origin,
+                threadExists: true,
+                threadDeleted: false,
+                activeRunId: null,
+              },
+        ),
+      );
+      yield* resolve().pipe(Effect.provide(f.dependencies));
+      const rows = yield* f.sql<{
+        state: string;
+        remote_thread_id: string | null;
+        end_reason: string | null;
+        ended_at: string | null;
+        host_unavailable_since: string | null;
+        host_last_failed_at: string | null;
+      }>`SELECT state, remote_thread_id, end_reason, ended_at, host_unavailable_since, host_last_failed_at FROM remote_dispatches WHERE correlation_id = ${id}`;
+      assert.deepStrictEqual(rows[0], {
+        state: kind === "fenced" ? "cancelled" : "running",
+        remote_thread_id: kind === "fenced" ? null : remoteThread,
+        end_reason: null,
+        ended_at: null,
+        host_unavailable_since: null,
+        host_last_failed_at: null,
+      });
+    }).pipe(Effect.provide(database)),
+);
+
+it.effect(
+  "regression #3092: the unreachable-thread probe never reopens an ended launch that has no thread",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      yield* ended(f);
+      f.answer(Effect.succeed({ _tag: "fenced" }));
+      f.answerReports();
+      yield* probeUnreachableThreads({
+        retryAt: new Map(),
+        reopen: (key) =>
+          reopenUnreachable(key).pipe(Effect.provideService(SqlClient.SqlClient, f.sql)),
+        start: () => Effect.void,
+      }).pipe(Effect.provide(f.dependencies));
+      const rows = yield* f.sql<{
+        state: string;
+      }>`SELECT state FROM remote_dispatches WHERE correlation_id = ${id}`;
+      assert.equal(rows[0]?.state, "lost");
+      assert.isFalse(yield* reopenUnreachable(id));
+    }).pipe(Effect.provide(database)),
+);
+
+it.effect(
+  "contract #3092: a gap longer than thirty minutes restarts an unknown launch's outage clock",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      f.answer(offline);
+      yield* f.sql`UPDATE remote_dispatches SET state = 'running', remote_thread_id = 'remote-thread' WHERE correlation_id = ${id}`;
+      const [row] = yield* f.sql`SELECT * FROM remote_dispatches WHERE correlation_id = ${id}`.pipe(
+        Effect.flatMap(decodeRemoteDispatchRows),
+      );
+      if (row === undefined) return yield* Effect.die("missing fixture");
+      yield* Effect.gen(function* () {
+        yield* recordUnreachable(publicRow(row));
+        yield* TestClock.adjust("31 minutes");
+        yield* recordUnreachable(publicRow(row));
+        const rows = yield* f.sql<{
+          host_unavailable_since: string | null;
+        }>`SELECT host_unavailable_since FROM remote_dispatches WHERE correlation_id = ${id}`;
+        assert.equal(rows[0]?.host_unavailable_since, "1970-01-01T00:31:00.000Z");
+        yield* f.sql`UPDATE remote_dispatches SET state = 'lost', remote_thread_id = NULL,
+        host_unavailable_since = NULL, host_last_failed_at = NULL WHERE correlation_id = ${id}`;
+        yield* resolve();
+        yield* TestClock.adjust("31 minutes");
+        yield* resolve();
+        const unknown = yield* f.sql<{
+          host_unavailable_since: string | null;
+        }>`SELECT host_unavailable_since FROM remote_dispatches WHERE correlation_id = ${id}`;
+        assert.equal(unknown[0]?.host_unavailable_since, "1970-01-01T01:02:00.000Z");
+      }).pipe(Effect.provide(f.dependencies));
+    }).pipe(Effect.provide(database)),
+);
