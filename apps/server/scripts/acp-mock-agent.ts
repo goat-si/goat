@@ -555,15 +555,17 @@ const program = Effect.gen(function* () {
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
-  const publishAntigravityCommands = (targetSessionId: string) =>
+  const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
     agent.client.sessionUpdate({
       sessionId: targetSessionId,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: [
-          { name: "plan", description: "Plan a task", input: { hint: "task" } },
-          { name: "logout", description: "Sign out" },
-        ],
+        availableCommands: command
+          ? [{ name: command, description: "Fixture command" }]
+          : [
+              { name: "plan", description: "Plan a task", input: { hint: "task" } },
+              { name: "logout", description: "Sign out" },
+            ],
       },
     });
 
@@ -981,6 +983,8 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
       promptCount += 1;
+      if (process.env.GOAT_ACP_PROMPT_COMMAND)
+        yield* publishAntigravityCommands(requestedSessionId, process.env.GOAT_ACP_PROMPT_COMMAND);
       const idleError = process.env.GOAT_ACP_IDLE_ERROR;
       if (idleError === "grok-background" && promptCount === 1) {
         // The structured completion lands before the prompt settles, so it is buffered.
