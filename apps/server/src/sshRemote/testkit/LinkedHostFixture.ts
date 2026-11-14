@@ -32,7 +32,8 @@ const LINK: LinkedHosts.LinkedHostCredential = {
 export type Answer =
   | { readonly status: number }
   | { readonly result: unknown }
-  | { readonly rpcError: string };
+  | { readonly rpcError: string }
+  | { readonly wrongId: true };
 
 /**
  * Runs body against a dispatch with one linked host and an SSH manager that
@@ -47,6 +48,7 @@ export const withLinkedHost = <A, E, R>(
   body: Effect.Effect<A, E, R>,
   serverVersion = LINK.host.serverVersion,
   access: LinkedHosts.LinkedHost["access"] = LINK.host.access,
+  initializeReply?: () => "reject" | "offline",
 ) =>
   Effect.gen(function* () {
     const link = { ...LINK, host: { ...LINK.host, serverVersion, access } };
@@ -68,6 +70,14 @@ export const withLinkedHost = <A, E, R>(
         method: request.method,
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
       });
+      if (request.method === "initialize" && initializeReply !== undefined) {
+        if (initializeReply() === "offline") throw new TypeError("offline");
+        return Response.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32600, message: "no" },
+        });
+      }
       if (request.method === "initialize")
         return Response.json({
           jsonrpc: "2.0",
@@ -85,6 +95,7 @@ export const withLinkedHost = <A, E, R>(
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
         args: request.params?.arguments,
       });
+      if ("wrongId" in reply) return Response.json({ jsonrpc: "2.0", id: "wrong", result: {} });
       if ("status" in reply) return new Response(null, { status: reply.status });
       if ("rpcError" in reply)
         return Response.json({

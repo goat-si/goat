@@ -78,6 +78,7 @@ import {
 } from "./sshEnvironmentRoute.ts";
 import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
+  answeredToolFailure,
   describe,
   failure,
   rpcLaunchFacts,
@@ -1718,7 +1719,7 @@ const make = Effect.gen(function* () {
               : failure(
                   "remote_refused",
                   `GOAT on ${alias} could not run ${call.tool}: ${describe(error)}`,
-                  { hostAnswered: true },
+                  answeredToolFailure(error),
                 ),
           );
         }),
@@ -1924,7 +1925,7 @@ const make = Effect.gen(function* () {
               : failure(
                   "remote_refused",
                   `GOAT on ${target.alias} could not run ${call.tool}: ${describe(error)}`,
-                  { hostAnswered: true },
+                  answeredToolFailure(error),
                 ),
           );
         }),

@@ -41,6 +41,7 @@ import {
   resolveLostThreadLaunches,
 } from "./remoteDispatchRecovery.ts";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
+import { withLinkedHost } from "../sshRemote/testkit/LinkedHostFixture.ts";
 import * as Coordinator from "./RemoteDispatchCoordinator.ts";
 
 const origin = ThreadId.make("recovery-origin");
@@ -562,4 +563,51 @@ it.effect("a revived launch delivers its report once while its channel child rem
       assert.equal((yield* stored.get(taskId, childId))?.state, "failed");
     }).pipe(Effect.provide(Layer.mergeAll(f.layer, ChildStore.layer, Inbox.layer)));
   }).pipe(Effect.provide(reportDatabase)),
+);
+
+it.effect(
+  "rejected MCP initialization between unreachable contacts does not restart the outage",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      let calls = 0;
+      const result = yield* withLinkedHost(
+        () => ({ result: {} }),
+        Effect.gen(function* () {
+          yield* resolve();
+          yield* TestClock.adjust("10 minutes");
+          yield* resolve();
+          const clock = yield* f.sql<{
+            since: string | null;
+          }>`SELECT host_unavailable_since AS since FROM remote_dispatches WHERE correlation_id = ${id}`;
+          assert.equal(clock[0]?.since, "1970-01-01T00:00:00.000Z");
+          for (let i = 0; i < 143; i++) {
+            yield* TestClock.adjust("10 minutes");
+            yield* resolve();
+          }
+          const rows = yield* f.sql<{
+            end_reason: string | null;
+          }>`SELECT end_reason FROM remote_dispatches WHERE correlation_id = ${id}`;
+          assert.equal(rows[0]?.end_reason, "host_unreachable");
+        }).pipe(
+          Effect.provide(
+            Layer.mock(Threads.ThreadManagementService)({
+              getThreadShell: () => Effect.succeed(liveThreadShell(origin)),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  if (command.type === "message.dispatch") f.notices.push(command.text);
+                  return { sequence: 1, storedEvents: [] };
+                }),
+            }),
+          ),
+        ),
+        undefined,
+        undefined,
+        () => (calls++ % 2 === 0 ? "offline" : "reject"),
+      );
+      assert.equal(result.result._tag, "Success");
+      assert.equal(result.record.filter((entry) => entry.method === "tools/call").length, 0);
+      assert.lengthOf(f.notices, 1);
+    }).pipe(Effect.provide(database)),
 );

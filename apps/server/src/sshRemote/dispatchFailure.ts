@@ -15,7 +15,7 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
    */
   readonly reason: SshDispatchFailureReason;
   readonly message: string;
-  /** True only when a reply from the remote host was received for this call. */
+  /** True only when the remote replied to this tool call. */
   readonly hostAnswered?: boolean | undefined;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
@@ -85,6 +85,11 @@ export const rpcLaunchFacts = (
   if (undeclared !== undefined) return { undeclaredArguments: undeclared };
   return tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {};
 };
+
+export const answeredToolFailure = (error: {
+  readonly kind: string;
+  readonly stage?: string | undefined;
+}) => (error.kind === "rpc" && error.stage !== "initialize" ? { hostAnswered: true } : {});
 
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });

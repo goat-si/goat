@@ -578,6 +578,21 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect("does not count rejected initialization as an SSH tool answer", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withRemote(
+        {
+          answer: (request) =>
+            request.method === "initialize" ? { rpcError: "no" } : { result: {} },
+        },
+        readCall(),
+      );
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "remote_refused" } });
+      if (result._tag === "Failure") expect(result.failure.hostAnswered).toBeUndefined();
+      expect(record.toolCalls).toEqual([]);
+    }),
+  );
+
   it.effect("returns the remote result and remembers the host as connected", () =>
     Effect.gen(function* () {
       const { result, record } = yield* withRemote(
