@@ -62,6 +62,7 @@ const RevokeEntry = Schema.Struct({
   linkId: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
   receipt: Schema.optionalKey(Schema.Struct({ purged: Schema.Boolean, linkId: Schema.String })),
+  resolvedAt: Schema.optionalKey(Schema.String),
 });
 const decodeRevokeEntry = Schema.decodeUnknownOption(Schema.fromJsonString(RevokeEntry));
 
@@ -70,7 +71,13 @@ export type RevokeOutcome =
   | { readonly kind: "clean" }
   | { readonly kind: "failed_clean"; readonly code: string }
   | { readonly kind: "open" }
-  | { readonly kind: "unsettled"; readonly state: string }
+  | {
+      readonly kind: "unsettled";
+      readonly state: string;
+      readonly code?: string;
+      /** A person or O5 resolved it (ocx link operations resolve). */
+      readonly resolved: boolean;
+    }
   | { readonly kind: "not_found" }
   | { readonly kind: "unreadable" };
 
@@ -95,7 +102,7 @@ export const readRevoke = (
       return expected.force ||
         (entry.receipt?.purged === true && entry.receipt.linkId === expected.linkId)
         ? { kind: "clean" }
-        : { kind: "unsettled", state: "unproven" };
+        : { kind: "unsettled", state: "unproven", resolved: false };
     case "failed_clean": {
       const code = entry.error?.code;
       return {
@@ -106,20 +113,28 @@ export const readRevoke = (
     case "open":
       return { kind: "open" };
     case "residual":
-    case "unknown":
-      return { kind: "unsettled", state: entry.state };
+    case "unknown": {
+      const code = entry.error?.code;
+      return {
+        kind: "unsettled",
+        state: entry.state,
+        ...(code !== undefined && CODE.test(code) ? { code } : {}),
+        resolved: entry.resolvedAt !== undefined,
+      };
+    }
     default:
       return { kind: "unreadable" };
   }
 };
 
-/** Hints of a refused purge that need a person's look at the Child; any other one is unreachable. */
+/**
+ * The link-bound refusals a purge's CLI line names (src/cli/link.ts BOUND_REFUSAL_HINTS; the Child
+ * changed nothing). A failed_clean purge with no hint is a machine with no planted ocx-child.
+ */
 export const CHILD_REFUSALS: ReadonlySet<string> = new Set([
   "child_residual",
   "child_link_mismatch",
-  "child_disconnect_pending",
   "expect_link_unsupported",
-  "binary_in_use",
 ]);
 
 const RecoverReceipt = Schema.Struct({
@@ -137,6 +152,9 @@ export const recoverAnswer = (output: OcxOutput | undefined, linkId: string) => 
     return receipt?.linkId === linkId && LINK_ID.test(linkId) ? "clean" : "unreadable";
   }
   const code = output.refusal?.code;
+  // A machine with no planted ocx-child answers remote_recover_failed with this hint for ever.
+  if (code === "remote_recover_failed" && output.refusal?.hint === "managed_child_missing")
+    return "managed_child_missing";
   return code !== undefined && CODE.test(code) ? code : "unreadable";
 };
 

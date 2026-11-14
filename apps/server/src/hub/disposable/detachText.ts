@@ -17,15 +17,13 @@ const STOPS: Record<string, string> = {
     "the lightweight Child keeps records it cannot restore, so OpenCodex kept the link. Check the machine; a person can force the detach, which removes the link without the machine.",
   revoke_child_link_mismatch:
     "the Child refused: it belongs to another link, or a connect of this one is still running there. Check it with connect status of its planted ocx-child; a person can force the detach.",
-  revoke_child_disconnect_pending:
-    "the Child has an unfinished disconnect it cannot tie to this link. A person can force the detach.",
   revoke_expect_link_unsupported:
     "the machine runs an ocx-child too old to check which link it belongs to. A person can force the detach.",
-  revoke_binary_in_use:
-    "another home's relay on the machine runs from the planted ocx-child, so OpenCodex kept the link. Stop that relay and detach it again, or a person can force the detach.",
+  revoke_child_missing:
+    "the machine has no planted ocx-child, so OpenCodex could not clean it and kept the link. A person can force the detach; its cleanup then waits for a person to check the machine and forget it on this hub.",
   revoke_refused: "OpenCodex refused the revoke and kept the link. A person can force the detach.",
   revoke_unsettled:
-    "OpenCodex could not tell what the revoke did to the Child. Check the machine, then a person on this hub runs ocx link operations resolve for the operation below, and forces the detach.",
+    "OpenCodex could not tell what the revoke did to the Child. Check the machine; a person on this hub resolves the operation below with ocx link operations resolve, then forces the detach.",
   link_unsettled:
     "OpenCodex could not tell what the machine's last link operation left, so GOAT does not remove a link it cannot name. A person resolves it with ocx link operations on this hub.",
   tombstone_limit:
@@ -39,6 +37,10 @@ const RECOVER_WAITS: Record<string, string> = {
     "the planted ocx-child is too old to check which link it belongs to, so GOAT cannot clean it.",
   child_residual: "the machine keeps records GOAT cannot restore; it was left as it is.",
   child_conflict: "the machine's records belong to another link or home; it was left as it is.",
+  host_key_changed:
+    "the machine presents another SSH host key than its link pinned, so GOAT sends it nothing.",
+  managed_child_missing:
+    "the machine has no planted ocx-child, so recover cannot confirm its cleanup.",
 };
 
 export interface DetachView {
@@ -64,13 +66,14 @@ export const detachMessage = (
   // A changed host key stops every step for the record; only a person removes it from Pen.
   if (
     view.stop === "host_key_changed" &&
+    detach?.force !== true &&
     (view.state === "linked" || view.state === "detaching" || view.state === "retired")
   )
     return {
       message:
         name +
-        " presented another SSH host key than its link pinned, so GOAT stopped every step for it and sent it nothing. Remove it from Pen with pen revoke; its record then names its link and the command that removes it.",
-      nextAction: "A person decides; remove the machine with pen revoke.",
+        " presented another SSH host key than its link pinned, so GOAT stopped every step for it and sent it nothing. A person can force the detach, which removes the link without contacting the machine; remove the machine from Pen with pen revoke.",
+      nextAction: "A person forces the detach, and removes the machine with pen revoke.",
     };
   switch (view.state) {
     case "linked":
@@ -96,7 +99,10 @@ export const detachMessage = (
         return {
           message:
             name + " is detaching, but " + (STOPS[detach.stop] ?? STOPS.revoke_refused) + operation,
-          nextAction: "Force the detach as a person, or check the machine and detach again.",
+          nextAction:
+            detach.stop === "revoke_unsettled" || detach.stop === "link_unsettled"
+              ? "Resolve the operation on the hub, then force the detach as a person."
+              : "Force the detach as a person, or check the machine and detach again.",
         };
       if (detach?.step === "settle")
         return {
