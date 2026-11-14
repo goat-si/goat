@@ -1282,6 +1282,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   });
 
+  const readCurrentBranch = (operation: string, cwd: string) =>
+    executeGit(operation, cwd, ["symbolic-ref", "--quiet", "HEAD"], {
+      timeoutMs: 5_000,
+      allowNonZeroExit: true,
+    }).pipe(
+      Effect.map((result) => (result.exitCode === 0 ? branchNameFromHeadRef(result.stdout) : null)),
+    );
+
   const resolveRepositoryPathsUncached = Effect.fn("resolveRepositoryPathsUncached")(function* (
     cwd: string,
   ) {
@@ -1366,9 +1374,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             Effect.map((physicalCwd) => path.relative(worktreeRoot, physicalCwd) === ""),
             Effect.orElseSucceed(() => undefined),
           );
+
     const currentBranch =
       currentBranchResult.exitCode === 0 ? branchNameFromHeadRef(currentBranchResult.stdout) : null;
-
     return {
       gitCommonDir,
       worktreeRoot,
@@ -3813,9 +3821,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         };
       }
 
-      const snapshot = yield* resolveListRefsSnapshot(
-        repositoryPaths.gitCommonDir,
-        input.refresh === true,
+      // Both caches outlive a checkout made outside T3 Code, so this checkout's branch is read
+      // on every call and replaces whatever the cached snapshot claims for it.
+      const [snapshot, currentBranch] = yield* Effect.all(
+        [
+          resolveListRefsSnapshot(repositoryPaths.gitCommonDir, input.refresh === true),
+          readCurrentBranch("GitVcsDriver.listRefs.currentBranch", input.cwd),
+        ],
+        { concurrency: 2 },
       );
       // NTFS folds case, so git's `C:/Users/Super/repo` is the stored `C:\Users\super\repo`.
       const worktreeRoot =
@@ -3827,18 +3840,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         (hostPlatform === "win32"
           ? normalizeProjectPathForComparison(worktreePath)
           : worktreePath) === worktreeRoot;
-      const hasCurrentWorktreeBranch =
-        worktreeRoot !== null &&
-        snapshot.localBranches.some((ref) => isCurrentWorktree(ref.worktreePath));
-      const localBranches = snapshot.localBranches.map((ref) => ({
-        ...ref,
-        worktreePath:
-          ref.worktreePath ??
-          (ref.name === repositoryPaths.currentBranch ? repositoryPaths.worktreeRoot : null),
-        current: hasCurrentWorktreeBranch
-          ? isCurrentWorktree(ref.worktreePath)
-          : ref.name === repositoryPaths.currentBranch,
-      }));
+      const localBranches = snapshot.localBranches.map((ref) => {
+        const current = ref.name === currentBranch;
+        return {
+          ...ref,
+          worktreePath:
+            repositoryPaths.worktreeRoot === null
+              ? ref.worktreePath
+              : current
+                ? repositoryPaths.worktreeRoot
+                : isCurrentWorktree(ref.worktreePath)
+                  ? null
+                  : ref.worktreePath,
+          current,
+        };
+      });
       const combinedBranches = input.includeMatchingRemoteRefs
         ? [...localBranches, ...snapshot.remoteBranches]
         : dedupeRemoteBranchesWithLocalMatches([...localBranches, ...snapshot.remoteBranches]);

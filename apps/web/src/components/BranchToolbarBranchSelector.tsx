@@ -410,7 +410,10 @@ export function BranchToolbarBranchSelector({
       refName,
     });
 
-    if (selectionTarget.reuseExistingWorktree) {
+    if (
+      selectionTarget.reuseExistingWorktree &&
+      !(selectionTarget.staysInActiveCheckout && canWriteSourceControl)
+    ) {
       setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
