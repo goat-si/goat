@@ -40,3 +40,16 @@ it("keeps decoded U+009C inside a stripped OSC query out of history", () => {
   const input = "A\u001b]11;?\u009cHIDDEN\u001b\\B\nC\u001bP$qm\u009cSHOWN\u001b\\D\n";
   expect(sanitizeTerminalHistoryChunk("", input).visibleText).toBe("AB\nCSHOWN\u001b\\D\n");
 });
+
+it.each([
+  { name: "é in DA", data: "A\u001b[0écB", history: "AB" },
+  { name: "DECID byte in a CSI", data: "A\u001b[嚠B", history: "A\ufffdB" },
+  { name: "C1 DCS then C1 CSI", data: "A\u001b[\u0090\u009b6nB", history: "A\u001bP\u009cB" },
+  { name: "ESC in DSR", data: "A\u001b[5\u001b[6nB", history: "AB" },
+  { name: "non-ASCII text", data: "A\u001b[界nB", history: "A\u001b[界nB" },
+])(
+  "preserves text and strips terminal queries after a CSI interruption ($name)",
+  ({ data, history }) => {
+    expect(sanitizeTerminalHistoryChunk("", data).visibleText).toBe(history);
+  },
+);
