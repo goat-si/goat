@@ -246,7 +246,7 @@ function ChatWithHome() {
   return <Home peekRows={() => rowsFrom(live)} />;
 }
 
-it("performance invariant: a streamed reply re-renders neither Home nor its rows, and a new task card version still updates its row", async () => {
+it("performance invariant: a streamed reply neither re-renders Home nor rescans the conversation, and a new task card version still updates its row", async () => {
   setup();
   await using screen = await render(<ChatWithHome />);
   const row = screen.getByRole("button", { name: /^Fix the build/ });

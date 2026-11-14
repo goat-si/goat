@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   botRoster,
@@ -8,7 +8,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type { BotId, BotRemoteWork, EnvironmentId, ThreadId } from "@goat/contracts";
 import { useGlobalAgentStore } from "~/globalAgentStore";
-import { useThreadVisibleTurnItems } from "~/state/entities";
+import { useTimelineVisibleTurnItems } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
@@ -44,8 +44,9 @@ export function useBotThreads(
   const watchedThreadId =
     bot?.threadId ?? (botRef?.environmentId === environmentId ? botRef?.threadId : undefined);
   // The conversation is read whether or not the server lists task threads: a question the bot
-  // asked in its own turn shows only there.
-  const items = useThreadVisibleTurnItems(
+  // asked in its own turn shows only there. These items hold while only a reply's text streams,
+  // so a token re-renders no reader of this list and rescans nothing below.
+  const items = useTimelineVisibleTurnItems(
     watchedThreadId && environmentId !== null
       ? scopeThreadRef(environmentId, watchedThreadId)
       : null,
@@ -64,20 +65,6 @@ export function useBotThreads(
   useEffect(() => {
     if (supported && watchedThreadId && revision !== undefined) refreshThreads();
   }, [supported, watchedThreadId, revision, refreshThreads]);
-  // Streamed assistant text replaces items every token; the chips keep their identity until one
-  // of them changes version, so Home does not re-render for each token.
-  const chipsKey = JSON.stringify(
-    items.flatMap(({ item }) =>
-      item.type === "notification" && item.ledgerTask !== undefined
-        ? [[item.ledgerTask.taskId, item.ledgerTask.taskVersion]]
-        : [],
-    ),
-  );
-  const [chips, setChips] = useState(() => ({
-    key: chipsKey,
-    byTask: goatBotNewestTaskChips(items),
-  }));
-  if (chips.key !== chipsKey) setChips({ key: chipsKey, byTask: goatBotNewestTaskChips(items) });
   return {
     rows: threads.data?.rows ?? [],
     mainMessageCount: threads.data?.mainMessageCount ?? 0,
@@ -93,7 +80,7 @@ export function useBotThreads(
     /** The bot's own turns asking a question in its chat, which the rows never list. */
     turnsWaiting: goatBotTurnsWaiting(items),
     /** Each task's newest chip in the conversation: what its worker asks, which rows leave out. */
-    chips: chips.byTask,
+    chips: goatBotNewestTaskChips(items),
     refresh: threads.refresh,
   };
 }
