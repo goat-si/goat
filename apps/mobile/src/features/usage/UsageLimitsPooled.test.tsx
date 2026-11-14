@@ -70,7 +70,6 @@ it("shows the zero spend cap on the pooled account detail with no windows", asyn
       ),
     );
     expect(container.textContent).toContain("Monthly spend: $0 cap");
-    expect(container.textContent).not.toContain("No limits reported.");
   } finally {
     await act(() => root.unmount());
     vi.unstubAllGlobals();

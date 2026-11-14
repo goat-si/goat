@@ -133,7 +133,7 @@ Paused, or Sign in again) and how much is left in each window with the time unti
 headers show how much the whole group has left. Ready accounts with the most quota left come first,
 then blocked accounts by which frees soonest. A reading older than five minutes counts as no reading
 until Limits refreshes. Codex accounts with banked reset credits show **Use reset** in their row. Claude lists each
-available kind of reset with its description and a **Use** action. Claude resets are not available when the server runs on macOS, where Claude keeps its
+available kind of reset with its label, count, and a **Use** action; its description appears in the confirmation dialog. Claude resets are not available when the server runs on macOS, where Claude keeps its
 login in the Keychain. On mobile, tap a row for the account's plan, where it is signed in, and its
 reset time.
 
