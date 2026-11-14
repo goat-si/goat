@@ -182,10 +182,11 @@ record is open, GOAT refuses to add it as an SSH device (in Settings →
 Connections, in **Hub devices** or by an agent), to link its GOAT, to join, move
 or re-link it under another alias, to add a route to it in Settings →
 Connections on web or desktop, or to connect to it from Settings → Remote
-launches. It is matched by its Pen alias (including Pen's own `pen-<name>`,
-read from Pen's files), the GOAT it runs, or the ED25519 SSH host key it offers;
-detach it first in Settings → Hub on web or desktop. A machine that offers no
-ED25519 key is matched only by its alias and its GOAT. Pairing a browser,
+launches on desktop. It is matched by its Pen alias (including Pen's own
+`pen-<name>`, read from Pen's files), the GOAT it runs, or the ED25519 SSH host
+key it offers; Remote launches asks the hub's SSH check, which matches the alias
+and the key. Detach it first in Settings → Hub on web or desktop. A machine that
+offers no ED25519 key is matched only by its alias and its GOAT. Pairing a browser,
 desktop or phone (including a phone's Add route) with the machine's own GOAT by
 its address and pairing code is a connection of that client alone: the hub
 never sees it, so GOAT cannot refuse it and **Hub devices** does not mark it as

@@ -191,10 +191,11 @@ record's Pen alias or Pen's own `pen-<name>` for it (read offline from Pen's kno
 any network read), the environment the route reaches, and the ED25519 sshd key it negotiates,
 trusted or not (`SshHostKeys` asks for that type). Callers: `LinkedHosts.link` (every linked add,
 before the pairing code is spent), `HubNodes.add` and import, SSH preflight
-(`disposablePreflight.ts`, so the Settings and agent SSH adds stop before trust or save),
+(`disposablePreflight.ts`, so the Settings and agent SSH adds and the desktop's Remote launches
+Connect stop before trust, a connection or a save),
 `SshDeviceAdd`, and HubMembership's join (both transports; the Hub-client join compares the key
-itself), move and repair re-link (`hubProbe.ts`). Web's Add route and Remote launches Connect
-refuse a disposable Hub device from the hub snapshot (`client-runtime` `hubNodes.ts`). An
+itself), move and repair re-link (`hubProbe.ts`). Web's Add route refuses a disposable Hub device
+from the hub snapshot (`client-runtime` `hubNodes.ts`). An
 unreadable table or Pen file reads as kept. A client's own pairing with the machine's GOAT is not
 seen by the hub. `host.status` and Hub nodes carry the projected class.
 
