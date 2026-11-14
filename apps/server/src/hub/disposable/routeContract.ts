@@ -11,6 +11,8 @@ export interface DisposableRoute {
   readonly user: string;
   /** GOAT's private known_hosts for this machine: one line, written once. */
   readonly knownHostsFile: string;
+  /** The hub's machine key (machineKey.ts), the only identity offered. */
+  readonly identityFile: string;
 }
 
 // ssh splits UserKnownHostsFile on spaces and expands % tokens and ${VAR} in it.
@@ -20,14 +22,15 @@ const ED25519_KEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/u;
 /**
  * The arguments every SSH command GOAT runs for a disposable machine starts with. `-F none` reads
  * no ssh_config, so no config adds forwards, environment or identities; the options name the route.
- * No identity is pinned yet: ssh offers its default key files and SSH_AUTH_SOCK's agent until the
- * attach slice pins the machine's key. Undefined when a value could not be passed unchanged.
+ * The hub's machine key is the only identity offered, never the agent's keys or the default key
+ * files. Undefined when a value could not be passed unchanged.
  */
 const sharedOptions = (route: DisposableRoute) => {
   if (
     !isPenRunCommand(route.proxyCommand, route) ||
     !isRouteUser(route.user) ||
-    !FILE.test(route.knownHostsFile)
+    !FILE.test(route.knownHostsFile) ||
+    !FILE.test(route.identityFile)
   )
     return undefined;
   const options = [
@@ -56,6 +59,11 @@ const sharedOptions = (route: DisposableRoute) => {
     "ForwardAgent=no",
     "ForwardX11=no",
     "ForwardX11Trusted=no",
+    "IdentitiesOnly=yes",
+    "IdentityAgent=none",
+    `IdentityFile=${route.identityFile}`,
+    "PasswordAuthentication=no",
+    "KbdInteractiveAuthentication=no",
     "GSSAPIAuthentication=no",
     "GSSAPIDelegateCredentials=no",
     "AddKeysToAgent=no",

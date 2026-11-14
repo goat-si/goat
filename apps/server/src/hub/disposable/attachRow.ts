@@ -21,6 +21,7 @@ import {
   stateMessage,
 } from "./attachModel.ts";
 import type * as Store from "./DisposableMachineStore.ts";
+import { decodeEnroll, enrollMessage, enrollSteps, leftPenMessage } from "./enrollModel.ts";
 import type { PenInviteRef } from "./PenInvites.ts";
 
 /** A disposable_machines row, the SQL that selects records by phase, and the fixed refusals. */
@@ -46,6 +47,10 @@ export interface Row {
   readonly fence: number;
   readonly effects_json: string;
   readonly conflicts_json: string;
+  readonly route_json: string | null;
+  readonly link_operation_id: string | null;
+  readonly link_id: string | null;
+  readonly enroll_json: string;
   readonly request_key: string | null;
   readonly state_since: string;
   readonly pen_admitted_at: string | null;
@@ -113,13 +118,25 @@ export const samePolicy = (a: ServerSettings, b: ServerSettings) =>
 export const status = (
   row: Row,
   invite?: { readonly token: string; readonly expiresAt: string },
+  machineKey?: string,
 ): HubMachineStatus => {
-  const { message, nextAction } = stateMessage(
-    row.state,
-    row.name,
-    row.pen_removed_at !== null,
-    row.pen_admitted_at !== null,
-  );
+  const enroll = decodeEnroll(row.enroll_json);
+  const leftWithLink =
+    row.pen_removed_at !== null && (row.link_id !== null || row.link_operation_id !== null);
+  const { message, nextAction } =
+    (leftWithLink
+      ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
+      : undefined) ??
+    (row.pen_admitted_at === null
+      ? undefined
+      : enrollMessage(
+          row.state,
+          row.name,
+          enroll,
+          row.pen_admitted_at < row.state_since,
+          row.link_operation_id,
+        )) ??
+    stateMessage(row.state, row.name, row.pen_removed_at !== null, row.pen_admitted_at !== null);
   const provisioner = provisionerOf(row);
   return {
     attachId: row.attach_id,
@@ -128,7 +145,7 @@ export const status = (
     state: row.state,
     step: row.step,
     // The wire carries 32 steps; reissue stops there, and an older row shows its latest.
-    steps: mintSteps(effectsOf(row)).slice(-32),
+    steps: [...mintSteps(effectsOf(row)), ...enrollSteps(enroll)].slice(-32),
     message,
     nextAction,
     class:
@@ -143,6 +160,7 @@ export const status = (
         ? { kind: "thread", threadId: ThreadId.make(provisioner.threadId) }
         : { kind: "person" },
     stateSince: row.state_since,
+    ...(machineKey === undefined || row.final_at !== null ? {} : { machineKey }),
     ...(invite === undefined ? {} : { invite }),
   };
 };

@@ -1,3 +1,4 @@
+import { toLabels, type LabelFields } from "./gitHubPullRequestLabels.ts";
 import { toMergeMethod } from "./gitHubMergeMethod.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
@@ -101,11 +102,6 @@ interface ListItemFields {
   readonly latestReviews?: ReadonlyArray<LatestReviewFields> | undefined;
   readonly labels?: ReadonlyArray<LabelFields> | undefined;
   readonly statusCheckRollup?: ReadonlyArray<CheckFields> | null | undefined;
-}
-
-interface LabelFields {
-  readonly name: string;
-  readonly color?: string | null | undefined;
 }
 
 interface ReviewRequestFields {
@@ -512,13 +508,6 @@ function toReviewDecision(value: string | null | undefined): PullRequestReviewDe
     default:
       return null;
   }
-}
-
-function toLabels(raw: ReadonlyArray<LabelFields> | undefined): ReadonlyArray<PullRequestLabel> {
-  return (raw ?? []).flatMap((label) => {
-    const name = trimmed(label.name);
-    return name === null ? [] : [{ name, color: trimmed(label.color) }];
-  });
 }
 
 function toReviewRequestLogins(

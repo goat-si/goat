@@ -60,7 +60,7 @@ const signed = (content: string): Reply => ({ exitCode: 0, write: `${content}+si
 const runSign = Effect.fn("test.runSign")(function* (replies: ReadonlyArray<Reply>) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-jsign-" });
+  const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-jsign-" });
   const file = path.join(dir, "t3.exe");
   yield* fs.writeFileString(file, UNSIGNED);
   const stub = stubJsign(replies);

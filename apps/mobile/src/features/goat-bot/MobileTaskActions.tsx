@@ -14,6 +14,8 @@ export function MobileTaskActions(props: {
   readonly task: BotWorkTask;
   readonly environmentId: EnvironmentId | null;
   readonly enabled: boolean;
+  /** This device may change the task's view; without it Pin and Done stay closed. */
+  readonly canUpdate: boolean;
   readonly canRetry: boolean;
   readonly childError: boolean;
   readonly onUpdate: (input: ChannelUpdateTaskViewInput) => void;
@@ -22,7 +24,11 @@ export function MobileTaskActions(props: {
 }) {
   const { task } = props;
   const closed = !props.enabled;
+  const viewClosed = closed || !props.canUpdate;
   const id = task.row.task.taskId;
+  const change = (input: ChannelUpdateTaskViewInput) => {
+    if (!viewClosed) props.onUpdate(input);
+  };
   return (
     <View className="flex-row flex-wrap gap-3">
       {props.environmentId && props.canRetry && isRetryableTaskStatus(task.row.task.status) ? (
@@ -35,23 +41,23 @@ export function MobileTaskActions(props: {
       ) : null}
       <Pressable
         accessibilityRole="button"
-        accessibilityState={{ disabled: closed }}
-        disabled={closed}
+        accessibilityState={{ disabled: viewClosed }}
+        disabled={viewClosed}
         className="min-h-[44px] justify-center"
-        onPress={() => props.onUpdate({ taskId: id, pinned: !task.row.view.pinnedAt })}
+        onPress={() => change({ taskId: id, pinned: !task.row.view.pinnedAt })}
       >
-        <Text className={closed ? "text-foreground-muted" : "text-foreground"}>
+        <Text className={viewClosed ? "text-foreground-muted" : "text-foreground"}>
           {task.row.view.pinnedAt ? "Unpin" : "Pin"}
         </Text>
       </Pressable>
       <Pressable
         accessibilityRole="button"
-        accessibilityState={{ disabled: closed }}
-        disabled={closed}
+        accessibilityState={{ disabled: viewClosed }}
+        disabled={viewClosed}
         className="min-h-[44px] justify-center"
-        onPress={() => props.onUpdate({ taskId: id, done: !task.row.view.doneAt })}
+        onPress={() => change({ taskId: id, done: !task.row.view.doneAt })}
       >
-        <Text className={closed ? "text-foreground-muted" : "text-foreground"}>
+        <Text className={viewClosed ? "text-foreground-muted" : "text-foreground"}>
           {task.row.view.doneAt ? "Reopen" : "Mark done"}
         </Text>
       </Pressable>

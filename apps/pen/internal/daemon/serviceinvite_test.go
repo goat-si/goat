@@ -23,6 +23,8 @@ type pairFixture struct {
 	clk  *clock
 	prog *program
 	h    *holder
+	// ended receives the id of each registration once its end closed everything it admitted.
+	ended chan string
 }
 
 func newPairFixture(t *testing.T) *pairFixture {
@@ -33,11 +35,15 @@ func newPairFixture(t *testing.T) *pairFixture {
 	t.Cleanup(rs.Close)
 	clk := &clock{}
 	clk.ms.Store(time.Now().UnixMilli())
-	a := founder(t, ctx, rs, "a", clk)
+	ended := make(chan string, 16) // a fixture registers at most twice; the daemon's stop ends the rest
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.Now = clk.now
+		o.ServiceEnded = func(id string) { ended <- id }
+	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
-	return &pairFixture{ctx: ctx, rs: rs, a: a, clk: clk, prog: prog, h: register(t, a, "goat", prog.port(), key)}
+	return &pairFixture{ctx: ctx, rs: rs, a: a, clk: clk, prog: prog, h: register(t, a, "goat", prog.port(), key), ended: ended}
 }
 
 // invite opens a service invite and returns its id and psk.
@@ -310,6 +316,17 @@ func TestAListChangeNeverClosesAPairingSessionAndTheRegistrationsEndDoes(t *test
 		t.Fatalf("the pairing session of the same key closed on a list change: %v", err)
 	}
 	f.h.c.Close()
+	// closedWith's FIN would end the session normally (1000) if it reached the program before the end did.
+	waitCtx, cancel := context.WithTimeout(f.ctx, 30*time.Second)
+	defer cancel()
+	select {
+	case id := <-f.ended:
+		if id != f.h.reply["id"] {
+			t.Fatalf("registration %s ended, want %v", id, f.h.reply["id"])
+		}
+	case <-waitCtx.Done():
+		t.Fatalf("registration %v did not end: %v", f.h.reply["id"], waitCtx.Err())
+	}
 	if code := closedWith(f.ctx, psec); code != wire.CodeNotAdmitted {
 		t.Fatalf("the pairing session of an ended registration closed %d, want 4401", code)
 	}

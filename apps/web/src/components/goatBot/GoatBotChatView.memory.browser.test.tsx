@@ -1,5 +1,8 @@
 import type { GoatBotRow, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import {
+  BotId,
+  ChannelTaskId,
+  type BotProfile,
   EnvironmentId,
   goatBotChangeNoteMessage,
   goatBotForgetNoteMessage,
@@ -116,6 +119,7 @@ vi.mock("~/state/query", async (original) => ({
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 
 const note = { index: 0, date: "2026-11-07", text: 'Reply in "Korean"' };
@@ -131,10 +135,12 @@ function setup(narrow = false) {
   const view = (
     rows: GoatBotRow[] = [],
     peek = false,
-    openHome: { key: string; entry: string } | null = null,
+    openHome: { key: string; entry: string; taskId?: ChannelTaskId } | null = null,
+    onHomeHandled?: () => void,
   ) => (
     <GoatBotChatView
       openHome={openHome}
+      onHomeHandled={onHomeHandled}
       availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
       canOperate
       rows={rows}
@@ -453,4 +459,89 @@ it("the memory in Library reads the notes again after the answer and after the t
   await userEvent.click(screen.getByRole("tab", { name: "Home" }));
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
   expect(state.refresh).toHaveBeenCalledTimes(opened + 4);
+});
+
+it("a task-origin request opens Home with its row marked once", async () => {
+  const { view } = setup();
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: { taskId: "task-a", title: "Returned task", status: "running", updatedAt: at },
+      view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    },
+  ];
+  const request = {
+    key: goatBotHomeKey(environmentId, null),
+    entry: "return-entry",
+    taskId: ChannelTaskId.make("task-a"),
+  };
+  const onHomeHandled = vi.fn();
+  await using screen = await render(view([], false, request, onHomeHandled));
+  await vi.waitFor(() => expect(onHomeHandled).toHaveBeenCalledOnce());
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await expect.element(chip).toHaveAttribute("aria-expanded", "true");
+  const row = screen.getByRole("link", { name: /^Returned task/ });
+  await expect.element(row).toBeVisible();
+  expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
+    "true",
+  );
+  await userEvent.click(chip);
+  await screen.rerender(view([], false, request));
+  await expect.element(chip).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(chip);
+  await expect.element(screen.getByRole("link", { name: /^Returned task/ })).toBeVisible();
+  expect(
+    screen
+      .getByRole("link", { name: /^Returned task/ })
+      .element()
+      .closest("[data-home-return]"),
+  ).toBeNull();
+  await screen.rerender(<div />);
+  await screen.rerender(view([], false, null));
+  await expect
+    .element(screen.getByRole("button", { name: "GOAT Bot home" }))
+    .toHaveAttribute("aria-expanded", "false");
+});
+
+it("opens the named member's Home for that member's task-origin request", async () => {
+  const { view } = setup();
+  const member = {
+    botId: BotId.make("member"),
+    name: "Research",
+    avatar: null,
+    purpose: "",
+    environmentId,
+    sessionThreadId: ThreadId.make("member-session"),
+  } as unknown as BotProfile;
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: { taskId: "task-m", title: "Member task", status: "running", updatedAt: at },
+      view: { taskId: "task-m", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    },
+  ];
+  const request = {
+    key: goatBotHomeKey(environmentId, member.botId),
+    entry: "member-return",
+    taskId: ChannelTaskId.make("task-m"),
+  };
+  await using screen = await render(
+    <GoatBotMemberContext value={member}>{view([], false, request)}</GoatBotMemberContext>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Research home" }))
+    .toHaveAttribute("aria-expanded", "true");
+  const row = screen.getByRole("link", { name: /^Member task/ });
+  await expect.element(row).toBeVisible();
+  expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
+    "true",
+  );
 });

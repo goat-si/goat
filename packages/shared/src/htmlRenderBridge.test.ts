@@ -29,7 +29,17 @@ function pageBridge(savedScript?: string) {
       if (list) list.splice(list.indexOf(fn), 1);
     },
   };
-  const document = { getElementById: () => ({ textContent: "" }), addEventListener: () => {} };
+  const image = {
+    tagName: "IMG",
+    src: "https://example.com/chart.png",
+    alt: "Chart",
+    closest: () => null,
+  };
+  const document = {
+    getElementById: () => ({ textContent: "" }),
+    addEventListener: () => {},
+    images: [image],
+  };
   const html = injectHtmlRenderBootstrap("<p>Saved page</p>");
   const script = savedScript ?? /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
   expect(script).toBeDefined();
@@ -81,14 +91,7 @@ function pageBridge(savedScript?: string) {
         isTrusted: true,
         defaultPrevented: false,
         button: 0,
-        composedPath: () => [
-          {
-            tagName: "IMG",
-            src: "https://example.com/chart.png",
-            alt: "Chart",
-            closest: () => null,
-          },
-        ],
+        composedPath: () => [image],
       }),
   };
 }
@@ -105,7 +108,9 @@ describe("HTML bridge version compatibility", () => {
       "t3/notifications/open-image",
     ]);
     expect(readHtmlRenderKeyDown(page.messages[0])?.code).toBe("KeyK");
-    expect(readHtmlRenderImageRequest(page.messages[1])?.src).toBe("https://example.com/chart.png");
+    expect(readHtmlRenderImageRequest(page.messages[1])?.images[0]?.src).toBe(
+      "https://example.com/chart.png",
+    );
   });
 
   it("a new page answers an old client, which sends only t3/ shortcuts, in t3/", () => {
@@ -134,7 +139,7 @@ describe("HTML bridge version compatibility", () => {
         "goat/notifications/open-image",
       ]);
       expect(readHtmlRenderKeyDown(page.messages[0])?.code).toBe("KeyK");
-      expect(readHtmlRenderImageRequest(page.messages[1])?.name).toBe("Chart");
+      expect(readHtmlRenderImageRequest(page.messages[1])?.images[0]?.name).toBe("Chart");
     },
   );
 
@@ -176,7 +181,7 @@ describe("HTML bridge version compatibility", () => {
         jsonrpc: "2.0",
         method: `${prefix}/notifications/open-image`,
         params: { src: "https://example.com/image.png" },
-      })?.name,
+      })?.images[0]?.name,
     ).toBe("Image");
     expect(
       readHtmlRenderKeyDown({

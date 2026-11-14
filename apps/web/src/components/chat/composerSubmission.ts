@@ -3,6 +3,17 @@ import { expandAssistantCitationsForProvider } from "@goat/shared/assistantCitat
 
 type ComposerSubmitEvent = { preventDefault: () => void };
 
+export function resumeEmptyComposer(
+  event: ComposerSubmitEvent | undefined,
+  blocked: boolean,
+  resume: () => void,
+): boolean {
+  event?.preventDefault();
+  if (blocked) return false;
+  resume();
+  return true;
+}
+
 type ComposerSubmissionInput = {
   prompt: string;
   providerInput?: string;
@@ -28,6 +39,20 @@ export function getComposerSubmissionValidationMessage(
   return options.submissionTarget === "provider-turn"
     ? getComposerPromptLengthValidationMessage(options.providerInput ?? options.prompt)
     : null;
+}
+
+// Answering a question responds to the open request instead of starting a provider turn, so
+// provider and turn-send state must not block it. Its own attachments and connection still do.
+export function isComposerSubmissionBlocked(input: {
+  submissionTarget: ComposerSubmissionInput["submissionTarget"];
+  noProviderAvailable: boolean;
+  sendDisabledReason: string | null;
+  attachmentBlockReason: string | null;
+  environmentUnavailable: boolean;
+}): boolean {
+  return input.submissionTarget === "pending-user-input"
+    ? input.attachmentBlockReason !== null || input.environmentUnavailable
+    : input.noProviderAvailable || input.sendDisabledReason !== null;
 }
 
 export function submitComposerDraft(

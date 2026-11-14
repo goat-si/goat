@@ -63,6 +63,7 @@ const route = (knownHostsFile: string) => ({
   proxyCommand: PROXY,
   user: "runner",
   knownHostsFile,
+  identityFile: "/srv/goat/disposable/machine_ed25519",
 });
 const sshG = (config: string, args: ReadonlyArray<string>) =>
   Effect.flatMap(ProcessRunner.ProcessRunner, (runner) =>
@@ -123,7 +124,11 @@ it.live.skipIf(WINDOWS)(
         forwardx11trusted: settings.get("forwardx11trusted"),
         permitremoteopen: settings.get("permitremoteopen"),
         connecttimeout: settings.get("connecttimeout"),
-        evilIdentity: identities.includes("identityfile /tmp/evil_id"),
+        identities,
+        identitiesonly: settings.get("identitiesonly"),
+        identityagent: settings.get("identityagent"),
+        passwordauthentication: settings.get("passwordauthentication"),
+        kbdinteractiveauthentication: settings.get("kbdinteractiveauthentication"),
       }).toEqual({
         user: "runner",
         port: "22",
@@ -157,7 +162,12 @@ it.live.skipIf(WINDOWS)(
         forwardx11trusted: "no",
         permitremoteopen: "none",
         connecttimeout: "10",
-        evilIdentity: false,
+        // Only the hub's machine key, never the agent's or the person's default keys.
+        identities: ["identityfile /srv/goat/disposable/machine_ed25519"],
+        identitiesonly: "yes",
+        identityagent: "none",
+        passwordauthentication: "no",
+        kbdinteractiveauthentication: "no",
       });
     }).pipe(
       Effect.scoped,
@@ -233,6 +243,9 @@ it.effect("refuses a route it cannot pass to ssh unchanged", () =>
     // ssh expands ${VAR} in UserKnownHostsFile.
     expect(options({ knownHostsFile: "/s/${HOME}/kh" })).toBeUndefined();
     expect(options({ knownHostsFile: "relative" })).toBeUndefined();
+    expect(options({ identityFile: "/s/a b" })).toBeUndefined();
+    expect(options({ identityFile: "/s/%d/key" })).toBeUndefined();
+    expect(options({ identityFile: "relative" })).toBeUndefined();
   }),
 );
 
@@ -259,6 +272,7 @@ it.live.skipIf(WINDOWS)(
         proxyCommand,
         user: "runner",
         knownHostsFile: dir + "/known_hosts",
+        identityFile: dir + "/machine_ed25519",
       });
       expect(options).toBeDefined();
       const runner = yield* ProcessRunner.ProcessRunner;

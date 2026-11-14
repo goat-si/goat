@@ -125,7 +125,8 @@ routes on the hub; an older one says so.
 ## Disposable machines
 
 A disposable machine is one you build for a short job, such as a cloud VM, and
-admit to your Pen mesh with a one-time invite. Turn on **Attach disposable
+admit to your Pen mesh with a one-time invite. The hub must run on macOS or
+Linux. Turn on **Attach disposable
 machines** in **Settings → Hub** (the hub must be on), then name the threads that
 may attach machines by their thread ID (**Copy → Thread ID** in a thread's menu).
 Only a person can change this consent, and it lasts 30 days: when it ends,
@@ -134,16 +135,52 @@ rule cancels invites that were not used yet.
 
 To attach a machine yourself, choose **Attach a machine**, paste the line
 `pen identity --json` prints on that machine, and name it. GOAT shows the invite
-token once; run `pen join` with it on that machine within 10 minutes. While it
+token once, with this hub's machine key. Add the key to `authorized_keys` of the
+machine's SSH user, then run `pen join` with the token on that machine within
+10 minutes. While it
 waits, **Reissue** cancels that invite and makes a new one for the same keys;
 once it has expired, attach the machine again. A provisioner
 thread does the same with `goat_hub_machine_attach`; its invite token appears in
 that thread's tool output and history, so treat the thread as holding a secret
 until the invite is used or expires.
 
+Once the machine joins, the hub checks the route Pen recorded for it, reaches
+it with the machine key alone, and links it to OpenCodex as a lightweight Child
+on that route only. The machine list says where each machine is and what to do
+next. On web and desktop, a machine GOAT cannot reach yet shows the machine key
+with **Copy machine key**; on mobile its text says where to find the key. The link
+needs OpenCodex 2.100.3 or later on the hub, the first release that can use the
+machine key; with an older one the machine waits at the link step. OpenCodex
+also refuses the key while a folder on its path can be written by its group or
+others or belongs to another user. GOAT removes group and other write by itself
+only from its state folder, the machine key's folder and its default home
+folder, when they are yours; a home you chose with `GOAT_HOME` or
+`--base-dir`, and every folder above it, it only names. The machine list says
+what to do: `chmod go-w` only for a folder of yours, otherwise moving GOAT's
+home to a path whose folders pass. Never change a shared or system folder or
+another user's folder or symlink, even as root.
+
+GOAT does not move its home for you, so when the list names a folder of yours,
+the `chmod go-w` it shows is the simpler fix. To move the home anyway, stop GOAT,
+move the folder, and start GOAT with `GOAT_HOME=<new>` or `--base-dir <new>`;
+the database, secrets and hub records move with it. Some things keep the old
+path: threads whose worktrees are in its `worktrees` folder still point there,
+so finish them first; a background service keeps serving the old home until you
+run `goat service uninstall --base-dir <old>` and then
+`goat service install --base-dir <new>`; and the desktop app's `goat` command
+needs **Remove** and **Install** again in **Settings → General → About**.
+A linked disposable machine's OpenCodex link also keeps the machine key's old
+path and stops working, so do not move the home while a disposable machine is
+linked.
+
+A machine with a full OpenCodex install, or one that shares its SSH host key
+with another disposable machine, stops for you to decide.
+
 Each machine is a full Pen member and can reach services on your machines'
-loopback. GOAT does not link it as a Child yet, and it stays a Pen member until
-you remove it with [`pen revoke`](pen.md#remove-a-machine). An older GOAT on the
+loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
+it with [`pen revoke`](pen.md#remove-a-machine). Removing a linked machine from Pen leaves its
+link on the hub; the machine list names the link and the `ocx link revoke`
+command that removes it. An older GOAT on the
 hub shows **Update GOAT on this hub** instead of these settings.
 
 ## Sync OpenCodex models

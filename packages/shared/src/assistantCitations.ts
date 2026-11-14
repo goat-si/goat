@@ -3,7 +3,9 @@ import {
   CITATION_LINK_PROTOCOLS,
 } from "@goat/contracts/legacyT3Names";
 import {
+  ASSISTANT_CITATION_CONTEXT_LENGTH,
   ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
+  ASSISTANT_CITATION_MAX_ID_LENGTH,
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   AssistantCitation,
 } from "@goat/contracts";
@@ -14,9 +16,14 @@ const CITATION_PROTOCOL = `${GOAT_CITATION_LINK_PROTOCOL}:`;
 const CITATION_HREF_PREFIX = `${CITATION_PROTOCOL}//v1/`;
 const CITATION_HREF_PREFIXES = CITATION_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 const CITATION_HREF_PATTERN = `(?:${CITATION_LINK_PROTOCOLS.join("|")})://v1/`;
-// Percent encoding needs up to nine characters per UTF-16 code unit; 16k covers selectors.
+// Percent encoding needs up to nine characters per UTF-16 code unit; 1k covers keys and offsets.
 const MAX_CITATION_HREF_LENGTH =
-  9 * (ASSISTANT_CITATION_MAX_TEXT_LENGTH + ASSISTANT_CITATION_MAX_COMMENT_LENGTH) + 16_000;
+  9 *
+    (ASSISTANT_CITATION_MAX_TEXT_LENGTH +
+      ASSISTANT_CITATION_MAX_COMMENT_LENGTH +
+      3 * ASSISTANT_CITATION_MAX_ID_LENGTH +
+      2 * ASSISTANT_CITATION_CONTEXT_LENGTH) +
+  1_000;
 const CITATION_LINK = new RegExp(
   String.raw`\[Assistant quote\]\((${CITATION_HREF_PATTERN}[^\s)]{1,${MAX_CITATION_HREF_LENGTH - Math.min(...CITATION_HREF_PREFIXES.map((prefix) => prefix.length))}})\)`,
   "g",

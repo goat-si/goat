@@ -58,6 +58,9 @@ vi.mock("react-native", () => ({
     </div>
   ),
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  TextInput: (props: { accessibilityLabel?: string }) => (
+    <input aria-label={props.accessibilityLabel} />
+  ),
   FlatList: (
     props: {
       data: ReadonlyArray<{ key: string }>;
@@ -133,6 +136,10 @@ const state = vi.hoisted(() => ({
   runNow: vi.fn(),
   retry: vi.fn(),
   openThread: vi.fn(),
+  // A server that looks tasks up by id and searches their titles.
+  lookupCapable: false,
+  lookup: vi.fn(),
+  update: vi.fn(),
 }));
 
 // The real face module draws the chip's face; only its native drawing and styling stand in.
@@ -190,8 +197,10 @@ vi.mock("../../state/channels", () => ({
     listBotArtifacts: () => "artifacts",
     readBotArtifact: {},
     listTasks: () => "computer",
-    updateTaskView: { permissionAtom: () => "permission" },
+    updateTaskView: { label: "update", permissionAtom: () => "permission", run: state.update },
     retryTask: { label: "retry", permissionAtom: () => "permission", run: state.retry },
+    getBotTask: { label: "lookup", permissionAtom: () => "permission", run: state.lookup },
+    searchBotTasks: { label: "search", permissionAtom: () => "permission" },
   },
 }));
 vi.mock("../../state/server", () => ({
@@ -222,6 +231,7 @@ vi.mock("../../state/environments", () => ({
                 goatBotTaskRetry: true,
                 goatBotChildWork: true,
                 goatBotMembers: true,
+                goatBotTaskLookupSearch: state.lookupCapable,
               },
             },
           },
@@ -241,7 +251,8 @@ vi.mock("./MobileBotCheckInForm", () => ({ MobileBotCheckInForm: () => null }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
     key === "task"
-      ? state.task
+      ? // As the real query: a success counts only once settled, not while a read is waiting.
+        { ...state.task, successResult: state.task.isSuccess && !state.task.isPending ? {} : null }
       : key === "routines"
         ? state.routines
         : {
@@ -294,11 +305,16 @@ function reset() {
   state.connected = true;
   for (const query of [state.task, state.routines])
     Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
-  state.task.refresh.mockClear();
+  state.task.refresh.mockReset();
+  // As the real query: asking again leaves the list waiting until a test settles it.
+  state.task.refresh.mockImplementation(() => Object.assign(state.task, { isPending: true }));
   state.routines.refresh.mockClear();
   state.setEnabled.mockReset();
   state.runNow.mockReset();
   state.retry.mockReset();
+  state.lookupCapable = false;
+  state.lookup.mockReset();
+  state.update.mockReset();
 }
 async function render(
   taskId?: ChannelTaskId,

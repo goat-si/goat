@@ -152,7 +152,7 @@ function stripTerminalControl(text: string): string {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-// Line editors (zsh, fish, bash 5.1+) enable bracketed paste when they start reading a command.
+// Line editors (zsh, fish, nu, bash 5.1+) enable bracketed paste when they start reading a command.
 const BRACKETED_PASTE_ON = "\x1b[?2004h";
 const BRACKETED_PASTE_OFF = "\x1b[?2004l";
 // Longer than one subprocess poll plus its ps timeout, so a startup prompt is seen as busy first.
@@ -164,12 +164,13 @@ function lineEditorReading(text: string, previous: boolean): boolean {
   return on === off ? previous : on > off;
 }
 
-type CompletionShell = "posix" | "fish" | "powershell";
+type CompletionShell = "posix" | "fish" | "nushell" | "powershell";
 
 function resolveCompletionShell(shell: string): CompletionShell | null {
   const name = (shell.split(/[/\\]/).at(-1) ?? shell).toLowerCase().replace(/\.exe$/, "");
   if (name === "cmd") return null;
   if (name === "fish") return "fish";
+  if (name === "nu") return "nushell";
   if (name === "pwsh" || name === "powershell") return "powershell";
   return "posix";
 }
@@ -186,6 +187,20 @@ function wrapCommandForCompletion(
       return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__goatc = $LASTEXITCODE } elseif ($?) { $__goatc = 0 } else { $__goatc = 1 }; Write-Host "${sentinel}$__goatc"`;
     case "fish":
       return `begin\r${body}\rend; printf '\\n${sentinel}%s\\n' $status`;
+    case "nushell": {
+      const escaped = command.replace(/["\\\x00-\x1f]/g, (char) =>
+        char === '"' || char === "\\" ? `\\${char}` : `\\u{${char.charCodeAt(0).toString(16)}}`,
+      );
+      // Nu resolves imports before running cd; source a file rooted in the worktree.
+      return [
+        "$env.LAST_EXIT_CODE = 0",
+        "let __goatf = try { mktemp --tmpdir-path $env.GOAT_WORKTREE_PATH --suffix .nu .goat-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
+        `if $__goatf == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__goatf | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__goatf; ^$nu.current-exe --login --commands $"cd $env.GOAT_WORKTREE_PATH; source ($__goatf | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
+        "let __goatc = $env.LAST_EXIT_CODE",
+        "try { if $__goatf != null and ($__goatf | path exists) { rm --permanent $__goatf } } catch {|e| print -e $e.msg }",
+        `print $"\\n${sentinel}($__goatc)"`,
+      ].join("; ");
+    }
     case "posix":
       return `( ${body}\r); printf '\\n${sentinel}%s\\n' "$?"`;
   }
@@ -526,9 +541,9 @@ export const make = Effect.gen(function* () {
     // Return once the terminal exists so callers can show it while a startup prompt waits.
     // PowerShell and cmd have no line-editor signal.
     yield* (
-      completionShell === "posix" || completionShell === "fish"
-        ? readiness.wait
-        : Effect.succeed("ready" as const)
+      completionShell === "powershell" || completionShell === null
+        ? Effect.succeed("ready" as const)
+        : readiness.wait
     ).pipe(
       Effect.flatMap((shell) =>
         shell === "exited" || commandLine === null

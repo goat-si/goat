@@ -202,6 +202,8 @@ export const DISPOSABLE_MACHINE_STATES = [
   "invited",
   "admitted",
   "attaching",
+  "linked",
+  "left_pen",
   "attached",
   "failed",
   "unknown",
@@ -261,8 +263,9 @@ const RequestKey = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export const DisposableAttachId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 
 /**
- * Starts one attach: GOAT mints a Pen invite bound to these keys and name, and the attach ends when
- * Pen admits the machine. An agent caller must be a thread the switch names.
+ * Starts one attach: GOAT mints a Pen invite bound to these keys and name. Once Pen admits the
+ * machine, GOAT checks its route, reaches it with the hub machine key and links it to OpenCodex as a
+ * lightweight Child. An agent caller must be a thread the switch names.
  */
 export const HubMachineAttachInput = Schema.Struct({
   name: DisposableMachineName,
@@ -295,6 +298,11 @@ export const HubMachineStep = Schema.Struct({
 });
 export type HubMachineStep = typeof HubMachineStep.Type;
 
+/** An OpenSSH ed25519 public key line; the comment is GOAT's own. */
+export const DisposableMachineKey = Schema.String.check(
+  Schema.isPattern(/^ssh-ed25519 [A-Za-z0-9+/]{68}(?: [A-Za-z0-9._@-]{1,64})?$/u),
+);
+
 export const HubMachineStatus = Schema.Struct({
   attachId: DisposableAttachId,
   name: DisposableMachineName,
@@ -310,6 +318,11 @@ export const HubMachineStatus = Schema.Struct({
   penMember: Schema.Boolean,
   provisioner: DisposableMachineProvisioner,
   stateSince: IsoDateTime,
+  /**
+   * The hub's machine key while the attach is open: the provisioner adds this public line to the
+   * machine user's authorized_keys, and GOAT and the Home reach the machine with it alone.
+   */
+  machineKey: Schema.optionalKey(DisposableMachineKey),
   /**
    * Only in the answer that minted it: the token the machine joins with. The attach service never
    * keeps it, and a replay answers without it; an agent caller's tool output, which carries it, is

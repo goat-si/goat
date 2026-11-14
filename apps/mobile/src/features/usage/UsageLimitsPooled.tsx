@@ -106,7 +106,7 @@ function LimitRow({
         return (
           <View key={`${pool.kind}:${pool.id}`} className="flex-row items-center gap-2">
             <Text numberOfLines={1} className="w-20 text-xs text-foreground-muted">
-              {cursorUsageWindowDetails(pool.id)?.label ?? pool.label}
+              {cursorUsageWindowDetails(pool.id, group.pool)?.label ?? pool.label}
             </Text>
             <View className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle">
               <View
