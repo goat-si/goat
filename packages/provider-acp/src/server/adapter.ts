@@ -333,8 +333,10 @@ export interface AcpAdapterV2Flavor {
       }
     | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
   readonly resolveSessionLaunch?: (
     environment: NodeJS.ProcessEnv,
+    sessionEnvironment: NodeJS.ProcessEnv,
   ) => Effect.Effect<unknown, EffectAcpErrors.AcpError, Scope.Scope>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
@@ -1124,6 +1126,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const sessionLaunch = yield* (
           flavor.resolveSessionLaunch?.(
             launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
           ) ?? Effect.void
         );
         const clientTerminals: AcpClientTerminals | undefined =

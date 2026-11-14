@@ -361,7 +361,7 @@ it.live("plan extraction receives the environment and launch captured by its ses
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.live("session launch resolution uses the workspace for relative PATH entries", () =>
+it.live("resolves relative PATH from the workspace and launches with the session PATH", () =>
   Effect.gen(function* () {
     const workspace = yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-acp-path-"))),
@@ -380,6 +380,7 @@ it.live("session launch resolution uses the workspace for relative PATH entries"
       ),
     });
     const resolved: Array<unknown> = [];
+    const launchPaths: Array<string | undefined> = [];
     const adapter = yield* makeAcpAdapterV2({
       instanceId,
       currentEnvironment: Effect.succeed({ ...process.env, PATH: "bin" }),
@@ -387,10 +388,12 @@ it.live("session launch resolution uses the workspace for relative PATH entries"
       flavor: {
         driver: ProviderDriverKind.make("acp-relative-path"),
         capabilities: AcpProviderCapabilitiesV2,
-        resolveSessionLaunch: (environment) =>
-          resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
+        resolveSessionLaunch: (environment, sessionEnvironment) => {
+          launchPaths.push(sessionEnvironment?.PATH);
+          return resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
             Effect.provide(NodeServices.layer),
-          ),
+          );
+        },
         makeRuntime: (input) => {
           resolved.push(input.sessionLaunch);
           return makeRuntime(input);
@@ -410,6 +413,6 @@ it.live("session launch resolution uses the workspace for relative PATH entries"
       modelSelection,
       runtimePolicy,
     });
-    assert.deepEqual(resolved, [executable]);
+    assert.deepEqual({ resolved, launchPaths }, { resolved: [executable], launchPaths: ["bin"] });
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
