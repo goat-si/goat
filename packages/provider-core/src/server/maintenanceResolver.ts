@@ -1,3 +1,5 @@
+import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
+import { quoteShellWord, quoteUpdateExecutable } from "./maintenanceShellQuote.ts";
 export type {
   ProviderMaintenanceCapabilities,
   ProviderMaintenanceCommandAction,
@@ -120,20 +122,6 @@ const NpmLatestVersionResponse = Schema.Struct({
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function quoteShellWord(word: string, platform: NodeJS.Platform): string {
-  const safeWord = platform === "win32" ? /^[\w./:\\@=-]+$/ : /^[\w./:@=-]+$/;
-  if (safeWord.test(word)) return word;
-  return platform === "win32"
-    ? `'${word.replace(/['\u2018\u2019]/g, "$&$&")}'`
-    : `'${word.replaceAll("'", "'\\''")}'`;
-}
-
-function quoteUpdateExecutable(executable: string, platform: NodeJS.Platform): string {
-  const quoted = quoteShellWord(executable, platform);
-  // Windows terminals default to PowerShell, where a quoted executable needs &.
-  return platform === "win32" && quoted !== executable ? `& ${quoted}` : quoted;
 }
 
 export function makeProviderMaintenanceCapabilities(input: {
@@ -755,6 +743,14 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
     ...capabilities,
     // npm owns registry, scoped auth and proxy configuration; failure must not retry public npm.
     latestVersion: null,
+    latestVersionCacheKey: [
+      "configured-npm",
+      npmPath,
+      packageName,
+      prefix ?? "",
+      environmentCacheKey(env),
+      installerLatestVersionKey(capabilities) ?? "",
+    ].join("\0"),
     lookupLatestVersion: capabilities.lookupLatestVersion
       ? capabilities.lookupLatestVersion.pipe(
           Effect.filterOrElse(
