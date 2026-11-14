@@ -12,14 +12,21 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
+import { homeWorkGoverns } from "../goatBot/homeCurrentOpenableWork.ts";
 import { createChannelEnvironmentAtoms } from "./channels.ts";
 
 const decodeRemote = Schema.decodeUnknownSync(BotRemoteWork);
 const env = EnvironmentId.make("source");
+// Home lists a bot's work with goatBotTaskThreads; the newer two add history and lookup.
+const TASK_CAPABILITIES = {
+  goatBotTaskThreads: true,
+  goatBotTaskThreadsPaged: true,
+  goatBotTaskLookupSearch: true,
+};
 const config = Atom.make<ServerConfig | null>({
   environment: {
     environmentId: env,
-    capabilities: { goatBotTaskThreadsPaged: true, goatBotTaskLookupSearch: true },
+    capabilities: TASK_CAPABILITIES,
   },
 } as unknown as ServerConfig);
 const destination = EnvironmentId.make("destination");
@@ -148,7 +155,7 @@ it("tracks capability, source, destination, and current-link transitions without
   registry.set(config, {
     environment: {
       environmentId: env,
-      capabilities: { goatBotTaskThreadsPaged: true, goatBotTaskLookupSearch: true },
+      capabilities: TASK_CAPABILITIES,
     },
   } as unknown as ServerConfig);
   expect(links()).toEqual(["worker", "remote-thread"]);
@@ -186,7 +193,7 @@ it("derives a bot's unread count once per work value and tells its subscriber on
   registry.set(config, {
     environment: {
       environmentId: env,
-      capabilities: { goatBotTaskThreadsPaged: true, goatBotTaskLookupSearch: true },
+      capabilities: TASK_CAPABILITIES,
     },
   } as unknown as ServerConfig);
   registry.set(query, AsyncResult.success({ rows: [unreadRow(true)], mainMessageCount: 0 }));
@@ -227,5 +234,32 @@ it("an ineligible bot's Home work reads no list", () => {
   registry.mount(atom);
   expect(registry.get(atom)).toMatchObject({ eligible: false, links: [] });
   expect(reads.list).toBe(0);
+  registry.dispose();
+});
+
+it("governs only with all three task capabilities: without goatBotTaskThreads Home reads no list and Threads keeps the legacy rule", () => {
+  const registry = AtomRegistry.make();
+  const runtime = Atom.runtime(
+    Layer.succeed(EnvironmentRegistry, {} as EnvironmentRegistry["Service"]),
+  );
+  registry.set(config, {
+    environment: {
+      environmentId: env,
+      capabilities: { goatBotTaskThreadsPaged: true, goatBotTaskLookupSearch: true },
+    },
+  } as unknown as ServerConfig);
+  registry.set(query, AsyncResult.success(answer));
+  const union = createChannelEnvironmentAtoms(runtime).homeCurrentOpenableWorkByEnvironment(env);
+  reads.list = 0;
+  registry.mount(union);
+  expect(registry.get(union).byBot).toEqual([{ botId: "main", eligible: false, list: "pending" }]);
+  expect(registry.get(union).links).toEqual([]);
+  expect(homeWorkGoverns(registry.get(union))).toBe(false);
+  expect(reads.list).toBe(0);
+  registry.set(config, {
+    environment: { environmentId: env, capabilities: TASK_CAPABILITIES },
+  } as unknown as ServerConfig);
+  expect(homeWorkGoverns(registry.get(union))).toBe(true);
+  expect(registry.get(union).links.map((link) => link.threadId)).toEqual(["worker"]);
   registry.dispose();
 });

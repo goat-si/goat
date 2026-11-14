@@ -1,58 +1,18 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 
-import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
-
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { type GlobalAgentLegacyRoute, legacyGlobalAgentRoute } from "~/globalAgentRoute";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { useThreadShell } from "~/state/entities";
-import {
-  useEnvironments,
-  usePrimaryEnvironmentId,
-  type EnvironmentPresentation,
-} from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { goatBotEnvironmentInputs } from "./goatBotEnvironmentInputs";
 
-import {
-  environmentSupportsChannelLedger,
-  type GoatBotEnvironmentInput,
-} from "@goat/client-runtime/goatBot";
-import type { EnvironmentId } from "@goat/contracts";
+import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 
 /** Every machine as GOAT Bot sees it: connected, offering channels, primary. */
 export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput> {
   const { environments } = useEnvironments();
   return goatBotEnvironmentInputs(environments, usePrimaryEnvironmentId());
-}
-
-/** The mapping behind useGoatBotEnvironments, shared with readGoatBotEnvironmentId. */
-export function goatBotEnvironmentInputs(
-  environments: ReadonlyArray<EnvironmentPresentation>,
-  primaryEnvironmentId: EnvironmentId | null,
-): ReadonlyArray<GoatBotEnvironmentInput> {
-  return environments.map((entry) => ({
-    environmentId: entry.environmentId,
-    connected: entry.connection.phase === "connected",
-    supportsChannelLedger: environmentSupportsChannelLedger(
-      entry.serverConfig?.environment.capabilities,
-    ),
-    supportsBotStatus: entry.serverConfig?.environment.capabilities.goatBotStatus === true,
-    primary: entry.environmentId === primaryEnvironmentId,
-    label: resolveEnvironmentOptionLabel({
-      isPrimary: entry.environmentId === primaryEnvironmentId,
-      environmentId: entry.environmentId,
-      runtimeLabel: entry.serverConfig?.environment.label ?? null,
-      savedLabel: entry.label,
-    }),
-    settingsSnapshot: entry.serverConfig?.settings ?? null,
-    homeTarget: {
-      environmentId: entry.environmentId,
-      connected: entry.connection.phase === "connected",
-      supportsHome: entry.serverConfig?.environment.capabilities.goatBotHome === true,
-      supportsBot: environmentSupportsChannelLedger(entry.serverConfig?.environment.capabilities),
-      settingsLoaded: entry.serverConfig?.settings != null,
-      home: entry.serverConfig?.settings?.goatBotHome ?? null,
-    },
-  }));
 }
 
 /** Where the old global agent still opens in its coding view, if anywhere. */
