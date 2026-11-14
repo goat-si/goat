@@ -1,3 +1,4 @@
+import { loadBootProviderSnapshots } from "./ProviderRegistryBoot.ts";
 import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -37,10 +38,7 @@ import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import {
-  hydrateCachedProvider,
-  isCachedProviderCorrelated,
   orderProviderSnapshots,
-  readProviderStatusCache,
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
@@ -347,59 +345,14 @@ export const layer = Layer.effect(
     const bootInstances = yield* instanceRegistry.listInstances;
     const bootSources = bootInstances.map(buildSnapshotSource);
     const fallbackProviders = yield* loadProviders(bootSources);
-    const fallbackByInstance = new Map<ProviderInstanceId, ServerProvider>();
-    for (let index = 0; index < fallbackProviders.length; index++) {
-      const provider = fallbackProviders[index];
-      const source = bootSources[index];
-      if (provider === undefined || source === undefined) {
-        continue;
-      }
-      fallbackByInstance.set(source.instanceId, provider);
-    }
-
-    const cachedProviders = yield* Effect.forEach(
+    const { bootProviders, awaitingBootInstances } = yield* loadBootProviderSnapshots({
+      bootInstances,
       bootSources,
-      (source) =>
-        Effect.gen(function* () {
-          const filePath = yield* resolveProviderStatusCachePath({
-            cacheDir: config.providerStatusCacheDir,
-            instanceId: source.instanceId,
-          }).pipe(Effect.provideService(Path.Path, path));
-          const fallbackProvider = fallbackByInstance.get(source.instanceId);
-          if (fallbackProvider === undefined) {
-            return undefined;
-          }
-          return yield* readProviderStatusCache(filePath).pipe(
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-            Effect.flatMap((cachedProvider) => {
-              if (cachedProvider === undefined) {
-                return Effect.void.pipe(Effect.as(undefined as ServerProvider | undefined));
-              }
-              const correlation = {
-                cachedProvider,
-                fallbackProvider,
-              } as const;
-              if (!isCachedProviderCorrelated(correlation)) {
-                return Effect.logWarning("provider status cache identity mismatch, ignoring", {
-                  path: filePath,
-                  instanceId: source.instanceId,
-                  cachedInstanceId: cachedProvider.instanceId ?? null,
-                  driver: source.driverKind,
-                  cachedDriver: cachedProvider.driver ?? null,
-                }).pipe(Effect.as(undefined as ServerProvider | undefined));
-              }
-              return Effect.succeed(hydrateCachedProvider(correlation));
-            }),
-          );
-        }),
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map((providers) =>
-        orderProviderSnapshots(
-          providers.filter((provider): provider is ServerProvider => provider !== undefined),
-        ),
-      ),
-    );
+      fallbackProviders,
+      cacheDir: config.providerStatusCacheDir,
+      fileSystem,
+      path,
+    });
     const initialManifest = yield* manifestService.current;
     const classifyCompatibility = (
       provider: ServerProvider,
@@ -411,7 +364,7 @@ export const layer = Layer.effect(
         ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
       );
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(
-      cachedProviders.map((provider) => classifyCompatibility(provider, initialManifest)),
+      bootProviders.map((provider) => classifyCompatibility(provider, initialManifest)),
     );
     const workspaceRefreshesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstance, ReadonlyMap<string, Deferred.Deferred<void>>>
@@ -528,6 +481,15 @@ export const layer = Layer.effect(
     // inference cycle while keeping auth-triggered refreshes in one place.
     let refreshAuthDependents: GlobalSkillRegistry.RefreshDependentAuth = () => Effect.void;
     const compatibilityRefreshRunning = yield* Ref.make(false);
+    const refreshCompatibility = Effect.gen(function* () {
+      if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
+        yield* manifestService.refresh.pipe(
+          Effect.andThen(upsertProviders([], { persist: false })),
+          Effect.ensuring(Ref.set(compatibilityRefreshRunning, false)),
+          Effect.forkIn(serviceScope),
+        );
+      }
+    });
     const syncProvider = Effect.fn("syncProvider")(function* (
       provider: ServerProvider,
       options?: {
@@ -545,15 +507,7 @@ export const layer = Layer.effect(
         refreshAuthDependents,
         serviceScope,
       );
-      // Reclassify the current read model after fetching. Never republish the
-      // probe captured before the fetch: a newer health result may have landed.
-      if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
-        yield* manifestService.refresh.pipe(
-          Effect.andThen(upsertProviders([], { persist: false })),
-          Effect.ensuring(Ref.set(compatibilityRefreshRunning, false)),
-          Effect.forkIn(serviceScope),
-        );
-      }
+      yield* refreshCompatibility;
       return providers;
     });
 
@@ -837,6 +791,13 @@ export const layer = Layer.effect(
             Effect.gen(function* () {
               const source = buildSnapshotSource(instance);
               const provider = yield* source.getSnapshot;
+              // Boot shows the cached status until this instance's first check publishes a result.
+              if (
+                awaitingBootInstances.has(instance) &&
+                (yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false))
+              ) {
+                return yield* refreshCompatibility;
+              }
               yield* correlateSnapshotWithSource(source, provider).pipe(
                 Effect.flatMap(syncProvider),
               );
@@ -894,7 +855,13 @@ export const layer = Layer.effect(
       Scope.provide(serviceScope),
     );
 
-    yield* upsertProviders(fallbackProviders, { publish: false });
+    yield* upsertProviders(
+      fallbackProviders.filter((_, index) => {
+        const instance = bootInstances[index];
+        return instance === undefined || !awaitingBootInstances.has(instance);
+      }),
+      { publish: false },
+    );
     const instanceChanges = yield* instanceRegistry.subscribeChanges;
     yield* syncLiveSources;
     yield* Stream.runForEach(

@@ -1,3 +1,9 @@
+import {
+  mockHandle,
+  layerMockSpawner,
+  writeFakeCodexCli,
+  makeMutableServerSettingsService,
+} from "./ProviderRegistry.testkit.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { vi } from "vite-plus/test";
@@ -24,7 +30,6 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -46,7 +51,6 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { deepMerge } from "@goat/shared/Struct";
 import { createModelCapabilities } from "@goat/shared/model";
-import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
@@ -103,7 +107,6 @@ const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({})
 
 process.env.GOAT_CURSOR_ENABLED = "1";
 
-const encoder = new TextEncoder();
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const withBundledCompatibility = (snapshot: ServerProvider) =>
   applyProviderCompatibility(
@@ -194,52 +197,6 @@ function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
     });
 }
 
-function mockHandle(result: { stdout: string; stderr: string; code: number }) {
-  return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.make(encoder.encode(result.stdout)),
-    stderr: Stream.make(encoder.encode(result.stderr)),
-    all: Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-}
-
-function layerMockSpawner(
-  handler: (args: ReadonlyArray<string>) => {
-    stdout: string;
-    stderr: string;
-    code: number;
-  },
-) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    // `ChildProcessSpawner.make` calls `spawn` while building `exitCode` and
-    // `string` effects, and drivers build commands they may never run (Claude's
-    // logout). Handle a command only when its effect runs, as the Node spawner does.
-    ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { args: ReadonlyArray<string> };
-      return Effect.sync(() => mockHandle(handler(cmd.args)));
-    }),
-  );
-}
-
-// A Codex CLI on disk whose `app-server` and `--version` behave as `script` says.
-const writeFakeCodexCli = Effect.fn("writeFakeCodexCli")(function* (script: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-fake-codex-" });
-  const binaryPath = path.join(directory, "codex");
-  yield* fs.writeFileString(binaryPath, `#!/bin/sh\n${script}\n`);
-  yield* fs.chmod(binaryPath, 0o755);
-  return { directory, binaryPath };
-});
-
 // The npm `@openai/codex` 0.1 CLI treats `app-server` as a prompt and exits 1.
 const OBSOLETE_CODEX_APP_SERVER = `echo "Missing OpenAI API key." >&2; exit 1`;
 
@@ -277,67 +234,6 @@ function makeCodexProbeSnapshot(
     skills: [],
     ...input,
   };
-}
-
-function makeMutableServerSettingsService(
-  initial: ContractServerSettings = DEFAULT_SERVER_SETTINGS,
-) {
-  return Effect.gen(function* () {
-    const settingsRef = yield* Ref.make(initial);
-    const changes = yield* PubSub.unbounded<ContractServerSettings>();
-
-    return {
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings: Ref.get(settingsRef),
-      updateSettings: (patch) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(settingsRef);
-          const next = applyServerSettingsPatch(current, patch);
-          encodeServerSettings(next);
-          yield* Ref.set(settingsRef, next);
-          yield* PubSub.publish(changes, next);
-          return next;
-        }),
-      updateSettingsWith: (patchFor) =>
-        Ref.get(settingsRef).pipe(
-          Effect.flatMap(patchFor),
-          Effect.flatMap((patch) =>
-            Effect.gen(function* () {
-              const current = yield* Ref.get(settingsRef);
-              const next = applyServerSettingsPatch(current, patch);
-              encodeServerSettings(next);
-              yield* Ref.set(settingsRef, next);
-              yield* PubSub.publish(changes, next);
-              return next;
-            }),
-          ),
-        ),
-      updateProviderInstance: (mutation, patch = {}) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(settingsRef);
-          const next = ServerSettingsModule.applyProviderInstanceMutation(
-            applyServerSettingsPatch(current, patch),
-            mutation,
-          );
-          encodeServerSettings(next);
-          yield* Ref.set(settingsRef, next);
-          yield* PubSub.publish(changes, next);
-          return next;
-        }),
-      checkpointReplicationPermit: () =>
-        Effect.die("checkpoint replication is not used by this fixture"),
-      withSettingsSnapshot: (use) => Ref.get(settingsRef).pipe(Effect.flatMap(use)),
-      get streamChanges() {
-        return Stream.fromPubSub(changes);
-      },
-      get subscribeChanges() {
-        return PubSub.subscribe(changes).pipe(
-          Effect.map((subscription) => Stream.fromSubscription(subscription)),
-        );
-      },
-    } satisfies ServerSettingsModule.ServerSettingsService["Service"];
-  });
 }
 
 const awaitPersistedProvider = (
@@ -1242,6 +1138,9 @@ it.layer(
                   }),
                 ),
               getSnapshot: Ref.get(currentProvider),
+              isAwaitingFirstCheck: Ref.get(currentProvider).pipe(
+                Effect.map((provider) => provider === pendingProvider),
+              ),
               refresh: Ref.get(nextProvider).pipe(
                 Effect.tap((provider) => Ref.set(currentProvider, provider)),
               ),
@@ -1275,6 +1174,23 @@ it.layer(
                 ? retainedModels
                 : [customModel, ...cachedProvider.models];
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, expectedModels);
+              if (!restarted) {
+                const probeFields = ({ status, installed, auth, version }: ServerProvider) => ({
+                  status,
+                  installed,
+                  auth,
+                  version,
+                });
+                // Boot reads the probe state from the cache, not the pending snapshot, and never persists the pending one.
+                assert.deepStrictEqual(
+                  probeFields((yield* registry.getProviders)[0]!),
+                  probeFields(cachedProvider),
+                );
+                assert.deepStrictEqual(
+                  probeFields((yield* readProviderStatusCache(filePath))!),
+                  probeFields(cachedProvider),
+                );
+              }
 
               yield* registry.refreshInstance(instance.instanceId);
               assert.deepStrictEqual(
@@ -1298,6 +1214,79 @@ it.layer(
           Effect.provide(
             ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-codex-retired-model-cache-",
+            }).pipe(Layer.provideMerge(NodeServices.layer)),
+          ),
+        ),
+      );
+      it.effect("keeps a check that finished before boot over the cached status", () =>
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const filePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: cachedProvider.instanceId,
+          });
+          const instance = {
+            instanceId: cachedProvider.instanceId,
+            driverKind: cachedProvider.driver,
+            continuationIdentity: {
+              driverKind: cachedProvider.driver,
+              continuationKey: "codex:instance:codex-personal",
+            },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: cachedProvider.driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(failedProvider),
+              isAwaitingFirstCheck: Effect.succeed(false),
+              refresh: Effect.succeed(failedProvider),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          } satisfies ProviderInstance;
+          const layerInstanceRegistry = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (id) =>
+                Effect.succeed(id === instance.instanceId ? instance : undefined),
+              listInstances: Effect.succeed([instance]),
+              listUnavailable: Effect.succeed([]),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          // First boot has no cache file; the second has a stale ready one.
+          for (const hasCache of [false, true]) {
+            if (hasCache) {
+              yield* writeProviderStatusCache({
+                filePath,
+                provider: { ...cachedProvider, status: "ready" },
+              });
+            }
+            yield* Effect.gen(function* () {
+              const registry = yield* ProviderRegistry.ProviderRegistry;
+              assert.strictEqual((yield* registry.getProviders)[0]?.status, failedProvider.status);
+              assert.strictEqual(
+                (yield* readProviderStatusCache(filePath))?.status,
+                failedProvider.status,
+              );
+            }).pipe(
+              Effect.provide(ProviderRegistry.layer.pipe(Layer.provide(layerInstanceRegistry))),
+              Effect.scoped,
+            );
+          }
+        }).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "goat-codex-probed-before-boot-",
             }).pipe(Layer.provideMerge(NodeServices.layer)),
           ),
         ),
