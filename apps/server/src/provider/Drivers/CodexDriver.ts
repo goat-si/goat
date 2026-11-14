@@ -212,20 +212,19 @@ export const CodexDriver: ProviderDriver<
     const pinnedHome = homeConfigured
       ? (homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath)
       : undefined;
-    // A host CODEX_HOME names one folder for every launch, relative to the server's working directory.
+    // Every launch names its home explicitly: the host's CODEX_HOME relative to the server's working
+    // directory, else the server user's .codex, so an instance HOME override cannot move one launch.
     const currentEnvironment = mergedEnvironment.pipe(
       Effect.map((env): NodeJS.ProcessEnv =>
         pinnedHome !== undefined
           ? { ...env, CODEX_HOME: pinnedHome }
-          : env.CODEX_HOME
-            ? {
-                ...env,
-                CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
-                  cwd: process.cwd(),
-                  environment: env,
-                }),
-              }
-            : env,
+          : {
+              ...env,
+              CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+                cwd: process.cwd(),
+                environment: env,
+              }),
+            },
       ),
     );
     const continuationIdentity = codexContinuationIdentity(homeLayout);

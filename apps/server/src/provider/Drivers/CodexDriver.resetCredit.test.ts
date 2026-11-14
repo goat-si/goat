@@ -124,7 +124,7 @@ const fixtureCodex = (root: string, body = "") =>
 
 /**
  * The CODEX_HOME each status-check launch got, the one a new session opened from another workspace
- * was started with, and the one the redemption got.
+ * was started with, the one the redemption got, and those text generation's launches got.
  */
 const launchedHomes = (root: string, form: InstanceForm) =>
   Effect.gen(function* () {
@@ -168,18 +168,30 @@ const launchedHomes = (root: string, form: InstanceForm) =>
       .pipe(Effect.exit);
     const atRedeem = homes.length;
     yield* instance.consumeResetCredit!(undefined).pipe(Effect.exit);
-    return { status, session, redemption: homes.slice(atRedeem) };
+    const redemption = homes.slice(atRedeem);
+    const atGenerate = homes.length;
+    yield* instance.textGeneration
+      .generateThreadTitle({
+        cwd: workspace,
+        message: "Name this thread",
+        modelSelection: { instanceId: ProviderInstanceId.make("launch-homes"), model: "gpt-test" },
+      })
+      .pipe(Effect.exit);
+    return { status, session, redemption, textGeneration: homes.slice(atGenerate) };
   }).pipe(Effect.provideService(HostProcess.HomeDirectory, root));
 
 const expectSameHome = (homes: {
   readonly status: ReadonlyArray<string | undefined>;
   readonly session: ReadonlyArray<string | undefined>;
   readonly redemption: ReadonlyArray<string | undefined>;
+  readonly textGeneration: ReadonlyArray<string | undefined>;
 }) => {
   expect(homes.status.length).toBeGreaterThan(0);
   expect(new Set(homes.status).size).toBe(1);
   expect(homes.session).toEqual([homes.status[0]]);
   expect(homes.redemption).toEqual([homes.status[0]]);
+  expect(homes.textGeneration.length).toBeGreaterThan(0);
+  expect(new Set(homes.textGeneration)).toEqual(new Set([homes.status[0]]));
 };
 
 it.layer(layerTest)("CodexDriver reset credits", (it) => {
