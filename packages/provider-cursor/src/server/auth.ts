@@ -44,6 +44,8 @@ export interface CursorAuthOptions {
   readonly displayName: string;
   readonly enabled: boolean;
   readonly apiKey?: string;
+  /** The key the instance's environment holds now; it outranks the one read at creation. */
+  readonly currentApiKey?: Effect.Effect<string | undefined>;
   readonly store: SdkCredentialStore;
   readonly credentialBinding?: NonNullable<ProviderAuthController["credentialBinding"]>;
   readonly onChanged: (signedIn: boolean) => Effect.Effect<void, ProviderSetupError>;
@@ -75,7 +77,11 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
     }));
 
   const readApiKey = Effect.gen(function* () {
-    if (configuredKey) return configuredKey;
+    const environmentKey =
+      options.currentApiKey === undefined
+        ? configuredKey
+        : (yield* options.currentApiKey)?.trim() || undefined;
+    if (environmentKey) return environmentKey;
     const credentials = yield* Effect.tryPromise({
       try: () => options.store.load(),
       catch: (cause) =>

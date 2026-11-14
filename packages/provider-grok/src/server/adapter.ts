@@ -121,6 +121,7 @@ export interface GrokAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: GrokSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   /** Read at each launch so a key saved after this adapter was created reaches the CLI. */
   readonly readStoredApiKey?: Effect.Effect<string | undefined>;
   readonly hostPlatform: NodeJS.Platform;
@@ -254,11 +255,10 @@ export function makeGrokAcpAdapterFlavor(
     rewriteUserText: (text, turnInput) => {
       const mention = leadingGrokSkillMention(text);
       if (mention === undefined) return Effect.succeed(text);
-      return discoverGrokSkills(
-        options.settings,
-        options.environment,
-        turnInput.runtimePolicy.cwd ?? undefined,
-      ).pipe(
+      return (options.currentEnvironment ?? Effect.succeed(options.environment)).pipe(
+        Effect.flatMap((env) =>
+          discoverGrokSkills(options.settings, env, turnInput.runtimePolicy.cwd ?? undefined),
+        ),
         Effect.map((skills) =>
           skills.some((skill) => skill.enabled && skill.name === mention.name)
             ? `/${mention.name}${mention.rest}`
@@ -305,11 +305,14 @@ export function makeGrokAcpAdapterFlavor(
       (({ runtimePolicy, ...input }) =>
         Effect.gen(function* () {
           const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
+          const environment = yield* (
+            options.currentEnvironment ?? Effect.succeed(options.environment)
+          );
           return yield* makeGrokAcpRuntime({
             ...input,
             interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
             grokSettings: options.settings,
-            environment: applyStoredGrokApiKey(options.environment, stored),
+            environment: applyStoredGrokApiKey(environment, stored),
             runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
           });
         })),
@@ -388,6 +391,9 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
   create: Effect.fn("GrokAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<GrokSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const hostPlatform = yield* HostProcess.Platform;
       const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
         GROK_CREDENTIAL_NAMESPACE,
@@ -400,7 +406,8 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
       return yield* makeGrokAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: { ...(yield* currentEnvironment) },
+        currentEnvironment,
         readStoredApiKey: readStoredGrokApiKey(credentials),
         hostPlatform,
         selfInvocation,

@@ -59,10 +59,10 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   resolveApiKey?: Effect.Effect<string, ProviderSetupError>,
   withAccess?: CursorAuth["withAccess"],
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment ?? process.env),
 ) {
   const fs = yield* FileSystem.FileSystem;
   const sdk = yield* CursorSdk.CursorSdk;
-  const resolvedEnvironment = environment ?? process.env;
 
   const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
     operation: TextGenerationOperations.Operation,
@@ -76,7 +76,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
 
     const apiKey = resolveApiKey
       ? yield* resolveApiKey
-      : resolvedEnvironment.CURSOR_API_KEY?.trim();
+      : (yield* currentEnvironment).CURSOR_API_KEY?.trim();
     if (!apiKey) {
       return yield* new TextGenerationError({
         operation,

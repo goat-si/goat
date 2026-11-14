@@ -153,6 +153,7 @@ export interface FxAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: FxSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly selfInvocation: SelfInvocation;
   /** fx's id for "Default", the model the provider snapshot read from `fx status`. */
   readonly defaultModel?: Effect.Effect<string | undefined>;
@@ -173,10 +174,15 @@ function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor
   const makeRuntime =
     options.makeRuntime ??
     (({ runtimePolicy: _runtimePolicy, processEnvironment, ...input }: AcpAdapterV2RuntimeInput) =>
-      makeFxAcpRuntime({
-        ...input,
-        fxSettings: options.settings,
-        environment: { ...options.environment, ...processEnvironment },
+      Effect.gen(function* () {
+        const environment = yield* (
+          options.currentEnvironment ?? Effect.succeed(options.environment)
+        );
+        return yield* makeFxAcpRuntime({
+          ...input,
+          fxSettings: options.settings,
+          environment: { ...environment, ...processEnvironment },
+        });
       }));
   return {
     driver: FX_DRIVER_KIND,
@@ -226,13 +232,17 @@ export const makeFxAdapterV2Driver = (
   create: Effect.fn("FxAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<FxSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const selfInvocation = yield* resolveSelfInvocation();
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       return yield* makeFxAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: { ...(yield* currentEnvironment) },
+        currentEnvironment,
         selfInvocation,
         defaultModel,
         nativeLogging: (threadId) =>

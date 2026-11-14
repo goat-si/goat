@@ -57,7 +57,7 @@ import {
   hasCursorSkillMention,
   rewriteCursorSkillMentions,
 } from "./skills.ts";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import * as SessionEnv from "./sessionEnvironment.ts";
 import { goatOrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildCursorRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -879,7 +879,7 @@ interface CursorLiveAgent {
 export interface CursorAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CursorSettings;
-  readonly environment: NodeJS.ProcessEnv;
+  readonly environment: SessionEnv.Source;
   readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
 }
 
@@ -897,7 +897,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
   // this adapter has advertised tools; no conversation or memory body is retained here.
   const memoryToolClaims = new Set<string>();
   const adapterOptions = options;
-  const apiKey = adapterOptions.environment.CURSOR_API_KEY?.trim() || undefined;
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
@@ -910,6 +909,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
     }),
     openSession: Effect.fn("CursorAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
+        const { environment: env, apiKey } = yield* SessionEnv.forSession(options.environment);
         const sessionScope = yield* Effect.scope;
         const createdAt = yield* DateTime.now;
         const session = providerSession({
@@ -2220,7 +2220,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (hasCursorSkillMention(rawText) && cursorSkillNames === undefined) {
             const skills = yield* discoverCursorSkills(
               turnInput.runtimePolicy.cwd ?? undefined,
-              adapterOptions.environment,
+              env,
             ).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
@@ -2824,14 +2824,13 @@ export const CursorAdapterV2Driver: ProviderAdapterDriver<
   defaultConfig: (): CursorSettings => DEFAULT_CURSOR_SETTINGS,
   create: Effect.fn("CursorAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<CursorSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
       return yield* makeCursorAdapterV2({
         instanceId: input.instanceId,
         settings: {
           ...input.config,
           enabled: input.enabled,
         },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: yield* SessionEnv.makeCurrent(input.environment),
       });
     },
     (effect, input) =>
