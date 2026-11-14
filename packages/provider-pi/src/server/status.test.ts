@@ -141,7 +141,7 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
-  it.effect("does not pass inherited GOAT session credentials to Pi or OmO probes", () =>
+  it.effect("does not pass inherited GOAT session credentials to any Pi or OmO probe process", () =>
     Effect.gen(function* () {
       for (const profile of [undefined, OMO_PROFILE]) {
         const observed: ChildProcess.StandardCommand[] = [];
@@ -167,11 +167,18 @@ describe("PiProvider", () => {
           undefined,
           profile,
         ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-        const probes = observed.filter(
-          (command) => command.args.includes("--version") || command.args[0] === "auth",
+        assert.deepEqual(
+          observed.map((command) =>
+            command.args.includes("--version")
+              ? "version"
+              : command.args[0] === "auth"
+                ? "auth"
+                : "rpc",
+          ),
+          ["version", "rpc", "auth"],
         );
-        assert.equal(probes.length, 2);
-        for (const probe of probes) {
+        for (const probe of observed) {
+          assert.notStrictEqual(probe.options.extendEnv, true);
           assert.isUndefined(probe.options.env?.GOAT_MCP_BEARER_TOKEN);
           assert.isUndefined(probe.options.env?.T3_MCP_BEARER_TOKEN);
           assert.equal(probe.options.env?.GOAT_ACP_MCP_AUTHORIZATION, "");
