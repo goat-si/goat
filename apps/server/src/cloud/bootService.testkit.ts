@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off - Fixtures encode subprocess and readiness responses.
 // @effect-diagnostics nodeBuiltinImport:off - Tests exercise native Node fixture boundaries.
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ConfigProvider from "effect/ConfigProvider";

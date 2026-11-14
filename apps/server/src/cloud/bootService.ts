@@ -413,7 +413,7 @@ const decodeSystemdUnitPaths = Schema.decodeUnknownEffect(
 );
 
 // The manager may not share the installer's environment; JSON preserves spaces in its paths.
-const readSystemdUnitDirectory = Effect.fn("cloud.boot_service.read_systemd_unit_directory")(
+export const readSystemdUnitDirectory = Effect.fn("cloud.boot_service.read_systemd_unit_directory")(
   function* () {
     const runner = yield* ProcessRunner.ProcessRunner;
     const path = yield* Path.Path;
@@ -662,6 +662,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     platform === "linux"
       ? yield* readSystemdUnitDirectory().pipe(
           Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provideService(Path.Path, path),
         )
       : undefined;
   let detectedManager = selectBootServiceManager({
@@ -987,6 +988,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       if (systemdUnitDir === undefined) {
         systemdUnitDir = yield* readSystemdUnitDirectory().pipe(
           Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provideService(Path.Path, path),
         );
         detectedManager = selectBootServiceManager({
           platform,
@@ -1321,7 +1323,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   }).pipe(Effect.withSpan("cloud.boot_service.uninstall"));
 
   const status: BootService["Service"]["status"] = Effect.gen(function* () {
-    if (detectedManager === undefined) {
+    const manager = detectedManager;
+    if (manager === undefined) {
       return { supported: false, installed: false, current: false, unitPath, logPath };
     }
     if (!(yield* fs.exists(unitPath))) {
@@ -1335,7 +1338,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         ? serviceStateActiveVersion(stateText.value)
         : undefined;
       const problems: BootServiceProblem[] =
-        detectedManager.kind === "systemd"
+        manager.kind === "systemd"
           ? [...(yield* readSystemdProblems(true, LEGACY_BOOT_SERVICE_NAMES.unitFile))]
           : [];
       // The goat.service branch reports this; skipping it here makes `goat update`
@@ -1374,11 +1377,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       };
     }
     const normalizeUnit = (contents: string) =>
-      detectedManager.kind === "launchd"
+      manager.kind === "launchd"
         ? contents.replace(/(<key>PATH<\/key>\n\s*<string>)[^<]*(<\/string>)/, "$1$2")
         : contents;
     const problems: BootServiceProblem[] =
-      detectedManager.kind === "systemd" ? [...(yield* readSystemdProblems(true))] : [];
+      manager.kind === "systemd" ? [...(yield* readSystemdProblems(true))] : [];
     if (yield* fs.exists(restartPendingPath)) problems.push("restart-pending");
     return {
       supported: true,
@@ -1388,8 +1391,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       problems,
       current:
         problems.length === 0 &&
-        !(detectedManager.kind === "systemd" && systemdUnsafeValue(plan)) &&
-        normalizeUnit(unit) === normalizeUnit(detectedManager.render(plan)) &&
+        !(manager.kind === "systemd" && systemdUnsafeValue(plan)) &&
+        normalizeUnit(unit) === normalizeUnit(manager.render(plan)) &&
         runtimeEntryExists &&
         Option.isSome(runtimeSentinel) &&
         runtimeSentinel.value.trim() === input.cliVersion &&

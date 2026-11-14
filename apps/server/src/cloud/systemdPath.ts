@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-import { CliError } from "effect/cli";
 import type { BootServicePlan } from "./bootService.ts";
 
 export const systemdUnsafeValue = (plan: BootServicePlan) =>
@@ -11,9 +10,5 @@ export class BootServiceBaseDirUnsupportedError extends Schema.TaggedError<BootS
 ) {
   override get message(): string {
     return `systemd cannot run GOAT from ${JSON.stringify(this.baseDir)}: the path contains a quote, backslash or control character. Choose another GOAT home with --base-dir.`;
-  }
-
-  override get [CliError.userMessage]() {
-    return this.message;
   }
 }

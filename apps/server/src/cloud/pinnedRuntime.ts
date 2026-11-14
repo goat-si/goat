@@ -535,6 +535,14 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
         : // Fully resolved, through chained links and a symlinked GOAT home alike.
           yield* fs.realPath(launcher).pipe(Effect.orElseSucceed(() => undefined));
     if (target === undefined) continue;
+    const entryDir = path.dirname(path.resolve(launcher));
+    const parent = path.dirname(entryDir);
+    if (
+      platform !== "win32" &&
+      (parent === versionsDir || parent === realVersionsDir) &&
+      target === path.join(realVersionsDir, path.basename(entryDir), path.basename(launcher))
+    )
+      continue;
     targets.push(target);
     if (
       (launcherOwnsVersionsDir(path, versionsDir, target) ||
