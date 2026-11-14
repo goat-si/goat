@@ -173,10 +173,14 @@ stored first and read back from OpenCodex's journal before anything is sent agai
 onto hub nodes as the machine's class, and an unreadable table reads as kept. A detach pass
 (`DisposableDetach`) runs after it: detach fences the record and removes the link with a journalled
 `ocx link revoke --purge`, clean only with the Child's purged receipt; a machine silent for 24 hours
-(48 handshakes or purges 30 minutes apart, counted only while Pen answers for it), or a person's
-force, gets `ocx link revoke --force` and a tombstone that `ocx link recover` settles once the machine
-answers. A purge GOAT gives up on is resolved in OpenCodex's journal before the next one is sent, so a
-machine leaves at most one unsettled entry there. OpenCodex's refusals are states with their
+(48 handshakes or purges 30 minutes apart, counted only while this hub's Pen answers its member
+list, read once per pass), or a person's force, gets `ocx link revoke --force` and a tombstone that
+`ocx link recover` settles once the machine answers. A silent machine's purge GOAT gives up on is
+resolved in OpenCodex's journal before the next purge, or after the force that replaces it commits;
+any other unsettled purge waits for a person and must read resolved before a new one goes, so a
+machine leaves at most one unsettled purge there. A purge left unknown while GOAT's own handshake
+reaches the machine stops for a person. A force at settle takes only the link the operation reserved,
+or an exclusive ephemeral Child on the record's route. OpenCodex's refusals are states with their
 own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, or was never admitted,
 and that name no link are pruned 30 days after they ended and left Pen; a released record only once
 Pen's member list shows its key absent. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are

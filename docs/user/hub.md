@@ -183,19 +183,28 @@ loopback, and it stays a Pen member until you remove it with
 
 **Detach** on a machine's row in Settings → Hub on web and desktop, or
 `goat_hub_machine_detach` from the thread that attached it, removes its OpenCodex
-link and the lightweight Child on the machine. The machine stays a Pen member, and
-keeps its slot in the cap, until you remove it with `pen revoke`. A machine that
+link and the lightweight Child on the machine. The machine stays a Pen member
+until you remove it with `pen revoke`, and its slot in the cap stays taken until
+both the detach has ended and the machine has left Pen. A machine that
 does not answer keeps its link: GOAT tries again every 30 minutes, and after 24
 hours without an answer it removes the link without the machine and cleans the
 machine once it answers. GOAT does the same for a linked machine that stops
 answering for 24 hours; if it answers again later, detach it to end its record.
-A check counts only while Pen still answers for the machine, so a hub cut off
-from its Pen does not remove its machines' links.
+A failed try counts only while this hub's Pen answers its member list, so a
+stopped Pen does not remove its machines' links; a hub whose network is cut while
+Pen keeps running still counts them. A machine that answers but whose cleanup
+OpenCodex cannot confirm, or that has an unfinished disconnect, waits for you
+instead, and the machine list says what to check. GOAT marks each purge it gives
+up on for a silent machine as resolved in `ocx link operations` itself, so
+OpenCodex's journal does not fill up; the entries it leaves are the ones the
+machine list asks you to check and resolve.
 **Force detach** removes the link now, without the machine; only a person can
 force, and it is also the way out for a machine that presents another SSH host
-key. If a forced or silent machine is gone for good, run
+key. If a forced or retired machine is gone for good, run
 `ocx link recover --forget --link-id <id> --yes` on the hub yourself, as the
-machine list says; OpenCodex refuses it from an agent. **Release** frees the slot
+machine list says; OpenCodex refuses it from an agent. A detaching machine you
+remove from Pen keeps its record, and with it its slot, until that cleanup ends.
+**Release** frees the slot
 of an attach whose invite Pen lost or used without recording who joined, once that
 invite has expired and Pen's member list shows the machine did not join. The
 phone app shows each machine's state but cannot detach or release yet
