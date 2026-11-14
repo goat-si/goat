@@ -5,10 +5,7 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 
 export function makeCodexRetryTimers(scope: Scope.Scope) {
-  const timers = new Map<
-    ProviderTurnId,
-    Fiber.Fiber<void, ProviderAdapter.ProviderAdapterProtocolError>
-  >();
+  const timers = new Map<ProviderTurnId, Fiber.Fiber<void>>();
   const cancel = Effect.fn("CodexRetryTimers.cancel")(function* (id: ProviderTurnId) {
     const timer = timers.get(id);
     timers.delete(id);
@@ -19,8 +16,10 @@ export function makeCodexRetryTimers(scope: Scope.Scope) {
     work: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
   ) {
     yield* cancel(id);
-    const timer = yield* work.pipe(
-      Effect.delay("10 minutes"),
+    // Cancel runs outside the terminalization permit, so it may interrupt only the sleep; due work gets its own fiber.
+    const timer = yield* Effect.sleep("10 minutes").pipe(
+      Effect.andThen(Effect.forkIn(work, scope)),
+      Effect.asVoid,
       Effect.ensuring(
         Effect.sync(() => {
           if (timers.get(id) === timer) timers.delete(id);

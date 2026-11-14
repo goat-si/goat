@@ -37,3 +37,28 @@ it.effect("replaces a retry deadline and cancels it when the retry recovers", ()
     assert.deepEqual(yield* Ref.get(fired), ["new"]);
   }).pipe(Effect.scoped),
 );
+
+// A recovering delta cancels outside the terminalization permit; it must not cut a finalize short.
+it.effect("a cancel after the deadline fired leaves the stall work running to its end", () =>
+  Effect.gen(function* () {
+    const timers = makeCodexRetryTimers(yield* Effect.scope);
+    const id = ProviderTurnId.make("retry-turn");
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const outcome = yield* Deferred.make<"finished" | "interrupted">();
+    yield* timers.start(
+      id,
+      Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(Deferred.succeed(outcome, "finished")),
+        Effect.onInterrupt(() => Deferred.succeed(outcome, "interrupted")),
+        Effect.asVoid,
+      ),
+    );
+    yield* TestClock.adjust("10 minutes");
+    yield* Deferred.await(entered);
+    yield* timers.cancel(id);
+    yield* Deferred.succeed(release, undefined);
+    assert.equal(yield* Deferred.await(outcome), "finished");
+  }).pipe(Effect.scoped),
+);
