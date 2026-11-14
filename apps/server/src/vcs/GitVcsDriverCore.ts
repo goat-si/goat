@@ -3103,7 +3103,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       executeGit(
         "GitVcsDriver.readBranchChangeTotals",
         cwd,
-        [...REVIEW_DIFF_ARGS, "--numstat", "-z", ref, "--"],
+        ["diff-index", "-M", "--numstat", "-z", ref, "--"],
         {
           allowNonZeroExit: true,
           maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
