@@ -403,7 +403,10 @@ export interface AcpAdapterV2Flavor {
   ) => AcpAdapterV2SubagentUpdate | undefined;
   readonly isProvisionalSubagentTool?: (toolCall: AcpToolCallState) => boolean;
   readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
-  readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
+  readonly extractProposedPlanMarkdown?: (
+    toolCall: AcpToolCallState,
+    session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
+  ) => string | undefined;
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
   /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
   readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
@@ -4081,7 +4084,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             for (const event of parseSessionUpdateEvent(notification).events) {
               if (event._tag !== "ToolCallUpdated") continue;
               const toolCall = flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall;
-              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall);
+              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall, {
+                environment: sessionEnvironment,
+                launch: sessionLaunch,
+              });
               if (proposedPlanMarkdown !== undefined && proposedPlanMarkdown.length > 0) {
                 yield* captureProposedPlan({ planMarkdown: proposedPlanMarkdown });
               }

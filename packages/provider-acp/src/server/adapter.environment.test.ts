@@ -12,6 +12,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -205,4 +206,70 @@ it.live(
       assert.deepEqual(rewrites, ["/old", "/old", "/old"]);
       assert.notStrictEqual(launches[0]?.env, host);
     }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("plan extraction receives the environment and launch captured by its session", () =>
+  Effect.gen(function* () {
+    const host = { ...process.env, GOAT_PLAN_TEST_VALUE: "old" };
+    const seen = yield* Deferred.make<unknown>();
+    const instanceId = ProviderInstanceId.make("acp-plan-environment");
+    const path = yield* Path.Path;
+    const makeRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* path.fromFileUrl(
+        new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+      ),
+      environment: { GOAT_ACP_EMIT_POST_SETTLE_MONITOR_FLOW: "1" },
+    });
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      continuationRequests: { offer: () => Effect.void },
+      currentEnvironment: Effect.sync(() => host),
+      selfInvocation: yield* resolveSelfInvocation(),
+      flavor: {
+        driver: ProviderDriverKind.make("acp-plan-environment"),
+        capabilities: AcpProviderCapabilitiesV2,
+        enablePostSettleContinuation: true,
+        resolveSessionLaunch: (environment) => Effect.succeed(environment.GOAT_PLAN_TEST_VALUE),
+        makeRuntime,
+        extractProposedPlanMarkdown: (...args) => {
+          Deferred.doneUnsafe(seen, Effect.succeed(Reflect.get(args, "1")));
+          return undefined;
+        },
+      },
+    });
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const modelSelection = { instanceId, model: "default" } as const;
+    const threadId = ThreadId.make("thread-plan-environment");
+    const session = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("plan"),
+      modelSelection,
+      runtimePolicy,
+    });
+    host.GOAT_PLAN_TEST_VALUE = "new";
+    const providerThread = yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+    yield* session.startTurn(
+      makeTurnInput({
+        threadId,
+        providerThread,
+        instanceId,
+        runtimePolicy,
+        now: yield* DateTime.now,
+        ordinal: 1,
+      }),
+    );
+    yield* session.events.pipe(
+      Stream.takeUntil((event) => event.type === "turn.terminal"),
+      Stream.runCollect,
+    );
+    const context = (yield* Deferred.await(seen)) as
+      | { environment?: NodeJS.ProcessEnv; launch?: unknown }
+      | undefined;
+    assert.deepEqual([context?.environment?.GOAT_PLAN_TEST_VALUE, context?.launch], ["old", "old"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
 );
