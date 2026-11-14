@@ -67,6 +67,7 @@ import {
 } from "./CodexGeneratedImageMarkdown.ts";
 import { CodexAppServerClientFactory } from "./CodexAppServerClientFactory.ts";
 import type { CodexAdapterV2Hooks, CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
+import { codexSessionEnvironment } from "./CodexAdapterV2Options.ts";
 export type { CodexAdapterV2Options } from "./CodexAdapterV2Options.ts";
 import {
   codexProcessStart,
@@ -1548,9 +1549,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
-        const sessionEnvironment =
-          resolvedRuntime?.environment ??
-          (yield* adapterOptions.currentEnvironment ?? Effect.succeed(adapterOptions.environment));
+        const sessionEnvironment = yield* codexSessionEnvironment(adapterOptions, resolvedRuntime);
         const routeInput = yield* HomeRoute.resolveCodexRouteContext({
           settings: launchSettings,
           binaryPath: launchSettings.binaryPath,
@@ -4561,7 +4560,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
+              const sessionEnv = processStart?.retained ? undefined : sessionEnvironment;
+              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, sessionEnv);
             }
           }).pipe(Effect.orDie),
         );

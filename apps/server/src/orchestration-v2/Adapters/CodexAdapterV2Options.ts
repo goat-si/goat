@@ -10,7 +10,7 @@ import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import type * as Crypto from "effect/Crypto";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
@@ -37,7 +37,11 @@ export interface CodexAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
-  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
+  /** `sessionEnvironment` is what the reporting session opened with; absent for a reattached process. */
+  readonly onUsageLimits?: (
+    update: Parameters<ManagedServerProvider["applyUsageLimits"]>[0],
+    sessionEnvironment?: NodeJS.ProcessEnv,
+  ) => ReturnType<ManagedServerProvider["applyUsageLimits"]>;
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly compatibility?: (
     version: string,
@@ -61,3 +65,12 @@ export type CodexAdapterV2Hooks = Pick<
   CodexAdapterV2Options,
   "onUsageLimits" | "resolveRuntime" | "compatibility" | "offeredModels" | "currentEnvironment"
 >;
+
+/** The environment a new session opens with: its managed runtime's, else the host's as it is now. */
+export const codexSessionEnvironment = (
+  options: Pick<CodexAdapterV2Options, "environment" | "currentEnvironment">,
+  runtime: CodexEffectiveRuntime | undefined,
+): Effect.Effect<NodeJS.ProcessEnv> =>
+  runtime === undefined
+    ? (options.currentEnvironment ?? Effect.succeed(options.environment))
+    : Effect.succeed(runtime.environment);

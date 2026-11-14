@@ -215,6 +215,8 @@ export const CodexDriver: ProviderDriver<
             Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
           );
     const continuationIdentity = codexContinuationIdentity(homeLayout);
+    const homeOf = (env: NodeJS.ProcessEnv) =>
+      codexHomeFor(env, { platform, homeDirectory, sep: pathService.sep });
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,
@@ -311,7 +313,17 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        // Usage from a session opened under another home is not the current home's usage.
+        onUsageLimits: (update, sessionEnvironment) =>
+          sessionEnvironment === undefined
+            ? snapshot.applyUsageLimits(update)
+            : currentEnvironment.pipe(
+                Effect.flatMap((env) =>
+                  homeOf(env) === homeOf(sessionEnvironment)
+                    ? snapshot.applyUsageLimits(update)
+                    : Effect.void,
+                ),
+              ),
         // New sessions read the same environment the status check uses.
         currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
@@ -451,7 +463,7 @@ export const CodexDriver: ProviderDriver<
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
     // Keyed on the redemption's home as written, from its cwd; the coordinator follows links.
     const accountKeyFor = (env: NodeJS.ProcessEnv) => {
-      const home = codexHomeFor(env, { platform, homeDirectory, sep: pathService.sep });
+      const home = homeOf(env);
       return Effect.succeed(
         pinnedHome ??
           (pathService.isAbsolute(home) ? home : `${process.cwd()}${pathService.sep}${home}`),
