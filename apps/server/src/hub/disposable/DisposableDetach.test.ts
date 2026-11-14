@@ -482,6 +482,10 @@ it.effect(
         yield* reconcile;
         yield* enroll;
         expect((yield* listed(attachId))?.message).toContain("ocx link revoke --link-id " + linkId);
+        // A forced revoke leaves a tombstone, which only a person forgets.
+        expect((yield* listed(attachId))?.message).toContain(
+          "ocx link recover --forget --link-id " + linkId,
+        );
       }),
     ),
 );
