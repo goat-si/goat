@@ -44,7 +44,7 @@ export function worktreeInstallCandidates(tools: {
   ];
 }
 
-// vite-plus 0.2.2 introduced PGP verification of Node's SHASUMS256.
+// The 0.2.2 floor adds signed checksums; see docs/operations/development.md#worktrees.
 function vpSupportsVerifiedNodeDownload(): { supported: boolean; timedOut: boolean } {
   const result = NodeChildProcess.spawnSync("vp --version", {
     shell: true,
@@ -52,7 +52,8 @@ function vpSupportsVerifiedNodeDownload(): { supported: boolean; timedOut: boole
     timeout: 5_000,
   });
   const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(result.stdout?.split(/\r?\n/, 1)[0] ?? "");
-  const timedOut = result.error?.code === "ETIMEDOUT";
+  const timedOut =
+    result.error !== undefined && "code" in result.error && result.error.code === "ETIMEDOUT";
   if (result.status !== 0 || !match) return { supported: false, timedOut };
   const [, major = "0", minor = "0", patch = "0"] = match;
   return {
