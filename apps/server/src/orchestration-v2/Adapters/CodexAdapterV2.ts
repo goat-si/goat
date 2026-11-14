@@ -1,3 +1,4 @@
+import { makeCodexRetryTimers } from "./CodexRetryTimers.ts";
 import {
   CodexProviderCapabilitiesV2,
   normalizeCodexThreadLoadModelSelection,
@@ -1843,6 +1844,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const providerRetries = yield* Ref.make(
           new Map<ProviderTurnId, ActiveCodexProviderRetry>(),
         );
+        const providerRetryTimers = makeCodexRetryTimers(scope);
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingCodexRuntimeRequest>(),
@@ -2039,6 +2041,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (providerRetry === undefined) {
             return;
           }
+          yield* providerRetryTimers.cancel(context.providerTurnId);
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver: CODEX_PROVIDER,
@@ -4733,9 +4736,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(context.providerTurnId, state);
               return updated;
             });
-            yield* failStalledProviderRetry(context, state, payload.error.codexErrorInfo).pipe(
-              Effect.delay("10 minutes"),
-              Effect.forkIn(scope, { startImmediately: true }),
+            yield* providerRetryTimers.start(
+              context.providerTurnId,
+              failStalledProviderRetry(context, state, payload.error.codexErrorInfo),
             );
             yield* emitProviderEvent({
               type: "turn_item.updated",
@@ -6175,6 +6178,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (current !== input.context) {
                 return false;
               }
+              if (input.stalledRetry === undefined)
+                yield* providerRetryTimers.cancel(input.context.providerTurnId);
               if (input.stalledRetry !== undefined) {
                 const retry = (yield* Ref.get(providerRetries)).get(input.context.providerTurnId);
                 if (
