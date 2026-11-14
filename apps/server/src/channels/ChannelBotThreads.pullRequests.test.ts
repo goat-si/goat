@@ -218,6 +218,22 @@ describe("ChannelBotThreads pull requests", () => {
     ),
   );
 
+  it.effect("a remote worker's row never takes a local thread's links that share its id", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* setup;
+        yield* insertTask("local", { status: "completed", createdAt: at(2) });
+        yield* setWorker("local", "thread:shared-worker");
+        yield* projectThread("thread:shared-worker", [link(21, { state: "merged" })]);
+        yield* insertTask("remote", { status: "completed", createdAt: at(2) });
+        yield* setWorker("remote", "thread:shared-worker", "box");
+        const result = yield* current;
+        assert.deepStrictEqual(taskRow(result, "local").pullRequests, [item(21, "merged")]);
+        assert.isUndefined(taskRow(result, "remote").pullRequests);
+      }),
+    ),
+  );
+
   it.effect("caps a row at five pull requests, open first, and counts the rest", () =>
     provide(
       Effect.gen(function* () {

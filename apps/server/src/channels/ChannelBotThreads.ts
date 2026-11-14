@@ -170,17 +170,17 @@ const make = Effect.gen(function* () {
     const launchLimit = options.launchLimit;
     const listsTask = (task: ChannelTask) =>
       !options.unknownView && !options.threadsOnly?.has(task.taskId);
-    // A session thread serves several tasks, so its links belong to none of them.
+    // Another machine's worker is not this projection's thread with the same id, and a session
+    // thread serves several tasks, so its links belong to none of them.
+    const localWorkerThreadId = (task: ChannelTask) =>
+      task.worker === undefined ||
+      task.worker.host !== undefined ||
+      isGoatBotSessionThreadId(task.worker.threadId)
+        ? undefined
+        : task.worker.threadId;
     const workerIds = [
       ...new Set(
-        tasks.flatMap((task) =>
-          listsTask(task) &&
-          task.worker !== undefined &&
-          task.worker.host === undefined &&
-          !isGoatBotSessionThreadId(task.worker.threadId)
-            ? [task.worker.threadId]
-            : [],
-        ),
+        tasks.flatMap((task) => (listsTask(task) ? (localWorkerThreadId(task) ?? []) : [])),
       ),
     ];
     const workerRows =
@@ -285,10 +285,11 @@ const make = Effect.gen(function* () {
               taskId: task.taskId,
             },
           );
+        const workerThreadId = localWorkerThreadId(task);
         const threadSources: Array<PullRequestSource> = [
-          ...(task.worker === undefined
+          ...(workerThreadId === undefined
             ? []
-            : readSource(workerColumns.get(task.worker.threadId), task.worker.threadId)),
+            : readSource(workerColumns.get(workerThreadId), workerThreadId)),
           // The join reads only a local launch's thread.
           ...children.flatMap(({ child, pullRequestColumns }) =>
             child.ownerId === owner.ownerId &&
