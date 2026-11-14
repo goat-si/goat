@@ -15,6 +15,8 @@ export { cloudSdkBackendMatches } from "../sdkBackend.ts";
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
 export const BACKEND_MISMATCH =
   "Cursor Cloud supports production backends only: unset CURSOR_BACKEND_URL on the server and in the selected Cursor provider (or set the provider value to https://api2.cursor.sh), then restart the server.";
+export const credentialFailureDetail = (error: ProviderSetupError) =>
+  error.detail === BACKEND_MISMATCH ? BACKEND_MISMATCH : "Cursor Cloud sign-in is unavailable.";
 const Credentials = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.Literal(1),

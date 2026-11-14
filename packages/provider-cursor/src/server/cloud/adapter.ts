@@ -23,7 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
-import { BACKEND_MISMATCH, cloudSdkBackendMatches } from "./credentials.ts";
+import * as Credentials from "./credentials.ts";
 import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
@@ -279,11 +279,11 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     request: () => Promise<A>,
   ) =>
     Effect.suspend(() =>
-      cloudSdkBackendMatches()
+      Credentials.cloudSdkBackendMatches()
         ? CursorCloudSdk.request(operation, request).pipe(
             Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
           )
-        : Effect.fail(protocol(BACKEND_MISMATCH)),
+        : Effect.fail(protocol(Credentials.BACKEND_MISMATCH)),
     );
 
   return ProviderAdapter.ProviderAdapterV2.of({
@@ -295,7 +295,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
         const captured = yield* requireApiKey.pipe(
-          Effect.mapError(() => protocol("Cursor Cloud sign-in is unavailable.")),
+          Effect.mapError((error) => protocol(Credentials.credentialFailureDetail(error))),
           Effect.result,
         );
         const key: Effect.Effect<string, ProviderAdapter.ProviderAdapterProtocolError> =
@@ -486,7 +486,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               const messages: AsyncIterable<SDKMessage> = {
                 [Symbol.asyncIterator]() {
                   const iterator = CursorCloudSdk.guardedStream(ctx.run, () =>
-                    protocol(BACKEND_MISMATCH),
+                    protocol(Credentials.BACKEND_MISMATCH),
                   );
                   return {
                     next: () => iterator.next(),
