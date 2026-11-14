@@ -47,8 +47,8 @@ function Host(props: { readonly kind: "dialog" | "sheet" }) {
 it.each(["dialog", "sheet"] as const)(
   "Escape inside a %s closes only the fallback menu and returns focus to its opener",
   async (kind) => {
-    using _menu = { [Symbol.dispose]: dismissContextMenu };
     await using _screen = await render(<Host kind={kind} />, { router: false }); // No route needed.
+    using _menu = { [Symbol.dispose]: dismissContextMenu };
     await userEvent.click(page.getByRole("button", { name: "Open host" }));
     const host = page.getByRole("dialog");
     await expect.element(host).toBeVisible();
@@ -60,7 +60,8 @@ it.each(["dialog", "sheet"] as const)(
     await expect.element(showWork).toHaveFocus();
     await userEvent.keyboard("{Escape}");
     await expect.element(showWork).not.toBeInTheDocument();
-    await expect.element(host).toBeVisible();
     await expect.element(actions).toHaveFocus();
+    // Still open, not merely visible while an exit transition runs.
+    await expect.element(host).toHaveAttribute("data-open");
   },
 );
