@@ -256,7 +256,8 @@ vi.mock("../../state/environments", () => {
   };
 });
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
   pickMobileGoatBotEnvironment: () => ({
     environmentId: state.environmentId,
     connected: state.connected,

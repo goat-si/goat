@@ -3,6 +3,7 @@ import { Atom } from "effect/reactivity";
 
 import {
   loadedMobileGoatBotRef,
+  mobileBotHomeListShown,
   pickMobileGoatBotEnvironment,
 } from "../features/goat-bot/goatBotHomeMode";
 import { mobileGoatBotEnvironmentInput } from "../features/goat-bot/mobileGoatBotEnvironments";
@@ -15,16 +16,25 @@ const mobileGoatBotHomeEnvironmentIdAtom = Atom.make((get) => {
   const botRef = loadedMobileGoatBotRef(get(mobilePreferencesAtom));
   // Until preferences load the Bots switch cannot open Home, so Home governs no computer.
   if (botRef === undefined) return null;
-  const environments = [...get(environmentPresentations.presentationsAtom)].map(
-    ([environmentId, presentation]) =>
-      mobileGoatBotEnvironmentInput({
-        environmentId,
-        label: presentation.entry.target.label,
-        connection: presentation.connection,
-        serverConfig: presentation.serverConfig,
-      }),
+  const presentations = get(environmentPresentations.presentationsAtom);
+  const environments = [...presentations].map(([environmentId, presentation]) =>
+    mobileGoatBotEnvironmentInput({
+      environmentId,
+      label: presentation.entry.target.label,
+      connection: presentation.connection,
+      serverConfig: presentation.serverConfig,
+    }),
   );
-  return pickMobileGoatBotEnvironment(environments, botRef)?.environmentId ?? null;
+  const selected = pickMobileGoatBotEnvironment(environments, botRef);
+  if (selected === null) return null;
+  // Only where Home's sheet can show the bot's list, so every thread it hides opens there. Members
+  // need no check here: the shared union adds them only on a server that advertises members.
+  const shown = mobileBotHomeListShown({
+    connected: selected.connected,
+    capabilities: presentations.get(selected.environmentId)?.serverConfig?.environment.capabilities,
+    member: false,
+  });
+  return shown ? selected.environmentId : null;
 }).pipe(Atom.withLabel("mobile-goat-bot-home-environment"));
 
 const UNGOVERNED = { rosterKnown: false, byBot: [], links: [] } as const;

@@ -17,6 +17,21 @@ export function loadedMobileGoatBotRef(
   return AsyncResult.isSuccess(preferences) ? (preferences.value.goatBotRef ?? null) : undefined;
 }
 
+/** Whether a bot's Home sheet can show its task list on its computer; a member also needs members. */
+export function mobileBotHomeListShown(input: {
+  readonly connected: boolean;
+  readonly capabilities:
+    | { readonly goatBotTaskThreads?: boolean; readonly goatBotMembers?: boolean }
+    | undefined;
+  readonly member: boolean;
+}): boolean {
+  return (
+    input.connected &&
+    input.capabilities?.goatBotTaskThreads === true &&
+    (!input.member || input.capabilities.goatBotMembers === true)
+  );
+}
+
 export function mobileGoatBotKnown(
   environments: ReadonlyArray<Pick<GoatBotEnvironmentInput, "supportsChannelLedger">>,
   botRef: ChannelBotRef | null,

@@ -745,6 +745,38 @@ it("hides a current task's thread and opens it from Home while the bot cannot ta
   expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
 });
 
+// The server advertises the newer flags without task lists, so Home's sheet would show no list.
+function advertise(extra: object) {
+  fx.registry.set(fx.config("env"), configOf(env, extra));
+  const presentations = new Map(
+    fx.registry.get(fx.atoms.presentations as never) as Map<string, { serverConfig: object }>,
+  );
+  const current = presentations.get("env");
+  if (current)
+    presentations.set("env", {
+      ...current,
+      serverConfig: {
+        environment: {
+          label: "A-mac",
+          capabilities: { ...capabilities, channelLedger: true, ...extra },
+        },
+      },
+    });
+  fx.registry.set(fx.atoms.presentations as never, presentations as never);
+}
+
+it("governs the selected computer only where Home can show its task list", async () => {
+  setup();
+  advertise({ goatBotTaskThreads: false });
+  // Dev's rule on a server without task lists hides none of the bot's work.
+  expect(hiddenSet()).toEqual([]);
+  advertise({});
+  expect(hiddenSet()).toEqual(sorted(envLinks));
+  await using screen = await renderHome();
+  await screen.openLink("Ship the release", "GOAT thread: Patch web");
+  expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
+});
+
 it("governs no computer while no bot computer is selected", () => {
   setup();
   setList(listed(farRows), "far");

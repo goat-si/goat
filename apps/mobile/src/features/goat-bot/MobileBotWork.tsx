@@ -29,7 +29,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { mobileBotHomeListShown, pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
@@ -143,10 +143,11 @@ export function MobileBotWork(props: {
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
   const member = props.member ?? null;
-  const enabled =
-    selected?.connected === true &&
-    capabilities?.goatBotTaskThreads === true &&
-    (member === null || capabilities?.goatBotMembers === true);
+  const enabled = mobileBotHomeListShown({
+    connected: selected?.connected === true,
+    capabilities,
+    member: member !== null,
+  });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(

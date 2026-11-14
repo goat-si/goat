@@ -285,7 +285,8 @@ vi.mock("./MobileBotMemory", () => ({
     <button onClick={() => props.onDraft?.("Remember this")}>Draft a note</button>
   ),
 }));
-vi.mock("./goatBotHomeMode", () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
   pickMobileGoatBotEnvironment: () => ({
     environmentId: "env",
     connected: state.connected,
