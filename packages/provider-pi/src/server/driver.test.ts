@@ -198,6 +198,35 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // The npm fixture is a POSIX shell script, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a registry change with PATH unchanged reaches the next update advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+        // npm answers with the latest version the configured registry offers.
+        yield* fs.writeFileString(
+          `${root}/npm`,
+          `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *b.example*) echo '"2.0.0"';; *) echo '"1.0.0"';; esac\n`,
+        );
+        for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${root}/${name}`, 0o755);
+        const host = { PATH: root, HOME: root, NPM_CONFIG_REGISTRY: "https://a.example" };
+        const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        assert.strictEqual(yield* advisory, "1.0.0");
+        host.NPM_CONFIG_REGISTRY = "https://b.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("maintenance notices an executable installed into an unchanged PATH", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

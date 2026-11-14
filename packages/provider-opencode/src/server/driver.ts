@@ -479,8 +479,11 @@ export const OpenCodeDriver: ProviderDriver<
     const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
       maintenanceFor(runtimeProbe.get),
       {
-        key: runtimeProbe.identity,
-        resolve: () => maintenanceFor(runtimeProbe.get),
+        // The probe identity already fingerprints the executable it would run.
+        lookup: Effect.all({ env: currentEnvironment, install: runtimeProbe.identity }).pipe(
+          Effect.map(({ env, install }) => ({ env, resolvedCommandPath: null, install })),
+        ),
+        resolve: ({ env }) => maintenanceFor(runtimeProbe.get, Effect.succeed(env)),
       },
     );
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>

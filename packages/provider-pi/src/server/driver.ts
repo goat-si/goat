@@ -139,47 +139,21 @@ const makePiFamilyDriver = (
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
         {
-          key: currentEnvironment.pipe(
+          lookup: currentEnvironment.pipe(
             Effect.flatMap((env) =>
               Effect.suspend(() =>
                 resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
                   Effect.provideService(CommandResolutionCache, new Map()),
                 ),
               ).pipe(
-                Effect.map((resolved) =>
-                  JSON.stringify({
-                    binaryPath: resolved ?? "missing",
-                    PATH: env.PATH,
-                    Path: env.Path,
-                    path: env.path,
-                    PATHEXT: env.PATHEXT,
-                    Pathext: env.Pathext,
-                  }),
-                ),
+                Effect.map((resolvedCommandPath) => ({ env, resolvedCommandPath })),
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, pathService),
               ),
             ),
           ),
-          resolve: (key) => {
-            const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
-            return currentEnvironment.pipe(
-              Effect.flatMap((env) =>
-                maintenanceForEnvironment(
-                  {
-                    ...env,
-                    PATH: lookupEnv.PATH,
-                    Path: lookupEnv.Path,
-                    path: lookupEnv.path,
-                    PATHEXT: lookupEnv.PATHEXT,
-                    Pathext: lookupEnv.Pathext,
-                  },
-                  lookupEnv.binaryPath === "missing" ? "" : lookupEnv.binaryPath,
-                  lookupEnv.binaryPath === "missing" ? null : lookupEnv.binaryPath,
-                ),
-              ),
-            );
-          },
+          resolve: ({ env, resolvedCommandPath }) =>
+            maintenanceForEnvironment(env, resolvedCommandPath ?? "", resolvedCommandPath),
         },
       );
 
