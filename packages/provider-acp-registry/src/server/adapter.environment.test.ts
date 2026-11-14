@@ -31,6 +31,64 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 const decodeSettings = Schema.decodeEffect(AcpRegistrySettings);
 
+it.live("opens a local registry session with relative PATH without changing the child's PATH", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-acp-relative-path-" });
+    yield* fs.makeDirectory(`${cwd}/bin`);
+    const executable = `${cwd}/bin/fixture-agent`;
+    const receipt = `${cwd}/receipt`;
+    const mockAgent = new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url)
+      .pathname;
+    yield* fs.writeFileString(
+      executable,
+      `#!/bin/sh\nprintf '%s\\n%s\\n' "$0" "$PATH" > '${receipt}'\nexec '${process.execPath}' '${mockAgent}'\n`,
+    );
+    yield* fs.chmod(executable, 0o755);
+    const catalog = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+      cacheDir: cwd,
+      toolsDir: `${cwd}/tools`,
+    });
+    const instanceId = ProviderInstanceId.make("registry-relative-path");
+    const adapter = yield* makeAcpRegistryAdapterV2({
+      instanceId,
+      settings: yield* decodeSettings({ source: "local", commandPath: "fixture-agent" }),
+      environment: { PATH: "bin" },
+      currentEnvironment: Effect.succeed({ PATH: "bin" }),
+      selfInvocation: yield* resolveSelfInvocation(),
+    }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd,
+    });
+    const threadId = ThreadId.make("registry-relative-path");
+    const modelSelection = { instanceId, model: "default" } as const;
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("registry-relative-path"),
+      modelSelection,
+      runtimePolicy,
+    });
+    yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+    assert.strictEqual(yield* fs.readFileString(receipt), `${executable}\nbin\n`);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        IdAllocator.layer,
+        McpProviderSessions.layer,
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("unexpected request")),
+        ),
+        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+      ),
+    ),
+    Effect.scoped,
+  ),
+);
+
 it.live("keeps the resolved executable across MCP replacement and resolves a new session", () =>
   Effect.gen(function* () {
     const host: NodeJS.ProcessEnv = { PATH: "/old", GOAT_ACP_SESSION_LIFECYCLE: "1" };
