@@ -363,10 +363,10 @@ export function useThreadComposerState() {
     projection: selectedThreadProjection?.projection,
   });
   const selectedThreadRuntime = selectedThreadProjection
-    ? deriveThreadRuntime(selectedThreadProjection.projection)
+    ? deriveThreadRuntime(selectedThreadProjection.projection, serverConfig?.providers)
     : (selectedThreadShell?.runtime ?? null);
   const selectedThreadActivityRun = selectedThreadProjection
-    ? deriveThreadActivityRun(selectedThreadProjection.projection)
+    ? deriveThreadActivityRun(selectedThreadProjection.projection, serverConfig?.providers)
     : (selectedThreadShell?.latestRun ?? null);
 
   const isCompacting = (() => {

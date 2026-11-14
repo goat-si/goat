@@ -354,6 +354,20 @@ describe("thread execution presentation", () => {
     const starting = { ...v2Projection, runs: [openRun], providerSessions: [session] };
 
     expect(deriveThreadActivityRun(starting)?.providerStartingLabel).toBe("Starting Claude");
+    const acp = {
+      ...starting,
+      providerSessions: [{ ...session, driver: ProviderDriverKind.make("acpRegistry") }],
+    };
+    expect(
+      deriveThreadActivityRun(acp, [
+        { instanceId: openRun.providerInstanceId, displayName: "My Agent" },
+      ])?.providerStartingLabel,
+    ).toBe("Starting My Agent");
+    expect(
+      deriveThreadActivityRun(acp, [{ instanceId: openRun.providerInstanceId }])
+        ?.providerStartingLabel,
+    ).toBe("Starting");
+
     expect(
       deriveThreadActivityRun({ ...starting, providerSessions: [] })?.providerStartingLabel,
     ).toBe("Starting");

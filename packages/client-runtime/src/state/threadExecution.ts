@@ -131,20 +131,31 @@ export function survivingRestartNotice(
     : null;
 }
 
+type ProviderNames = ReadonlyArray<Pick<ServerProvider, "instanceId" | "displayName">>;
+
 function providerStartingLabel(
   projection: ThreadStructure,
   run: OrchestrationV2ThreadProjection["runs"][number],
+  providers: ProviderNames,
 ): string {
   const driver = projection.providerSessions.findLast(
     (session) => session.providerInstanceId === run.providerInstanceId,
   )?.driver;
-  const name = driver === undefined ? undefined : PROVIDER_DISPLAY_NAMES[driver];
+  const name =
+    driver === "acpRegistry"
+      ? providers
+          .find((provider) => provider.instanceId === run.providerInstanceId)
+          ?.displayName?.trim() || undefined
+      : driver === undefined
+        ? undefined
+        : PROVIDER_DISPLAY_NAMES[driver];
   return name === undefined ? "Starting" : `Starting ${name}`;
 }
 
 function summarizeThreadRun(
   projection: ThreadStructure,
   run: OrchestrationV2ThreadProjection["runs"][number],
+  providers: ProviderNames,
 ): ThreadRunSummary {
   const turnStatus = ACTIVITY_RUN_STATUSES.has(run.status)
     ? latestProviderTurnForAttempt(projection.providerTurns, run.activeAttemptId)?.status
@@ -165,7 +176,7 @@ function summarizeThreadRun(
     // the provider can still be launching for minutes.
     ...(turnStatus === undefined
       ? PROVIDER_STARTING_RUN_STATUSES.has(run.status)
-        ? { providerStartingLabel: providerStartingLabel(projection, run) }
+        ? { providerStartingLabel: providerStartingLabel(projection, run, providers) }
         : {}
       : turnStatus === "pending" || turnStatus === "running"
         ? {}
@@ -193,16 +204,22 @@ function presentedLatestRun(
   return presentedUsageLimitRun(projection) ?? latestUnheldRun(projection.runs);
 }
 
-export function deriveLatestThreadRun(projection: ThreadStructure): ThreadRunSummary | null {
+export function deriveLatestThreadRun(
+  projection: ThreadStructure,
+  providers: ProviderNames = [],
+): ThreadRunSummary | null {
   const run = presentedLatestRun(projection);
-  return run === null ? null : summarizeThreadRun(projection, run);
+  return run === null ? null : summarizeThreadRun(projection, run, providers);
 }
 
-export function deriveThreadActivityRun(projection: ThreadStructure): ThreadRunSummary | null {
+export function deriveThreadActivityRun(
+  projection: ThreadStructure,
+  providers: ProviderNames = [],
+): ThreadRunSummary | null {
   const run =
     latestMatchingRun(projection, (candidate) => ACTIVITY_RUN_STATUSES.has(candidate.status)) ??
     presentedLatestRun(projection);
-  return run === null ? null : summarizeThreadRun(projection, run);
+  return run === null ? null : summarizeThreadRun(projection, run, providers);
 }
 
 /**
@@ -361,8 +378,9 @@ export function canResumeThread(
 
 export function deriveThreadRuntime(
   projection: ThreadStructure & Pick<OrchestrationV2ThreadProjection, "updatedAt">,
+  providers: ProviderNames = [],
 ): ThreadRuntimeSummary | null {
-  const runtime = deriveThreadStructureRuntime(projection);
+  const runtime = deriveThreadStructureRuntime(projection, providers);
   return runtime === null
     ? null
     : { ...runtime, updatedAt: DateTime.formatIso(projection.updatedAt) };
@@ -371,14 +389,15 @@ export function deriveThreadRuntime(
 /** The runtime summary a thread's structure determines: all of it but `updatedAt`. */
 export function deriveThreadStructureRuntime(
   projection: ThreadStructure,
+  providers: ProviderNames = [],
 ): ThreadStructureRuntime | null {
-  const latestRun = deriveLatestThreadRun(projection);
+  const latestRun = deriveLatestThreadRun(projection, providers);
   const providerSession = projection.providerSessions.findLast(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
   const usageLimitedRun = presentedUsageLimitRun(projection);
   const latestRunProjection = presentedLatestRun(projection);
-  const activityRun = deriveThreadActivityRun(projection);
+  const activityRun = deriveThreadActivityRun(projection, providers);
   const liveActivityRun = latestMatchingRun(projection, (run) =>
     ACTIVITY_RUN_STATUSES.has(run.status),
   );
