@@ -20,6 +20,7 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 const fixture = vi.hoisted(() => ({
   statusByThreadId: new Map<string, "running" | "exited">(),
   pendingSurfaces: [] as Array<() => void>,
+  resetSessions: () => {},
   surfaceOptions: [] as GhosttyTerminalSurfaceOptions[],
   metadata: new Map<
     string,
@@ -46,18 +47,26 @@ vi.mock("~/terminal/ghostty/surface", () => ({
 }));
 vi.mock("../state/terminalSessions", async () => {
   const Atom = await import("effect/reactivity/Atom");
-  const sessions = Atom.family((_environmentId: EnvironmentId) =>
-    Atom.family((threadId: ThreadId) =>
-      Atom.make({
-        ...EMPTY_TERMINAL_SESSION_STATE,
-        status: fixture.statusByThreadId.get(threadId) ?? "closed",
-        version: 1,
-      }),
-    ),
-  );
+  const makeSession = (threadId: ThreadId) =>
+    Atom.make({
+      ...EMPTY_TERMINAL_SESSION_STATE,
+      status: fixture.statusByThreadId.get(threadId) ?? "closed",
+      version: 1,
+    });
+  let sessions = new Map<string, ReturnType<typeof makeSession>>();
+  fixture.resetSessions = () => {
+    sessions = new Map();
+  };
   return {
-    attachedTerminalSessionAtom: (environmentId: EnvironmentId, terminal: { threadId: ThreadId }) =>
-      sessions(environmentId)(terminal.threadId),
+    attachedTerminalSessionAtom: (
+      environmentId: EnvironmentId,
+      terminal: { threadId: ThreadId },
+    ) => {
+      const key = JSON.stringify([environmentId, terminal.threadId]);
+      const atom = sessions.get(key) ?? makeSession(terminal.threadId);
+      sessions.set(key, atom);
+      return atom;
+    },
   };
 });
 vi.mock("../state/session", () => ({
@@ -148,6 +157,7 @@ function Drawer(props: {
 }
 
 function setup() {
+  fixture.resetSessions();
   const original: ScopedThreadRef = {
     environmentId: EnvironmentId.make("environment-a"),
     threadId: ThreadId.make("thread-a"),
