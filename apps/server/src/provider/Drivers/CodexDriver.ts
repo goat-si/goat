@@ -53,7 +53,6 @@ import {
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
-import { codexHomeFor } from "./codexRedemptionHome.ts";
 import { codexUsageReader } from "./codexUsage.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
@@ -184,7 +183,6 @@ export const CodexDriver: ProviderDriver<
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const baseEnvironment = yield* HostProcess.Environment;
     const homeDirectory = yield* HostProcess.HomeDirectory;
-    const platform = yield* HostProcess.Platform;
     const mergedEnvironment = Effect.suspend(() =>
       mergeProviderInstanceEnvironment(environment, baseEnvironment),
     ).pipe(
@@ -215,8 +213,6 @@ export const CodexDriver: ProviderDriver<
             Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
           );
     const continuationIdentity = codexContinuationIdentity(homeLayout);
-    const homeOf = (env: NodeJS.ProcessEnv) =>
-      codexHomeFor(env, { platform, homeDirectory, sep: pathService.sep });
     // The home a check or session process runs under, and its filesystem identity, found once per
     // check and once per session; a failed lookup keeps the path, so both sides fall back alike.
     const executionHome = (env: NodeJS.ProcessEnv) =>
@@ -488,28 +484,21 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
-    // Keyed on the redemption's home as written, from its cwd; the coordinator follows links.
-    const accountKeyFor = (env: NodeJS.ProcessEnv) => {
-      const home = homeOf(env);
-      return Effect.succeed(
-        pinnedHome ??
-          (pathService.isAbsolute(home) ? home : `${process.cwd()}${pathService.sep}${home}`),
-      );
-    };
+    // It runs under the home a status check and a new session use for the same environment.
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
       currentEnvironment.pipe(
         Effect.flatMap((processEnv) =>
-          accountKeyFor(processEnv).pipe(
+          Effect.succeed(executionHome(processEnv)).pipe(
             Effect.flatMap((accountKey) =>
               resetCreditCoordinator.redeem(accountKey, (idempotencyKey) =>
                 Effect.gen(function* () {
                   const { client } = yield* withCodexAppServerClient({
                     binaryPath: effectiveConfig.binaryPath,
-                    homePath: effectiveConfig.homePath,
+                    homePath: accountKey,
                     launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
                     cwd: process.cwd(),
                     environment: processEnv,
-                    // The captured environment alone: the key above was computed from it.
+                    // The captured environment alone, so nothing the host adds later reaches it.
                     extendEnv: false,
                   });
                   const response = yield* client.request("account/rateLimitResetCredit/consume", {
