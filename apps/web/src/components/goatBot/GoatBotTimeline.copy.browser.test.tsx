@@ -72,6 +72,12 @@ it("reports clipboard failure", async () => {
   await vi.waitFor(() =>
     expect(state.toasts).toEqual([expect.objectContaining({ type: "error" })]),
   );
+  expect(screen.getByRole("button", { name: "Copy" }).all()).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Copied" }).query()).toBeNull();
+  expect(screen.container.querySelector('[data-icon="CheckIcon"]')).toBeNull();
+  expect(document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent).not.toBe(
+    "Copied",
+  );
 });
 
 it("does not let a removed reply's pending copy clear the current copied reply", async () => {
