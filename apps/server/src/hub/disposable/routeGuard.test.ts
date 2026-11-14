@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import type { DisposableRecord } from "./disposableClass.ts";
-import { claimedBy, penAliases, refusalText } from "./routeGuard.ts";
+import { claimedBy, ownLinkRefusal, penAliases, refusalText } from "./routeGuard.ts";
 
 const node = "a".repeat(26);
 const record = (overrides: Partial<DisposableRecord> = {}): DisposableRecord => ({
@@ -51,6 +51,20 @@ describe("claimedBy", () => {
     // pen revoke never ends a detaching record, and mobile has no Detach.
     expect(text).toContain("Settings → Hub on web or desktop");
     expect(text).not.toContain("pen revoke");
+  });
+
+  it("tells leave and repair who detaches the machine, within 500 characters at the longest alias", () => {
+    // SAFE_ALIAS allows 64 characters; attach ids are UUIDs.
+    const alias = "a".repeat(64);
+    const attachId = "00000000-0000-4000-8000-000000000000";
+    for (const by of ["alias", "environment", "host_key", "link"] as const) {
+      for (const action of ["leave", "repair"] as const) {
+        const text = ownLinkRefusal({ attachId, nodeId: node, by }, alias, action);
+        expect(text.length).toBeLessThanOrEqual(500);
+        expect(text).toContain("Settings → Hub on web or desktop");
+        expect(text).toContain("the thread that attached it");
+      }
+    }
   });
 });
 

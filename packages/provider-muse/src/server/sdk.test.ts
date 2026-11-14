@@ -375,3 +375,26 @@ describe("Muse workspace root", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
+
+// The SDK spawns natively: libuv would wait on a hung mount under the cwd or PATH.
+it.effect("launches through env on Linux, which enters the cwd and searches PATH", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) !== "linux") return;
+    const launched = (options: Parameters<typeof createMuseSdkHostEffect>[0]) =>
+      Effect.gen(function* () {
+        const createHost = vi.fn(async (_options: unknown) => ({}) as MuseSdkHost);
+        yield* createMuseSdkHostEffect(options, createHost);
+        return createHost.mock.calls[0]?.[0];
+      });
+    const throughEnv = yield* launched({ binaryPath: "muse", cwd: "/work space" });
+    expect(throughEnv).toMatchObject({
+      launch: { command: "/usr/bin/env", args: ["-C", "/work space", "--", "muse"] },
+    });
+    expect(throughEnv).not.toHaveProperty("cwd");
+    // env would read this path as an assignment.
+    expect(yield* launched({ binaryPath: "/opt/a=b/muse", cwd: "/work" })).toMatchObject({
+      launch: { command: "/opt/a=b/muse", args: [] },
+      cwd: "/work",
+    });
+  }),
+);

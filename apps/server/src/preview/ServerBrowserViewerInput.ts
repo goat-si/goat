@@ -56,14 +56,15 @@ export const CLIPBOARD_WORLD = "goat-preview-clipboard";
 // real key is handled counts.
 export const CLIPBOARD_SCRIPT = `(() => {
   let keying = false;
-  let copied = "";
+  const copies = [];
   // The same Ctrl or Cmd + C or X that editingCommand sends as copy or cut.
   addEventListener("keydown", (event) => {
     if (!event.isTrusted || event.altKey || event.ctrlKey === event.metaKey) return;
     const key = event.key.toLowerCase();
     if (key !== "c" && key !== "x") return;
     keying = true;
-    copied = "";
+    copies.push({ at: Date.now(), text: "" });
+    if (copies.length > 128) copies.shift();
     setTimeout(() => { keying = false; });
   }, true);
   const selection = () => {
@@ -74,7 +75,8 @@ export const CLIPBOARD_SCRIPT = `(() => {
     return String(document.getSelection() ?? "");
   };
   const record = (text) => {
-    copied = String(text ?? "").slice(0, ${CLIPBOARD_TEXT_LIMIT});
+    const copy = copies.at(-1);
+    if (copy) copy.text = String(text ?? "").slice(0, ${CLIPBOARD_TEXT_LIMIT});
   };
   // Capturing at window runs before page handlers can stop the event, and
   // before cut removes the selection.
@@ -89,10 +91,9 @@ export const CLIPBOARD_SCRIPT = `(() => {
     addEventListener(type, snapshot, true);
     addEventListener(type, replace);
   }
-  globalThis.takeCopy = () => {
-    const text = copied;
-    copied = "";
-    return text;
+  globalThis.takeCopy = (since, until) => {
+    while (copies.length > 0 && copies[0].at < since) copies.shift();
+    return copies[0] && copies[0].at <= until ? copies.shift().text : "";
   };
 })();`;
 

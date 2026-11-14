@@ -7,6 +7,8 @@ import { guardChild } from "@goat/shared/errorGuards";
 
 const CLAUDE_GROUP_WATCH_SCRIPT = [
   "{ trap '' TERM; read -r _ <&3; kill -TERM 0; sleep 5; kill -KILL 0; } </dev/null >/dev/null 2>&1 &",
+  'cd -P -- "$1" || exit 125',
+  "shift",
   'exec "$@" 3<&-',
 ].join("\n");
 
@@ -21,12 +23,19 @@ export function spawnClaudeProcessGroup(
   onStderr: (text: string) => void = () => {},
   onStderrClose: () => void = () => {},
 ): SpawnedProcess {
+  const cwd = options.cwd ?? ".";
   const child = guardChild(
     NodeChildProcess.spawn(
       "/bin/sh",
-      ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
+      [
+        "-c",
+        CLAUDE_GROUP_WATCH_SCRIPT,
+        "goat-claude",
+        cwd.startsWith("/") ? cwd : `./${cwd}`,
+        options.command,
+        ...options.args,
+      ],
       {
-        cwd: options.cwd,
         env: options.env,
         signal: options.signal,
         stdio: ["pipe", "pipe", "pipe", "pipe"],

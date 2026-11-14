@@ -1,3 +1,4 @@
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { settlementCase } from "./ManagerSettlement.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -902,8 +903,10 @@ it.layer(
 
       process.emitData("prompt ");
       process.emitData("\u001b[?2026$p\u001b[?2026;2$y\u001b[>q\u001b[?u\u001b[?31u");
+      process.emitData("\u001b[=c\u001b[=0c\u001bZ");
       process.emitData("\u001bP$q m\u001b\\\u001bP1$r0m\u001b\\");
       process.emitData("\u001bP+q544e\u001b\\\u001bP1+r544e=1b\u001b\\");
+      process.emitData("\u001bP$qm\u0007hidden\u001b\\\u001bP+q544e\u0007hidden\u001b\\");
       process.emitData('\u001b[!p\u001b["p\u001b[4 q\u001b[u');
       process.emitData("done\n");
 
@@ -1780,6 +1783,7 @@ it.layer(
       const path = yield* Path.Path;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        deriveProviderInstanceConfigMap,
         serverSettings,
         path,
         rawProviderInstanceId: "configured_home",
@@ -1830,6 +1834,7 @@ it.layer(
         historyByteLimit: 8,
         resolveProviderInstanceEnvironment: (rawProviderInstanceId, env) =>
           TerminalManager.resolveProviderInstanceTerminalEnvironment({
+            deriveProviderInstanceConfigMap,
             serverSettings,
             path,
             rawProviderInstanceId,

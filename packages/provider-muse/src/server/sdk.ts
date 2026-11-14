@@ -10,6 +10,7 @@ import {
   type SpawnedMspConnection,
 } from "@muse-code/sdk";
 import type { RuntimeMode } from "@goat/contracts";
+import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
@@ -212,10 +213,19 @@ export const createMuseSdkHostEffect = Effect.fn("createMuseSdkHostEffect")(func
   options: Omit<MuseSdkHostOptions, "signal">,
   createHost: typeof createMuseSdkHost = createMuseSdkHost,
 ) {
-  const launch = options.launch ?? (yield* museLaunch(options.binaryPath, options.environment));
+  const native = options.launch ?? (yield* museLaunch(options.binaryPath, options.environment));
+  const throughEnv =
+    (yield* HostProcess.Platform) === "linux" && (yield* Effect.promise(supportsEnvChdir))
+      ? envTrampoline(native.command, native.args, options.cwd)
+      : undefined;
+  const { cwd: _enteredByEnv, ...withoutCwd } = options;
+  const hostOptions =
+    throughEnv === undefined
+      ? { ...options, launch: native }
+      : { ...withoutCwd, launch: throughEnv };
   let startup: Promise<MuseSdkHost> | undefined;
   return yield* Effect.tryPromise((signal) => {
-    startup = createHost({ ...options, launch, signal });
+    startup = createHost({ ...hostOptions, signal });
     return startup;
   }).pipe(
     Effect.onInterrupt(() =>
