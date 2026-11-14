@@ -231,8 +231,10 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           });
           assert.equal(launches.at(-1)?.options.env?.PATH, "/new/bin");
           assert.equal(oldLaunch?.options.env?.PATH, "/old/bin");
+          const beforeInheritedRefresh = launches.length;
           yield* inherited.snapshot.refresh;
-          assert.equal(launches.at(-1)?.options.env?.PATH, "/new/bin");
+          assert.isAbove(launches.length, beforeInheritedRefresh);
+          assert.equal(launches[beforeInheritedRefresh]?.options.env?.PATH, "/new/bin");
           yield* inherited.snapshotForCwd!("/first");
           assert.equal(
             launches.findLast((launch) => launch.options.cwd === "/first")?.options.env?.PATH,
@@ -244,8 +246,10 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
             modelSelection: { ...sessionInput.modelSelection, instanceId: overridden.instanceId },
           });
           assert.equal(launches.at(-1)?.options.env?.PATH, "/old/bin");
+          const beforeOverriddenRefresh = launches.length;
           yield* overridden.snapshot.refresh;
-          assert.equal(launches.at(-1)?.options.env?.PATH, "/old/bin");
+          assert.isAbove(launches.length, beforeOverriddenRefresh);
+          assert.equal(launches[beforeOverriddenRefresh]?.options.env?.PATH, "/old/bin");
         }
       }).pipe(Effect.scoped),
   );
