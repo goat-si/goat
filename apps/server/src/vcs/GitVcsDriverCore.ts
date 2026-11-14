@@ -1,3 +1,4 @@
+export { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import {
   parseDefaultBranchFromRemoteHeadRef,
   resolvePrimaryDefaultBranch,
@@ -111,6 +112,7 @@ import { filterBranchesForListQuery, paginateBranches } from "./gitBranchListQue
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { refreshNewWorktreeIndex } from "./worktreeIndexRefresh.ts";
 import { createTrackingBranch, trackingCheckoutTarget } from "./createTrackingBranch.ts";
+import { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
 import { commitContextObjects, mergeHeadExists } from "./commitContextObjects.ts";
 import { isMissingGitCwdError, isNonRepositoryGitStderr } from "./gitNonRepository.ts";
@@ -333,23 +335,6 @@ function parseWorktreeBranchPaths(stdout: string): ReadonlyMap<string, string> {
   flush();
 
   return worktreePaths;
-}
-
-function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
-  const parts = input.split("\0");
-  if (parts.length === 0) return [];
-
-  if (truncated && parts[parts.length - 1]?.length) {
-    parts.pop();
-  }
-
-  return parts.filter((value) => value.length > 0);
-}
-
-export function splitNullSeparatedGitStdoutPaths(
-  result: Pick<GitVcsDriver.ExecuteGitResult, "stdout" | "stdoutTruncated">,
-): string[] {
-  return splitNullSeparatedPaths(result.stdout, result.stdoutTruncated);
 }
 
 // Checkout/worktree add parse leading dashes as options; pre-2.44 Git cannot guard with --end-of-options.
@@ -2766,6 +2751,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // A deadline would kill git mid-checkout (e.g. a slow LFS smudge) and strand a half-updated tree.
     const options = {
       timeoutMs: null,
+      stallTimeoutMs: WORKTREE_ADD_STALL_TIMEOUT_MS,
       appendTruncationMarker: true,
       allowNonZeroExit: true,
     };
@@ -4606,6 +4592,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         {
           // Killing a slow checkout partway through strands a half-updated working tree.
           timeoutMs: null,
+          stallTimeoutMs: WORKTREE_ADD_STALL_TIMEOUT_MS,
           fallbackErrorDetail: "git failed to move the checkout onto the pull request head",
         },
       );

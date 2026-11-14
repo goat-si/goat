@@ -2,6 +2,7 @@ import { assert, it, describe } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
@@ -80,5 +81,43 @@ describe("checkout timeouts", () => {
         yield* Fiber.join(moving);
         assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), remoteHead);
       }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["pull", "merge"] as const)("stops a stalled %s checkout", (subcommand) =>
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const { cwd, remoteHead } = yield* cloneBehindRemote;
+      yield* git(cwd, ["fetch", "origin"]);
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          const handle = yield* delegate.spawn(command);
+          if (!ChildProcess.isStandardCommand(command) || command.args[0] !== subcommand)
+            return handle;
+          yield* Deferred.succeed(started, undefined);
+          return ChildProcessSpawner.makeHandle({
+            ...handle,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            exitCode: Deferred.await(release).pipe(Effect.andThen(handle.exitCode)),
+          });
+        }),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(layerServerConfig),
+      );
+      const move =
+        subcommand === "pull"
+          ? Effect.asVoid(driver.pullCurrentBranch(cwd))
+          : Effect.asVoid(driver.refreshCheckedOutBranch({ cwd, targetCommit: remoteHead }));
+      const fiber = yield* move.pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("3 minutes");
+      yield* Deferred.succeed(release, undefined);
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error.reason, "stalled");
+    }).pipe(Effect.provide(layerTest)),
   );
 });
