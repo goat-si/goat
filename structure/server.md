@@ -191,8 +191,8 @@ record's Pen alias or Pen's own `pen-<name>` for it (read offline from Pen's kno
 any network read), the environment the route reaches, and the ED25519 sshd key it negotiates,
 trusted or not (`SshHostKeys` asks for that type). Callers: `LinkedHosts.link` (every linked add,
 before the pairing code is spent), `HubNodes.add` and import, SSH preflight
-(`disposablePreflight.ts`, so the Settings and agent SSH adds and the desktop's Remote launches
-Connect stop before trust, a connection or a save),
+(`disposablePreflight.ts`, so the Settings and agent SSH adds stop before trust or a save, and
+the desktop's Remote launches Connect asks it on the dispatcher and on its own server first),
 `SshDeviceAdd`, and HubMembership's join (both transports; the Hub-client join compares the key
 itself), move and repair re-link (`hubProbe.ts`). Web's Add route refuses a disposable Hub device
 from the hub snapshot (`client-runtime` `hubNodes.ts`). An
