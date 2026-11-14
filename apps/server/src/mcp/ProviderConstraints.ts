@@ -28,6 +28,12 @@ export function providerConstraints(
     constraints.push(provider.message ?? `Provider status is ${provider.status}.`);
   }
   if (provider.auth.status === "unauthenticated") {
+    if (
+      provider.driver === "codex" &&
+      provider.message?.includes("`codex login` with CODEX_HOME")
+    ) {
+      constraints.push("Codex CLI is not authenticated. Run `codex login` and try again.");
+    }
     constraints.push("Provider is not authenticated.");
   }
   return constraints;

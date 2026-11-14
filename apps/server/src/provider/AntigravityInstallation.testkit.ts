@@ -17,7 +17,7 @@ export const serverContents = "antigravity runtime\n";
 export const harnessContents = "local harness\n";
 export const previousReleaseId = "1".repeat(64);
 export const previousVersion = "fixture-old";
-export const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export const zipFixtures = {
   complete:

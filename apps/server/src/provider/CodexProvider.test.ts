@@ -422,6 +422,8 @@ it.effect.each([
         constraints,
         "Codex CLI is not authenticated. Run `codex login` and try again.",
       );
+      assert.include(constraints, snapshot.message);
+      assert.include(snapshot.message ?? "", fixture.input.settings.homePath);
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
