@@ -218,6 +218,37 @@ describe("ChannelBotThreads pull requests", () => {
     ),
   );
 
+  it.effect(
+    "a pull request reopened on a refreshed thread reads open over an archived thread's closed, in either source order",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          for (const [taskId, archivedSide] of [
+            ["archived-worker", "worker"],
+            ["archived-launch", "launch"],
+          ] as const) {
+            yield* insertTask(taskId, { status: "completed", createdAt: at(2) });
+            yield* setWorker(taskId, "thread:" + taskId + "-worker");
+            yield* localLaunch(taskId, taskId + "-launch", "completed");
+            for (const side of ["worker", "launch"] as const)
+              yield* projectThread(
+                "thread:" + taskId + "-" + side,
+                [link(71, { state: side === archivedSide ? "closed" : "open" })],
+                side === archivedSide ? { archivedAt: at(1) } : {},
+              );
+          }
+          const result = yield* current;
+          assert.deepStrictEqual(taskRow(result, "archived-worker").pullRequests, [
+            item(71, "open"),
+          ]);
+          assert.deepStrictEqual(taskRow(result, "archived-launch").pullRequests, [
+            item(71, "open"),
+          ]);
+        }),
+      ),
+  );
+
   it.effect("a remote worker's row never takes a local thread's links that share its id", () =>
     provide(
       Effect.gen(function* () {

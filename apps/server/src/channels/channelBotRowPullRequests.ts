@@ -85,33 +85,40 @@ const shown = (
   state !== undefined && (refreshed || state !== "open") ? { ...item, state } : item;
 
 /**
- * One row's pull requests by repository and number: projection threads win over the copy, a
- * thread that still shows a state over one that does not. Capped before encoding, since shipped
- * clients reject a longer list.
+ * Which duplicate of a pull request a row keeps, lowest first: a state from a thread still
+ * refreshed; a merged or closed state from a thread no longer refreshed; the stored copy's
+ * state; no state. A tie keeps the first source met: the worker, its launches, then the copy.
+ */
+const precedence = (item: BotRowPullRequest, fromThread: boolean, refreshed: boolean) =>
+  item.state === undefined ? 3 : !fromThread ? 2 : refreshed ? 0 : 1;
+
+/**
+ * One row's pull requests by repository and number, capped before encoding, since shipped clients
+ * reject a longer list.
  */
 export const botRowPullRequests = (
   threads: ReadonlyArray<PullRequestSource>,
   copy: PullRequestSource,
 ): { readonly pullRequests?: Array<BotRowPullRequest>; readonly pullRequestsOmitted?: number } => {
-  const byKey = new Map<string, BotRowPullRequest>();
-  for (const source of threads)
+  const byKey = new Map<string, { readonly item: BotRowPullRequest; readonly rank: number }>();
+  for (const [source, fromThread] of [
+    ...threads.map((thread) => [thread, true] as const),
+    [copy, false] as const,
+  ])
     for (const pullRequest of source.pullRequests) {
       const key = pullRequest.repository + "#" + pullRequest.number;
       const item = shown(pullRequest, source.refreshed);
-      const known = byKey.get(key);
-      if (known === undefined || (known.state === undefined && item.state !== undefined))
-        byKey.set(key, item);
+      const rank = precedence(item, fromThread, source.refreshed);
+      if (rank < (byKey.get(key)?.rank ?? Number.POSITIVE_INFINITY)) byKey.set(key, { item, rank });
     }
-  for (const pullRequest of copy.pullRequests) {
-    const key = pullRequest.repository + "#" + pullRequest.number;
-    if (!byKey.has(key)) byKey.set(key, shown(pullRequest, copy.refreshed));
-  }
-  const all = [...byKey.values()].toSorted(
-    (left, right) =>
-      RANK[left.state ?? "none"] - RANK[right.state ?? "none"] ||
-      right.number - left.number ||
-      left.repository.localeCompare(right.repository),
-  );
+  const all = [...byKey.values()]
+    .map(({ item }) => item)
+    .toSorted(
+      (left, right) =>
+        RANK[left.state ?? "none"] - RANK[right.state ?? "none"] ||
+        right.number - left.number ||
+        left.repository.localeCompare(right.repository),
+    );
   if (all.length === 0) return {};
   const omitted = all.length - CHANNEL_BOT_ROW_PULL_REQUESTS;
   return {
