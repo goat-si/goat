@@ -382,10 +382,14 @@ export function createEnvironmentThreadDetailAtoms<E>(
   // Holds while only streamed assistant text moves, so the timeline re-renders on structure;
   // each streaming message reads its text through assistantMessageTextAtom.
   const timelineVisibleTurnItemsAtomFamily = Atom.family((key: string) => {
+    let previousInput = EMPTY_VISIBLE_TURN_ITEMS;
     let previous = EMPTY_VISIBLE_TURN_ITEMS;
     return Atom.make((get) => {
       const next = get(visibleTurnItemsAtomFamily(key));
-      if (!sameApartFromStreamedAssistantText(previous, next)) previous = next;
+      // The held value differs from the latest input only by streamed text, and that relation is
+      // transitive, so comparing consecutive inputs decides the same while keeping their hint.
+      if (!sameApartFromStreamedAssistantText(previousInput, next)) previous = next;
+      previousInput = next;
       return previous;
     }).pipe(
       Atom.setIdleTTL(0),
@@ -394,12 +398,17 @@ export function createEnvironmentThreadDetailAtoms<E>(
   });
 
   const assistantMessageTextAtomFamily = Atom.family((key: string) => {
-    const separator = key.lastIndexOf("\u0000");
-    const thread = key.slice(0, separator);
-    const itemId = key.slice(separator + 1);
+    const itemSeparator = key.lastIndexOf("\u0000");
+    const sourceSeparator = key.lastIndexOf("\u0000", itemSeparator - 1);
+    const thread = key.slice(0, sourceSeparator);
+    const sourceThreadId = key.slice(sourceSeparator + 1, itemSeparator);
+    const itemId = key.slice(itemSeparator + 1);
     return Atom.make((get) => {
-      const item = get(visibleTurnItemsAtomFamily(thread)).find(
-        (visibleItem) => visibleItem.item.id === itemId,
+      // Streamed replies land on the newest rows. A merged history page can hold another
+      // source thread's row with the same item id, so the source thread is part of the match.
+      const item = get(visibleTurnItemsAtomFamily(thread)).findLast(
+        (visibleItem) =>
+          visibleItem.item.id === itemId && visibleItem.sourceThreadId === sourceThreadId,
       )?.item;
       return item?.type === "assistant_message" ? item.text : null;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-assistant-message-text:${key}`));
@@ -668,8 +677,8 @@ export function createEnvironmentThreadDetailAtoms<E>(
       quietVisibleTurnItemsAtomFamily(threadKey(ref)),
     timelineVisibleTurnItemsAtom: (ref: ScopedThreadRef) =>
       timelineVisibleTurnItemsAtomFamily(threadKey(ref)),
-    assistantMessageTextAtom: (ref: ScopedThreadRef, itemId: string) =>
-      assistantMessageTextAtomFamily(`${threadKey(ref)}\u0000${itemId}`),
+    assistantMessageTextAtom: (ref: ScopedThreadRef, sourceThreadId: string, itemId: string) =>
+      assistantMessageTextAtomFamily(`${threadKey(ref)}\u0000${sourceThreadId}\u0000${itemId}`),
     statusAtom: (ref: ScopedThreadRef) => statusAtomFamily(threadKey(ref)),
     sequenceAtom: (ref: ScopedThreadRef) => sequenceAtomFamily(threadKey(ref)),
     errorAtom: (ref: ScopedThreadRef) => errorAtomFamily(threadKey(ref)),

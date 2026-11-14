@@ -5,6 +5,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 const fixture = vi.hoisted(() => ({
   acceleration: "auto",
   pending: null as Promise<never> | null,
+  supportsModelLinking: undefined as boolean | undefined,
 }));
 vi.mock("../state/session", async (original) => ({
   ...(await original()),
@@ -16,6 +17,9 @@ vi.mock("@goat/client-runtime/voice-input", async (original) => ({
     context.id === "other" && fixture.pending
       ? fixture.pending
       : {
+          ...(fixture.supportsModelLinking === undefined
+            ? {}
+            : { supportsModelLinking: fixture.supportsModelLinking }),
           models: [
             {
               id: "a",
@@ -148,4 +152,34 @@ it("does not keep GPU sorting when switching to a CPU-configured environment", a
   await expect
     .element(page.getByRole("combobox", { name: "Sort models" }))
     .toHaveValue("recommended");
+});
+
+const linkingDialog = (supportsModelLinking: boolean | undefined) => {
+  fixture.acceleration = "auto";
+  fixture.pending = null;
+  fixture.supportsModelLinking = supportsModelLinking;
+  return render(
+    <VoiceModelDialog
+      open
+      onOpenChange={() => {}}
+      environmentId={EnvironmentId.make("env")}
+      label="Test"
+      canManage
+      resolveContext={async (id) => ({ id }) as never}
+    />,
+    { router: false }, // The model dialog does not use routing.
+  );
+};
+
+it("hides existing-model linking from a server that does not support it", async () => {
+  await using _screen = await linkingDialog(undefined);
+  await expect.element(page.getByText("Alpha")).toBeVisible();
+  await expect
+    .element(page.getByRole("button", { name: "Use existing models" }))
+    .not.toBeInTheDocument();
+});
+
+it("offers existing-model linking when the server supports it", async () => {
+  await using _screen = await linkingDialog(true);
+  await expect.element(page.getByRole("button", { name: "Use existing models" })).toBeVisible();
 });

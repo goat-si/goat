@@ -1,4 +1,4 @@
-import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
+import { LIVE_ACTIVITY_ROW_ID, thinkingRow, type ThinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
 import { itemIcon, type ThreadActivityIcon } from "./threadActivityIcons";
 import {
@@ -234,13 +234,7 @@ type ThreadFeedEntryContent =
       readonly label: string;
       readonly expanded: boolean;
     }
-  | {
-      readonly type: "thinking";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly providerStartingLabel?: string;
-    };
+  | ThinkingRow;
 
 export interface ThreadFeedLatestRun {
   readonly runId: RunId;

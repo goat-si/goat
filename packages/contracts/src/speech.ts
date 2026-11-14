@@ -25,6 +25,9 @@ export const SpeechSettingsPatchFields = { speech: Schema.optionalKey(SpeechConf
 export const SpeechModelRequest = Schema.Struct({
   modelId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
 });
+export const SpeechModelLinkRequest = Schema.Struct({
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+});
 export const SpeechBenchmarkTier = Schema.Literals(["cpu", "accelerated"]);
 export type SpeechBenchmarkTier = typeof SpeechBenchmarkTier.Type;
 export const SpeechBenchmark = Schema.Struct({
@@ -40,6 +43,8 @@ export function speechBenchmarkTiers(
   return ["cpu", "accelerated"];
 }
 export const SpeechModelList = Schema.Struct({
+  /** Absent from servers that cannot link existing model files. */
+  supportsModelLinking: Schema.optionalKey(Schema.Boolean),
   models: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -48,6 +53,7 @@ export const SpeechModelList = Schema.Struct({
       size: Schema.Number,
       installed: Schema.Boolean,
       selected: Schema.Boolean,
+      linkedFrom: Schema.optionalKey(Schema.String),
       recommended: Schema.optionalKey(Schema.Boolean),
       benchmark: Schema.optionalKey(SpeechBenchmark),
     }),

@@ -4856,7 +4856,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             const messages = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_messages
               WHERE thread_id = ${threadId} AND (
-                message_id IN ${sql.in(memoryMessageIds)}
+                message_id IN ${sql.in(memoryMessageIds)} OR message_id IN (SELECT json_extract(r.payload_json, '$.userMessageId') FROM orchestration_v2_projection_runs r JOIN orchestration_v2_projection_context_handoffs h ON h.target_run_id = r.run_id WHERE r.thread_id = ${threadId} AND h.thread_id = ${threadId} AND h.status = 'ready' AND json_extract(h.payload_json, '$.delivery') IS NULL)
                 OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
               ) ORDER BY created_at ASC, message_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeMessagePayload, threadId)));

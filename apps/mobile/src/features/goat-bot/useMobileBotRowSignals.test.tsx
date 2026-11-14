@@ -17,8 +17,8 @@ vi.mock("../../state/channels", () => ({
     homeCurrentUnreadAtom: ([id, bot]: [string, string]) => `unread:${id}:${bot}`,
   },
 }));
-vi.mock("../../state/goatBotHomeWork", () => ({
-  mobileGoatBotHomeWorkByEnvironment: (id: string) => `by-env:${id}`,
+vi.mock("../../state/goatBotHomeEnvironment", () => ({
+  mobileGoatBotHomeEnvironmentIdAtom: "home-environment",
 }));
 vi.mock("effect/reactivity", () => ({
   Atom: {
@@ -93,4 +93,20 @@ it("names each count it cannot read, and says nothing while the bot's list is st
   const loading = await show({ environmentId: env, botId: scout, waiting: "pending" });
   expect(loading?.unread).toBeNull();
   expect(loading?.spoken).toEqual([]);
+});
+
+it("marks and says a waiting count it cannot read while the unread list is still loading", async () => {
+  setup(true, { "unread:env:scout": "pending" });
+  const signals = await show({ environmentId: env, botId: scout, waiting: "unavailable" });
+  expect(signals?.unread).toBeNull();
+  expect(signals?.missing).toBe("waiting unavailable");
+  expect(signals?.spoken).toEqual(["waiting unavailable"]);
+});
+
+it("says only the unread count is unavailable when the bot's list failed and the waiting count is known", async () => {
+  setup(true, { "unread:env:scout": "unavailable" });
+  const signals = await show({ environmentId: env, botId: scout, waiting: "ready" });
+  expect(signals?.unread).toBeNull();
+  expect(signals?.missing).toBe("Unread unavailable");
+  expect(signals?.spoken).toEqual(["Unread unavailable"]);
 });

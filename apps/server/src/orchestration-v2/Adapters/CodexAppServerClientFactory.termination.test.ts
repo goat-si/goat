@@ -20,8 +20,8 @@ it.live("scope closure kills a Codex stdio app-server that ignores SIGTERM", () 
     };
     const command = yield* makeCodexAppServerSpawnCommand(input);
     const child = yield* spawner.spawn(command).pipe(Scope.provide(scope));
-    const ready = yield* child.stdout.pipe(Stream.decodeText(), Stream.runHead);
-    expect(Option.getOrThrow(ready)).toContain("ready");
+    const ready = yield* child.stdout.pipe(Stream.decodeText(), Stream.splitLines, Stream.runHead);
+    expect(Option.getOrThrow(ready)).toBe("ready");
     yield* Scope.close(scope, Exit.void);
     expect(yield* child.isRunning).toBe(false);
     expect(() => process.kill(Number(child.pid), 0)).toThrow();

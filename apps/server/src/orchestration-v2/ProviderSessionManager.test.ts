@@ -1,5 +1,8 @@
+import { normalizeCodexThreadLoadModelSelection } from "./Adapters/CodexCapabilities.ts";
+import { registerCodexLoadKeyCheck } from "./ProviderSessionLoadKey.testkit.ts";
 import {
   makeProviderSession,
+  makeProviderThread,
   emptyState,
   type TestProviderRuntimeState,
   modelSelection,
@@ -8,6 +11,7 @@ import {
   ExclusiveCapabilities,
 } from "./ProviderSessionFixture.testkit.ts";
 export {
+  makeProviderThread,
   modelSelection,
   CODEX_DRIVER,
   runtimePolicy,
@@ -180,39 +184,6 @@ export function makeThreadCreatedEvent(input: {
     };
   });
 }
-export function makeProviderThread(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly threadId: ThreadId;
-  readonly providerSessionId: ProviderSessionId;
-  readonly now: DateTime.Utc;
-  readonly nativeThreadId?: string;
-}): OrchestrationV2ProviderThread {
-  const nativeThreadId = input.nativeThreadId ?? "native-thread";
-  return {
-    id: input.idAllocator.derive.providerThread({
-      driver: CODEX_DRIVER,
-      nativeThreadId,
-    }),
-    driver: CODEX_DRIVER,
-    providerInstanceId: modelSelection.instanceId,
-    providerSessionId: input.providerSessionId,
-    appThreadId: input.threadId,
-    ownerNodeId: null,
-    nativeThreadRef: {
-      driver: CODEX_DRIVER,
-      nativeId: nativeThreadId,
-      strength: "strong",
-    },
-    nativeConversationHeadRef: null,
-    status: "idle",
-    firstRunOrdinal: null,
-    lastRunOrdinal: null,
-    handoffIds: [],
-    forkedFrom: null,
-    createdAt: input.now,
-    updatedAt: input.now,
-  };
-}
 // A Codex native subagent's provider thread is owned by its child app thread
 // but reachable from the parent's projection through the subagent record.
 const makeNativeChildFixture = Effect.fnUntraced(function* () {
@@ -319,6 +290,7 @@ function unimplemented(detail: string) {
 const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
+    readonly normalizeCodexLoad?: boolean;
     readonly failEventStream?: boolean;
     readonly capabilities?: OrchestrationV2ProviderCapabilities;
     readonly extensionStatuses?: OrchestrationV2ProviderSession["extensionStatuses"];
@@ -438,6 +410,11 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
             : {
                 hasPendingBackgroundWorkForThread: () => options.hasPendingBackgroundWorkForThread!,
               }),
+          ...(options.normalizeCodexLoad
+            ? {
+                normalizeThreadLoadModelSelection: normalizeCodexThreadLoadModelSelection,
+              }
+            : {}),
           ensureThread: () => unimplemented("ensureThread unused in test"),
           resumeThread: (threadInput) =>
             Ref.update(state, (current) => ({
@@ -474,6 +451,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   });
 });
 export function layerTest(input: {
+  readonly normalizeCodexLoad?: boolean;
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
   readonly maxIdlePinMs?: number;
@@ -557,6 +535,7 @@ export function layerTest(input: {
             : layerTestEventSink;
   const layerRegistry = Layer.unwrap(
     makeProviderAdapter(input.state, {
+      ...(input.normalizeCodexLoad ? { normalizeCodexLoad: true } : {}),
       failEventStream: input.failEventStream ?? false,
       ...(input.capabilities === undefined ? {} : { capabilities: input.capabilities }),
       ...(input.extensionStatuses === undefined
@@ -3732,6 +3711,8 @@ it.effect.each(["manual_shutdown", "server_shutdown"] as const)(
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
     }),
 );
+
+registerCodexLoadKeyCheck({ makeThreadCreatedEvent, makeProviderThread, layerTest });
 
 registerDetachRequestCheck({
   makeThreadCreatedEvent,

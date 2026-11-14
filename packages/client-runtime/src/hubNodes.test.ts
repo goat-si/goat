@@ -1,7 +1,75 @@
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { RpcClientError } from "effect/rpc";
 import { describe, expect, it } from "vite-plus/test";
-import { hubDeviceAccess, isHubNodesUnsupportedError } from "./hubNodes.ts";
+import {
+  disposableRouteRefusal,
+  hubDeviceAccess,
+  hubNodeClassView,
+  isHubNodesUnsupportedError,
+} from "./hubNodes.ts";
+
+describe("hubNodeClassView", () => {
+  const now = Date.parse("2026-11-14T12:00:00.000Z");
+  const machineClass = {
+    class: "disposable",
+    attachId: "a-1",
+    state: "linked",
+    stateSince: "2026-11-14T10:00:00.000Z",
+    provisioner: { kind: "thread" as const, threadId: ThreadId.make("thread-1") },
+    penMember: true,
+    conflicts: [],
+  };
+  it("shows a disposable machine's class, Pen membership, provisioner, state and its age; a kept one shows nothing", () => {
+    expect(hubNodeClassView(machineClass, now)).toEqual({
+      badges: [
+        { label: "Disposable", tone: "info" },
+        { label: "Still in Pen", tone: "secondary" },
+      ],
+      detail: "Attached by an agent thread · linked for 2h",
+    });
+    expect(
+      hubNodeClassView(
+        {
+          ...machineClass,
+          class: "conflict",
+          state: "left_pen",
+          penMember: false,
+          provisioner: { kind: "person" },
+          conflicts: ["sshd_pin_shared", "other_route"],
+        },
+        now,
+      ),
+    ).toEqual({
+      badges: [{ label: "Conflict", tone: "warning" }],
+      detail:
+        "Attached by a person · left Pen for 2h · Conflict: another record has the same SSH host key; the hub reaches it by another route than its Pen alias",
+    });
+    expect(hubNodeClassView(undefined, now)).toBeUndefined();
+  });
+});
+
+describe("disposableRouteRefusal", () => {
+  it("refuses another route to a saved environment the hub reaches as a disposable machine, and leaves a kept one alone", () => {
+    const machineClass = {
+      class: "disposable",
+      attachId: "a-1",
+      state: "linked",
+      stateSince: "2026-11-14T10:00:00.000Z",
+      provisioner: { kind: "person" as const },
+      penMember: true,
+      conflicts: [],
+    };
+    const nodes = [
+      { environmentId: EnvironmentId.make("env-cc"), label: "cc-07", machineClass },
+      { environmentId: EnvironmentId.make("env-box"), label: "box" },
+    ];
+    expect(disposableRouteRefusal(nodes, EnvironmentId.make("env-cc"))).toContain(
+      "cc-07 is a disposable machine",
+    );
+    expect(disposableRouteRefusal(nodes, EnvironmentId.make("env-box"))).toBeUndefined();
+  });
+});
 
 describe("hubDeviceAccess", () => {
   const session = (permissions: ReadonlyArray<"orchestration:read" | "hub:proxy">) => ({
