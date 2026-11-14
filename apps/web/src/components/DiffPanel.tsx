@@ -1050,6 +1050,7 @@ export default function DiffPanel({
                     const composedPath = event.nativeEvent.composedPath?.() ?? [];
                     for (const node of composedPath) {
                       if (!(node instanceof HTMLElement)) continue;
+                      // Header buttons own their clicks; bubbling a chevron click would toggle twice.
                       if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
                         return;
                       }

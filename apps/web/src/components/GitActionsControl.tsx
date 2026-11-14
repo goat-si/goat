@@ -1152,6 +1152,7 @@ export default function GitActionsControl({
       : null;
   const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState);
   const redesign = useClientSettings((s) => s.redesignEnabled);
+  // A fresh draft or a thread with no turns hides commit, push, and diff rows until there is work.
   const quietEmptyDraft =
     redesign &&
     isPanel &&
@@ -1169,6 +1170,7 @@ export default function GitActionsControl({
         terminology: changeRequestTerminology,
       })
     : null;
+  // Keep enabled until live status loads; the server rejects stale requests.
   const featureBranchUnavailableReason = pendingDefaultBranchAction
     ? resolveFeatureBranchUnavailableReason({
         branchName: pendingDefaultBranchAction.branchName,
@@ -1809,6 +1811,10 @@ export default function GitActionsControl({
             </ThreadDetailsControl>
           )}
           {isPanel && gitActionProgress && !sshFetchBack.visible ? (
+            // The menu is disabled while an action runs, so its chevron slot
+            // hosts the elapsed counter instead, leaving the full row width to
+            // the status text. Pinned to the title row so it stays put when
+            // the output row expands below.
             <GitActionElapsedTime
               startedAtMs={gitActionProgress.startedAtMs}
               className="flex h-8 shrink-0 items-center self-start pe-2.5 text-2xs font-normal tabular-nums text-muted-foreground"
