@@ -37,23 +37,6 @@ const linuxPlan = {
   unitPath: "/home/sam/.config/systemd/user/goat.service",
 };
 
-it.each([
-  ["a unit", '/home/sam/T3 "Data"/100%\\x', BootService.renderBootServiceUnit],
-  [
-    "a plist",
-    "/Users/sam/a&b <c>",
-    (plan: BootService.BootServicePlan) =>
-      BootService.renderBootServicePlist(plan, { homeDir: "/Users/sam", environmentPath: "" }),
-  ],
-] as const)("reads the launcher back out of %s", (_, baseDir, render) => {
-  const program = `${baseDir}/runtime/versions/1.2.3/t3`;
-  expect(
-    BootService.bootServiceProgramOf(
-      render({ program: [program, "__service-launcher"], baseDir, logPath: "/log", unitPath: "" }),
-    ),
-  ).toBe(program);
-});
-
 const macRuntime = "/Users/sam/.t3/runtime/goat/versions/1.2.3/goat";
 const macPlan = {
   program: [macRuntime, "__service-launcher"],
@@ -851,6 +834,21 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         expect(yield* fs.readFileString(statePath)).toBe(state);
         expect(yield* fs.readFileString(marker)).toBe("1.2.3\n");
       }),
+  );
+
+  it.effect("rejects an unloadable home before changing an installed service", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, commands } = yield* makeHarness();
+      const path = yield* Path.Path;
+      const plan = yield* service.install();
+      const unit = yield* fs.readFileString(plan.unitPath);
+      const other = yield* makeService(undefined, "1.2.3", path.join(plan.baseDir, 'bad"home'));
+      commands.length = 0;
+      const error = yield* other.install().pipe(Effect.flip);
+      expect(error._tag).toBe("BootServiceBaseDirUnsupportedError");
+      expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
+      expect(commands).toEqual([]);
+    }),
   );
 
   it.effect("starts a service after its systemd start limit trips", () =>

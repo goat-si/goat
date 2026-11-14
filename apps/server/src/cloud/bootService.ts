@@ -1,5 +1,7 @@
+import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
 import {
   escapeSystemdSpecifiers,
+  unescapeXmlText,
   quoteSystemdValue,
   unquoteSystemdValue,
 } from "./systemdValues.ts";
@@ -81,9 +83,6 @@ const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 const bootServiceEnvNames = (name: string) => [name, legacyEnvName(name) ?? name] as const;
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 
-const unescapeXmlText = (value: string) =>
-  value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
-
 export function bootServiceBaseDirOf(contents: string): string | undefined {
   const homeNames = bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).join("|");
   const systemd = new RegExp(`^Environment=(?:${homeNames})=(.*)$`, "m").exec(contents)?.[1];
@@ -94,15 +93,7 @@ export function bootServiceBaseDirOf(contents: string): string | undefined {
   return plist === undefined ? undefined : unescapeXmlText(plist);
 }
 
-/** The executable an installed unit or plist starts: the launcher's runtime. */
-export function bootServiceProgramOf(contents: string): string | undefined {
-  const systemd = /^ExecStart=("(?:\\.|[^"\\])*"|\S+)/m.exec(contents)?.[1];
-  if (systemd !== undefined) return unquoteSystemdValue(systemd);
-  const plist = /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(
-    contents,
-  )?.[1];
-  return plist === undefined ? undefined : unescapeXmlText(plist);
-}
+export { bootServiceProgramOf } from "./systemdValues.ts";
 
 export interface BootServicePlan {
   readonly program: ReadonlyArray<string>;
@@ -118,6 +109,8 @@ export function renderBootServiceUnit(
   plan: BootServicePlan,
   names: BootServiceNames = BOOT_SERVICE_NAMES,
 ): string {
+  if (systemdUnsafeValue(plan))
+    throw new BootServiceBaseDirUnsupportedError({ baseDir: plan.baseDir });
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
@@ -620,6 +613,7 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootSer
 
 export type BootServiceError =
   | BootServiceUnsupportedError
+  | BootServiceBaseDirUnsupportedError
   | BootServiceCommandError
   | BootServiceInstallError
   | BootServicePrerequisiteError
@@ -1017,6 +1011,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     readonly start?: boolean;
   }) {
     const manager = yield* requireManager;
+    if (manager.kind === "systemd" && systemdUnsafeValue(plan))
+      return yield* new BootServiceBaseDirUnsupportedError({ baseDir: input.baseDir });
     const current = yield* readCurrentUnit;
     if (current._tag === "Foreign") {
       return yield* new BootServiceCommandError({
@@ -1400,6 +1396,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       problems,
       current:
         problems.length === 0 &&
+        !(detectedManager.kind === "systemd" && systemdUnsafeValue(plan)) &&
         normalizeUnit(unit) === normalizeUnit(detectedManager.render(plan)) &&
         runtimeEntryExists &&
         Option.isSome(runtimeSentinel) &&

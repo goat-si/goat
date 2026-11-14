@@ -51,3 +51,34 @@ it("reads the home of units installed before the GOAT rename", () => {
   expect(unit).toContain(`Environment=GOAT_HOME=${linuxPlan.baseDir}`);
   expect(unit).toContain(`Environment=T3CODE_HOME=${linuxPlan.baseDir}`); // goat-rename: legacy
 });
+
+it.each(['/home/sam/a"b', "/home/sam/a'b", "/home/sam/a\\b", "/home/sam/a\nb"])(
+  "refuses a systemd executable path that cannot be loaded: %s",
+  (baseDir) => {
+    expect(() =>
+      BootService.renderBootServiceUnit({
+        program: [`${baseDir}/runtime/goat/versions/1.2.3/goat`, "__service-launcher"],
+        baseDir,
+        logPath: `${baseDir}/boot-service.log`,
+        unitPath: "/tmp/goat.service",
+      }),
+    ).toThrow();
+  },
+);
+
+it.each([
+  ["a unit", "/home/sam/T3 Data/100%$x", BootService.renderBootServiceUnit],
+  [
+    "a plist",
+    "/Users/sam/a&b <c>",
+    (plan: BootService.BootServicePlan) =>
+      BootService.renderBootServicePlist(plan, { homeDir: "/Users/sam", environmentPath: "" }),
+  ],
+] as const)("reads the launcher back out of %s", (_, baseDir, render) => {
+  const program = `${baseDir}/runtime/versions/1.2.3/t3`;
+  expect(
+    BootService.bootServiceProgramOf(
+      render({ program: [program, "__service-launcher"], baseDir, logPath: "/log", unitPath: "" }),
+    ),
+  ).toBe(program);
+});
