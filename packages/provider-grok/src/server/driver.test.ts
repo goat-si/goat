@@ -152,6 +152,40 @@ it.layer(layerTest)("GrokDriver", (it) => {
     );
   });
 
+  it.effect("regression #3079: maintenance follows changes to the current PATH", () => {
+    const host = { PATH: "", HOME: "/tmp" };
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "grok-maintenance-path-" });
+      const dirs = [path.join(root, "first"), path.join(root, "second")];
+      for (const dir of dirs) {
+        yield* fs.makeDirectory(dir);
+        yield* fs.writeFileString(path.join(dir, "grok"), "#!/bin/sh\n");
+        yield* fs.chmod(path.join(dir, "grok"), 0o755);
+      }
+      host.PATH = dirs[0]!;
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-maintenance-path"),
+        displayName: undefined,
+        enabled: false,
+        environment: [],
+        config: GrokDriver.defaultConfig(),
+      });
+      expect((yield* instance.snapshot.resolveMaintenance()).update?.executable).toBe(
+        path.join(dirs[0]!, "grok"),
+      );
+      host.PATH = dirs[1]!;
+      expect((yield* instance.snapshot.resolveMaintenance()).update?.executable).toBe(
+        path.join(dirs[1]!, "grok"),
+      );
+    }).pipe(
+      Effect.provideService(HostProcess.Environment, host),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    );
+  });
+
   // Each case puts a stub `brew` at `<prefix>/bin/brew` beside the Grok binary.
   const homebrewCases = [
     {
