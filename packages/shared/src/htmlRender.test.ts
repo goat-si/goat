@@ -179,6 +179,16 @@ describe("htmlRenderFromToolItem", () => {
       ["html_render", result],
       // OpenCode 2 Code Mode reports a script's nested html_render call as one `execute` item.
       ["execute", JSON.stringify(result)],
+      // Grok CLI wraps MCP results as { type: "MCP", output: { OkayOutput: "<json>" } }.
+      [
+        "t3-code.html_render",
+        {
+          type: "MCP",
+          tool_name: "html_render",
+          server_name: "t3-code",
+          output: { OkayOutput: JSON.stringify(result) },
+        },
+      ],
     ] as const) {
       expect(htmlRenderFromToolItem({ toolName, output })).toEqual(reference);
     }
@@ -203,5 +213,16 @@ describe("htmlRenderFromToolItem", () => {
         output,
       }),
     ).toBeUndefined();
+  });
+
+  it("does not accept a failed Grok result or a different tool as a page", () => {
+    const output = { type: "MCP", output: { OkayOutput: JSON.stringify(result) } };
+    expect(
+      htmlRenderFromToolItem({
+        toolName: "goat.html_render",
+        output: { ...output, isError: true },
+      }),
+    ).toBeUndefined();
+    expect(htmlRenderFromToolItem({ toolName: "other.tool", output })).toBeUndefined();
   });
 });
