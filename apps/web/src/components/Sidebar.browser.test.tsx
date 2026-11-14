@@ -5,7 +5,7 @@ import { createWorkspaceFocusController, workspaceAreaProps } from "../lib/works
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { EnvironmentId, ProjectId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { makeThreadFixture } from "../test-fixtures";
@@ -16,7 +16,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import type { Project } from "../types";
 import Sidebar from "./Sidebar";
-import { SidebarProvider } from "./ui/sidebar";
+import { Sidebar as SidebarSheet, SidebarProvider, SidebarTrigger } from "./ui/sidebar";
 
 vi.mock(import("../state/olderSettledShelf"), async (original) => {
   const actual = await original();
@@ -215,5 +215,79 @@ describe("sidebar settled pagination", () => {
     const loadedRows = screen.container.querySelectorAll("[data-thread-item]").length;
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
+  });
+});
+
+describe("sidebar click guard in the narrow sheet", () => {
+  it("refuses a press on a row that slid under it after the closed sheet opens", async () => {
+    await page.viewport(390, 844);
+    using stack = new DisposableStack();
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
+    const activeProject = project("active");
+    const shells = (indexes: readonly number[]) =>
+      indexes.map((index) => threadShell(activeProject.id, index));
+    const routeThreadRef: ScopedThreadRef = {
+      environmentId: activeProject.environmentId,
+      threadId: ThreadId.make("thread-9"),
+    };
+    vi.mocked(useProjects).mockReturnValue([activeProject]);
+    vi.mocked(useQuietThreadShells).mockReturnValue(shells([0, 1, 2, 3]));
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: {
+        environmentId: activeProject.environmentId,
+        projectId: activeProject.id,
+      },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef,
+    });
+    const tree = () => (
+      <SidebarProvider>
+        <SidebarSheet>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarSheet>
+        <SidebarTrigger />
+      </SidebarProvider>
+    );
+    await using screen = await render(tree());
+    // The guard times presses with performance.now; the test moves that clock by hand.
+    let now = 0;
+    using _now = vi.spyOn(performance, "now").mockImplementation(() => now);
+
+    // The list reorders while the sheet is closed, then the user opens it.
+    vi.mocked(useQuietThreadShells).mockReturnValue(shells([0, 1, 2]));
+    await screen.rerender(tree());
+    await userEvent.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>("li[data-thread-item]"));
+    await expect.poll(() => rows().length).toBe(3);
+    await expect.element(page.elementLocator(rows()[1]!)).toBeVisible();
+    // The pointer comes to rest on the list once the sheet has slid in.
+    await userEvent.hover(page.elementLocator(rows()[1]!));
+    now += 1000;
+
+    // The top row goes away on its own, so the next one slides up under the pointer.
+    const [top, next] = rows();
+    const topIndex = Number(top!.dataset.threadItem!.split("thread-").pop());
+    vi.mocked(useQuietThreadShells).mockReturnValue(
+      shells([0, 1, 2].filter((index) => index !== topIndex)),
+    );
+    await screen.rerender(tree());
+    await expect.poll(() => rows()[0]).toBe(next);
+    const pressed = vi.fn();
+    next!.addEventListener("click", pressed);
+
+    await userEvent.click(page.elementLocator(next!));
+    expect(pressed).not.toHaveBeenCalled();
+
+    now += 500;
+    await userEvent.click(page.elementLocator(next!));
+    expect(pressed).toHaveBeenCalledOnce();
   });
 });

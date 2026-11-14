@@ -28,8 +28,8 @@ const rowId = (row: Element): RowId =>
 
 function readTops(list: HTMLElement) {
   const tops = new Map<RowId, { top: number; height: number }>();
-  // A hidden list (the closed narrow sheet stays mounted) reports zero offsets; reading none
-  // makes the first pass after it opens a fill from empty.
+  // A hidden list (the closed narrow sheet stays mounted) reports zero offsets, so it reads none
+  // and the guard's observer takes the snapshot once the list shows.
   if (list.getClientRects().length === 0) return tops;
   for (const child of list.children) {
     if (child instanceof HTMLElement) {
@@ -116,6 +116,14 @@ export function createSidebarShiftGuard(list: HTMLElement) {
   for (const type of PRESS_FOLLOW_UPS) {
     view?.addEventListener(type, onPressFollowUp, { capture: true });
   }
+  // Opening the closed narrow sheet commits no list change, and its list stays hidden for a commit
+  // after the open state flips, so the snapshot the next move is judged against is taken on show.
+  const shown = view
+    ? new view.ResizeObserver(() => {
+        if (tops.size === 0) tops = readTops(list);
+      })
+    : null;
+  shown?.observe(list);
 
   return {
     update() {
@@ -139,6 +147,7 @@ export function createSidebarShiftGuard(list: HTMLElement) {
       tops = next;
     },
     dispose() {
+      shown?.disconnect();
       view?.removeEventListener("pointerdown", onPointerDown, { capture: true });
       view?.removeEventListener("pointerup", onPointerUp, { capture: true });
       view?.removeEventListener("pointercancel", onPointerCancel, { capture: true });
