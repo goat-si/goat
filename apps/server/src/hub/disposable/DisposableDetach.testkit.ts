@@ -12,7 +12,10 @@ interface RevokeEntry {
   code?: string;
   purged?: true;
   resolvedAt?: string;
-  /** A forced revoke that began its removal keeps its link's retirement receipt until it finishes. */
+  /**
+   * A revoke that claimed its link's retirement receipt and failed at commit (unknown) owns that removal
+   * until a repeat of its id finishes it or a person's plain --force takes it over.
+   */
   ownsReceipt?: true;
 }
 
@@ -46,6 +49,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
      * cleanup was intended.
      */
     purgeOpen: false,
+    /** The Home cannot settle a forced revoke either: the entry stays open, as for purgeOpen. */
+    forceOpen: false,
     /** The next revokes are refused before the journal (operation_journal_full): never recorded. */
     journalRefuses: 0,
     /** The next resolves fail, as an unreadable journal would. */
@@ -55,11 +60,11 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     /** A forced revoke is refused, as OpenCodex does at 256 waiting tombstones. */
     tombstoneLimit: false,
     /**
-     * A forced revoke refused by the tombstone limit had begun its removal in an earlier attempt, so it
-     * still owns the link's retirement receipt: a repeat of its id resumes it, a new id is refused with
-     * link_retirement_owned (link-routes.ts foreignRetirement, resumeRetirementBeforeReplay).
+     * The next revokes that reach their commit fail there (key_revoke_failed) after claiming the link's
+     * retirement receipt: unknown, owning the removal. A repeat of that id resumes it and fails again
+     * while this count lasts; a new journalled id is refused link_retirement_owned (foreignRetirement).
      */
-    ownsReceiptOnLimit: false,
+    commitFails: 0,
     /**
      * Recover answers link_retirement_pending until a repeat of the committed forced revoke clears
      * its receipt; while pendingFault holds (a full disk), a repeat does not clear it.
@@ -70,17 +75,44 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     busy: 0,
     /** The next journal reads fail, as a lost answer would. */
     loseRead: 0,
+    /** The next revokes never reach the Home (GOAT stopped while sending): no answer, nothing recorded. */
+    dropSends: 0,
     revokes,
     tombstones,
     resolved: [] as Array<string>,
     /** A person forgets a tombstone on the Home. */
     forget: (linkId: string) => tombstones.delete(linkId),
+    /**
+     * A person's ocx link revoke --force --yes without an operation id: it takes over any unfinished
+     * removal, removes the link with a tombstone, and leaves each owner with its recorded outcome.
+     */
+    plainForce: (linkId: string) => {
+      for (const entry of revokes.values()) if (entry.linkId === linkId) delete entry.ownsReceipt;
+      if (!host.control.links.has(linkId)) return;
+      remember(linkId);
+      tombstones.add(linkId);
+      host.control.links.delete(linkId);
+    },
+    /** A journalled revoke GOAT did not start failed at commit and owns the link's removal. */
+    outsideOwner: (linkId: string) =>
+      revokes.set("outside.1", {
+        operationId: "outside.1",
+        linkId,
+        force: false,
+        state: "unknown",
+        code: "key_revoke_failed",
+        ownsReceipt: true,
+      }),
     sent: [] as Array<string>,
   };
   const refused = (code: number, refusal: OcxRefusal): OcxOutput => ({ code, stdout: "", refusal });
   const option = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1] ?? "";
   // Each link's alias, kept past its removal so recover knows which machine it reaches.
   const aliases = new Map<string, string>();
+  const remember = (linkId: string) => {
+    const alias = host.control.links.get(linkId)?.alias;
+    if (typeof alias === "string") aliases.set(linkId, alias);
+  };
   const nodeOf = (linkId: string) => (aliases.get(linkId) ?? "").replace(/^pen-/u, "");
   const answers = (linkId: string) => control.machineAnswers && host.control.inPen(nodeOf(linkId));
   host.control.silent = () => !control.machineAnswers;
@@ -107,22 +139,42 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     const linkId = option(args, "--link-id");
     const operationId = option(args, "--operation-id");
     const force = args.includes("--force");
+    if (control.dropSends > 0) {
+      control.dropSends -= 1;
+      return { code: 1, stdout: "" };
+    }
     control.sent.push(operationId);
     const known = revokes.get(operationId);
     // A repeat of an open entry recovers it (link-operation.ts replayOperation, recoverRevoke).
     if (known !== undefined && known.state === "open") {
-      if (control.purgeOpen) return refused(1, { code: "operation_journal_failed" });
+      if (known.force ? control.forceOpen : control.purgeOpen)
+        return refused(1, { code: "operation_journal_failed" });
       known.state = "unknown";
       known.code = "operation_interrupted";
       return answer(known);
     }
-    // A recorded id replays its answer (a failed_clean one too); a forced one left unsettled, or one
-    // that still owns its retirement receipt, resumes.
-    if (
-      known !== undefined &&
-      (!force || known.state === "committed" || known.state === "failed_clean") &&
-      known.ownsReceipt !== true
-    ) {
+    // An id that owns its removal resumes it: reopened, then committed, or unknown again
+    // (resumedRevokeJournal, settleResumedRevoke); a force whose record is still listed writes its
+    // tombstone again.
+    if (known !== undefined && known.ownsReceipt === true) {
+      delete known.resolvedAt;
+      if (control.commitFails > 0 || (known.force && control.tombstoneLimit)) {
+        known.state = "unknown";
+        if (control.commitFails > 0) {
+          control.commitFails -= 1;
+          known.code = "key_revoke_failed";
+        } else known.code = "tombstone_limit";
+        return answer(known);
+      }
+      if (known.force) tombstones.add(linkId);
+      host.control.links.delete(linkId);
+      known.state = "committed";
+      delete known.code;
+      delete known.ownsReceipt;
+      return answer(known);
+    }
+    // Any other recorded id replays its answer, whatever its state.
+    if (known !== undefined) {
       if (force && known.state === "committed" && !control.pendingFault)
         control.pendingReceipt = false;
       return answer(known);
@@ -136,34 +188,28 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       return refused(5, { code: "operation_journal_full" });
     }
     // An open revoke of this link refuses every other revoke of it (openRevokeConflict).
-    if (
-      known === undefined &&
-      [...revokes.values()].some((entry) => entry.linkId === linkId && entry.state === "open")
-    )
+    if ([...revokes.values()].some((entry) => entry.linkId === linkId && entry.state === "open"))
       return refused(5, { code: "link_operation_open" });
-    // Another forced revoke of this link owns its retirement receipt: a new id is refused.
+    // Another revoke of this link owns its retirement receipt: a new journalled id is refused.
     if (
-      known === undefined &&
       [...revokes.values()].some((entry) => entry.linkId === linkId && entry.ownsReceipt === true)
     )
       return refused(5, { code: "link_retirement_owned" });
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
-    const alias = host.control.links.get(linkId)?.alias;
-    if (typeof alias === "string") aliases.set(linkId, alias);
-    const entry: RevokeEntry = known ?? { operationId, linkId, force, state: "open" };
+    remember(linkId);
+    const entry: RevokeEntry = { operationId, linkId, force, state: "open" };
     revokes.set(operationId, entry);
     if (force) {
       if (control.tombstoneLimit) {
         entry.state = "failed_clean";
         entry.code = "tombstone_limit";
-        if (control.ownsReceiptOnLimit) entry.ownsReceipt = true;
         return answer(entry);
       }
+      if (control.forceOpen) return refused(1, { code: "operation_journal_failed" });
+      if (control.commitFails > 0) return commitFailed(entry);
       tombstones.add(linkId);
       host.control.links.delete(linkId);
       entry.state = "committed";
-      delete entry.code;
-      delete entry.ownsReceipt;
       return answer(entry);
     }
     if (control.purgeOpen) {
@@ -185,9 +231,18 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       entry.code = "remote_disconnect_failed";
       return answer(entry, control.childRefusal);
     }
+    entry.purged = true;
+    if (control.commitFails > 0) return commitFailed(entry);
     host.control.links.delete(linkId);
     entry.state = "committed";
-    entry.purged = true;
+    return answer(entry);
+  };
+  /** The commit after the claim fails: the link stays (a force's own tombstone goes), unknown. */
+  const commitFailed = (entry: RevokeEntry): OcxOutput => {
+    control.commitFails -= 1;
+    entry.state = "unknown";
+    entry.code = "key_revoke_failed";
+    entry.ownsReceipt = true;
     return answer(entry);
   };
   const recover = (args: ReadonlyArray<string>): OcxOutput => {

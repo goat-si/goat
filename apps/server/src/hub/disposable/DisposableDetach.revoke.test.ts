@@ -47,6 +47,28 @@ it.effect("a person's force resolves the purge it supersedes only once the force
   ),
 );
 
+it.effect("a person's force while a resolve is still owed keeps the text that names it", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      ocx.machineAnswers = false;
+      yield* detach(PERSON, attachId, "d-1");
+      yield* detachPass;
+      ocx.resolveFails = 3;
+      yield* detach(PERSON, attachId, "d-2", true);
+      yield* detachPass;
+      yield* TestClock.adjust(HOUR / 2);
+      yield* detachPass;
+      const resolveCommand =
+        "ocx link operations resolve --operation-id " + attachId + ".purge.1 --yes";
+      expect((yield* listed(attachId))?.message).toContain(resolveCommand);
+      yield* detach(PERSON, attachId, "d-3", true);
+      expect((yield* listed(attachId))?.message).toContain(resolveCommand);
+    }),
+  ),
+);
+
 it.effect("a reissue whose request id embeds a detach's does not answer that detach", () =>
   world((pen, home, _grant, host) =>
     Effect.gen(function* () {
