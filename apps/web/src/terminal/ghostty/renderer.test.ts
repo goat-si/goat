@@ -61,6 +61,9 @@ function recordingContext() {
     save() {},
     restore() {},
     resetTransform() {},
+    getTransform() {
+      return { a: 1, d: 1 };
+    },
     clearRect(...rect: number[]) {
       paints.push({ kind: "clear", rect });
     },
@@ -97,8 +100,8 @@ describe("Ghostty background rendering", () => {
 
     expect(paints.filter((paint) => paint.kind === "clear").map((paint) => paint.rect)).toEqual([
       [0, 0, 100, 50],
-      [4, 4, 20, 10],
-      [4, 14, 20, 10],
+      [0, 4, 100, 10],
+      [0, 14, 100, 10],
     ]);
     expect(paints.filter((paint) => paint.kind === "fill")).toEqual([
       { kind: "fill", color: "rgb(16, 32, 48)", rect: [14, 4, 10, 10] },
@@ -108,7 +111,7 @@ describe("Ghostty background rendering", () => {
     paints.length = 0;
     draw(context, false, true);
     expect(paints).toEqual([
-      { kind: "clear", rect: [4, 4, 20, 10] },
+      { kind: "clear", rect: [0, 4, 100, 10] },
       { kind: "fill", color: "rgb(16, 32, 48)", rect: [14, 4, 10, 10] },
     ]);
   });
@@ -120,9 +123,9 @@ describe("Ghostty background rendering", () => {
     expect(paints.filter((paint) => paint.kind === "clear")).toEqual([]);
     expect(paints.filter((paint) => paint.kind === "fill")).toEqual([
       { kind: "fill", color: "rgb(0, 0, 0)", rect: [0, 0, 100, 50] },
-      { kind: "fill", color: "rgb(0, 0, 0)", rect: [4, 4, 20, 10] },
+      { kind: "fill", color: "rgb(0, 0, 0)", rect: [0, 4, 100, 10] },
       { kind: "fill", color: "rgb(16, 32, 48)", rect: [14, 4, 10, 10] },
-      { kind: "fill", color: "rgb(0, 0, 0)", rect: [4, 14, 20, 10] },
+      { kind: "fill", color: "rgb(0, 0, 0)", rect: [0, 14, 100, 10] },
       { kind: "fill", color: "rgba(72, 122, 191, 0.35)", rect: [4, 14, 10, 10] },
     ]);
   });
