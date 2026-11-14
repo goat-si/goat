@@ -43,6 +43,7 @@ const answer = { rows: [row], mainMessageCount: 0 };
 const query = Atom.make<AsyncResult.AsyncResult<ChannelListBotThreadsResult, Error>>(
   AsyncResult.success(answer),
 );
+const reads = vi.hoisted(() => ({ list: 0 }));
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({
     initialConfigValueAtom: (id: EnvironmentId) => (id === env ? config : destinationConfig),
@@ -58,7 +59,14 @@ vi.mock("./runtime.ts", async () => {
   const { Atom: A } = await import("effect/reactivity");
   return {
     createEnvironmentRpcCommand: () => ({}),
-    createEnvironmentRpcQueryAtomFamily: () => () => query,
+    // Every evaluation of the list query counts as one list read.
+    createEnvironmentRpcQueryAtomFamily: () => {
+      const counted = A.make((get) => {
+        reads.list++;
+        return get(query);
+      });
+      return () => counted;
+    },
     createEnvironmentRpcSubscriptionAtomFamily: () => () => A.make(null),
     createEnvironmentSubscriptionAtomFamily: () => () => A.make(null),
   };
@@ -155,5 +163,69 @@ it("tracks capability, source, destination, and current-link transitions without
   registry.set(query, AsyncResult.initial());
   expect(registry.get(atom).list).toBe("pending");
   expect(links()).toEqual([]);
+  registry.dispose();
+});
+
+const decodeRow = Schema.decodeSync(BotThreadRow);
+const unreadRow = (unread: boolean, workerThread = "worker") =>
+  decodeRow({
+    kind: "task",
+    task: { taskId: "a", title: "Task", status: "running", updatedAt: "2026-11-04T00:00:00.000Z" },
+    view: { taskId: "a", pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: "2026-11-04T00:00:00.000Z",
+    unread,
+    mainMessagesSinceQuiet: 0,
+    worker: { environmentId: "source", threadId: workerThread },
+  });
+
+it("derives a bot's unread count once per work value and tells its subscriber only when it changes", () => {
+  const registry = AtomRegistry.make();
+  const runtime = Atom.runtime(
+    Layer.succeed(EnvironmentRegistry, {} as EnvironmentRegistry["Service"]),
+  );
+  registry.set(config, {
+    environment: {
+      environmentId: env,
+      capabilities: { goatBotTaskThreadsPaged: true, goatBotTaskLookupSearch: true },
+    },
+  } as unknown as ServerConfig);
+  registry.set(query, AsyncResult.success({ rows: [unreadRow(true)], mainMessageCount: 0 }));
+  const unread = createChannelEnvironmentAtoms(runtime).homeCurrentUnreadAtom([
+    env,
+    BotId.make("main"),
+  ]);
+  const seen: unknown[] = [];
+  registry.subscribe(unread, (value) => seen.push(value), { immediate: true });
+  expect(seen).toEqual([1]);
+  // The worker moves: links change, the count does not, so the row hears nothing.
+  registry.set(
+    query,
+    AsyncResult.success({ rows: [unreadRow(true, "moved")], mainMessageCount: 0 }),
+  );
+  expect(registry.get(unread)).toBe(1);
+  expect(seen).toEqual([1]);
+  registry.set(query, AsyncResult.success({ rows: [unreadRow(false)], mainMessageCount: 0 }));
+  expect(seen).toEqual([1, 0]);
+  registry.set(query, AsyncResult.fail(new Error("offline")));
+  expect(seen).toEqual([1, 0, "unavailable"]);
+  registry.dispose();
+});
+
+it("an ineligible bot's Home work reads no list", () => {
+  const registry = AtomRegistry.make();
+  const runtime = Atom.runtime(
+    Layer.succeed(EnvironmentRegistry, {} as EnvironmentRegistry["Service"]),
+  );
+  registry.set(config, {
+    environment: { environmentId: env, capabilities: { goatBotTaskThreads: true } },
+  } as unknown as ServerConfig);
+  const atom = createChannelEnvironmentAtoms(runtime).homeCurrentOpenableWorkAtom([
+    env,
+    BotId.make("main"),
+  ]);
+  reads.list = 0;
+  registry.mount(atom);
+  expect(registry.get(atom)).toMatchObject({ eligible: false, links: [] });
+  expect(reads.list).toBe(0);
   registry.dispose();
 });

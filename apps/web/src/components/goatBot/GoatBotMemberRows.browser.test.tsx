@@ -42,6 +42,10 @@ const server = vi.hoisted(() => ({
   connected: true,
   waitingRead: true,
 }));
+const workAtoms = vi.hoisted(() => ({
+  current: vi.fn((_key: readonly [string, string]) => "current-work"),
+  unread: vi.fn((_key: readonly [string, string]) => "unread-count"),
+}));
 const publish = () => {
   server.version++;
   for (const listener of server.listeners) listener();
@@ -80,6 +84,14 @@ vi.mock("@effect/atom-react", async (original) => ({
         rosterKnown: true,
         byBot: [{ eligible: server.h2 && server.connected }, { eligible: server.memberEligible }],
       };
+    // The bot's unread signal, as channelEnvironment.homeCurrentUnreadAtom derives it.
+    if (atom === "unread-count") {
+      const { eligible, list, work } = server.work;
+      if (!eligible || list === "failed") return "unavailable";
+      if (list === "pending") return "pending";
+      return [...work.running, ...work.waiting, ...work.finished].filter((task) => task.row.unread)
+        .length;
+    }
     return atom === "current-work" ? server.work : true;
   },
 }));
@@ -87,7 +99,8 @@ vi.mock("~/state/channels", () => {
   const command = (tag: string) => ({ tag, permissionAtom: () => null });
   return {
     channelEnvironment: {
-      homeCurrentOpenableWorkAtom: () => "current-work",
+      homeCurrentOpenableWorkAtom: workAtoms.current,
+      homeCurrentUnreadAtom: workAtoms.unread,
       homeCurrentOpenableWorkByEnvironment: () => "home-work",
       setBotHidden: command("hide"),
       deleteBot: command("delete"),
@@ -212,6 +225,8 @@ function Roster() {
 }
 
 function setup() {
+  workAtoms.current.mockClear();
+  workAtoms.unread.mockClear();
   server.bots = [profile("research", "Research")];
   server.busy = false;
   server.toasts = [];
@@ -447,4 +462,13 @@ it("a capable environment Home does not govern keeps the legacy row, and switche
     .element(screen.getByRole("link", { name: /^2 waiting for you\s*Research/ }))
     .toBeVisible();
   expect(screen.getByLabelText(/unavailable/i).query()).toBeNull();
+});
+
+it("a row Home does not govern subscribes to none of its bot's work", async () => {
+  setup();
+  server.memberEligible = false;
+  await using screen = await render(<Roster />, { router: false });
+  await expect.element(screen.getByRole("link", { name: /Research/ })).toBeVisible();
+  expect(workAtoms.current).not.toHaveBeenCalled();
+  expect(workAtoms.unread).not.toHaveBeenCalled();
 });
