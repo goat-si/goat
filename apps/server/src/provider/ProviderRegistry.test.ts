@@ -1,3 +1,4 @@
+import { codexHomeHintRegression } from "./CodexHomeHint.testkit.ts";
 import {
   mockHandle,
   layerMockSpawner,
@@ -376,6 +377,11 @@ it.layer(
           message: "Codex CLI is not authenticated. Run `codex login` and try again.",
         });
       }),
+    );
+
+    it.effect(
+      "names the instance's CODEX_HOME in the sign-in hint for a custom home",
+      codexHomeHintRegression,
     );
 
     it.effect("returns ready with unknown auth when app-server does not require OpenAI auth", () =>
