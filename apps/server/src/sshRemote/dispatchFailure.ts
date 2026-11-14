@@ -15,6 +15,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
    */
   readonly reason: SshDispatchFailureReason;
   readonly message: string;
+  /** True only when a reply from the remote host was received for this call. */
+  readonly hostAnswered?: boolean | undefined;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
   /** Arguments a remote refused goat_thread_launch for before creating anything; nothing ran. */

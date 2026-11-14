@@ -612,7 +612,9 @@ describe("SshRemoteDispatch.callHostTool", () => {
         { answer: () => ({ throws: "fetch failed" }) },
         readCall(),
       );
-      expect(result._tag === "Failure" && result.failure.reason).toBe("host_unavailable");
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("hostAnswered", true);
     }),
   );
 
@@ -638,6 +640,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
       if (result._tag !== "Failure") return;
       expect(result.failure.reason).toBe("remote_refused");
       expect(result.failure.remoteCode).toBe("thread_not_found");
+      expect(result.failure).toHaveProperty("hostAnswered", true);
       expect(hostFailure(result.failure).code).toBe("thread_not_found");
     }),
   );
@@ -648,7 +651,10 @@ describe("SshRemoteDispatch.callHostTool", () => {
         { answer: (request) => initialize(request) ?? { rpcError: "Unknown tool" } },
         readCall(),
       );
-      expect(result._tag === "Failure" && result.failure.reason).toBe("remote_refused");
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "remote_refused", hostAnswered: true },
+      });
     }),
   );
 
@@ -704,6 +710,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
       expect(record.toolCalls).toEqual(["goat_provider_sync_status"]);
       if (result._tag !== "Failure") throw new Error("expected a refusal");
       expect(result.failure.reason).toBe("remote_outdated");
+      expect(result.failure).toHaveProperty("hostAnswered", true);
       expect(hostFailure(result.failure)).toMatchObject({
         code: "remote_outdated",
         reason: "remote_outdated",

@@ -55,6 +55,8 @@ describe("SshRemoteDispatch with a linked host", () => {
         _tag: "Failure",
         failure: { reason: "remote_refused", message: expect.stringContaining("approvals") },
       });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("hostAnswered", true);
       expect(record).toEqual([]);
     }),
   );
@@ -205,7 +207,33 @@ describe("SshRemoteDispatch with a linked host", () => {
           message: expect.stringContaining("GOAT on box does not have goat_provider_sync_read"),
         },
       });
+      if (result._tag === "Failure") expect(result.failure).toHaveProperty("hostAnswered", true);
       expect(record.at(-1)).toMatchObject({ tool: "goat_provider_sync_status" });
+    }),
+  );
+
+  it.effect.each([
+    ["tool result", { result: { isError: true, structuredContent: { message: "no" } } }],
+    ["protocol error", { rpcError: "permission denied" }],
+  ] as const)("marks a linked host's %s as an answer", ([, reply]) =>
+    Effect.gen(function* () {
+      const { result } = yield* withLinkedHost(() => reply, call("goat_thread_read", false));
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "remote_refused", hostAnswered: true },
+      });
+    }),
+  );
+
+  it.effect("does not count an HTTP failure as a linked host answer", () =>
+    Effect.gen(function* () {
+      const { result } = yield* withLinkedHost(
+        () => ({ status: 503 }),
+        call("goat_thread_read", false),
+      );
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("hostAnswered", true);
     }),
   );
 
