@@ -60,7 +60,9 @@ account.</p>
 <h2 id="runtime-installation">Runtime installation</h2>
 <p>Managed installation supports Apple Silicon macOS, Linux x64 or ARM64, and Windows
 x64 or ARM64. Intel Macs can connect to a supported remote environment. Allow
-several GB of free disk space, especially on Linux.</p>
+several GB of free disk space, especially on Linux.
+On Linux ARM64, Google’s runtime needs a kernel with 4 KiB memory pages, so it
+does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.</p>
 <h3 id="use-a-manual-installation">Use a manual installation</h3>
 <p>Download the archive for your environment from the <a href="https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json">official ACP Registry</a>.
 Extract the ACP executable and its <code>localharness_external</code> helper into the same
