@@ -242,19 +242,17 @@ export const CodexDriver: ProviderDriver<
       : undefined;
     // Every launch names its home explicitly: the host's CODEX_HOME relative to the server's working
     // directory, else the server user's .codex, so an instance HOME override cannot move one launch.
-    const currentEnvironment = mergedEnvironment.pipe(
-      Effect.map((env): NodeJS.ProcessEnv =>
-        pinnedHome !== undefined
-          ? { ...env, CODEX_HOME: pinnedHome }
-          : {
-              ...env,
-              CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
-                cwd: process.cwd(),
-                environment: env,
-              }),
-            },
-      ),
-    );
+    const withExecutionHome = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+      pinnedHome !== undefined
+        ? { ...env, CODEX_HOME: pinnedHome }
+        : {
+            ...env,
+            CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+              cwd: process.cwd(),
+              environment: env,
+            }),
+          };
+    const currentEnvironment = mergedEnvironment.pipe(Effect.map(withExecutionHome));
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     // The home a check or session process runs under, and its filesystem identity, found once per
     // check and once per session; a failed lookup keeps the path, so both sides fall back alike.
@@ -420,13 +418,16 @@ export const CodexDriver: ProviderDriver<
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
-          currentEnvironment.pipe(
-            Effect.flatMap((env) =>
+          mergedEnvironment.pipe(
+            Effect.flatMap((merged) =>
               Effect.gen(function* () {
+                const env = withExecutionHome(merged);
                 const home = executionHome(env);
                 const before = yield* homeIdentity(home);
+                // A home the host names is the one the sign-in hint shows, as for a pinned home.
+                const named = pinnedHome !== undefined || Boolean(merged.CODEX_HOME?.trim());
                 const status = yield* checkCodexProviderStatus(
-                  effectiveConfig,
+                  named ? { ...effectiveConfig, homePath: home } : effectiveConfig,
                   undefined,
                   env,
                 ).pipe(provideHomeRoute);
