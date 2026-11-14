@@ -22,7 +22,7 @@ import * as Schema from "effect/Schema";
 import * as CursorSdk from "../CursorSdk.ts";
 import { buildCursorDiscoveredModelsFromSdk } from "../status.ts";
 import { CursorCloudSettings } from "../../settings.ts";
-import { makeCursorCloudCredentials } from "./credentials.ts";
+import { BACKEND_MISMATCH, makeCursorCloudCredentials, sdkBackendMatches } from "./credentials.ts";
 import { DRIVER, makeCursorCloudAdapter } from "./adapter.ts";
 import * as CursorCloudSdk from "./sdk.ts";
 
@@ -111,7 +111,19 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
       const checkProvider = input.enabled
         ? Effect.gen(function* () {
             const apiKey = yield* credentials.requireApiKey;
+            if (!sdkBackendMatches())
+              return yield* snapshotValue({
+                status: "error",
+                auth: "unknown",
+                message: BACKEND_MISMATCH,
+              });
             yield* sdk.checkAccess(apiKey);
+            if (!sdkBackendMatches())
+              return yield* snapshotValue({
+                status: "error",
+                auth: "unknown",
+                message: BACKEND_MISMATCH,
+              });
             const models = yield* sdk.readModels(apiKey);
             return yield* snapshotValue({
               status: "ready",

@@ -5,6 +5,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { makeHarness } from "./adapter.testkit.ts";
 import { resolveKey, makeCursorCloudCredentials } from "./credentials.ts";
 
 const instanceId = ProviderInstanceId.make("cursorCloud-test");
@@ -251,3 +253,35 @@ describe("Cursor Cloud credential precedence", () => {
     }),
   );
 });
+
+it.effect("refuses an SDK call when the server backend differs from the sibling override", () =>
+  Effect.gen(function* () {
+    const previous = process.env.CURSOR_BACKEND_URL;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+        else process.env.CURSOR_BACKEND_URL = previous;
+      }),
+    );
+    process.env.CURSOR_BACKEND_URL = "https://custom.invalid";
+    const settings = yield* decodeSettings({
+      providerInstances: {
+        [siblingId]: {
+          driver: "cursor",
+          enabled: true,
+          config: {},
+          environment: [{ name: "CURSOR_BACKEND_URL", value: "https://api2.cursor.sh" }],
+        },
+      },
+    });
+    const h = credentialFixture(settings);
+    const credentials = yield* makeCursorCloudCredentials(instanceId, siblingId).pipe(
+      Effect.provideService(ProviderHost.ProviderHost, h.host),
+    );
+    const adapter = yield* makeHarness(credentials.requireApiKey);
+    const result = yield* adapter.runtime.startTurn(adapter.input).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.message).toContain("CURSOR_BACKEND_URL");
+    expect(adapter.create).not.toHaveBeenCalled();
+  }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+);

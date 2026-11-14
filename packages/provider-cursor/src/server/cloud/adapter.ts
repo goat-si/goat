@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
+import { BACKEND_MISMATCH, sdkBackendMatches } from "./credentials.ts";
 import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
@@ -277,8 +278,12 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     operation: CursorCloudSdk.CursorCloudSdkError["operation"],
     request: () => Promise<A>,
   ) =>
-    CursorCloudSdk.request(operation, request).pipe(
-      Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+    Effect.suspend(() =>
+      sdkBackendMatches()
+        ? CursorCloudSdk.request(operation, request).pipe(
+            Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+          )
+        : Effect.fail(protocol(BACKEND_MISMATCH)),
     );
 
   return ProviderAdapter.ProviderAdapterV2.of({
@@ -480,7 +485,9 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             if (agent) {
               const messages: AsyncIterable<SDKMessage> = {
                 [Symbol.asyncIterator]() {
-                  const iterator = ctx.run.stream();
+                  const iterator = CursorCloudSdk.guardedStream(ctx.run, () =>
+                    protocol(BACKEND_MISMATCH),
+                  );
                   return {
                     next: () => iterator.next(),
                     // Abort the owned stream before awaiting return with a pending next.

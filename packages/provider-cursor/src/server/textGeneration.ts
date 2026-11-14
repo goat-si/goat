@@ -116,6 +116,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         ),
         (store) => Effect.tryPromise(() => store.dispose()).pipe(Effect.ignore({ log: true })),
       );
+      // The SDK takes no environment: it reads CURSOR_BACKEND_URL from the server process; instance and session environments select only the key.
       const agentOptions = {
         apiKey,
         mode: "plan",

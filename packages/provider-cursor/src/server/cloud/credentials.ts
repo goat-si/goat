@@ -11,6 +11,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 const PRODUCTION_BACKEND = "https://api2.cursor.sh";
+export const sdkBackendMatches = () =>
+  (process.env.CURSOR_BACKEND_URL ?? PRODUCTION_BACKEND).replace(/\/+$/, "") === PRODUCTION_BACKEND;
+export const BACKEND_MISMATCH =
+  "Cursor Cloud cannot use this key: set the server's CURSOR_BACKEND_URL to https://api2.cursor.sh or unset it, then restart the server.";
 const Credentials = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.Literal(1),
@@ -28,7 +32,7 @@ function usable(value: StoredSdkCredentials | undefined, now: number) {
   return (
     value !== undefined &&
     value.apiKey.trim().length > 0 &&
-    value.backendUrl.replace(/\/$/, "") === PRODUCTION_BACKEND &&
+    value.backendUrl.replace(/\/+$/, "") === PRODUCTION_BACKEND &&
     (value.apiKeyExpiresAtMs === undefined || value.apiKeyExpiresAtMs > now)
   );
 }
@@ -87,8 +91,8 @@ export const makeCursorCloudCredentials = Effect.fn("makeCursorCloudCredentials"
       hostEnvironment,
     );
     if (
-      environment.CURSOR_BACKEND_URL &&
-      environment.CURSOR_BACKEND_URL.replace(/\/$/, "") !== PRODUCTION_BACKEND
+      environment.CURSOR_BACKEND_URL !== undefined &&
+      environment.CURSOR_BACKEND_URL.replace(/\/+$/, "") !== PRODUCTION_BACKEND
     ) {
       return yield* new ProviderSetupError({
         instanceId,

@@ -32,3 +32,29 @@ it.effect("keeps the credential captured at session open for launches and reads"
     );
   }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
 );
+
+it.effect(
+  "refuses a session key when the SDK backend changes, and allows matching production",
+  () =>
+    Effect.gen(function* () {
+      const previous = process.env.CURSOR_BACKEND_URL;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.CURSOR_BACKEND_URL;
+          else process.env.CURSOR_BACKEND_URL = previous;
+        }),
+      );
+      delete process.env.CURSOR_BACKEND_URL;
+      const h = yield* makeHarness();
+      process.env.CURSOR_BACKEND_URL = "https://custom.invalid";
+      const result = yield* h.runtime.startTurn(h.input).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(h.create).not.toHaveBeenCalled();
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh///";
+      const matching = yield* makeHarness();
+      yield* matching.runtime.startTurn(matching.input);
+      yield* Deferred.await(matching.streamStarted);
+      expect(matching.create).toHaveBeenCalledOnce();
+      yield* matching.finish;
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+);
