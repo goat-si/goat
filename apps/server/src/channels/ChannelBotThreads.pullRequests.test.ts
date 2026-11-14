@@ -19,7 +19,12 @@ const repository = "goat-si/goat";
 const url = (repo: string, number: number) => `https://github.com/${repo}/pull/${number}`;
 const link = (
   number: number,
-  options: { readonly state?: State; readonly repo?: string; readonly dismissed?: true } = {},
+  options: {
+    readonly state?: State;
+    readonly repo?: string;
+    readonly dismissed?: true;
+    readonly closedAt?: string;
+  } = {},
 ) => ({
   host: "github.com",
   repository: options.repo ?? repository,
@@ -38,6 +43,7 @@ const link = (
           isDraft: false,
           updatedAt: null,
           syncedAt: at(1),
+          ...(options.closedAt === undefined ? {} : { closedAt: options.closedAt }),
         },
   stack: null,
 });
@@ -50,6 +56,7 @@ const projectThread = (
     readonly settledOverride?: "settled";
     readonly archivedAt?: string;
     readonly deleted?: true;
+    readonly projectId?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -61,7 +68,8 @@ const projectThread = (
       archivedAt: thread.archivedAt ?? null,
     });
     const deletedAt = thread.deleted ? at(1) : null;
-    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json) VALUES (${threadId}, 'project:repo', ${threadId}, 'codex', 'full-access', 'default', ${at(5)}, ${at(5)}, ${deletedAt}, ${payload})`;
+    const projectId = thread.projectId ?? "project:repo";
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json) VALUES (${threadId}, ${projectId}, ${threadId}, 'codex', 'full-access', 'default', ${at(5)}, ${at(5)}, ${deletedAt}, ${payload})`;
   });
 const setWorker = (taskId: string, threadId: string, host?: string) =>
   Effect.gen(function* () {
@@ -246,6 +254,40 @@ describe("ChannelBotThreads pull requests", () => {
           assert.deepStrictEqual(taskRow(result, "archived-launch").pullRequests, [
             item(71, "open"),
           ]);
+        }),
+      ),
+  );
+
+  it.effect(
+    "a pull request closed a day ago on one project's thread never outranks the same pull request still read open on another's, in either source order",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          for (const [taskId, closedSide] of [
+            ["final-worker", "worker"],
+            ["final-launch", "launch"],
+          ] as const) {
+            yield* insertTask(taskId, { status: "completed", createdAt: at(2) });
+            yield* setWorker(taskId, "thread:" + taskId + "-worker");
+            yield* localLaunch(taskId, taskId + "-launch", "completed");
+            for (const side of ["worker", "launch"] as const)
+              yield* projectThread(
+                "thread:" + taskId + "-" + side,
+                [
+                  link(
+                    73,
+                    side === closedSide
+                      ? { state: "closed", closedAt: at(25 * 60) }
+                      : { state: "open" },
+                  ),
+                ],
+                { projectId: side === "worker" ? "project:a" : "project:b" },
+              );
+          }
+          const result = yield* current;
+          assert.deepStrictEqual(taskRow(result, "final-worker").pullRequests, [item(73, "open")]);
+          assert.deepStrictEqual(taskRow(result, "final-launch").pullRequests, [item(73, "open")]);
         }),
       ),
   );

@@ -12,7 +12,7 @@ export function isPullRequestSyncUnsettled(thread: {
 }
 
 export function isFinalPullRequestSnapshot(
-  snapshot: ThreadPullRequestSnapshot | null,
+  snapshot: Pick<ThreadPullRequestSnapshot, "state" | "closedAt" | "mergedAt"> | null,
   nowMs: number,
 ): boolean {
   return snapshot?.state === "merged"

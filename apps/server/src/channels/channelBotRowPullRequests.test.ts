@@ -2,8 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import type { PullRequestState } from "@goat/contracts";
 import { botRowPullRequests, type PullRequestSource } from "./channelBotRowPullRequests.ts";
 
-const source = (refreshed: boolean, state?: PullRequestState): PullRequestSource => ({
+const source = (refreshed: boolean, state?: PullRequestState, final?: true): PullRequestSource => ({
   refreshed,
+  ...(final ? { final: new Set(["goat-si/goat#42"]) } : {}),
   pullRequests: [
     {
       repository: "goat-si/goat",
@@ -21,6 +22,8 @@ const staleFinalThread = source(false, "closed");
 const staleOpenThread = source(false, "open");
 const runningCopy = source(true, "merged");
 const staleOpenCopy = source(false, "open");
+// An unsettled thread whose closed snapshot the refresher no longer reads (closed 24 hours or more).
+const finalClosedThread = source(true, "closed", true);
 
 const kept = (
   threads: ReadonlyArray<PullRequestSource>,
@@ -44,6 +47,10 @@ describe("botRowPullRequests", () => {
       ["stateless, then stale final", [staleOpenThread, staleFinalThread], none, "closed"],
       ["the copy over a stateless thread", [staleOpenThread], runningCopy, "merged"],
       ["no state anywhere", [staleOpenThread], staleOpenCopy, "none"],
+      // A closed snapshot nothing reads any more never outranks an open one still read.
+      ["final closed, then refreshed", [finalClosedThread, refreshedThread], none, "open"],
+      ["refreshed, then final closed", [refreshedThread, finalClosedThread], none, "open"],
+      ["final closed over the copy", [finalClosedThread], runningCopy, "closed"],
     ];
     assert.deepStrictEqual(
       Object.fromEntries(cases.map(([name, threads, copy]) => [name, kept(threads, copy)])),

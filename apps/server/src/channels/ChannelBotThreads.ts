@@ -261,8 +261,9 @@ const make = Effect.gen(function* () {
     );
     // A thread whose links cannot be read leaves the row to its other sources.
     const unreadablePullRequests: Array<string> = [];
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const readSource = (columns: ThreadPullRequestColumns | undefined, threadId: string) => {
-      const source = columns === undefined ? undefined : threadPullRequestSource(columns);
+      const source = columns === undefined ? undefined : threadPullRequestSource(columns, nowMs);
       if (source !== "unreadable") return source === undefined ? [] : [source];
       unreadablePullRequests.push(threadId);
       return [];

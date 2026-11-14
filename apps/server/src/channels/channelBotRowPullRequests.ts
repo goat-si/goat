@@ -11,13 +11,18 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
-import { isPullRequestSyncUnsettled } from "../orchestration-v2/pullRequestSyncFinal.ts";
+import {
+  isFinalPullRequestSnapshot,
+  isPullRequestSyncUnsettled,
+} from "../orchestration-v2/pullRequestSyncFinal.ts";
 import { pullRequestsFromLinks } from "./channelWorkerObservation.ts";
 
 /** Where a work row's pull requests come from, and whether anything still refreshes their state. */
 export interface PullRequestSource {
   readonly pullRequests: ReadonlyArray<ChannelTaskPullRequest>;
   readonly refreshed: boolean;
+  /** Pull requests (repository#number) the refresher no longer reads even on a refreshed thread. */
+  readonly final?: ReadonlySet<string>;
 }
 export interface ThreadPullRequestColumns {
   readonly pull_requests_json: string | null;
@@ -46,7 +51,13 @@ const decodeColumns = Schema.decodeUnknownOption(
             number: PositiveInt,
             url: TrimmedNonEmptyString,
             source: ThreadPullRequestLinkSource,
-            snapshot: Schema.NullOr(Schema.Struct({ state: PullRequestState })),
+            snapshot: Schema.NullOr(
+              Schema.Struct({
+                state: PullRequestState,
+                closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+                mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+              }),
+            ),
             watch: Schema.optional(Schema.Unknown),
           }),
         ),
@@ -58,9 +69,13 @@ const decodeColumns = Schema.decodeUnknownOption(
   ),
 );
 
+const pullRequestKey = (item: { readonly repository: string; readonly number: number }) =>
+  item.repository + "#" + item.number;
+
 /** A thread's pull requests; undefined without a projection row, "unreadable" when they cannot be read. */
 export const threadPullRequestSource = (
   columns: ThreadPullRequestColumns,
+  nowMs: number,
 ): PullRequestSource | "unreadable" | undefined => {
   if (columns.pull_requests_json === null) return undefined;
   const decoded = decodeColumns(columns.pull_requests_json);
@@ -73,6 +88,11 @@ export const threadPullRequestSource = (
       columns.pull_requests_deleted_at === null &&
       archivedAt === null &&
       isPullRequestSyncUnsettled({ settledOverride, settledAt }),
+    final: new Set(
+      (links ?? []).flatMap((link) =>
+        isFinalPullRequestSnapshot(link.snapshot, nowMs) ? [pullRequestKey(link)] : [],
+      ),
+    ),
   };
 };
 
@@ -87,13 +107,14 @@ const shown = (
   { url: _url, state, ...item }: ChannelTaskPullRequest,
   refreshed: boolean,
 ): BotRowPullRequest =>
-  // A terminal state stays true; any other is shown only while something still reads the host.
+  // Merged and closed show from any source (a closed one can reopen, which only a refresh
+  // shows); open shows only while something still reads the host.
   state !== undefined && (refreshed || state !== "open") ? { ...item, state } : item;
 
 /**
- * Which duplicate of a pull request a row keeps, lowest first: a state from a thread still
- * refreshed; a merged or closed state from a thread no longer refreshed; the stored copy's
- * state; no state. A tie keeps the first source met: the worker, its launches, then the copy.
+ * Which duplicate of a pull request a row keeps, lowest first: a state from a thread that still
+ * reads it (refreshed and not final, as the refresher judges both); a merged or closed state no
+ * longer read; the stored copy's state; no state. A tie keeps the first source met.
  */
 const precedence = (item: BotRowPullRequest, fromThread: boolean, refreshed: boolean) =>
   item.state === undefined ? 3 : !fromThread ? 2 : refreshed ? 0 : 1;
@@ -112,9 +133,10 @@ export const botRowPullRequests = (
     [copy, false] as const,
   ])
     for (const pullRequest of source.pullRequests) {
-      const key = pullRequest.repository + "#" + pullRequest.number;
-      const item = shown(pullRequest, source.refreshed);
-      const rank = precedence(item, fromThread, source.refreshed);
+      const key = pullRequestKey(pullRequest);
+      const refreshed = source.refreshed && source.final?.has(key) !== true;
+      const item = shown(pullRequest, refreshed);
+      const rank = precedence(item, fromThread, refreshed);
       if (rank < (byKey.get(key)?.rank ?? Number.POSITIVE_INFINITY)) byKey.set(key, { item, rank });
     }
   const all = [...byKey.values()]
