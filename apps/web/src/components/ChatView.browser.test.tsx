@@ -147,6 +147,7 @@ it("a mounted thread view lets go of the thread structures it has replaced", asy
   });
   const router = getRouter(createMemoryHistory({ initialEntries: ["/"] }));
   await router.load();
+  // AppRoot brings its own router.
   await using _app = await render(<AppRoot router={router} />, { router: false });
   const open = async (threadId: ThreadId, text: string) => {
     await act(() =>
