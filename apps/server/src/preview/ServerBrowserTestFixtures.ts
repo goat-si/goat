@@ -1,3 +1,4 @@
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
 import type * as ServerBrowser from "./ServerBrowser.ts";
@@ -146,3 +147,21 @@ export const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
 
 export const viewportSizes = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
   items.flatMap((item) => (item._tag === "viewport" ? [`${item.width}x${item.height}`] : []));
+
+const testThread = {
+  threadId: ThreadId.make("browser-test-thread"),
+  providerSessionId: "agent-a",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+};
+export const scope = {
+  environmentId: EnvironmentId.make("browser-test-environment"),
+  thread: testThread,
+  client: undefined,
+  requestNamespace: "browser-test",
+  capabilities: new Set(["preview"] as const),
+  issuedAt: 1,
+};
+export const asSession = (providerSessionId: string) => ({
+  ...scope,
+  thread: { ...testThread, providerSessionId },
+});

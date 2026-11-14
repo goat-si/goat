@@ -67,7 +67,7 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
   window.__goatRecorder = {
     async frame(base64, cssWidth) {
       if (tooLarge) return false;
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const bytes = Uint8Array.fromBase64(base64);
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
       if (tooLarge) { bitmap.close(); return false; }
       if (!recorder) {

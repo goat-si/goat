@@ -4,7 +4,11 @@ import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.test
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
-import { makeEncoderPage, mockFinalRecordingFrame } from "./RecordingEncoder.testkit.ts";
+import {
+  assertFastRecordingAcks,
+  makeEncoderPage,
+  mockFinalRecordingFrame,
+} from "./RecordingEncoder.testkit.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -12,10 +16,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { it } from "@effect/vitest";
 import {
   type BrowserRecordingFrameRate,
-  EnvironmentId,
   PreviewTabId,
-  ProviderInstanceId,
-  ThreadId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
   type PreviewAutomationStatus,
@@ -46,6 +47,8 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import {
+  asSession,
+  scope,
   fileChooserElement,
   makeFrame,
   makeSession,
@@ -74,7 +77,11 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     pinStore = async (_profileId: string, store: string) => store;
     withProfile = <A>(_profileId: string, run: () => Promise<A>) => run();
     async scratchPage() {
-      return makeEncoderPage(makeContext().page, encoderStreams) as unknown as Page;
+      return makeEncoderPage(
+        makeContext().page,
+        encoderStreams,
+        () => decodeGate,
+      ) as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext(undefined, desktopPageUrl);
@@ -197,6 +204,7 @@ const contexts: ReturnType<typeof makeContext>[] = [];
 const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }> = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
+let decodeGate: Promise<void> | undefined;
 let contextFailure: Error | null = null;
 let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
@@ -219,23 +227,7 @@ const desktopRenders = (tabId: string) => {
 const releasedDesktopTabs: Array<string> = [];
 const desktopTurns = new NodeEvents.EventEmitter();
 const desktopConnections: Array<{ endpoint: string; context: ReturnType<typeof makeContext> }> = [];
-const testThread = {
-  threadId: ThreadId.make("browser-test-thread"),
-  providerSessionId: "agent-a",
-  providerInstanceId: ProviderInstanceId.make("codex"),
-};
-export const scope = {
-  environmentId: EnvironmentId.make("browser-test-environment"),
-  thread: testThread,
-  client: undefined,
-  requestNamespace: "browser-test",
-  capabilities: new Set(["preview"] as const),
-  issuedAt: 1,
-};
-const asSession = (providerSessionId: string) => ({
-  ...scope,
-  thread: { ...testThread, providerSessionId },
-});
+export { scope } from "./ServerBrowserTestFixtures.ts";
 const dependencies = Layer.mergeAll(
   ServerSettings.layerTest(),
   historyMemoryLayer,
@@ -333,6 +325,7 @@ beforeEach(() => {
   encoderStreams.length = 0;
   contextRequests.length = 0;
   contextGate = null;
+  decodeGate = undefined;
   contextFailure = null;
   pageSetupFailure = null;
   initialNavigation = null;
@@ -929,6 +922,9 @@ it.effect.each([
         }
         yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
         expect(encoderStreams).toEqual([{ frameRate, bitsPerSecond }]);
+        yield* assertFastRecordingAcks(contexts[0]!.sessions, (gate) => {
+          decodeGate = gate;
+        });
       }),
     ).pipe(Effect.provide(layer)),
 );

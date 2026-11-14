@@ -1,3 +1,4 @@
+import { makeRecordingFrames } from "./RecordingFrames.ts";
 import { withinStatusDeadline } from "./statusDeadline.ts";
 import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
@@ -270,7 +271,7 @@ interface Recording {
   readonly encoder: Page;
   readonly session: CDPSession;
   readonly startedAt: string;
-  readonly framesInFlight: Set<Promise<void>>;
+  readonly frames: ReturnType<typeof makeRecordingFrames>;
 }
 
 interface ServerTab {
@@ -1438,43 +1439,36 @@ const make = Effect.gen(function* () {
         );
         const opened = await channel.newCDPSession(tab.page);
         session = opened;
-        const framesInFlight = new Set<Promise<void>>();
-        opened.on("Page.screencastFrame", (frame) => {
-          // A private tab records nothing; the frame still releases Chromium.
-          if (tab.control.isPrivate)
-            return void opened
-              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-              .catch(constVoid);
-          const cssWidth = tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth;
-          const delivered: Promise<void> = Promise.resolve()
-            .then(() =>
-              channel.call(() =>
-                encoder.evaluate(
-                  ([data, width]) =>
-                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-                  [frame.data, cssWidth] as const,
-                ),
+        const frames = makeRecordingFrames({
+          acknowledge: (sessionId) => opened.send("Page.screencastFrameAck", { sessionId }),
+          encode: (data, width) =>
+            channel.call(() =>
+              encoder.evaluate(
+                ([frameData, cssWidth]) =>
+                  (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
+                    frameData,
+                    cssWidth,
+                  ),
+                [data, width] as const,
               ),
-            )
-            .then(async (accepted) => {
-              if (!accepted) await opened.send("Page.stopScreencast");
-            })
-            .catch(constVoid)
-            .finally(() => {
-              framesInFlight.delete(delivered);
-              void opened
-                .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-                .catch(constVoid);
-            });
-          framesInFlight.add(delivered);
+            ),
+          stop: () => opened.send("Page.stopScreencast"),
+          isPrivate: () => tab.control.isPrivate,
         });
+        opened.on("Page.screencastFrame", (frame) =>
+          frames.offer({
+            data: frame.data,
+            width: tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth,
+            sessionId: frame.sessionId,
+          }),
+        );
         await channel.sendFor(opened)("Page.startScreencast", RECORDING_SCREENCAST);
         if (tab.closing) throw new Error("The tab closed while the recording started.");
         const recording: Recording = {
           encoder,
           session: opened,
           startedAt: new Date().toISOString(),
-          framesInFlight,
+          frames,
         };
         tab.recording = recording;
         return recording;
@@ -1536,7 +1530,7 @@ const make = Effect.gen(function* () {
       }
       try {
         await recording.session.send("Page.stopScreencast").catch(constVoid);
-        await Promise.all(recording.framesInFlight);
+        await recording.frames.finish();
         await recording.session.detach().catch(constVoid);
         if (!tab.closing && !tab.dialog) {
           const finalFrame = await captureFinalRecordingFrame(
@@ -1545,16 +1539,14 @@ const make = Effect.gen(function* () {
             tab.control,
           );
           if (finalFrame !== undefined && !tab.control.isPrivate) {
-            await recording.encoder
-              .evaluate(
-                ([data, width]) =>
-                  (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-                [
-                  finalFrame,
-                  tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
-                ] as const,
-              )
-              .catch(constVoid);
+            await recording.encoder.evaluate(
+              ([data, width]) =>
+                (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+              [
+                finalFrame,
+                tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width,
+              ] as const,
+            );
           }
         }
         const stopped = await recording.encoder.evaluate(() =>

@@ -1,9 +1,12 @@
+import * as Effect from "effect/Effect";
+import { expect } from "vite-plus/test";
 import * as NodeVM from "node:vm";
 import { vi } from "vite-plus/test";
 
 export function makeEncoderPage<T extends object>(
   page: T,
   encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: number }>,
+  decodeGate: () => Promise<void> | undefined = () => undefined,
 ) {
   let paintedFrame = "";
   const canvas = {
@@ -55,12 +58,10 @@ export function makeEncoderPage<T extends object>(
     document: { createElement: (tag: string) => (tag === "video" ? video : canvas) },
     Path2D: function Path2D() {},
     MediaRecorder: FakeMediaRecorder,
-    createImageBitmap: async (blob: Blob) => ({
-      width: 1280,
-      height: 800,
-      pixels: await blob.text(),
-      close() {},
-    }),
+    createImageBitmap: async (blob: Blob) => {
+      await decodeGate();
+      return { width: 1280, height: 800, pixels: await blob.text(), close() {} };
+    },
     atob,
     btoa,
     Blob,
@@ -91,3 +92,31 @@ export const mockFinalRecordingFrame = (
       : Promise.resolve({ data: Buffer.from("final frame").toString("base64") });
   });
 };
+
+export const assertFastRecordingAcks = (
+  sessions: ReadonlyArray<ReturnType<typeof import("./ServerBrowserTestFixtures.ts").makeSession>>,
+  setGate: (gate: Promise<void> | undefined) => void,
+) =>
+  Effect.gen(function* () {
+    const session = sessions.find((candidate) =>
+      candidate.send.mock.calls.some(([method]) => method === "Page.startScreencast"),
+    );
+    if (!session) throw new Error("Missing recording session");
+    const gate = Promise.withResolvers<void>();
+    setGate(gate.promise);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        gate.resolve();
+        setGate(undefined);
+      }),
+    );
+    for (const sessionId of [1, 2, 3])
+      session.emit("Page.screencastFrame", {
+        data: Buffer.from(`frame ${sessionId}`).toString("base64"),
+        sessionId,
+        metadata: { deviceWidth: 1280 },
+      });
+    expect(
+      session.send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck"),
+    ).toHaveLength(3);
+  });
