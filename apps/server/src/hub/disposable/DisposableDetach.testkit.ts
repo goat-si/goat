@@ -65,6 +65,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
      * while this count lasts; a new journalled id is refused link_retirement_owned (foreignRetirement).
      */
     commitFails: 0,
+    /** A resumed owner fails and its settle cannot be written, so its entry stays open. */
+    resumeOpen: false,
     /**
      * Recover answers link_retirement_pending until a repeat of the committed forced revoke clears
      * its receipt; while pendingFault holds (a full disk), a repeat does not clear it.
@@ -87,7 +89,13 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
      * removal, removes the link with a tombstone, and leaves each owner with its recorded outcome.
      */
     plainForce: (linkId: string) => {
-      for (const entry of revokes.values()) if (entry.linkId === linkId) delete entry.ownsReceipt;
+      // It fences the receipt's owner and settles it unknown and unresolved (fenceRetirementOwnerForForce).
+      for (const entry of revokes.values())
+        if (entry.linkId === linkId && entry.ownsReceipt === true) {
+          delete entry.ownsReceipt;
+          delete entry.resolvedAt;
+          entry.state = "unknown";
+        }
       if (!host.control.links.has(linkId)) return;
       remember(linkId);
       tombstones.add(linkId);
@@ -145,8 +153,9 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     }
     control.sent.push(operationId);
     const known = revokes.get(operationId);
-    // A repeat of an open entry recovers it (link-operation.ts replayOperation, recoverRevoke).
-    if (known !== undefined && known.state === "open") {
+    // A repeat of an open entry that owns no removal recovers it (replayOperation, recoverRevoke);
+    // one that owns its removal resumes it first (resumeRetirementBeforeReplay).
+    if (known !== undefined && known.state === "open" && known.ownsReceipt !== true) {
       if (known.force ? control.forceOpen : control.purgeOpen)
         return refused(1, { code: "operation_journal_failed" });
       known.state = "unknown";
@@ -158,6 +167,11 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     // tombstone again.
     if (known !== undefined && known.ownsReceipt === true) {
       delete known.resolvedAt;
+      // The resume fails and its settle cannot be written: the entry stays open.
+      if (control.resumeOpen) {
+        known.state = "open";
+        return refused(1, { code: "operation_journal_failed" });
+      }
       if (control.commitFails > 0 || (known.force && control.tombstoneLimit)) {
         known.state = "unknown";
         if (control.commitFails > 0) {
