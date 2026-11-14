@@ -137,6 +137,8 @@ with Cursor’s default API endpoint. For a custom endpoint, use an explicit tok
 <p>Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with <code>grok login</code>. Explicit <code>XAI_API_KEY</code> connections and custom authentication
 or endpoint configurations do not report subscription limits.</p>
+<p>Muse Code reports its session and weekly windows and its tier once the Muse CLI has run in a thread.
+Until then it shows no limits. Readings are not kept across a server restart.</p>
 <p>API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through <code>ANTHROPIC_AUTH_TOKEN</code>.</p>
 <h2 id="fall-back-to-another-model-at-a-limit">Fall back to another model at a limit</h2>
@@ -239,7 +241,8 @@ the limit off.</p>
 <h2 id="connect-a-cliproxyapi-hub">Connect a CLIProxyAPI hub</h2>
 <p>To see pooled accounts, open <strong>Settings → Providers → Usage providers → Add CLIProxyAPI hub</strong>. Choose the
 environment that will connect to the hub and enter its URL and management key.</p>
-<p>The accounts appear under <strong>Usage → Limits</strong>. Codex accounts show banked reset credits; select an
+<p>The hub’s Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear under <strong>Usage → Limits</strong>;
+accounts for other providers are not read. Codex accounts show banked reset credits; select an
 account and choose <strong>Use reset</strong> to redeem one. No hub plugin is required.</p>
 <p>This connection supplies usage information; configure
 the provider separately to send agent requests through the hub. Remove the hub from the same
