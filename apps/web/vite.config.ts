@@ -24,6 +24,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
+import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -292,6 +293,28 @@ function chunkCycleGuardPlugin(): Plugin {
   };
 }
 
+// Stamps index.html's title with the name branding.ts resolves once the app
+// loads, so a tab opens on the right channel instead of flashing another's.
+// Desktop swaps in its injected branding from an inline script in index.html.
+function bootstrapTitlePlugin(): Plugin {
+  let development = false;
+  return {
+    name: "goat:bootstrap-title",
+    configResolved(config) {
+      // The same flag Vite exposes to the app as import.meta.env.DEV.
+      development = !config.isProduction;
+    },
+    transformIndexHtml(html) {
+      const stageLabel = resolveWebAppStageLabel({
+        hostedAppChannel: configuredReleaseChannel,
+        development,
+      });
+      const title = formatAppDisplayName({ baseName: "GOAT", stageLabel });
+      return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+    },
+  };
+}
+
 // Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
 const configuredAllowedHosts = (process.env.GOAT_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
@@ -312,6 +335,7 @@ export default defineConfig(() => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      bootstrapTitlePlugin(),
       // Worker previews repeatedly fetch large WASM assets; loopback tests need no compression.
       process.env.VITEST ? undefined : devCompressionPlugin(),
       chunkCycleGuardPlugin(),
