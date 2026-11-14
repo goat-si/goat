@@ -134,6 +134,7 @@ const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 // The first fetch after a long gap can pull thousands of new refs for minutes while
 // printing progress the whole time, so the worktree base fetch also stops only on silence.
 const WORKTREE_BASE_FETCH_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
+const FETCH_REMOTE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -4611,6 +4612,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const options = {
       env: STATUS_UPSTREAM_REFRESH_ENV,
       fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
+      timeoutMs: FETCH_REMOTE_TIMEOUT_MS,
     };
     // Another fetch in the same repository, such as the background status
     // poll, can win the race for a remote-tracking ref. The loser fails, but
