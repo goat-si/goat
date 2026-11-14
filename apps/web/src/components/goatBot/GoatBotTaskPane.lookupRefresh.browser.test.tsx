@@ -453,6 +453,63 @@ function holdUpdate() {
   return () => act(() => settle());
 }
 
+it("rereads once after a listed task action completes during a later refresh", async () => {
+  setup();
+  state.listTasks = ["task-1"];
+  const pinned = holdUpdate();
+  state.refresh.mockImplementation(() => {
+    state.listPending = true;
+  });
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Pin" }));
+  state.refresh();
+  await screen.rerender(<Pane onClose={() => {}} />);
+  state.listPending = false;
+  state.listTasks = [];
+  state.refresh();
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await pinned();
+  expect(state.refresh).toHaveBeenCalledTimes(3);
+  expect(calls).toHaveLength(0);
+  state.listPending = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Refreshed task"));
+  await expect.element(screen.getByRole("heading", { name: "Refreshed task" })).toBeVisible();
+  expect(calls).toHaveLength(1);
+});
+
+it("reads once when a refresh fails and the last list lacks the task", async () => {
+  setup();
+  state.listPending = true;
+  await using screen = await render(<Pane onClose={() => {}} />);
+  expect(calls).toHaveLength(0);
+  state.listPending = false;
+  state.listFailed = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  await act(() => calls[0]?.answer("Task after failure"));
+  await expect.element(screen.getByRole("heading", { name: "Task after failure" })).toBeVisible();
+  expect(calls).toHaveLength(1);
+});
+
+it("keeps the held new-period answer when an ended-period read answers later", async () => {
+  setup();
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  state.listTasks = ["task-1"];
+  await screen.rerender(<Pane onClose={() => {}} />);
+  state.listTasks = [];
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await vi.waitFor(() => expect(calls).toHaveLength(2));
+  await act(() => calls[1]?.answer("Current answer"));
+  await expect.element(screen.getByRole("heading", { name: "Current answer" })).toBeVisible();
+  await act(() => calls[0]?.answer("Expired answer"));
+  await expect.element(screen.getByRole("heading", { name: "Current answer" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Expired answer" }).query()).toBeNull();
+  expect(calls).toHaveLength(2);
+});
+
 it("drops a late acknowledgement for the same task id in another environment", async () => {
   setup();
   const acknowledged = holdUpdate();

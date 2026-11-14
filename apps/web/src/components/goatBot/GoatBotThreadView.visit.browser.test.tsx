@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
@@ -54,8 +54,15 @@ vi.mock("./useGoatBotSession", () => ({
   }),
 }));
 vi.mock("./GoatBotChatView", () => ({
-  GoatBotChatView: (props: { openHome?: { key: string; entry: string } | null }) => (
-    <div>GOAT Bot{props.openHome ? ` home:${props.openHome.key}:${props.openHome.entry}` : ""}</div>
+  GoatBotChatView: (props: {
+    openHome?: { key: string; entry: string; taskId?: string } | null;
+  }) => (
+    <div>
+      GOAT Bot
+      {props.openHome
+        ? ` home:${props.openHome.key}:${props.openHome.entry}:${props.openHome.taskId ?? ""}`
+        : ""}
+    </div>
   ),
 }));
 vi.mock("./GoatBotTimeline", async () => {
@@ -126,4 +133,47 @@ it("takes an Open Home request once and removes it from the history entry", asyn
   await vi.waitFor(() => expect(router.state.location.pathname).toBe("/"));
   expect(router.state.location.state.goatBotOpenHome).toBeUndefined();
   expect(screen.container.textContent).toBe(shown);
+});
+
+it("takes a task-origin Home request once from the entry reached by Back", async () => {
+  state.visit.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <GoatBotThreadView
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+      />
+    </AppAtomRegistryProvider>,
+  );
+  const router = screen.router;
+  if (!router) throw new Error("missing router");
+  await router.navigate({
+    to: "/",
+    state: { goatBotOpenHome: { key: "member-home", taskId: ChannelTaskId.make("task-a") } },
+  });
+  await expect.element(screen.getByText(/home:member-home:.*:task-a/)).toBeInTheDocument();
+  await vi.waitFor(() => expect(router.state.location.state.goatBotOpenHome).toBeUndefined());
+  await router.navigate({ to: "/new" });
+  router.history.back();
+  await vi.waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  expect(router.state.location.state.goatBotOpenHome).toBeUndefined();
+});
+
+it("does not request Home when returning from a bare navigation", async () => {
+  state.visit.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <GoatBotThreadView
+        environmentId={EnvironmentId.make("env")}
+        threadId={ThreadId.make("bot")}
+      />
+    </AppAtomRegistryProvider>,
+  );
+  const router = screen.router;
+  if (!router) throw new Error("missing router");
+  await router.navigate({ to: "/new" });
+  router.history.back();
+  await vi.waitFor(() => expect(router.state.location.pathname).toBe("/"));
+  expect(router.state.location.state.goatBotOpenHome).toBeUndefined();
+  expect(screen.container.textContent).toBe("GOAT Bot");
 });
