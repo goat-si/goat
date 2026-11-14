@@ -801,14 +801,18 @@ const make = Effect.gen(function* () {
           : sql`${write.pendingAnswerMessageId}`;
       const hold =
         write.completionHold === undefined ? sql`completion_hold` : sql`${write.completionHold}`;
+      // A message may have moved updated_at past this write's clock; task activity never goes back.
+      const activeAt = sql`CASE WHEN julianday(updated_at) > julianday(${next.updatedAt})
+        THEN updated_at ELSE ${next.updatedAt} END`;
       const updated = yield* sql<{ readonly task_id: string }>`
         UPDATE channel_tasks SET
           status = ${next.status},
           version = ${next.version},
           generation = ${next.generation},
           worker_thread_id = ${next.worker?.threadId ?? null},
-          task_json = ${encodeTask(next)}, newest_ask_at = ${newestAskAt(next)},
-          updated_at = ${next.updatedAt},
+          task_json = json_set(${encodeTask(next)}, '$.updatedAt', ${activeAt}),
+          newest_ask_at = ${newestAskAt(next)},
+          updated_at = ${activeAt},
           pending_answer_message_id = ${pendingAnswer},
           completion_hold = ${hold}
         WHERE task_id = ${next.taskId} AND version = ${write.expectedVersion}
@@ -1667,6 +1671,7 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: (channel) => channel.wake,
       }),
+      changes.announce,
     ),
 
     getDeliveryState: (deliveryId) =>

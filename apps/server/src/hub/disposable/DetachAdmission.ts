@@ -32,6 +32,15 @@ const NOT_PROVISIONER =
   "Only the thread that attached this machine, while the switch names it, or a person may detach it.";
 // A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
 const RELEASABLE = new Set(["unknown"]);
+/** Outcomes of a stopped retirement force that OpenCodex may still hold: open, unknown, or unread. */
+const MAY_OWE = new Set([
+  "open",
+  "unsettled",
+  "not_found",
+  "unreadable",
+  "retirement_owned",
+  "owner_open",
+]);
 // Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 const DETACHABLE = new Set([
@@ -141,23 +150,42 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         const { pendingResent: _pending, ...repending } = stopless;
         const kept = person ? repending : stopless;
         // A person's force starts its sends afresh and reads the stored id again before any stop;
-        // an open purge stays, as OpenCodex refuses any other revoke while it is open.
+        // an open purge stays, as OpenCodex refuses any other revoke while it is open, and so does
+        // a resolve still owed.
         const { sends: _sends, outcome, ...rest } = kept;
-        const fresh = outcome === "open" ? { ...rest, outcome } : rest;
-        // A revoke OpenCodex left open or never recorded goes again under its id after a detach.
+        const fresh =
+          outcome === "open" || outcome === "resolve_owed" ? { ...rest, outcome } : rest;
+        // A revoke OpenCodex left open or never recorded goes again under its id after a detach, as
+        // does one refused for an unfinished removal: GOAT then repeats its own earlier one again.
         const resend =
-          known?.stop === "revoke_unsettled" &&
-          (outcome === "open" || outcome === "not_found" || outcome === "unreadable");
-        // A stopped retirement force goes on under its id while it is open, or while the machine
-        // fails for a person, or for anyone once the failures would retire it; an agent's plain
-        // detach of a machine that answers starts a purge.
+          (known?.stop === "revoke_unsettled" &&
+            (outcome === "open" || outcome === "not_found" || outcome === "unreadable")) ||
+          known?.stop === "link_retirement_owned";
+        // A stopped retirement force goes on under its id for a person while OpenCodex may still
+        // hold it or the machine fails, and for anyone once the failures would retire it. Below
+        // that, an agent neither goes on with a removal without the machine nor drops its id.
         const failing = (enroll.health?.failures ?? 0) > 0;
-        const retirement =
-          row.state === "linked" &&
-          known?.force === true &&
-          known.stop !== undefined &&
-          (outcome === "open" ||
-            (failing && (person || retires(enroll.health, yield* Clock.currentTimeMillis))));
+        const retiring = retires(enroll.health, yield* Clock.currentTimeMillis);
+        const stoppedForce =
+          row.state === "linked" && known?.force === true && known.stop !== undefined;
+        // A stop stored with no outcome (every answer lost) may owe as much as an unread one.
+        const mayOwe = outcome === undefined || MAY_OWE.has(outcome);
+        if (stoppedForce && mayOwe && !person && !retiring)
+          return yield* fail(
+            "person_required",
+            "This machine's removal without it is unfinished in OpenCodex; only a person goes on with it, in Settings → Hub on web or desktop.",
+          );
+        const retirement = stoppedForce && (person ? mayOwe || failing : retiring);
+        // Not read since it stopped, on a machine that answers: the force step reads it, and the
+        // owner it stored, first. A person's Force stays a force.
+        const check =
+          retirement &&
+          !failing &&
+          input.force !== true &&
+          (outcome === undefined ||
+            outcome === "not_found" ||
+            outcome === "unreadable" ||
+            outcome === "retirement_owned");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true
@@ -166,7 +194,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
                 ? fresh
                 : kept
             : retirement
-              ? { ...fresh, force: true as const }
+              ? { ...fresh, force: true as const, ...(check ? { outcome: "check" } : {}) }
               : {
                   step: stepFor,
                   attempt: known?.attempt ?? 0,

@@ -178,8 +178,10 @@ list, read once per pass, so a network cut with Pen's daemon still answering cou
 force, gets `ocx link revoke --force` and a tombstone that
 `ocx link recover` settles once the machine answers. A silent machine's purge GOAT gives up on is
 resolved in OpenCodex's journal before the next purge, or after the force that replaces it commits;
-any other unsettled purge waits for a person and must read resolved before a new one goes, so a
-machine leaves at most one unsettled purge there. A purge left unknown while GOAT's own handshake
+any other unsettled purge is repeated once, which resumes a removal it claimed before failing, then
+waits for a person and must read resolved before a new one goes, so a machine leaves at most one
+unsettled purge there. A new id refused `link_retirement_owned` repeats GOAT's own earlier revoke
+of the link, stored with the new id, before it stops for a person (`DetachForce.ts`). A purge left unknown while GOAT's own handshake
 reaches the machine stops for a person. A force at settle takes only the link the operation reserved,
 or an exclusive ephemeral Child on the record's route. OpenCodex's refusals are states with their
 own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, or was never admitted,

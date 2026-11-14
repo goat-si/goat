@@ -7,7 +7,12 @@ import { ensureLocalApi } from "../../localApi";
 import { Button } from "../ui/button";
 import { providerClients } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
-import { LimitWindows, ResetCredits, resetCreditsSummary } from "../usage/UsageLimits";
+import {
+  LimitWindows,
+  ResetCredits,
+  ZeroSpendCap,
+  resetCreditsSummary,
+} from "../usage/UsageLimits";
 import { ComposerBanner } from "./ComposerBanner";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 
@@ -106,6 +111,7 @@ function UsageLimitsBannerBody({
                   now={now}
                 />
               )}
+              {account.limits.zeroSpendCap ? <ZeroSpendCap /> : null}
               {blocks.map((block) => (
                 <span key={block.id} className="text-xs text-muted-foreground">
                   {availabilityText(block, now)}

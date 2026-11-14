@@ -1,3 +1,5 @@
+import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
+export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
 import { itemIcon, type ThreadActivityIcon } from "./threadActivityIcons";
 import {
   setPendingUserInputCustomAnswer as setSharedCustomAnswer,
@@ -237,6 +239,7 @@ type ThreadFeedEntryContent =
       readonly id: string;
       readonly createdAt: string;
       readonly runId: RunId | null;
+      readonly providerStartingLabel?: string;
     };
 
 export interface ThreadFeedLatestRun {
@@ -245,6 +248,7 @@ export interface ThreadFeedLatestRun {
   readonly startedAt: string | null;
   readonly completedAt: string | null;
   readonly turnEnded?: boolean;
+  readonly providerStartingLabel?: string;
 }
 
 /** Long Android headers can ANR despite one-line display; cap labels only, preserving expanded and copied text. */
@@ -388,7 +392,6 @@ const runFoldRowsCache = new WeakMap<
   ThreadFeedEntry,
   Extract<ThreadFeedEntry, { readonly type: "run-fold" }>
 >();
-let cachedThinkingRow: Extract<ThreadFeedEntry, { readonly type: "thinking" }> | null = null;
 
 export function isContextCompactionActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return (
@@ -1279,7 +1282,8 @@ function latestRunsEqual(left: ThreadFeedLatestRun | null, right: ThreadFeedLate
       left.status === right.status &&
       left.startedAt === right.startedAt &&
       left.completedAt === right.completedAt &&
-      left.turnEnded === right.turnEnded)
+      left.turnEnded === right.turnEnded &&
+      left.providerStartingLabel === right.providerStartingLabel)
   );
 }
 
@@ -1513,7 +1517,7 @@ export function deriveThreadFeedPresentation(
           row.activities[0]?.projectedItem.item.status === "running"),
     )
   ) {
-    result.push(thinkingRow(activeWorkStartedAt, activeRunId));
+    result.push(thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel));
   }
   const checkpointByRunId = new Map<RunId, ThreadCheckpointSummary>();
   for (const entry of sourceFeed) {
@@ -1612,15 +1616,6 @@ function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
             activity.projectedItem.item.type !== "subagent",
         )))
   );
-}
-
-export const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
-
-function thinkingRow(createdAt: string, runId: RunId | null) {
-  if (cachedThinkingRow?.createdAt !== createdAt || cachedThinkingRow.runId !== runId) {
-    cachedThinkingRow = { type: "thinking", id: LIVE_ACTIVITY_ROW_ID, createdAt, runId };
-  }
-  return cachedThinkingRow;
 }
 
 function appendPresentedFeedEntry(

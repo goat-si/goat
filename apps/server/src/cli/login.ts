@@ -16,7 +16,7 @@ import * as CliError from "effect/cli/CliError";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { mcpToolSession } from "../mcp/AcpMcpStdioBridge.ts";
-import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
 import {
   CliCredentialError,
   CliLogin,
@@ -66,7 +66,7 @@ const readStoredLogin = Effect.fn("cli.login.read")(function* (paths: Paths) {
 const loadStoredLogin = Effect.fn("cli.login.load")(function* (paths: Paths) {
   const login = yield* readStoredLogin(paths);
   if (Option.isNone(login)) return Option.none<StoredLogin>();
-  const runtime = yield* readPersistedServerRuntimeState(paths.serverRuntimeStatePath).pipe(
+  const runtime = yield* readLiveServerRuntimeState(paths.serverRuntimeStatePath).pipe(
     Effect.orElseSucceed(() => Option.none()),
   );
   if (Option.isNone(runtime))

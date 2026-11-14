@@ -135,7 +135,10 @@ export function MobileBotWork(props: {
 }) {
   const home = useMobileGoatBotHomeMode();
   // The sheet reaches the bottom of the screen; its last entry clears the home indicator.
-  const bottomInset = useSafeAreaInsets().bottom + 24;
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom + 24;
+  // Android draws the sheet edge to edge, so Close starts below the status bar.
+  const sheetTop = Platform.OS === "android" ? { paddingTop: 16 + insets.top } : undefined;
   const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
@@ -875,7 +878,7 @@ export function MobileBotWork(props: {
         // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
-        <View className="flex-1 bg-screen px-4 pt-4">
+        <View className="flex-1 bg-screen px-4 pt-4" style={sheetTop}>
           <View className="flex-row items-center justify-between">
             <Pressable
               accessibilityRole="button"

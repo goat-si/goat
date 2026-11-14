@@ -22,6 +22,9 @@ const OUTCOMES = [
   "not_found",
   "unreadable",
   "unsettled",
+  "retirement_owned",
+  "resolve_owed",
+  "retirement_pending",
 ];
 const STOPS = [
   undefined,
@@ -37,45 +40,109 @@ const STOPS = [
   "link_foreign",
   "link_open",
   "tombstone_limit",
+  "link_retirement_owned",
 ];
 
 it("every detach text fits the wire's 500 characters with the longest name and operation id", () => {
   const name = "m".repeat(63);
-  const operationId = "a".repeat(64) + ".force.99";
+  const ids = ["a".repeat(64) + ".force.99", "a".repeat(64) + ".purge.99"];
   let seen = 0;
-  for (const state of STATES)
-    for (const step of STEPS)
-      for (const outcome of OUTCOMES)
-        for (const stop of STOPS)
-          for (const inPen of [true, false])
-            for (const recordStop of [undefined, "host_key_changed"])
-              for (const elsewhere of [true, false])
-                for (const failures of [47, 0])
-                  for (const forced of [true, false]) {
-                    const shown = detachMessage({
-                      state,
-                      name,
-                      linkId: "lnk_0123456789abcdef",
-                      detach: {
-                        step,
-                        attempt: 99,
-                        operationId,
-                        ...(forced ? { force: true as const } : {}),
-                        refusal: "o".repeat(40),
-                        foreignLinkId: "lnk_fedcba9876543210",
-                        ...(outcome === undefined ? {} : { outcome }),
-                        ...(stop === undefined ? {} : { stop }),
-                        ...(elsewhere ? { elsewhere: true as const } : {}),
-                      },
-                      health: { failures, checkedAtMs: 0 },
-                      linkKeyMoved: false,
-                      inPen,
-                      stop: recordStop,
-                    });
-                    if (shown === undefined) continue;
-                    seen += 1;
-                    expect(shown.message.length).toBeLessThanOrEqual(500);
-                    expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
-                  }
+  for (const operationId of ids)
+    for (const state of STATES)
+      for (const step of STEPS)
+        for (const outcome of OUTCOMES)
+          for (const stop of STOPS)
+            for (const inPen of [true, false])
+              for (const recordStop of [undefined, "host_key_changed"])
+                for (const elsewhere of [true, false])
+                  for (const failures of [47, 0])
+                    for (const forced of [true, false]) {
+                      const shown = detachMessage({
+                        state,
+                        name,
+                        linkId: "lnk_0123456789abcdef",
+                        detach: {
+                          step,
+                          attempt: 99,
+                          operationId,
+                          ...(forced ? { force: true as const } : {}),
+                          refusal: "o".repeat(40),
+                          foreignLinkId: "lnk_fedcba9876543210",
+                          owner: "a".repeat(64) + ".purge.98",
+                          supersedes: "a".repeat(64) + ".purge.98",
+                          ...(outcome === undefined ? {} : { outcome }),
+                          ...(stop === undefined ? {} : { stop }),
+                          ...(elsewhere ? { elsewhere: true as const } : {}),
+                        },
+                        health: { failures, checkedAtMs: 0 },
+                        linkKeyMoved: false,
+                        inPen,
+                        stop: recordStop,
+                      });
+                      if (shown === undefined) continue;
+                      seen += 1;
+                      expect(shown.message.length).toBeLessThanOrEqual(500);
+                      expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
+                    }
   expect(seen).toBeGreaterThan(100);
+});
+
+it("an unproven detach names the planted ocx-child by the path a person can run on the machine", () => {
+  const shown = detachMessage({
+    state: "purged",
+    name: "cc-1",
+    linkId: null,
+    detach: { step: "done", attempt: 1, operationId: "a.link.1", outcome: "unproven" },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: false,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("~/.cache/opencodex/bin/ocx-child connect status --json");
+  // Resolve refuses an open entry, so the next action does not send a person there for one.
+  expect(shown?.nextAction).toContain("an open entry cannot be resolved");
+});
+
+it("a linked row whose retirement force stopped and whose host key changed names the person's Force its conflict row offers", () => {
+  const shown = detachMessage({
+    state: "linked",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 1,
+      operationId: "a.force.1",
+      force: true,
+      sends: 3,
+      stop: "revoke_unsettled",
+      outcome: "not_found",
+    },
+    health: { failures: 0, checkedAtMs: 0 },
+    linkKeyMoved: false,
+    inPen: true,
+    stop: "host_key_changed",
+  });
+  expect(shown?.message).toContain("another SSH host key");
+  expect(shown?.nextAction).toContain("forces the detach");
+});
+
+it("a purge that stays unknown tells a person to fix what stopped it before forcing", () => {
+  const shown = detachMessage({
+    state: "detaching",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 1,
+      operationId: "a.purge.1",
+      stop: "revoke_unsettled",
+      outcome: "unsettled",
+    },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("fixes what stopped it");
+  expect(shown?.nextAction).toContain("fixes what stopped it");
 });

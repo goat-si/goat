@@ -13,8 +13,11 @@ export function WorktreeRetentionRows({
   settings: StorageCleanupSettings;
   isProjectScope: boolean;
   status: (key: keyof StorageCleanupSettings) => string | undefined;
-  updateWorktree: (patch: Partial<WorktreeCleanupRules>) => void;
-  update: (patch: Partial<StorageCleanupSettings>) => void;
+  updateWorktree: (
+    patch: Partial<WorktreeCleanupRules>,
+    options?: { onFailed?: () => void },
+  ) => void;
+  update: (patch: Partial<StorageCleanupSettings>, options?: { onFailed?: () => void }) => void;
 }) {
   return (
     <>
@@ -28,7 +31,9 @@ export function WorktreeRetentionRows({
             value={settings.worktreeKeepRecent}
             maximum={1000}
             unit="worktrees"
-            onChange={(worktreeKeepRecent) => updateWorktree({ worktreeKeepRecent })}
+            onChange={(worktreeKeepRecent, onFailed) =>
+              updateWorktree({ worktreeKeepRecent }, { onFailed })
+            }
           />
         }
       />
@@ -69,7 +74,9 @@ export function WorktreeRetentionRows({
               label="Keep snapshots for"
               value={settings.worktreeSnapshotDays}
               offLabel="Forever"
-              onChange={(worktreeSnapshotDays) => update({ worktreeSnapshotDays })}
+              onChange={(worktreeSnapshotDays, onFailed) =>
+                update({ worktreeSnapshotDays }, { onFailed })
+              }
             />
           }
         />

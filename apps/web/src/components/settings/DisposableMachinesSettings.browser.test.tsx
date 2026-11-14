@@ -291,6 +291,30 @@ it("a detaching machine that left Pen says when its slot is free, for a detach a
   await expect.element(screen.getByText(/stays in Pen/)).not.toBeInTheDocument();
 });
 
+it("a retired machine that left Pen offers the Detach its pending removal names", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(
+    AsyncResult.success({
+      machines: [row({ state: "retired", step: "recover", penMember: false })],
+    }),
+  );
+  state.detach.mockResolvedValue({ _tag: "Success", value: row({ state: "detaching" }) });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  await expect
+    .element(screen.getByText(/has left Pen; its slot is free once the detach ends/))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
+  expect(state.detach).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ attachId: "a-1" }),
+  });
+});
+
 it("a hub without detach says to update GOAT instead of a generic failure", async () => {
   using fixture = setup(true);
   state.list = Atom.make(AsyncResult.success({ machines: [row({})] }));

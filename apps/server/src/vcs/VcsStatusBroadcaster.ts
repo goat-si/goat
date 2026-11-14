@@ -393,7 +393,25 @@ export const make = Effect.gen(function* () {
     "VcsStatusBroadcaster.refreshLocalStatus",
   )(function* (rawCwd) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    return yield* refreshLocalStatusCore(cwd);
+    const local = yield* refreshLocalStatusCore(cwd);
+    const cached = yield* getCachedStatus(cwd);
+    if (cached?.remote?.value?.hasUpstream) {
+      const divergence = yield* workflow.upstreamDivergence(cwd);
+      const latest = yield* getCachedStatus(cwd);
+      if (divergence && latest?.remote?.value && latest.remote.branch === divergence.refName) {
+        const value = {
+          ...latest.remote.value,
+          aheadCount: divergence.aheadCount,
+          behindCount: divergence.behindCount,
+        };
+        yield* updateCachedRemoteStatus(
+          cwd,
+          { branch: divergence.refName, value, fingerprint: fingerprintStatusPart(value) },
+          { publish: true },
+        );
+      }
+    }
+    return local;
   });
 
   const readRemoteStatus = Effect.fn("VcsStatusBroadcaster.readRemoteStatus")(function* (
@@ -403,7 +421,17 @@ export const make = Effect.gen(function* () {
     const branch = yield* workflow.currentBranch(cwd);
     // GitManager's remote TTL cache is keyed by cwd, not the checked-out branch.
     yield* workflow.invalidateRemoteStatus(cwd);
-    const value = yield* workflow.remoteStatus({ cwd }, options);
+    const previousRemote = (yield* getCachedStatus(cwd))?.remote;
+    const remote = yield* workflow.remoteStatus({ cwd }, options);
+    const latest = yield* getCachedStatus(cwd);
+    const refreshed =
+      remote?.hasUpstream && latest?.remote !== previousRemote && latest?.remote?.branch === branch
+        ? yield* workflow.upstreamDivergence(cwd)
+        : null;
+    const value =
+      remote && refreshed?.refName === branch
+        ? { ...remote, aheadCount: refreshed.aheadCount, behindCount: refreshed.behindCount }
+        : remote;
     const currentBranch = yield* workflow.currentBranch(cwd);
     const cached = yield* getCachedStatus(cwd);
     if (branch !== currentBranch || cached?.local?.value.refName !== currentBranch) {
