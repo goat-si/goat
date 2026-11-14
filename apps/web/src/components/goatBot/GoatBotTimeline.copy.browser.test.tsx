@@ -2,7 +2,7 @@ import "~/index.css";
 
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({ toasts: [] as Array<{ type?: string; title?: string }> }));
 vi.mock("../ui/toast", async (original) => ({
@@ -66,4 +66,30 @@ it("reports clipboard failure", async () => {
   await vi.waitFor(() =>
     expect(state.toasts).toEqual([expect.objectContaining({ type: "error" })]),
   );
+});
+
+it("shows Copied in the active row tooltip and resets both labels after 1200ms", async () => {
+  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
+    router: false, // No navigation links.
+  });
+  using _write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  using _clock = fakeTimers();
+  const buttons = screen.container.querySelectorAll<HTMLButtonElement>('button[aria-label="Copy"]');
+  const first = buttons[0];
+  const second = buttons[1];
+  if (!first || !second) throw new Error("missing copy buttons");
+  await act(async () => {
+    first.focus();
+    first.click();
+    await Promise.resolve();
+  });
+  expect(first.getAttribute("aria-label")).toBe("Copied");
+  expect(second.getAttribute("aria-label")).toBe("Copy");
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Copied");
+  await act(() => vi.advanceTimersByTimeAsync(699));
+  expect(first.getAttribute("aria-label")).toBe("Copied");
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(first.getAttribute("aria-label")).toBe("Copy");
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Copy");
 });
