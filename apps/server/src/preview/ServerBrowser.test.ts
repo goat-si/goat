@@ -2672,3 +2672,12 @@ it.live.each([
       }),
     ).pipe(Effect.provide(layer)),
 );
+
+it.effect("a desktop tab on system appearance clears Playwright's emulation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { context } = yield* openDesktopViewer;
+      expect(context.page.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
