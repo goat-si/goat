@@ -92,6 +92,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
           initialMode?: string;
           newSessionErrorData?: unknown;
           promptCommand?: string;
+          emitToolCalls?: boolean;
         }
       | boolean = {},
   ) {
@@ -100,6 +101,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     const newSessionErrorData =
       typeof options === "boolean" ? undefined : options.newSessionErrorData;
     const promptCommand = typeof options === "boolean" ? undefined : options.promptCommand;
+    const emitToolCalls = typeof options === "boolean" ? false : (options.emitToolCalls ?? false);
     const directory = path.join(root, name);
     const executablePath = path.join(directory, "agy_acp_server.par");
     const harnessPath = path.join(directory, "localharness_external");
@@ -119,6 +121,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
         ...(promptCommand === undefined
           ? []
           : [`export GOAT_ACP_PROMPT_COMMAND=${shellQuote(promptCommand)}`]),
+        ...(emitToolCalls ? ["export GOAT_ACP_EMIT_TOOL_CALLS=1"] : []),
         ...(newSessionErrorData === undefined
           ? []
           : [
@@ -330,8 +333,9 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
-    "preserves live runtime homes while sweeping orphaned runs on replacement",
+    "a turn in flight keeps its runtime home through an instance rebuild while orphaned runs are swept",
     () =>
       Effect.gen(function* () {
         const original = yield* HostProcess.Environment;
@@ -343,9 +347,11 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         const h = yield* makeHarness().pipe(
           Effect.provideService(HostProcess.Environment, { ...original, HOME: home }),
         );
+        // The agent asks permission mid-turn and waits for GOAT's answer, holding the turn open.
+        h.controls.selected = yield* h.makeExecutable("held turn", { emitToolCalls: true });
         const threadId = ThreadId.make("replacement-live");
         const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "full-access",
+          runtimeMode: "approval-required",
           interactionMode: "default",
           cwd: home,
         });
@@ -363,15 +369,17 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         });
         const runtimeHome = h.launches.at(-1)?.profileDirectory;
         if (!runtimeHome) return yield* Effect.die("Missing runtime home");
-        const orphan = path.join(h.directories.runtimeTemp, "run-orphan");
-        yield* fs.makeDirectory(orphan);
-        yield* h.makeReplacement();
-        expect(yield* fs.exists(runtimeHome)).toBe(true);
-        expect(yield* fs.readLink(path.join(runtimeHome, "antigravity-acp"))).toBe(
-          path.join(h.profileDirectory, "antigravity-acp"),
+        const pendingRequest = yield* Deferred.make<string>();
+        const turnEvents = yield* session.events.pipe(
+          Stream.tap((event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+              ? Deferred.succeed(pendingRequest, event.runtimeRequest.id)
+              : Effect.void,
+          ),
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.forkScoped,
         );
-        expect(yield* fs.readLink(path.join(runtimeHome, "config", "skills"))).toBe(skills);
-        expect(yield* fs.exists(orphan)).toBe(false);
         yield* session.startTurn(
           makeTurnInput({
             threadId,
@@ -383,11 +391,19 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
             ordinal: 1,
           }),
         );
-        const events = yield* session.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runCollect,
+        const requestId = yield* Deferred.await(pendingRequest);
+        const orphan = path.join(h.directories.runtimeTemp, "run-orphan");
+        yield* fs.makeDirectory(orphan);
+        yield* h.makeReplacement();
+        expect(yield* fs.exists(runtimeHome)).toBe(true);
+        expect(yield* fs.readLink(path.join(runtimeHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
         );
-        expect(Array.from(events).some((event) => event.type === "turn.terminal")).toBe(true);
+        expect(yield* fs.readLink(path.join(runtimeHome, "config", "skills"))).toBe(skills);
+        expect(yield* fs.exists(orphan)).toBe(false);
+        yield* session.respondToRuntimeRequest({ requestId, decision: "accept" });
+        const events = Array.from(yield* Fiber.join(turnEvents));
+        expect(events.at(-1)).toMatchObject({ type: "turn.terminal", status: "completed" });
       }).pipe(Effect.scoped),
   );
   // The runtime fixture uses POSIX shell scripts.
