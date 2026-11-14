@@ -2755,7 +2755,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       appendTruncationMarker: true,
       allowNonZeroExit: true,
     };
-    let args = ["pull", "--ff-only"];
+    let args = ["pull", "--ff-only", "--progress"];
     let result = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.pullCurrentBranch.pull",
       cwd,
@@ -2791,7 +2791,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         currentBranch === refName &&
         currentSha === beforeSha
       ) {
-        args = ["pull", "--ff-only", "--", remote, mergeRef];
+        args = ["pull", "--ff-only", "--progress", "--", remote, mergeRef];
         result = yield* executeGitWithStableDiagnostics(
           "GitVcsDriver.pullCurrentBranch.pull",
           cwd,

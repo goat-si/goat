@@ -445,6 +445,22 @@ describe("pullCurrentBranch", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("requests progress on the initial pull and retry", () =>
+    Effect.gen(function* () {
+      const pulls: ReadonlyArray<string>[] = [];
+      const driver = yield* withPaddedPull("stdout", (args) => pulls.push(args));
+      const { cwd, updater } = yield* cloneBehindRemote;
+      yield* git(updater, ["push", "origin", "HEAD:refs/heads/other"]);
+      yield* writeTextFile(cwd, ".git/refs/remotes/origin/other.lock", "");
+
+      const result = yield* driver.pullCurrentBranch(cwd);
+
+      assert.equal(result.status, "pulled");
+      assert.lengthOf(pulls, 2);
+      for (const args of pulls) assert.include(args, "--progress");
+    }).pipe(Effect.scoped, Effect.provide(layerServerConfig.pipe(Layer.provideMerge(layerTest)))),
+  );
+
   it.effect.each([false, true])(
     "pulls past an unrelated lock with custom fetch mapping=%s",
     (customMapping) =>
