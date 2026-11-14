@@ -158,11 +158,20 @@ folder, when they are yours; a home you chose with `GOAT_HOME` or
 `--base-dir`, and every folder above it, it only names. The machine list says
 what to do: `chmod go-w` only for a folder of yours, otherwise moving GOAT's
 home to a path whose folders pass. Never change a shared or system folder or
-another user's folder or symlink, even as root. To move GOAT's home, stop GOAT,
+another user's folder or symlink, even as root.
+
+GOAT does not move its home for you, so when the list names a folder of yours,
+the `chmod go-w` it shows is the simpler fix. To move the home anyway, stop GOAT,
 move the folder, and start GOAT with `GOAT_HOME=<new>` or `--base-dir <new>`;
-the database, secrets and hub records move with it. A machine with a full OpenCodex
-install, or one that shares its SSH host key with another disposable machine,
-stops for you to decide.
+the database, secrets and hub records move with it. Some things keep the old
+path: threads whose worktrees are in its `worktrees` folder still point there,
+so finish them first; a background service keeps serving the old home until you
+run `goat service uninstall --base-dir <old>` and then
+`goat service install --base-dir <new>`; and the desktop app's `goat` command
+needs **Remove** and **Install** again in **Settings → General → About**.
+
+A machine with a full OpenCodex install, or one that shares its SSH host key
+with another disposable machine, stops for you to decide.
 
 Each machine is a full Pen member and can reach services on your machines'
 loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
