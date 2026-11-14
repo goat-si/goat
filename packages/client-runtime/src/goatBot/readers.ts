@@ -72,18 +72,11 @@ function countLabel(count: number, noun: string): string | null {
 }
 
 /**
- * What waits on a person: questions, tool approvals, a sign-in, an unresumed usage limit, and a
- * finished task with neither a report nor a written result ("Finished." is the server's text
- * when the worker wrote nothing; a written "Finished." cannot be told apart from it).
+ * What waits on a person comes first: questions, tool approvals, a sign-in, an unresumed usage
+ * limit. Only without those does a finished task with neither a report nor a written result say
+ * so ("Finished." is the server's text when the worker wrote nothing).
  */
 function attentionLabel(chip: ChannelTaskChip, summary: string): string | null {
-  if (
-    chip.status === "completed" &&
-    chip.completionReport === "missing" &&
-    (summary === "" || summary === "Finished.")
-  ) {
-    return "Finished without a report";
-  }
   const needsYou = chip.observed?.needsYou ?? [];
   const count = (kind: (typeof needsYou)[number]["kind"]) =>
     needsYou.filter((item) => item.kind === kind).length;
@@ -94,6 +87,13 @@ function attentionLabel(chip: ChannelTaskChip, summary: string): string | null {
     count("usage_limit") > 0 ? "Usage limit: resume needed" : null,
   ].filter((part) => part !== null);
   if (parts.length > 0) return parts.join(" · ");
+  if (
+    chip.status === "completed" &&
+    chip.completionReport === "missing" &&
+    (summary === "" || summary === "Finished.")
+  ) {
+    return "Finished without a report";
+  }
   if (chip.observed?.usageLimitResetAt !== undefined) return "Usage limit: resumes after reset";
   return null;
 }

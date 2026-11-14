@@ -139,19 +139,31 @@ describe("presentTaskChip", () => {
     });
   });
 
-  it("flags a completed task whose worker did not report, even with an open question count", () => {
-    for (const openQuestionCount of [0, 2]) {
-      expect(
-        presentTaskChip(
-          chip({ status: "completed", completionReport: "missing", openQuestionCount }),
-        ),
-      ).toMatchObject({ statusLabel: "Done", attentionLabel: "Finished without a report" });
-    }
+  it("flags a completed task whose worker did not report when nothing else waits on a person", () => {
+    expect(
+      presentTaskChip(chip({ status: "completed", completionReport: "missing" })),
+    ).toMatchObject({ statusLabel: "Done", attentionLabel: "Finished without a report" });
     expect(
       presentTaskChip(
         chip({ status: "running", completionReport: "missing", openQuestionCount: 1 }),
       ).attentionLabel,
     ).toBe("1 question");
+  });
+
+  it("shows what waits on a person before a missing report, even with nothing written", () => {
+    for (const summary of ["Finished.", undefined]) {
+      expect([
+        summary,
+        presentTaskChip(
+          chip({
+            status: "completed",
+            completionReport: "missing",
+            openQuestionCount: 2,
+            ...(summary === undefined ? {} : { summary }),
+          }),
+        ).attentionLabel,
+      ]).toEqual([summary, "2 questions"]);
+    }
   });
 
   const written = "I added clamp next to sum and the tests pass.";
