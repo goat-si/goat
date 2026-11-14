@@ -54,6 +54,8 @@ export function useMobileBotManage(environmentId: EnvironmentId | null, botName 
     canEdit: mayEdit && connected,
     /** This person may hide, delete and restore bots, connected or not; offline they wait. */
     mayManage,
+    /** The bot's computer is connected; bot writes wait for it. */
+    connected,
     /** Resolves to the new bot, or to the message to show in the sheet. */
     create: async (
       changes: Partial<BotProfileValues>,

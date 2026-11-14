@@ -101,7 +101,7 @@ import { GOAT_BOT_LIST_PADDING, goatBotFooterInView } from "./goatBotListEnd";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { MobileBotWork } from "./MobileBotWork";
-import { MobileDeletedBotBanner } from "./MobileDeletedBotBanner";
+import { MobileDeletedBotBanner, type MobileRestoreMember } from "./MobileDeletedBotBanner";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { availabilityCopy } from "./goatBotAvailabilityCopy";
 
@@ -317,8 +317,8 @@ export function GoatBotScreen(props: {
   readonly readSnapshot?: GoatBotVisitSnapshot | null;
   /** The main bot's profile, which names its chat; absent before the server keeps profiles. */
   readonly main?: BotProfile | null;
-  /** Restores a deleted member; absent when this person may not manage bots. */
-  readonly onRestoreMember?: (() => Promise<boolean>) | undefined;
+  /** Restores a deleted member, or why not now; absent when this person may not manage bots. */
+  readonly onRestoreMember?: MobileRestoreMember | undefined;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };

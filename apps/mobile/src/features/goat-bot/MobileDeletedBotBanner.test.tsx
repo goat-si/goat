@@ -9,7 +9,6 @@ const state = vi.hoisted(() => ({
   restore: vi.fn(async (_bot: unknown) => true),
   connected: true,
 }));
-vi.mock("./goatBotComputerLink", () => ({ useGoatBotComputerConnected: () => state.connected }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -60,7 +59,13 @@ async function mount() {
     root.render(
       <MobileDeletedBotBanner
         member={scout}
-        onRestore={state.canManage ? () => state.restore(scout) : undefined}
+        onRestore={
+          !state.canManage
+            ? undefined
+            : state.connected
+              ? () => state.restore(scout)
+              : { unavailable: "Unavailable while Scout's computer is offline" }
+        }
       />,
     ),
   );

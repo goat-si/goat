@@ -111,7 +111,9 @@ export function GoatBotRouteScreen({
       main={main}
       onRestoreMember={
         member !== null && member.state === "deleted" && manage.mayManage
-          ? () => manage.restore(member)
+          ? manage.connected
+            ? () => manage.restore(member)
+            : { unavailable: `Unavailable while ${member.name}'s computer is offline` }
           : undefined
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}
