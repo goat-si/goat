@@ -175,12 +175,18 @@ export function MobileBotRoster(props: {
         selectedKey={props.selectedKey}
         bots={roster.bots}
         members={
-          roster.supportsMembers
+          // Unknown capabilities (nothing read from this computer yet) are not an older server.
+          roster.supportsMembers || roster.membersUnknown
             ? {
                 hidden: roster.groups.hidden,
                 deleted: roster.groups.deleted,
                 // The generated name needs the whole list, hidden and deleted included.
                 canCreate: manage.canCreate && listed !== null && operation === null,
+                ...(roster.connected
+                  ? {}
+                  : {
+                      unavailable: `Unavailable while ${roster.computerLabel ?? "its computer"} is offline`,
+                    }),
                 onNewBot: () => {
                   if (environmentId !== null && listed !== null)
                     startNewBot(environmentId, listed, create, openIfStillHere(), mount, uuidv4);

@@ -106,6 +106,8 @@ export function MobileBotRosterView(props: {
     readonly hidden: ReadonlyArray<BotProfile>;
     readonly deleted: ReadonlyArray<BotProfile>;
     readonly canCreate: boolean;
+    /** Why New bot cannot be used now (the computer is offline); said to the screen reader. */
+    readonly unavailable?: string;
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
@@ -296,6 +298,9 @@ export function MobileBotRosterView(props: {
             icon="plus"
             disabled={!props.members.canCreate}
             fullWidth
+            {...(props.members.unavailable === undefined
+              ? {}
+              : { accessibilityHint: props.members.unavailable })}
             onPress={props.members.onNewBot}
           />
         ) : (

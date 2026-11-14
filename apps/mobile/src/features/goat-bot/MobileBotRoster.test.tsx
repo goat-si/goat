@@ -36,6 +36,9 @@ const state = vi.hoisted(() => ({
     environmentId: "env",
     listedBots: [] as Array<object> | null,
     refreshBots: vi.fn(),
+    supportsMembers: true,
+    membersUnknown: false,
+    connected: true,
   },
   requests: 0,
   newBotRow: null as unknown,
@@ -80,7 +83,10 @@ vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
     bots: [],
     groups: { main: null, members: [], hidden: [], deleted: [] },
-    supportsMembers: true,
+    supportsMembers: state.roster.supportsMembers,
+    membersUnknown: state.roster.membersUnknown,
+    connected: state.roster.connected,
+    computerLabel: "Studio Mac",
     environmentId: state.roster.environmentId,
     slackEnabled: false,
     listedBots: state.roster.listedBots,
@@ -492,4 +498,31 @@ it("opens nothing for a retried create that returns a bot already deleted", asyn
   expect(view.opened).not.toHaveBeenCalled();
   expect(view.container.textContent).toBe("");
   await view.unmount();
+});
+
+it("offline, or before this computer's capabilities are known, New bot is unavailable and never 'Coming soon'", async () => {
+  state.roster = {
+    ...state.roster,
+    supportsMembers: true,
+    membersUnknown: false,
+    connected: false,
+  };
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  expect(state.members).toMatchObject({ unavailable: "Unavailable while Studio Mac is offline" });
+  // Nothing read from this computer yet: its capabilities are unknown, not those of an older server.
+  state.roster = { ...state.roster, supportsMembers: false, membersUnknown: true };
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  expect(state.members).toMatchObject({ unavailable: "Unavailable while Studio Mac is offline" });
+  // A computer that says it has no member bots keeps the older-server button.
+  state.roster = {
+    ...state.roster,
+    supportsMembers: false,
+    membersUnknown: false,
+    connected: true,
+  };
+  await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+  expect(state.members).toBeNull();
+  state.roster = { ...state.roster, supportsMembers: true, connected: true };
+  await act(async () => root.unmount());
 });

@@ -155,15 +155,22 @@ vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
     accessibilityLabel,
+    accessibilityHint,
     disabled,
     onPress,
   }: {
     label: string;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
+    <button
+      aria-label={accessibilityLabel}
+      aria-description={accessibilityHint}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {label}
     </button>
   ),
@@ -622,4 +629,33 @@ it("where Home governs, a row shows and says its unread recent tasks and what it
     signals.byBot = {};
     members.status = {};
   }
+});
+
+it("while the computer is offline, New bot stays New bot, unavailable, and says why", async () => {
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        slackEnabled={false}
+        onOpenBot={() => {}}
+        members={{
+          hidden: [],
+          deleted: [],
+          canCreate: false,
+          unavailable: "Unavailable while Studio Mac is offline",
+          onNewBot: () => {},
+          onLongPressBot: () => {},
+          canRestore: false,
+          onRestoreDeleted: () => {},
+        }}
+      />,
+    ),
+  );
+  const add = [...container.querySelectorAll("button")].find((element) =>
+    element.textContent?.includes("New bot"),
+  );
+  expect(add?.textContent).toBe("New bot");
+  expect(add?.disabled).toBe(true);
+  expect(add?.getAttribute("aria-description")).toBe("Unavailable while Studio Mac is offline");
 });

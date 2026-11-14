@@ -164,13 +164,16 @@ vi.mock("@goat/client-runtime/state/runtime", async () => {
   return { createEnvironmentRpcQueryAtomFamily: () => () => read };
 });
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+// The bot computer's connection as the app sees it; each test sets it.
+const link = vi.hoisted(() => ({ phase: "connected" }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
       [
         "env",
         {
-          connection: { phase: "connected" },
+          connection: { phase: link.phase },
+          entry: { target: { label: "Studio Mac" } },
           serverConfig: { environment: { capabilities: { goatBotOpenAsks: true } } },
         },
       ],
@@ -217,6 +220,7 @@ vi.mock("../../components/ui/Button", () => ({
 
 import { MobileBotList } from "./MobileBotList";
 import { MobileBotRosterView } from "./MobileBotRosterView";
+import { resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 const at = "2026-11-11T10:00:00.000Z";
 const decodeProfile = Schema.decodeUnknownSync(BotProfile);
@@ -485,4 +489,46 @@ it("on the phone's bot list, an ask opens the GoatBot screen of its bot on that 
     { name: "GoatBot", params: { botId: "quiet", taskId: "task-q" } },
     { name: "GoatBot", params: { taskId: "task-m" } },
   ]);
+});
+
+function setupLink(phase: string) {
+  registry = AtomRegistry.make();
+  link.phase = phase;
+  resetKeptPerComputerForTests();
+}
+
+it("keeps the asks it last read while the computer is offline, says they may be out of date, and offers no retry", async () => {
+  setupLink("connected");
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  link.phase = "disconnected";
+  await showRoster(true);
+  expect(stripButton()?.getAttribute("aria-label")).toBe(
+    "1 waiting for you, offline, may be out of date. Scout: Which machine?",
+  );
+  expect(container.textContent).toContain("Offline · this may be out of date");
+  expect(container.textContent).not.toContain("Try again");
+  link.phase = "connected";
+});
+
+it("keeps the last asks through a failed refresh when the computer then goes offline", async () => {
+  setupLink("connected");
+  await showRoster(true);
+  serve(read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:05:00.000Z")]));
+  await act(async () => {});
+  serve(AsyncResult.failure(Cause.fail(new Error("socket"))));
+  await act(async () => {});
+  link.phase = "disconnected";
+  await showRoster(true);
+  expect(container.textContent).toContain("Scout: Which machine?");
+  expect(container.textContent).toContain("Offline · this may be out of date");
+  link.phase = "connected";
+});
+
+it("says what waits is unavailable when the computer is offline before any read answered", async () => {
+  setupLink("disconnected");
+  await showRoster(true);
+  expect(container.textContent).toContain("Needs you · unavailable while Studio Mac is offline");
+  link.phase = "connected";
 });
