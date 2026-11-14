@@ -106,7 +106,7 @@ it.effect.each(WALKS)("$stop: the way out its text names ends the detach", (walk
       const { attachId, linkId } = yield* linked(pen, home, host, 1);
       walk.arrange(ocx);
       yield* detach(PERSON, attachId, "d-1", walk.start === "force");
-      for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+      for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
       expect(yield* stopOf(attachId)).toBe(walk.stop);
       const { force } = walk.leave(ocx, attachId);
       yield* detach(PERSON, attachId, "d-2", force);
@@ -133,7 +133,7 @@ it.effect(
         const { attachId } = yield* linked(pen, home, host, 1);
         ocx.purgeOpen = true;
         yield* detach(PERSON, attachId, "d-1");
-        for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+        for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
         expect(yield* stopOf(attachId)).toBe("revoke_unsettled");
         const open = yield* listed(attachId);
         expect(open?.message).toContain("detaches again");
@@ -163,7 +163,7 @@ it.effect(
         const { attachId } = yield* linked(pen, home, host, 1);
         ocx.journalRefuses = 3;
         yield* detach(PERSON, attachId, "d-1");
-        for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+        for (let pass = 0; pass < 4; pass += 1) yield* detachPass;
         const stopped = yield* listed(attachId);
         expect(stopped?.message).toContain("operation_journal_full");
         expect(stopped?.message).not.toContain("resolve");

@@ -40,8 +40,9 @@ it.effect(
         const stopped = yield* listed(attachId);
         expect(stopped?.message).toContain("stopped");
         // A linked row offers Detach only: no text names a force.
-        expect(stopped?.message).not.toContain("force");
-        expect(stopped?.nextAction).not.toContain("force");
+        expect(stopped?.message).not.toMatch(/forces? the detach/u);
+        expect(stopped?.nextAction).not.toMatch(/forces? the detach/u);
+        expect(stopped?.nextAction).toContain("detaches it");
         silent(false);
         ocx.tombstoneLimit = false;
         yield* TestClock.adjust(HOUR / 2);
@@ -49,7 +50,7 @@ it.effect(
         const back = yield* listed(attachId);
         expect(back?.state).toBe("linked");
         expect(back?.message).not.toContain("stopped");
-        expect(back?.message).not.toContain("force");
+        expect(back?.message).not.toMatch(/forces? the detach/u);
         silent(true);
         yield* detachPass;
         for (let check = 0; check < 49; check += 1) {

@@ -111,30 +111,32 @@ it.effect(
     ),
 );
 
-it.effect("a person's force at settle never revokes a link it cannot tie to the attach", () =>
-  world((pen, home, _grant, host) =>
-    Effect.gen(function* () {
-      const ocx = fakeDetachHome(host);
-      withIdentity(home);
-      const { attachId, nodeId } = yield* joined(pen, host, 1);
-      host.control.adds.push("unknown");
-      for (let pass = 0; pass < 3; pass += 1) yield* enroll;
-      // A full install linked by hand under the same alias: not the id the add reserved.
-      host.control.links.set("lnk_00000000000000aa", {
-        id: "lnk_00000000000000aa",
-        alias: "pen-" + nodeId,
-        childKind: "full",
-        exclusive: false,
-      });
-      yield* detach(PERSON, attachId, "d-1", true);
-      yield* detachPass;
-      expect(ocx.sent).toEqual([]);
-      expect(host.control.links.has("lnk_00000000000000aa")).toBe(true);
-      const stopped = yield* listed(attachId);
-      expect(stopped?.state).toBe("detaching");
-      expect(stopped?.message).toContain("cannot tie");
-    }),
-  ),
+it.effect(
+  "a person's force at settle never revokes a link the operation did not reserve: the record ends unproven and the link stays",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        withIdentity(home);
+        const { attachId, nodeId } = yield* joined(pen, host, 1);
+        host.control.adds.push("unknown");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        // A full install linked by hand under the same alias: not the id the add reserved.
+        host.control.links.set("lnk_00000000000000aa", {
+          id: "lnk_00000000000000aa",
+          alias: "pen-" + nodeId,
+          childKind: "full",
+          exclusive: false,
+        });
+        yield* detach(PERSON, attachId, "d-1", true);
+        yield* detachPass;
+        expect(ocx.sent).toEqual([]);
+        expect(host.control.links.has("lnk_00000000000000aa")).toBe(true);
+        const done = yield* listed(attachId);
+        expect(done?.state).toBe("purged");
+        expect(done?.message).toContain("may still hold the planted Child");
+      }),
+    ),
 );
 
 it.effect(

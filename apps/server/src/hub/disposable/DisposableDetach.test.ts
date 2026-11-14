@@ -520,7 +520,8 @@ it.effect(
           attachId + ".force.1",
           attachId + ".force.1",
         ]);
-        expect((yield* listed(attachId))?.message).toContain("could not tell what the revoke did");
+        // Refused before its journal entry: OpenCodex never recorded it, so there is nothing to resolve.
+        expect((yield* listed(attachId))?.message).toContain("never recorded");
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
         expect(ocx.sent.at(-1)).toBe(attachId + ".force.1");
