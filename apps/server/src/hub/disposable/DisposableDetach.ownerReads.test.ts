@@ -151,9 +151,9 @@ it.effect(
     ),
 );
 
-it.effect(
-  "a Force whose stored id was refused keeps the owner that still holds the removal, and GOAT repeats that owner",
-  () =>
+it.effect.each(["failed_clean", "not_found"] as const)(
+  "a Force whose stored id OpenCodex settled refused or never recorded (%s) keeps the owner that still holds the removal, and GOAT repeats that owner",
+  (stored) =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
         const ocx = fakeDetachHome(host);
@@ -168,13 +168,15 @@ it.effect(
           code: "key_revoke_failed",
           ownsReceipt: true,
         });
-        ocx.revokes.set(refused, {
-          operationId: refused,
-          linkId,
-          force: true,
-          state: "failed_clean",
-          code: "revoke_refused",
-        });
+        // v2.100.3 settles a force failed_clean when its tombstone cannot be written, before any intent.
+        if (stored === "failed_clean")
+          ocx.revokes.set(refused, {
+            operationId: refused,
+            linkId,
+            force: true,
+            state: "failed_clean",
+            code: "tombstone_write_failed",
+          });
         yield* storeDetach(
           attachId,
           {
@@ -183,8 +185,8 @@ it.effect(
             operationId: refused,
             sends: 1,
             force: true,
-            stop: "revoke_refused",
-            outcome: "revoke_refused",
+            stop: stored === "failed_clean" ? "revoke_refused" : "revoke_unsettled",
+            outcome: stored === "failed_clean" ? "tombstone_write_failed" : "not_found",
             owner,
           },
           "detaching",
