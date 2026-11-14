@@ -160,11 +160,14 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
         Effect.provideService(HostProcess.Environment, { PATH: root, HOME: root }),
         Effect.provideService(FileSystem.FileSystem, countingFs),
       );
+      // Settle the instance's own status probe so only the maintenance lookup is counted.
+      yield* instance.snapshot.refresh;
+      const before = checks;
       assert.strictEqual(
-        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        (yield* instance.snapshot.resolveMaintenance({ fresh: true })).update?.executable,
         executable,
       );
-      assert.strictEqual(checks, 2);
+      assert.strictEqual(checks - before, 3);
     }).pipe(Effect.scoped),
   );
 
