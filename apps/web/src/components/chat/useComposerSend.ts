@@ -112,13 +112,13 @@ import {
 } from "@goat/shared/composerContextReferences";
 import {
   draftSendState,
-  notifyDirectAnnotationAttached,
   notifySendBusy,
   type MultipleModelTarget,
   resolveMultipleModelTargets,
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { UnifiedSettings } from "@goat/contracts";
 import type { Dispatch } from "react";

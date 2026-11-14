@@ -45,6 +45,7 @@ import {
 } from "../ChatView.logic";
 import { readPreparedConnection } from "../../state/session";
 import { recallableComposerPrompt } from "./composerPromptHistory";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 
 // Kept per route so a send in flight, and the multiple-model selections, survive
 // ChatView remounting while the user navigates.
@@ -361,17 +362,6 @@ export function prepareTurnAttachments(input: {
         dataUrl: await readFileAsDataUrl(attachment.file),
         ...(attachment.source ? { source: attachment.source } : {}),
       };
-    }),
-  );
-}
-
-export function notifyDirectAnnotationAttached(isDirect: boolean) {
-  if (!isDirect) return;
-  toastManager.add(
-    stackedThreadToast({
-      type: "info",
-      title: "Annotation attached to draft",
-      description: "Sending is unavailable right now. Finish the current action, then send.",
     }),
   );
 }
