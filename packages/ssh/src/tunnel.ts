@@ -52,6 +52,7 @@ import {
   supersededPreparation,
   type PreparationAdmission,
 } from "./ensureFlight.ts";
+import { REMOTE_ARCHIVE_EXTRACT } from "./remoteArchiveExtract.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
@@ -755,10 +756,7 @@ if ! goat_runtime_ready; then
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  case "$GOAT_PLATFORM_KEY" in
-    win32-*) "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;; # GNU tar cannot read zip.
-    *) tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;;
-  esac
+${REMOTE_ARCHIVE_EXTRACT}
   rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
