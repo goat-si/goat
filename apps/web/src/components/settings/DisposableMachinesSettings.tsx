@@ -384,7 +384,9 @@ export function DisposableMachinesSettings({
                   return (
                     <span key={action} className="flex items-center gap-1">
                       {confirming === key && (
-                        <span className="text-muted-foreground">{ACTION_EFFECT[action]}</span>
+                        <span className="text-muted-foreground">
+                          {effectOf(action, machine.penMember)}
+                        </span>
                       )}
                       <Button
                         size="xs"
@@ -441,12 +443,17 @@ const ACTION_FAILED: Record<MachineAction, string> = {
   force: "Could not force the detach.",
   release: "Could not release the attach.",
 };
-const ACTION_EFFECT: Record<MachineAction, string> = {
-  detach:
-    "GOAT removes its OpenCodex link and the lightweight Child; it stays in Pen and keeps its slot until pen revoke.",
-  force:
-    "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke.",
-  release: "Frees the slot; if the machine joined Pen after all, remove it with pen revoke.",
+/** What confirming does; out of Pen, the open record holds the slot until the detach ends. */
+const effectOf = (action: MachineAction, penMember: boolean) => {
+  if (action === "release")
+    return "Frees the slot once Pen's member list shows the machine did not join.";
+  if (action === "detach")
+    return penMember
+      ? "GOAT removes its OpenCodex link and the lightweight Child; it stays in Pen and keeps its slot until pen revoke."
+      : "GOAT removes its OpenCodex link and the lightweight Child; it has left Pen; its slot is free once the detach ends.";
+  return penMember
+    ? "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke."
+    : "GOAT removes the link without the machine; it has left Pen, so its slot is free once a person forgets its cleanup on the hub.";
 };
 const REMOVABLE = new Set(["linked", "detaching", "retired"]);
 const DETACHABLE = new Set([
