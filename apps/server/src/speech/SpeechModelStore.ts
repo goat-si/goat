@@ -218,8 +218,10 @@ const make = Effect.gen(function* () {
   const filesUnder = Effect.fn("SpeechModelStore.filesUnder")(function* (source: string) {
     const files: Array<{ readonly file: string; readonly size: number }> = [];
     const pending = [{ entry: source, depth: LINK_SEARCH_DEPTH }];
-    for (let visited = 0; pending.length > 0 && visited < LINK_SEARCH_ENTRIES; visited += 1) {
-      const { entry, depth } = pending.pop()!;
+    for (let visited = 0; visited < LINK_SEARCH_ENTRIES; visited += 1) {
+      const next = pending.pop();
+      if (next === undefined) break;
+      const { entry, depth } = next;
       const info = yield* statFile(entry);
       if (info?.type === "File") files.push({ file: entry, size: Number(info.size) });
       if (info?.type !== "Directory" || depth === 0) continue;

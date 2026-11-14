@@ -121,8 +121,8 @@ const CONTEXT_TIER_INPUT_KEY =
 function readContextTiers(entry: LiteLlmEntry, base: TokenRates): ContextTier[] {
   const thresholds = new Set<string>();
   for (const key of Object.keys(entry)) {
-    const match = CONTEXT_TIER_INPUT_KEY.exec(key);
-    if (match !== null) thresholds.add(match[1]!);
+    const threshold = CONTEXT_TIER_INPUT_KEY.exec(key)?.[1];
+    if (threshold !== undefined) thresholds.add(threshold);
   }
   return [...thresholds]
     .map((threshold) => {
@@ -219,7 +219,8 @@ function mergeContextTiers(
   if (a.length !== b.length) return null;
   const merged: ContextTier[] = [];
   for (const [index, tier] of a.entries()) {
-    const other = b[index]!;
+    const other = b[index];
+    if (other === undefined) return null;
     const rate = mergeSpeedRates(tier.rate, other.rate);
     if (tier.thresholdTokens !== other.thresholdTokens || rate === null) return null;
     merged.push({ thresholdTokens: tier.thresholdTokens, rate });
