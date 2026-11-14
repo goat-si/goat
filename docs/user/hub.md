@@ -177,10 +177,17 @@ linked. If you moved it anyway, move it back to bring the link back.
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
 
-GOAT reaches a disposable machine only through its own Pen route. Adding it as
-an SSH device, joining, moving or re-linking it under another alias, or adding a
-route to it in **Hub devices** is refused while its record is open, matched by
-its Pen alias, the SSH host key it offers or the GOAT it runs; detach it first.
+GOAT reaches a disposable machine only through its own Pen route. While its
+record is open, GOAT refuses to add it as an SSH device (in Settings →
+Connections, in **Hub devices** or by an agent), to link its GOAT, to join, move
+or re-link it under another alias, or to add a route to it in Settings →
+Connections. It is matched by its Pen alias (including Pen's own `pen-<name>`,
+read from Pen's files), the GOAT it runs, or the ED25519 SSH host key it offers;
+detach it first in Settings → Hub on web or desktop. A machine that offers no
+ED25519 key is matched only by its alias and its GOAT. Pairing a browser or
+desktop with the machine's own GOAT by its address and pairing code is a
+connection of that client alone: the hub never sees it, so GOAT cannot refuse it
+and **Hub devices** does not mark it as a Conflict.
 Its row in **Hub devices** shows **Disposable**, or **Conflict** when something
 about it is ambiguous, **Still in Pen** while its key is a Pen member, who
 attached it and how long it has been in its state.

@@ -186,11 +186,16 @@ own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, 
 and that name no link are pruned 30 days after they ended and left Pen; a released record only once
 Pen's member list shows its key absent. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are
 thin transports over it.
-Kept-machine route paths refuse an open record's machine by its Pen alias (before any network read),
-the environment it reaches, or the sshd key it negotiates, trusted or not (`routeGuard.ts`,
-`SshHostKeys`): `HubNodes.add` with its linked add (before the pairing code is spent) and import,
-`SshDeviceAdd`, and HubMembership's join (both transports), move and repair re-link (`hubProbe.ts`).
-An unreadable table reads as kept. `host.status` and Hub nodes carry the projected class.
+Kept-machine route paths ask one guard (`DisposableRouteGuard`, rules in `routeGuard.ts`): an open
+record's Pen alias or Pen's own `pen-<name>` for it (read offline from Pen's known_hosts, before
+any network read), the environment the route reaches, and the ED25519 sshd key it negotiates,
+trusted or not (`SshHostKeys` asks for that type). Callers: `LinkedHosts.link` (every linked add,
+before the pairing code is spent), `HubNodes.add` and import, SSH preflight
+(`disposablePreflight.ts`, so the Settings and agent SSH adds stop before trust or save),
+`SshDeviceAdd`, and HubMembership's join (both transports; the Hub-client join compares the key
+itself), move and repair re-link (`hubProbe.ts`). Web's Add route refuses a disposable Hub device
+from the hub snapshot. An unreadable table or Pen file reads as kept. A client's own pairing with
+the machine's GOAT is not seen by the hub. `host.status` and Hub nodes carry the projected class.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
