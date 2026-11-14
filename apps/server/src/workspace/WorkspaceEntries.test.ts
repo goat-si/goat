@@ -447,6 +447,18 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         expect(listed.files).toContainEqual({ path: "file-205.secret", byteLength: 1 });
       }),
     );
+
+    it.effect("returns no ignored files for a query that matches none", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ git: true });
+        yield* writeTextFile(cwd, ".gitignore", "*.secret\n");
+        yield* writeTextFile(cwd, "api.secret", "s");
+
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const listed = yield* workspaceEntries.listIgnoredFiles({ cwd, query: "missing" });
+        expect(listed).toEqual({ files: [], truncated: false });
+      }),
+    );
   });
 
   describe("search", () => {
