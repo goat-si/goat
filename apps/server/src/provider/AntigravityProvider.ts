@@ -457,11 +457,17 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const onConfigOptionsUpdated = Effect.fn("AntigravityProvider.onConfigOptionsUpdated")(function* (
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    profile?: string,
   ) {
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     observeThinkingLevels(configOptions);
     const models = buildAntigravityModelsFromSession({ configOptions }, thinkingLevels);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status !== "authenticated") return state;
+      if (
+        state.draft.auth.status !== "authenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return { ...state, draft: { ...state.draft, models } };
     });
   });
@@ -469,12 +475,18 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const onAvailableCommands = Effect.fn("AntigravityProvider.onAvailableCommands")(function* (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     cwd?: string,
+    profile?: string,
   ) {
     if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     const slashCommands = nativeCommands(commands);
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status === "unauthenticated") return state;
+      if (
+        state.draft.auth.status === "unauthenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return {
         ...state,
         draft: {

@@ -162,6 +162,7 @@ export const AntigravityDriver: ProviderDriver<
       Effect.map((env) => resolveAntigravityUserHome(platform, env, homeDirectory)),
     );
     const startedProfiles = new WeakMap<AcpSessionRuntime.AcpSessionRuntimeStartResult, string>();
+    const eventProfiles = new WeakMap<AcpSessionRuntime.AcpSessionRuntimeEvent, string>();
     const directories = yield* resolveAntigravityInstanceDirectories(
       host.paths.stateDir,
       instanceId,
@@ -313,6 +314,14 @@ export const AntigravityDriver: ProviderDriver<
       }).pipe(Effect.provideService(Crypto.Crypto, crypto));
       return {
         ...runtime,
+        getEvents: () =>
+          runtime.getEvents().pipe(
+            Stream.tap((event) =>
+              Effect.sync(() => {
+                eventProfiles.set(event, userHome);
+              }),
+            ),
+          ),
         ...(executable.harnessPath === null
           ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
           : {}),
@@ -388,10 +397,14 @@ export const AntigravityDriver: ProviderDriver<
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
         }
         if (event._tag === "ConfigOptionsUpdated") {
-          return provider.onConfigOptionsUpdated(event.configOptions);
+          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(event.availableCommands)
+          ? provider.onAvailableCommands(
+              event.availableCommands,
+              undefined,
+              eventProfiles.get(event),
+            )
           : Effect.void;
       }).pipe(Effect.forkScoped);
       // Thinking levels differ per model and are reported only for the selected one.
@@ -508,10 +521,14 @@ export const AntigravityDriver: ProviderDriver<
         provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
       onSessionEvent: (event) => {
         if (event._tag === "ConfigOptionsUpdated") {
-          return provider.onConfigOptionsUpdated(event.configOptions);
+          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(event.availableCommands)
+          ? provider.onAvailableCommands(
+              event.availableCommands,
+              undefined,
+              eventProfiles.get(event),
+            )
           : Effect.void;
       },
       continuationRequests,

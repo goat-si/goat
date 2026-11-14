@@ -209,17 +209,17 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
           }),
       ),
     );
-    // Ambient CLI overrides cannot redirect a GOAT-owned token to a different provider.
+    // Empty values also shadow the host when a launcher extends its environment.
     const environment: NodeJS.ProcessEnv = {
       ...(options.currentEnvironment ? yield* options.currentEnvironment : options.environment),
       CODEX_HOME: homePath,
+      ACCESS_TOKEN: "",
+      OPENAI_API_KEY: "",
+      OPENAI_BASE_URL: "",
+      GOAT_CODEX_LAUNCH_ARGS: "",
     };
-    delete environment.ACCESS_TOKEN;
-    for (const name of ["GOAT_CODEX_LAUNCH_ARGS", legacyEnvName("GOAT_CODEX_LAUNCH_ARGS")]) {
-      if (name !== undefined) delete environment[name];
-    }
-    delete environment.OPENAI_API_KEY;
-    delete environment.OPENAI_BASE_URL;
+    const legacyLaunchArgs = legacyEnvName("GOAT_CODEX_LAUNCH_ARGS");
+    if (legacyLaunchArgs !== undefined) environment[legacyLaunchArgs] = "";
     return {
       config: decodeSettings({
         enabled: options.enabled,
