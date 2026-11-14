@@ -72,12 +72,16 @@ function countLabel(count: number, noun: string): string | null {
 }
 
 /**
- * What waits on a person, whatever the task's status says: questions on the task or in the worker
- * thread, tool approvals, a provider sign-in, or a usage limit nothing will resume on its own. A
- * finished task whose worker never reported its outcome is worth a second look too.
+ * What waits on a person: questions, tool approvals, a sign-in, an unresumed usage limit, and a
+ * finished task with neither a report nor a written result ("Finished." is the server's text
+ * when the worker wrote nothing; a written "Finished." cannot be told apart from it).
  */
-function attentionLabel(chip: ChannelTaskChip): string | null {
-  if (chip.status === "completed" && chip.completionReport === "missing") {
+function attentionLabel(chip: ChannelTaskChip, summary: string): string | null {
+  if (
+    chip.status === "completed" &&
+    chip.completionReport === "missing" &&
+    (summary === "" || summary === "Finished.")
+  ) {
     return "Finished without a report";
   }
   const needsYou = chip.observed?.needsYou ?? [];
@@ -158,7 +162,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
       isRetryableTaskStatus(chip.status) && host === undefined && chip.movedFrom === undefined,
     summary: summary.length > 0 ? summary : null,
     ended: chip.status === "completed" || chip.status === "failed" || chip.status === "cancelled",
-    attentionLabel: attentionLabel(chip),
+    attentionLabel: attentionLabel(chip, summary),
     evidenceLabels: verificationLabels(chip, report.notRun),
     pullRequests: pullRequestLinks(chip),
     ...(chip.askInChat === true ? { askInChat: true } : {}),
