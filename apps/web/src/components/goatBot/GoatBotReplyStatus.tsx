@@ -5,12 +5,14 @@ import { useGoatBotName } from "./goatBotMemberContext";
 export function GoatBotReplyStatus({
   announcement,
   replyingSince,
+  sends = 0,
 }: {
   readonly announcement: {
     readonly sequence: number;
     readonly row: Extract<GoatBotRow, { kind: "bot" }>;
   } | null;
   readonly replyingSince: string | null;
+  readonly sends?: number;
 }) {
   const botName = useGoatBotName();
   const [painted, setPainted] = useState(false);
@@ -24,8 +26,10 @@ export function GoatBotReplyStatus({
     toggle: false,
     text: "",
     readingKey: replyingSince,
+    sends,
   });
-  const sending = replyingSince !== null && replyingSince !== reply.readingKey;
+  const sending =
+    sends !== reply.sends || (replyingSince !== null && replyingSince !== reply.readingKey);
   if (announcement !== null && announcement.sequence !== reply.sequence) {
     const toggle = !reply.toggle;
     const row = announcement.row;
@@ -46,9 +50,10 @@ export function GoatBotReplyStatus({
       toggle,
       text: sending ? "" : text,
       readingKey: replyingSince,
+      sends,
     });
-  } else if (reply.readingKey !== replyingSince) {
-    setReply({ ...reply, readingKey: replyingSince, text: sending ? "" : reply.text });
+  } else if (reply.readingKey !== replyingSince || reply.sends !== sends) {
+    setReply({ ...reply, readingKey: replyingSince, sends, text: sending ? "" : reply.text });
   }
   return (
     <span role="status" aria-live="polite" aria-label="New bot reply" className="sr-only">

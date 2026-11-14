@@ -263,18 +263,24 @@ function GoatBotChatViewContent({
   const [local, setLocal] = useState<{
     identity: string;
     submissions: ReadonlyArray<GoatBotLocalSubmission>;
-  }>({ identity: timelineIdentity, submissions: [] });
+    sends: number;
+  }>({ identity: timelineIdentity, submissions: [], sends: 0 });
   if (local.identity !== timelineIdentity)
-    setLocal({ identity: timelineIdentity, submissions: [] });
+    setLocal({ identity: timelineIdentity, submissions: [], sends: 0 });
   const recordSubmission = (result: boolean | string | void) => {
-    if (typeof result === "string") {
-      const submission = { key: result };
+    if (result !== false) {
       setLocal((previous) => ({
         identity: timelineIdentity,
-        submissions: [
-          ...(previous.identity === timelineIdentity ? previous.submissions : []),
-          submission,
-        ],
+        submissions:
+          typeof result === "string"
+            ? [
+                ...(previous.identity === timelineIdentity ? previous.submissions : []),
+                { key: result },
+              ]
+            : previous.identity === timelineIdentity
+              ? previous.submissions
+              : [],
+        sends: previous.identity === timelineIdentity ? previous.sends + 1 : 1,
       }));
     }
     return result !== false;
@@ -487,6 +493,7 @@ function GoatBotChatViewContent({
             key={`${timelineIdentity}:reply`}
             replyingSince={removed ? null : replyingSince}
             announcement={announcement}
+            sends={local.identity === timelineIdentity ? local.sends : 0}
           />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
           <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
