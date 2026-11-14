@@ -125,6 +125,7 @@ vi.mock("./useBotRoster", () => ({
     loaded: state.listLoaded,
     pending: state.listPending,
     failed: state.listFailed,
+    chips: new Map(),
     refresh: state.refresh,
   }),
 }));

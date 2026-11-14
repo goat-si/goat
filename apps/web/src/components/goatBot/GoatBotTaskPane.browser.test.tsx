@@ -558,7 +558,7 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
   const close = vi.fn();
   await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();
-  await expect.element(screen.getByText("Needs your input")).toBeVisible();
+  await expect.element(screen.getByText("Waiting for you", { exact: true })).toBeVisible();
   expect(state.session).toHaveBeenCalledWith("task-1");
   expect(state.update).toHaveBeenCalledWith({
     environmentId: "env",

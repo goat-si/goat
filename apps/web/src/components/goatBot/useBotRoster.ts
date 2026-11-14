@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   botRoster,
@@ -64,6 +64,20 @@ export function useBotThreads(
   useEffect(() => {
     if (supported && watchedThreadId && revision !== undefined) refreshThreads();
   }, [supported, watchedThreadId, revision, refreshThreads]);
+  // Streamed assistant text replaces items every token; the chips keep their identity until one
+  // of them changes version, so Home does not re-render for each token.
+  const chipsKey = JSON.stringify(
+    items.flatMap(({ item }) =>
+      item.type === "notification" && item.ledgerTask !== undefined
+        ? [[item.ledgerTask.taskId, item.ledgerTask.taskVersion]]
+        : [],
+    ),
+  );
+  const [chips, setChips] = useState(() => ({
+    key: chipsKey,
+    byTask: goatBotNewestTaskChips(items),
+  }));
+  if (chips.key !== chipsKey) setChips({ key: chipsKey, byTask: goatBotNewestTaskChips(items) });
   return {
     rows: threads.data?.rows ?? [],
     mainMessageCount: threads.data?.mainMessageCount ?? 0,
@@ -79,7 +93,7 @@ export function useBotThreads(
     /** The bot's own turns asking a question in its chat, which the rows never list. */
     turnsWaiting: goatBotTurnsWaiting(items),
     /** Each task's newest chip in the conversation: what its worker asks, which rows leave out. */
-    chips: goatBotNewestTaskChips(items),
+    chips: chips.byTask,
     refresh: threads.refresh,
   };
 }
