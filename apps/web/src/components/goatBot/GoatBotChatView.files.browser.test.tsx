@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, TurnItemId } from "@goat/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -151,12 +151,7 @@ const row: GoatBotRow = {
 function view(
   threadId = "bot",
   rows: ReadonlyArray<GoatBotRow> = [row],
-  source?: {
-    identity: string;
-    baselineIds: ReadonlySet<string>;
-    sourceIds: ReadonlySet<string>;
-    committedSends: ReadonlyMap<string, string>;
-  },
+  source?: Parameters<typeof GoatBotChatView>[0]["source"],
 ) {
   return (
     <GoatBotChatView
@@ -180,7 +175,7 @@ it("announces a reply while a file is open without repeating it on close", async
     const source = (ids: string[]) => ({
       identity: "local:bot",
       baselineIds,
-      sourceIds: new Set(ids),
+      sourceIds: new Set(ids.map((id) => TurnItemId.make(id))),
       committedSends: new Map<string, string>(),
     });
     await using screen = await render(view("bot", [row], source([row.id])));
