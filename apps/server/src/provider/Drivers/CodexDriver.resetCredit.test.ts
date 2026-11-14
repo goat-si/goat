@@ -62,10 +62,11 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  // A whitespace-only home is relative to the server's directory, as the redemption process runs.
+  // Codex resolves the value as written from its working directory, the server's: no trim, no ~.
   it.effect.each([
     { name: "ends in a space", host: (root: string) => `${root}/user ` },
     { name: "is only whitespace", host: () => " " },
+    { name: "starts with ~/", host: () => "~/account" },
   ])("a host home that $name shares a lock with an instance pinned to it", ({ host: hostHome }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
