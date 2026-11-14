@@ -3,9 +3,8 @@ import {
   BotProfile,
   EnvironmentId,
   EventId,
-  MessageId,
+  ProjectId,
   ThreadId,
-  TurnItemId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
   type OrchestrationV2TurnItem,
@@ -21,7 +20,8 @@ import * as DateTime from "effect/DateTime";
 import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import type { Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
+import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../../test/render";
 import "../../index.css";
@@ -30,6 +30,8 @@ type ThreadDetails = ReturnType<typeof createEnvironmentThreadDetailAtoms>;
 type ServerSocket = Queue.Queue<OrchestrationV2ThreadStreamItem>;
 const mocks = vi.hoisted(() => ({
   details: null as ThreadDetails | null,
+  taskMode: false,
+  taskThreads: null as import("effect/reactivity").Atom.Writable<unknown> | null,
   server: {
     threads: new Map<string, OrchestrationV2ThreadProjection>(),
     socket: new Promise<ServerSocket>(() => {}),
@@ -37,6 +39,58 @@ const mocks = vi.hoisted(() => ({
     httpRequests: 0,
   },
 }));
+
+vi.mock("./goatBotHooks", async (original) => ({
+  ...(await original<typeof import("./goatBotHooks")>()),
+  useGoatBotEnvironments: () =>
+    mocks.taskMode
+      ? [
+          {
+            environmentId: "g1-sync-snapshot-test",
+            connected: true,
+            supportsChannelLedger: true,
+            primary: true,
+          },
+        ]
+      : [],
+}));
+vi.mock("~/state/entities", async (original) => {
+  const actual = await original<typeof import("~/state/entities")>();
+  return {
+    ...actual,
+    useServerConfigs: () => {
+      const configs = actual.useServerConfigs();
+      return mocks.taskMode
+        ? new Map([
+            [
+              "g1-sync-snapshot-test",
+              { environment: { capabilities: { goatBotTaskThreads: true } } },
+            ],
+          ])
+        : configs;
+    },
+    useEnvironmentShellsBootstrapped: (
+      id: Parameters<typeof actual.useEnvironmentShellsBootstrapped>[0],
+    ) => {
+      const ready = actual.useEnvironmentShellsBootstrapped(id);
+      return mocks.taskMode || ready;
+    },
+  };
+});
+vi.mock("~/state/channels", async (original) => {
+  const actual = await original<typeof import("~/state/channels")>();
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const taskThreads = Atom.make(AsyncResult.success({ rows: [] }));
+  mocks.taskThreads = taskThreads as import("effect/reactivity").Atom.Writable<unknown>;
+  return {
+    ...actual,
+    channelEnvironment: {
+      ...actual.channelEnvironment,
+      listBotThreads: (input: Parameters<typeof actual.channelEnvironment.listBotThreads>[0]) =>
+        mocks.taskMode ? taskThreads : actual.channelEnvironment.listBotThreads(input),
+    },
+  };
+});
 
 vi.mock("~/state/threads", async (original) => {
   const { Atom } = await import("effect/reactivity");
@@ -179,6 +233,13 @@ import { randomUUID } from "~/lib/utils";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { verifySidebarReopen } from "./GoatBotChatView.reopen.test-support";
+import { completedTask, taskOutcome, turnItem } from "./GoatBotChatView.sync.fixtures";
+import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
+import { AsyncResult } from "effect/reactivity";
+import * as Effect from "effect/Effect";
+import { Persistence } from "@goat/client-runtime/platform";
+import { layer as storageLayer } from "~/connection/storage";
 
 const environmentId = EnvironmentId.make("g1-sync-snapshot-test");
 const at = DateTime.makeUnsafe("2026-10-12T09:40:00Z");
@@ -216,41 +277,39 @@ function MemberChat({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   );
 }
 
-function turnItem(
-  threadId: ThreadId,
-  id: string,
-  role: "user" | "assistant",
-  text: string,
-  ordinal: number,
-): OrchestrationV2TurnItem {
-  const common = {
-    id: TurnItemId.make(id),
-    threadId,
-    runId: null,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal,
-    status: "completed" as const,
-    title: null,
-    startedAt: at,
-    completedAt: at,
-    updatedAt: at,
-    messageId: MessageId.make(`message-${id}`),
-    text,
-  };
-  return role === "user"
-    ? {
-        ...common,
-        type: "user_message",
-        inputIntent: "turn_start",
-        attachments: [],
-        createdBy: "user",
-        creationSource: "web",
-      }
-    : { ...common, type: "assistant_message", streaming: false };
+function TaskChat({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const [port] = useState<GoatBotChannelPort>(() => ({
+    ensureBot: async () => ({
+      environmentId,
+      projectId: ProjectId.make("project"),
+      threadId: threadRef.threadId,
+    }),
+    getBotStatus: async () => {
+      throw new Error("unexpected status read");
+    },
+    ingest: async () => {
+      throw new Error("unexpected send");
+    },
+    listTasks: async () => {
+      throw new Error("unexpected task read");
+    },
+    useCanSend: () => true,
+  }));
+  return (
+    <GoatBotChannelContext value={port}>
+      <MemberChat threadRef={threadRef} />
+    </GoatBotChannelContext>
+  );
+}
+
+async function taskList(taskIds: readonly string[]) {
+  if (!mocks.taskThreads) throw new Error("task list atom unavailable");
+  await act(() =>
+    appAtomRegistry.set(
+      mocks.taskThreads!,
+      AsyncResult.success({ rows: taskIds.map((taskId) => ({ kind: "task", task: { taskId } })) }),
+    ),
+  );
 }
 
 function projected(item: OrchestrationV2TurnItem, position: number) {
@@ -282,6 +341,7 @@ function nextAtom<A>(atom: Atom.Atom<A>, predicate: (value: A) => boolean): Prom
 }
 
 function setup(thread: string, history: ReadonlyArray<OrchestrationV2TurnItem> = []) {
+  mocks.taskMode = false;
   const threadRef = { environmentId, threadId: ThreadId.make(`${thread}-${randomUUID()}`) };
   const fixture = makeThreadProjectionFixture();
   mocks.server.threads.set(threadRef.threadId, {
@@ -341,6 +401,215 @@ async function deliver(
   });
 }
 
+it("guard: an outcome hidden at baseline stays silent when the task list resolves", async () => {
+  const id = ThreadId.make("task-history");
+  const threadRef = setup(id, [
+    turnItem(
+      id,
+      "history",
+      "user",
+      Array.from({ length: 80 }, (_, i) => `Line ${i}`).join("\n"),
+      1,
+    ),
+    completedTask(id, "card", "task-1", 2),
+    taskOutcome(id, "old-outcome", "task-1", 3),
+  ]);
+  mocks.taskMode = true;
+  await taskList([]);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <TaskChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { details } = await synchronized(threadRef);
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome"));
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  expect(screen.container.textContent).not.toContain("Outcome old-outcome");
+  const source = appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef));
+  await taskList(["task-1"]);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toBe(source);
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome old-outcome"));
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("announces a new hidden outcome once when the task list exposes it", async () => {
+  const id = ThreadId.make("task-new");
+  const threadRef = setup(id, [
+    turnItem(
+      id,
+      "history",
+      "user",
+      Array.from({ length: 80 }, (_, i) => `Line ${i}`).join("\n"),
+      1,
+    ),
+    completedTask(id, "card", "task-1", 2),
+  ]);
+  mocks.taskMode = true;
+  await taskList([]);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <TaskChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { socket, details } = await synchronized(threadRef);
+  const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
+  await act(() => {
+    scroll.scrollTop = 0;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  const outcome = taskOutcome(threadRef.threadId, "new-outcome", "task-1", 3);
+  await deliver(socket, details, threadRef, outcome, 2);
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  expect(status?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  const source = appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef));
+  await taskList(["task-1"]);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toBe(source);
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome new-outcome"));
+  expect(status?.textContent).toMatch(/Research posted an update\.|New update from Research\./);
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
+    .toBeVisible();
+  const announced = status?.textContent;
+  await taskList([]);
+  await taskList(["task-1"]);
+  expect(status?.textContent).toBe(announced);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("does not reannounce older replies when a task card hides and restores the newest outcome", async () => {
+  const id = ThreadId.make("task-revision");
+  const finished = completedTask(id, "card", "task-1", 2);
+  if (finished.type !== "notification" || !finished.ledgerTask)
+    throw new Error("expected task card");
+  const running = {
+    ...finished,
+    ledgerTask: { ...finished.ledgerTask, status: "running" as const, summary: "In progress" },
+  };
+  const threadRef = setup(id, [turnItem(id, "history", "user", "History", 1), running]);
+  mocks.taskMode = true;
+  await taskList([]);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <TaskChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { socket, details } = await synchronized(threadRef);
+  await deliver(
+    socket,
+    details,
+    threadRef,
+    turnItem(threadRef.threadId, "older", "assistant", "Older reply", 3),
+    2,
+  );
+  await deliver(
+    socket,
+    details,
+    threadRef,
+    taskOutcome(threadRef.threadId, "newest", "task-1", 4),
+    3,
+  );
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome newest"));
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  const spoken = status?.textContent;
+  expect(spoken).toMatch(/update/);
+  const revise = async (card: OrchestrationV2TurnItem, sequence: number) => {
+    if (card.type !== "notification") throw new Error("expected task notification");
+    await act(async () => {
+      Queue.offerUnsafe(socket, {
+        kind: "event",
+        sequence,
+        event: {
+          id: EventId.make(`card-${sequence}`),
+          type: "turn-item.updated",
+          threadId: threadRef.threadId,
+          occurredAt: at,
+          payload: { ...card, threadId: threadRef.threadId },
+        },
+      });
+      await nextAtom(details.visibleTurnItemsAtom(threadRef), (items) =>
+        items.some(
+          ({ item }) =>
+            item.type === "notification" &&
+            item.id === card.id &&
+            item.ledgerTask?.status === card.ledgerTask?.status,
+        ),
+      );
+    });
+  };
+  await revise({ ...running, ledgerTask: { ...finished.ledgerTask, taskVersion: 2 } }, 4);
+  expect(screen.container.textContent).not.toContain("Outcome newest");
+  expect(status?.textContent).toBe(spoken);
+  await revise({ ...running, ledgerTask: { ...running.ledgerTask, taskVersion: 3 } }, 5);
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome newest"));
+  expect(status?.textContent).toBe(spoken);
+});
+
+it("guard: a synchronized empty mounted chat has an empty baseline and status", async () => {
+  const threadRef = setup("empty-guard");
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <MemberChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const { details } = await synchronized(threadRef);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toHaveLength(0);
+  expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toBe("");
+});
+
+it("baselines persisted cached history when the mounted chat becomes live", async () => {
+  const id = ThreadId.make("cached-history");
+  const threadRef = setup(id, [turnItem(id, "cached-reply", "assistant", "Cached reply", 1)]);
+  const projection = mocks.server.threads.get(threadRef.threadId);
+  if (!projection) throw new Error("missing cached snapshot");
+  const save = Atom.runtime(storageLayer).atom(
+    Effect.gen(function* () {
+      const store = yield* Persistence.EnvironmentCacheStore;
+      yield* store.saveThread(environmentId, { snapshotSequence: 1, projection });
+    }),
+  );
+  const saved = await nextAtom(
+    save,
+    (result) => result._tag === "Success" || result._tag === "Failure",
+  );
+  if (saved._tag === "Failure") throw new Error("could not seed cached thread");
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <MemberChat threadRef={threadRef} />
+    </AppAtomRegistryProvider>,
+  );
+  const details = mocks.details;
+  if (!details) throw new Error("thread details were not installed");
+  await nextAtom(details.visibleTurnItemsAtom(threadRef), (items) =>
+    items.some(({ item }) => item.id === "cached-reply"),
+  );
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("Cached reply"));
+  const status = screen.container.querySelector("[data-goat-bot-reply-status]");
+  expect(status?.textContent).toBe("");
+  const socket = await mocks.server.socket;
+  await act(async () => {
+    Queue.offerUnsafe(socket, { kind: "synchronized" });
+    await nextAtom(details.statusAtom(threadRef), (value) => value === "live");
+  });
+  expect(status?.textContent).toBe("");
+  await deliver(
+    socket,
+    details,
+    threadRef,
+    turnItem(threadRef.threadId, "catch-up", "assistant", "Catch-up reply", 2),
+    2,
+  );
+  expect(status?.textContent).toMatch(/Research replied\.|New reply from Research\./);
+});
+
+it("reopens live history silently and announces one reply arriving afterward", () =>
+  verifySidebarReopen({ setup, synchronized, deliver, MemberChat }));
+
 it.each(["above", "following"] as const)(
   "the first reply after an empty synchronized member snapshot is new while %s",
   async (mode) => {
@@ -376,6 +645,9 @@ it.each(["above", "following"] as const)(
       2,
     );
     await deliver(socket, details, threadRef, answer, 3);
+    expect(screen.container.querySelector("[data-goat-bot-reply-status]")?.textContent).toMatch(
+      /Research replied\.|New reply from Research\./,
+    );
     const row = screen.container.querySelector<HTMLElement>(`[data-bot-row="${answer.id}"]`)!;
     expect(row).not.toBeNull();
     if (mode === "above") {

@@ -107,12 +107,17 @@ function NameForm({
   const [draft, setDraft] = useState(member.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unchanged, setUnchanged] = useState(false);
   const inputId = useId();
   const name = draft.trim();
   async function save(event: FormEvent) {
     event.preventDefault();
-    // An unchanged name sends nothing; the bot keeps its generated name and the row stays.
-    if (saving || name === "" || name === member.name) return;
+    if (saving || name === "") return;
+    if (name === member.name) {
+      setError(null);
+      setUnchanged(true);
+      return;
+    }
     setSaving(true);
     setError(null);
     const result = await update({
@@ -143,7 +148,10 @@ function NameForm({
           value={draft}
           maxLength={NAME_MAX}
           disabled={saving}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setUnchanged(false);
+          }}
         />
         <Button type="submit" size="sm" disabled={saving || name === ""}>
           {saving ? "Saving…" : "Done"}
@@ -172,6 +180,11 @@ function NameForm({
           <XIcon />
         </Button>
       </div>
+      <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+        {unchanged
+          ? `Already called ${member.name}. Type a different name, or use More for other settings.`
+          : ""}
+      </p>
       {error !== null ? (
         <p role="alert" className="text-sm text-destructive-foreground">
           {error}
