@@ -179,6 +179,36 @@ const lazyMiseShim = {
 } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"];
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
+  it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const oldDir = `${root}/old`;
+      const newDir = `${root}/new`;
+      for (const dir of [oldDir, newDir]) {
+        yield* fs.makeDirectory(dir);
+        yield* fs.writeFileString(`${dir}/opencode`, "#!/bin/sh\n");
+        yield* fs.chmod(`${dir}/opencode`, 0o755);
+      }
+      const host = { PATH: oldDir, HOME: root, XDG_DATA_HOME: root };
+      const instance = yield* create({}, noHttp).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+      );
+      const first = yield* instance.snapshot.resolveMaintenance();
+      assert.strictEqual(first.installPath, `${oldDir}/opencode`);
+      yield* fs.remove(`${oldDir}/opencode`);
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).installPath,
+        first.installPath,
+      );
+      host.PATH = newDir;
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).installPath,
+        `${newDir}/opencode`,
+      );
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "regression #3079: a new OpenCode session uses the current host PATH and honors instance PATH",
     () =>

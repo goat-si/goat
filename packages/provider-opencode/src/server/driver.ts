@@ -290,14 +290,17 @@ export const OpenCodeDriver: ProviderDriver<
       provider: DRIVER_KIND,
       packageName: null,
     });
-    const maintenanceFor = (probed: typeof runtimeProbe.get) =>
+    const maintenanceFor = (
+      probed: typeof runtimeProbe.get,
+      lookupEnvironment = currentEnvironment,
+    ) =>
       probed.pipe(
         Effect.map((result) => result.generation),
         Effect.option,
         Effect.flatMap((generation) =>
           Option.isNone(generation)
             ? Effect.succeed(noUpdate)
-            : currentEnvironment.pipe(
+            : lookupEnvironment.pipe(
                 Effect.flatMap((env) =>
                   resolveProviderMaintenanceCapabilitiesEffect(
                     openCodeUpdateFor(generation.value),
@@ -315,6 +318,36 @@ export const OpenCodeDriver: ProviderDriver<
       );
     const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
       maintenanceFor(runtimeProbe.get),
+      {
+        key: currentEnvironment.pipe(
+          Effect.map((env) =>
+            JSON.stringify({
+              binaryPath: effectiveConfig.binaryPath,
+              PATH: env.PATH,
+              Path: env.Path,
+              path: env.path,
+              PATHEXT: env.PATHEXT,
+              Pathext: env.Pathext,
+            }),
+          ),
+        ),
+        resolve: (key) => {
+          const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
+          return maintenanceFor(
+            runtimeProbe.get,
+            currentEnvironment.pipe(
+              Effect.map((env) => ({
+                ...env,
+                PATH: lookupEnv.PATH,
+                Path: lookupEnv.Path,
+                path: lookupEnv.path,
+                PATHEXT: lookupEnv.PATHEXT,
+                Pathext: lookupEnv.Pathext,
+              })),
+            ),
+          );
+        },
+      },
     );
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
       !effectiveConfig.enabled
