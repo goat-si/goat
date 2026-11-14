@@ -441,6 +441,72 @@ describe("task unread follows delivered messages", () => {
   );
 
   it.effect(
+    "regression #2550: an overflow that lands while a recovery scan runs is kept for the next scan",
+    () =>
+      withHolds(
+        Effect.gen(function* () {
+          yield* setup;
+          const ids = Array.from({ length: 101 }, (_, index) =>
+            ChannelTaskId.make("task:scan-" + String(index).padStart(3, "0")),
+          );
+          for (const id of ids) yield* task(id);
+          yield* refuseMarks;
+          yield* queue(...ids.map((id) => message("scan-" + id.slice("task:scan-".length), id)));
+          yield* deliverDue;
+          yield* deliverDue;
+          // 100 settles wait and one post is over the cap, so a scan is due 30 seconds from now.
+          yield* TestClock.adjust("30 seconds");
+          const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+            goatInput("and this", "scan-receipt-input"),
+            rpcContext,
+          );
+          const receipt: ChannelOutboundMessage = {
+            ...message("scan-receipt", ids[0]),
+            kind: "receipt",
+            inReplyToInputId: input.inputId,
+          };
+          yield* (yield* Ledger.ChannelLedger).enqueueDeliveries(
+            [
+              {
+                deliveryId: receipt.deliveryId,
+                causeKey: "reply:" + input.inputId,
+                inputId: input.inputId,
+                taskId: ids[0],
+                message: receipt,
+              },
+            ],
+            yield* now,
+          );
+          const token = yield* ownerToken;
+          const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+          const holds = yield* LedgerCallHolds;
+          // The receipt is sent and in flight, its settle held, when the scan takes its snapshot.
+          const settle = yield* holds.holdNext(
+            "recordDelivery",
+            (call) => call.deliveryId === "scan-receipt",
+          );
+          yield* worker.deliverReceipts(token);
+          yield* settle.reached;
+          const scan = yield* holds.holdNext("releaseUnsentDeliveries");
+          const pass = yield* Effect.forkChild(worker.deliverDue(token));
+          yield* scan.reached;
+          // While the scan is held, the receipt's settle fails and finds the queue full.
+          yield* settle.release;
+          yield* worker.settleReceipts;
+          assert.strictEqual(yield* outboxState("scan-receipt"), "delivering");
+          yield* allowMarks;
+          yield* scan.release;
+          yield* Fiber.join(pass);
+          assert.strictEqual(yield* outboxState("scan-receipt"), "delivering");
+          yield* TestClock.adjust("30 seconds");
+          for (let round = 0; round < 3; round++) yield* deliverDue;
+          assert.strictEqual(yield* outboxState("scan-receipt"), "delivered");
+          assert.strictEqual(yield* recordsOf("scan-receipt"), 1);
+        }),
+      ),
+  );
+
+  it.effect(
     "regression #2550: a message queued, then acknowledged over, then delivered is unread",
     () =>
       provide(

@@ -12,7 +12,8 @@ type HeldMethod =
   | "getRemoteWorker"
   | "isForwardPending"
   | "getTask"
-  | "recordDelivery";
+  | "recordDelivery"
+  | "releaseUnsentDeliveries";
 type Ledger = ChannelLedger.ChannelLedger["Service"];
 type Input<M extends HeldMethod> = Parameters<Ledger[M]>[0];
 type Hold = { reached: Effect.Effect<void>; release: Effect.Effect<boolean> };
@@ -50,6 +51,7 @@ export class LedgerCallHolds extends Context.Service<
         "isForwardPending",
         "getTask",
         "recordDelivery",
+        "releaseUnsentDeliveries",
       ];
       const originals = { ...observed };
       const releases = new Set<Deferred.Deferred<void>>();

@@ -359,6 +359,8 @@ const make = Effect.gen(function* () {
   const retrySettles = Effect.fn("ChannelDeliveryWorker.retrySettles")(function* (owner: string) {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     if (orphanScanAt !== undefined && orphanScanAt <= now) {
+      // Taken before the query, so a request made while it runs is kept.
+      orphanScanAt = undefined;
       const released = yield* ledger
         .releaseUnsentDeliveries({
           owner,
@@ -370,14 +372,15 @@ const make = Effect.gen(function* () {
           limit: RECONCILE_BATCH,
         })
         .pipe(Effect.result);
-      orphanScanAt =
+      const again =
         released._tag === "Success"
           ? released.success.remaining
-            ? now + Duration.toMillis(RECONCILE_INTERVAL)
-            : undefined
-          : released.failure.reason === "ownership_lost"
-            ? undefined
-            : now + Duration.toMillis(RECONCILE_INTERVAL);
+          : released.failure.reason !== "ownership_lost";
+      if (again)
+        orphanScanAt = Math.min(
+          orphanScanAt ?? Infinity,
+          now + Duration.toMillis(RECONCILE_INTERVAL),
+        );
     }
     const due = [...pendingSettles.values()].filter((entry) => entry.nextAt <= now);
     for (const entry of due.slice(0, RELEASE_BATCH)) {
