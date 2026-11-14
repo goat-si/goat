@@ -1,3 +1,4 @@
+import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
 import { desktopReattachment } from "./DesktopReattachment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
@@ -555,8 +556,7 @@ const make = Effect.gen(function* () {
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
     void tab.control.close().catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else void tab.page.close().catch(constVoid);
-    if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
+    else closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
     void tab.recording?.encoder.close().catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
@@ -824,6 +824,7 @@ const make = Effect.gen(function* () {
         });
       });
       page.on("dialog", (dialog) => {
+        if (acceptClosingDialog(tab.closing, dialog)) return;
         tab.dialog = dialog;
         broadcastControl(tab);
       });
@@ -1860,6 +1861,7 @@ const make = Effect.gen(function* () {
       tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
       void tab.control.close().catch(constVoid);
+      if (tab.desktop && tab.dialog === null) await unloadDesktopTab(tab);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);
       return {};
