@@ -383,9 +383,17 @@ export const OpenCodeDriver: ProviderDriver<
       sessionConfigKey: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
-      openCode2ProbeServer.withConnection(({ client }) =>
-        loadOpenCode2Catalog(client, host.paths.cwd),
-      ),
+      (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined) =>
+        openCode2ProbeServer.withConnection(
+          ({ client }) => loadOpenCode2Catalog(client, host.paths.cwd),
+          launch,
+        ),
+      openCode2ProbeServer.captureLaunch ??
+        Effect.succeed(undefined as OpenCodeServerOwner.OpenCodeServerLaunch | undefined),
+      (left, right) =>
+        left === undefined || right === undefined
+          ? left === right
+          : OpenCodeServerOwner.sameOpenCodeServerLaunch(left, right),
     );
     // No location: OpenCode answers with the machine's global skills, which hold for every cwd.
     const loadOpenCode2Skills = loadOpenCode2GlobalSkills(
