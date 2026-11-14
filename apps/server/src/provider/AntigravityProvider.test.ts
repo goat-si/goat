@@ -141,6 +141,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly enabled?: boolean;
     readonly safe?: boolean;
     readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
+    readonly clearUsage?: Effect.Effect<void>;
     readonly currentProfile?: Effect.Effect<string>;
   } = {},
 ) {
@@ -157,6 +158,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
       ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
+      ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
       ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
@@ -427,17 +429,23 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
   it.effect("a sign-out is not lost when the home changes while it is applied", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        // The home reads B, then C while the sign-out is applied, then B again.
-        const reads = yield* Ref.make(0);
-        const currentProfile = Ref.getAndUpdate(reads, (count) => count + 1).pipe(
-          Effect.map((count) => (count === 2 ? "/home/c" : "/home/b")),
-        );
-        const harness = yield* makeHarness({ currentProfile });
+        const home = yield* Ref.make("/home/b");
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          currentProfile: Ref.get(home),
+          clearUsage: Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+        });
         yield* harness.initialize;
         yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
-        yield* Ref.set(reads, 1);
-        yield* harness.provider.onSignedOut("/home/b");
-        yield* Ref.set(reads, 3);
+        const signOut = yield* harness.provider.onSignedOut("/home/b").pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Ref.set(home, "/home/c");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(signOut);
+        yield* Ref.set(home, "/home/b");
         expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
       }),
     ),
