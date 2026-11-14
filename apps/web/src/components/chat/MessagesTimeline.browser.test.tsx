@@ -4,7 +4,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
-import { cdp } from "vite-plus/test/browser";
+import { cdp, userEvent } from "vite-plus/test/browser";
 import {
   NodeId,
   ProviderDriverKind,
@@ -19,7 +19,6 @@ import {
 } from "@goat/contracts";
 import { Profiler, StrictMode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 

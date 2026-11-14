@@ -1342,6 +1342,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
               onItemSizeChanged={handleItemSizeChanged}
               // A viewport resize changes how much of the content fits.
               onLayout={reportContentOverflow}
+              tabIndex={-1}
+              data-workspace-focus-default
               className={cn(
                 "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
                 topFadeEnabled && "topbar-scroll-fade",
