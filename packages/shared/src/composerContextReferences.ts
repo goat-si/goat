@@ -435,6 +435,36 @@ export function projectComposerContextForProvider(input: {
   return `${body}\n\n<${CONTEXT_ENVELOPE_TAG} version="1">\n${entries.join("\n")}\n</${CONTEXT_ENVELOPE_TAG}>`;
 }
 
+const PROVIDER_MARKER = /\[([A-Z][^[\]:;\n]*): ([^[\];\n]*); ref=([^[\]\s]+)\]/g;
+
+/**
+ * Readable form of a single-reference `projectComposerContextForProvider` output, as question
+ * answers store it. Only an envelope right after its own marker is removed; typed XML stays.
+ */
+export function composerContextProviderTextForDisplay(text: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(PROVIDER_MARKER)) {
+    if (match.index < cursor) continue;
+    const markerEnd = match.index + match[0].length;
+    const tag = [GOAT_CONTEXT_ENVELOPE_TAG, LEGACY_CONTEXT_ENVELOPE_TAG].find((tag) =>
+      text.startsWith(`\n\n<${tag} version="1">\n<${CONTEXT_ENTRY_TAG} kind="`, markerEnd),
+    );
+    if (tag === undefined || match[3] === undefined) continue;
+    const prefix = `\n\n<${tag} version="1">\n<${CONTEXT_ENTRY_TAG} kind="`;
+    const kindEnd = text.indexOf('"', markerEnd + prefix.length);
+    if (kindEnd === -1 || !text.startsWith(` id="${escapeAttribute(match[3])}"`, kindEnd + 1)) {
+      continue;
+    }
+    const envelopeClose = `</${tag}>`;
+    const close = text.indexOf(envelopeClose, kindEnd);
+    if (close === -1) continue;
+    result += `${text.slice(cursor, match.index)}[${match[1]}: ${match[2]}]`;
+    cursor = close + envelopeClose.length;
+  }
+  return result + text.slice(cursor);
+}
+
 export type VerifiedThreadHosts = ReadonlyMap<EnvironmentId, string> & {
   readonly allows?: (environmentId: EnvironmentId, host: string) => boolean;
 };
