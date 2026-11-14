@@ -26,21 +26,18 @@ async function mount(element: React.ReactElement) {
   };
 }
 
-it("a list entry remounted with a status already showing does not speak it again", async () => {
+it("only a view that asks speaks a status already showing when it mounts", async () => {
   spoken.length = 0;
+  // A list entry, such as Home's task search, scrolled away and back with the same line.
   const first = await mount(<Status text={null} />);
   await first.render(<Status text="No matching tasks" />);
   await first.unmount();
-  // Scrolled away and back: the entry mounts again with the same line.
   const again = await mount(<Status text="No matching tasks" />);
   await again.unmount();
   expect(spoken).toEqual(["No matching tasks"]);
-});
-
-it("a screen that asks speaks a status already showing when it opens, once", async () => {
-  spoken.length = 0;
+  // The task screen asks: a line already there when it opens is spoken once.
   const screen = await mount(<Status text="You can't see this task" onMount />);
   await screen.render(<Status text="You can't see this task" onMount />);
   await screen.unmount();
-  expect(spoken).toEqual(["You can't see this task"]);
+  expect(spoken).toEqual(["No matching tasks", "You can't see this task"]);
 });
