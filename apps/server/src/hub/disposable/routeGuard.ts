@@ -115,7 +115,7 @@ export const refusalText = (claim: DisposableClaim | undefined, target: string) 
         claim.nodeId +
         " (attach " +
         claim.attachId +
-        "), which GOAT reaches only through its own Pen route. Reach the kept machine by an alias of your own (a Host block without the Pen name), or rename one of them in Pen."
+        "), which GOAT reaches only through its own Pen route. Reach the other member by an alias of your own (a Host block without the Pen name), or rename one of them in Pen."
       : target +
         " is a disposable machine (attach " +
         claim.attachId +

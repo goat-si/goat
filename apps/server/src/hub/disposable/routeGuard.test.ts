@@ -81,6 +81,7 @@ describe("Pen's own pen-<name> alias", () => {
     // The kept member under that name is reached by another alias, not by detaching anything.
     const text = refusalText(twin, "pen-cc");
     expect(text).toContain("more than one Pen member");
+    expect(text).toContain("the other member");
     expect(text).toContain("pen-" + node);
     expect(text).not.toContain("Detach it");
   });
