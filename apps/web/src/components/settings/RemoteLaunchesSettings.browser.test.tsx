@@ -20,6 +20,8 @@ const state = vi.hoisted(() => ({
   connect: vi.fn(),
   preflight: vi.fn(),
   canPreflight: true,
+  /** Environments where the person may not run the guarded SSH check. */
+  deniedPreflight: new Set<string>(),
   toast: vi.fn(),
   presentations: null as unknown as Atom.Writable<
     ReadonlyMap<EnvironmentId, { connection: { phase: string } }>
@@ -71,6 +73,14 @@ const preflightReport = (
     summary: "This is a disposable machine.",
   })),
 });
+const PRIMARY_URL = "http://127.0.0.1:3773";
+const nativePrimary = { id: "primary", bootstrapToken: "fixture-token", httpBaseUrl: PRIMARY_URL };
+/** The catalog's primary environment, at the native backend's base URL unless given another. */
+const primaryAt = (environmentId: EnvironmentId, httpBaseUrl = PRIMARY_URL) =>
+  ({
+    environmentId,
+    entry: { target: { _tag: "PrimaryConnectionTarget", httpBaseUrl } },
+  }) as never;
 let root: Root;
 let registry: AtomRegistry.AtomRegistry;
 let container: HTMLDivElement;
@@ -87,7 +97,11 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  Object.defineProperty(window, "desktopBridge", { configurable: true, value: {} });
+  // A native primary backend on this desktop, whose SSH config the desktop dials through.
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value: { getLocalEnvironmentBootstraps: () => [nativePrimary] },
+  });
   state.toast.mockReset();
   gate = makeSshProvisionGate();
   state.connect.mockReset().mockImplementation(gate.command);
@@ -114,10 +128,14 @@ beforeEach(() => {
   // The dispatcher's guarded SSH preflight; it passes unless a test says otherwise.
   state.preflight.mockReset().mockResolvedValue({ _tag: "Success", value: preflightReport([]) });
   state.canPreflight = true;
-  Object.assign(state.preflight, { permissionAtom: () => Atom.make(state.canPreflight) });
+  state.deniedPreflight = new Set();
+  Object.assign(state.preflight, {
+    permissionAtom: (environmentId: string) =>
+      Atom.make(state.canPreflight && !state.deniedPreflight.has(environmentId)),
+  });
   Object.assign(serverEnvironment, { preflightSshHost: state.preflight });
   // This desktop's own server is the dispatcher unless a test says otherwise.
-  vi.mocked(usePrimaryEnvironment).mockReturnValue({ environmentId: dispatcher } as never);
+  vi.mocked(usePrimaryEnvironment).mockReturnValue(primaryAt(dispatcher));
   registry = AtomRegistry.make();
   container = document.createElement("div");
   document.body.append(container);
@@ -294,7 +312,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const own = EnvironmentId.make("desktop-own");
-      vi.mocked(usePrimaryEnvironment).mockReturnValue({ environmentId: own } as never);
+      vi.mocked(usePrimaryEnvironment).mockReturnValue(primaryAt(own));
       state.preflight.mockImplementation((args: { readonly environmentId: EnvironmentId }) =>
         Promise.resolve({
           _tag: "Success",
@@ -325,5 +343,75 @@ it.effect("offers no Connect to a person who may not run the SSH check there", (
     state.canPreflight = false;
     expect(yield* openConnect(false)).toBeUndefined();
     expect(container.textContent).toContain("Pair fixture-vps under Environments");
+  }),
+);
+
+it.effect(
+  "offers no Connect when the catalog has no primary environment, as Add device needs one",
+  () =>
+    Effect.gen(function* () {
+      vi.mocked(usePrimaryEnvironment).mockReturnValue(null);
+      expect(yield* openConnect(false)).toBeUndefined();
+    }),
+);
+
+it.effect(
+  "offers no Connect when the primary is not this desktop's native backend, whose SSH config it would dial with",
+  () =>
+    Effect.gen(function* () {
+      vi.mocked(usePrimaryEnvironment).mockReturnValue(
+        primaryAt(dispatcher, "https://other.example"),
+      );
+      expect(yield* openConnect(false)).toBeUndefined();
+    }),
+);
+
+it.effect("offers no Connect when only this desktop's own check is denied", () =>
+  Effect.gen(function* () {
+    const own = EnvironmentId.make("desktop-own");
+    vi.mocked(usePrimaryEnvironment).mockReturnValue(primaryAt(own));
+    state.deniedPreflight = new Set([own]);
+    expect(yield* openConnect(false)).toBeUndefined();
+  }),
+);
+
+it.effect("asks this desktop's own server before the dispatcher", () =>
+  Effect.gen(function* () {
+    const own = EnvironmentId.make("desktop-own");
+    vi.mocked(usePrimaryEnvironment).mockReturnValue(primaryAt(own));
+    state.preflight.mockImplementation((args: { readonly environmentId: EnvironmentId }) =>
+      Promise.resolve({
+        _tag: "Success",
+        value: preflightReport(
+          args.environmentId === dispatcher
+            ? [{ id: "host_key", detail: "stop here, after both checks" }]
+            : [],
+        ),
+      }),
+    );
+    yield* openConnect(true);
+    expect(
+      state.preflight.mock.calls.map(
+        (call) => (call[0] as { readonly environmentId: EnvironmentId }).environmentId,
+      ),
+    ).toEqual([own, dispatcher]);
+    expect(state.connect).not.toHaveBeenCalled();
+  }),
+);
+
+it.effect("a preflight request that fails does not connect, and says why", () =>
+  Effect.gen(function* () {
+    state.preflight.mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("The SSH check could not run.")),
+    });
+    yield* openConnect(true);
+    expect(state.connect).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        description: expect.stringContaining("The SSH check could not run."),
+      }),
+    );
   }),
 );

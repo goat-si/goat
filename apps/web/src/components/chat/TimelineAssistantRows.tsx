@@ -30,7 +30,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
   // The timeline holds a streaming message's row while only its text grows.
   const liveText = useAssistantMessageText(
     row.message.streaming ? ctx.threadRef : null,
-    row.projectedItem?.item.id,
+    row.projectedItem,
   );
   const text = liveText ?? row.message.text;
   const messageText =
