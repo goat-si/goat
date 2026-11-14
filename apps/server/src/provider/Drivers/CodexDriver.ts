@@ -447,14 +447,16 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
+    // The home the redemption process uses: a non-empty CODEX_HOME as written, from the server's cwd.
     const accountKeyFor = (env: NodeJS.ProcessEnv) =>
-      pinnedHome !== undefined
-        ? Effect.succeed(pinnedHome)
-        : resolveCodexHomeLayout({ ...config, homePath: env.CODEX_HOME ?? "" }).pipe(
-            Effect.map((layout) => layout.sharedHomePath),
-            Effect.provideService(Path.Path, pathService),
-            Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
-          );
+      Effect.succeed(
+        pinnedHome ??
+          pathService.resolve(
+            env.CODEX_HOME
+              ? expandHomePath(env.CODEX_HOME, homeDirectory)
+              : pathService.join(homeDirectory, ".codex"),
+          ),
+      );
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
       currentEnvironment.pipe(
         Effect.flatMap((processEnv) =>

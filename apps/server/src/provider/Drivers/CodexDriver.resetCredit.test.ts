@@ -3,6 +3,7 @@ import { ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import { CodexDriver } from "./CodexDriver.ts";
@@ -61,12 +62,16 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("a host home ending in a space shares a lock with an instance pinned to it", () =>
+  // A whitespace-only home is relative to the server's directory, as the redemption process runs.
+  it.effect.each([
+    { name: "ends in a space", host: (root: string) => `${root}/user ` },
+    { name: "is only whitespace", host: () => " " },
+  ])("a host home that $name shares a lock with an instance pinned to it", ({ host: hostHome }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
-      const home = `${root}/user `;
-      yield* fs.makeDirectory(home);
+      const home = hostHome(root);
       const { service, keys } = yield* scriptedCoordinator(["uncertain", "settled"]);
       const create = (id: string, homePath: string, host: NodeJS.ProcessEnv) =>
         CodexDriver.create({
@@ -81,7 +86,7 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
           Effect.provideService(ResetCreditCoordinator.ResetCreditCoordinator, service),
         );
       const following = yield* create("reset-credit-host", "", { PATH: "", CODEX_HOME: home });
-      const pinned = yield* create("reset-credit-pinned", home, { PATH: "" });
+      const pinned = yield* create("reset-credit-pinned", path.resolve(home), { PATH: "" });
       yield* following.consumeResetCredit!().pipe(Effect.exit);
       yield* pinned.consumeResetCredit!().pipe(Effect.exit);
       const [first, second] = keys;
