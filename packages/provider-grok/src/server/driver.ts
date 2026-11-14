@@ -230,7 +230,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
       currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
       {
-        key: currentEnvironment.pipe(
+        lookup: currentEnvironment.pipe(
           Effect.flatMap((env) =>
             Effect.gen(function* () {
               const resolved = effectiveConfig.binaryPath
@@ -241,37 +241,14 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
               const real = resolved
                 ? yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => null))
                 : null;
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              return JSON.stringify({
-                resolved,
-                real,
-                binaryPath: effectiveConfig.binaryPath,
-                PATH: env.PATH,
-                Path: env.Path,
-                path: env.path,
-                PATHEXT: env.PATHEXT,
-                Pathext: env.Pathext,
-              });
+              // The link target, so an upgrade that retargets the same path is a new install.
+              return { env, resolvedCommandPath: resolved ?? null, install: real };
             }),
           ),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         ),
-        resolve: (key) => {
-          const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
-          return currentEnvironment.pipe(
-            Effect.flatMap((env) =>
-              maintenanceForEnvironment({
-                ...env,
-                PATH: lookupEnv.PATH,
-                Path: lookupEnv.Path,
-                path: lookupEnv.path,
-                PATHEXT: lookupEnv.PATHEXT,
-                Pathext: lookupEnv.Pathext,
-              }),
-            ),
-          );
-        },
+        resolve: ({ env }) => maintenanceForEnvironment(env),
       },
     );
     const orchestrationAdapter = yield* GrokAdapterV2Driver.create({
