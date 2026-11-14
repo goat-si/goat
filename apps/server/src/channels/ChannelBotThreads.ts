@@ -136,6 +136,18 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
+    const markKeys = encodeJson(
+      tasks.map((task) => TaskViews.messageMarkKey(owner.ownerId, task.taskId)),
+    );
+    const marks = yield* sql<{
+      readonly key: string;
+      readonly value_json: string;
+    }>`SELECT s.key, s.value_json FROM json_each(${markKeys}) ids JOIN channel_runtime_state s ON s.key = ids.value`.pipe(
+      Effect.mapError(failed),
+    );
+    const markMap = new Map(
+      marks.map((mark) => [mark.key, TaskViews.readMessageMark(mark.value_json)]),
+    );
     const launchLimit = options.launchLimit;
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
     // cannot hide that a task has more launches than the page lists.
@@ -211,6 +223,7 @@ const make = Effect.gen(function* () {
           doneAt: null,
           readThrough: null,
         };
+        const mark = markMap.get(TaskViews.messageMarkKey(owner.ownerId, task.taskId));
         rows.push({
           kind: "task",
           task: {
@@ -222,9 +235,10 @@ const make = Effect.gen(function* () {
             ...(task.generation > 1 ? { generation: task.generation } : {}),
           },
           view,
-          lastActivityAt: task.updatedAt,
+          lastActivityAt: mark?.at ?? task.updatedAt,
           unread:
-            view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
+            mark !== undefined &&
+            (view.readThrough === null || Date.parse(mark.at) > Date.parse(view.readThrough)),
           mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
           // A worker on another machine is not a thread this machine's rows can open.
           ...(task.worker === undefined || task.worker.host !== undefined

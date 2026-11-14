@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
+import * as TaskViews from "./channelTaskViews.ts";
 import { timelineIdsFor } from "./channelIds.ts";
 import { personMessageEntry } from "./channelPersonMessage.ts";
 
@@ -86,6 +87,7 @@ export const layerGoatTransport = Layer.effectDiscard(
     const registry = yield* ChannelTransport.ChannelTransportRegistry;
     const timeline = yield* ChannelBotTimeline;
     const ledger = yield* ChannelLedger.ChannelLedger;
+    const views = yield* TaskViews.ChannelTaskViews;
     const persistenceFailed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
     /**
@@ -203,6 +205,15 @@ export const layerGoatTransport = Layer.effectDiscard(
             },
             revision: "send",
           });
+          if (message.taskId !== undefined) {
+            const task = yield* ledger
+              .getTask(message.taskId)
+              .pipe(Effect.mapError(persistenceFailed));
+            if (task !== undefined)
+              yield* views
+                .raiseMessageMark(message.taskId, task.ownerId, message.deliveryId)
+                .pipe(Effect.mapError(persistenceFailed));
+          }
         }
         const acceptedAt = DateTime.formatIso(yield* DateTime.now);
         return { deliveryId: message.deliveryId, acceptedAt };

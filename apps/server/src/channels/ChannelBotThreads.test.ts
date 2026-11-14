@@ -1,12 +1,20 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelChildWorkId, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  ChannelChildWorkId,
+  ChannelDeliveryId,
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as Transport from "./ChannelTransport.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 import * as ChildStore from "./channelChildWorkStore.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -123,6 +131,16 @@ describe("ChannelBotThreads", () => {
         yield* insertTask("task:old", ownerId, "completed", old);
         yield* insertTask("task:pinned", ownerId, "completed", old);
         yield* insertTask("task:foreign", "foreign", "running", time);
+        const transport = Option.getOrThrow(
+          yield* (yield* Transport.ChannelTransportRegistry).resolve("goat"),
+        );
+        yield* transport.send({
+          deliveryId: ChannelDeliveryId.make("active-message"),
+          destination: { kind: "goat", environmentId, threadId: botThreadId },
+          kind: "result",
+          text: "An update",
+          taskId: ChannelTaskId.make("task:active"),
+        });
         for (let index = 0; index < 101; index++) {
           yield* insertTask(
             `task:stale-${index}`,

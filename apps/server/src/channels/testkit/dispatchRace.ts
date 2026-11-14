@@ -19,6 +19,11 @@ export class LedgerCallHolds extends Context.Service<
       method: M,
       forInput?: (input: Input<M>) => boolean,
     ) => Effect.Effect<Hold>;
+    /** Like holdNext, but the call reads first and its caller waits before seeing the result. */
+    readonly holdAfterNext: <M extends HeldMethod>(
+      method: M,
+      forInput?: (input: Input<M>) => boolean,
+    ) => Effect.Effect<Hold>;
     readonly failNext: <M extends HeldMethod>(
       method: M,
       error: ChannelLedger.ChannelLedgerError,
@@ -103,6 +108,25 @@ export class LedgerCallHolds extends Context.Service<
             Deferred.succeed(reached, undefined).pipe(
               Effect.andThen(Deferred.await(release)),
               Effect.andThen(originals[method](input)),
+            ),
+          );
+          return {
+            reached: Deferred.await(reached),
+            release: Deferred.succeed(release, undefined),
+          };
+        }),
+        holdAfterNext: Effect.fn("LedgerCallHolds.holdAfterNext")(function* <M extends HeldMethod>(
+          method: M,
+          forInput?: (input: Input<M>) => boolean,
+        ) {
+          const reached = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          releases.add(release);
+          enqueue(method, forInput, (input) =>
+            originals[method](input).pipe(
+              Effect.tap(() =>
+                Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release))),
+              ),
             ),
           );
           return {
