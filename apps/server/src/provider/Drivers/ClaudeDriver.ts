@@ -409,7 +409,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             driver: DRIVER_KIND,
             instanceId,
             detail:
-              cause._tag === "ClaudeResetCreditError"
+              cause._tag === "ClaudeResetCreditError" ||
+              cause._tag === "ResetCreditAccountLimitError"
                 ? cause.message
                 : "Claude could not redeem the reset.",
             cause,

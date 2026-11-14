@@ -121,10 +121,11 @@ const makeHarness = Effect.fn("makeAuthTestHarness")(function* (
         catalog = ["gemini-test"];
         events.push("catalog-published");
       }),
-    onSignedOut: Effect.sync(() => {
-      catalog = [];
-      events.push("catalog-cleared");
-    }),
+    onSignedOut: () =>
+      Effect.sync(() => {
+        catalog = [];
+        events.push("catalog-cleared");
+      }),
     forwardCallback: () =>
       options.forwardCallback ??
       Effect.sync(() => {

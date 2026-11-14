@@ -1,12 +1,11 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
 import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -37,7 +36,6 @@ import {
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
-  type TurnTokenUsage,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
@@ -172,6 +170,9 @@ import {
   type AcpMcpContext,
 } from "./mcpContext.ts";
 
+import { acpPerTurnPromptUsage } from "./promptUsage.ts";
+export { acpPerTurnPromptUsage } from "./promptUsage.ts";
+
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 // Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
@@ -191,6 +192,8 @@ export interface AcpAdapterV2RuntimeInput {
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
+  readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
+  readonly sessionLaunch?: unknown;
   readonly resumeSessionId?: string;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
@@ -267,50 +270,6 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
   }
 }
 
-/**
- * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
- * directly onto TurnTokenUsage: the response's counters already cover exactly
- * this prompt.
- */
-export function acpPerTurnPromptUsage(
-  usage: EffectAcpSchema.Usage | null | undefined,
-  hasSubagents: boolean,
-  terminalStatus: OrchestrationV2ProviderTurn["status"],
-  geminiUsage = false,
-): TurnTokenUsage {
-  if (usage == null) {
-    return { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents };
-  }
-  const inputTokens = geminiUsage
-    ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
-    : usage.inputTokens;
-  const outputTokens = geminiUsage
-    ? usage.outputTokens + (usage.thoughtTokens ?? 0)
-    : usage.outputTokens;
-  // TurnTokenUsage contract: input includes cache read + write and reasoning
-  // is a subset of output, so clamp counters that exceed their parent and
-  // drop the ones the agent left unset. Cache writes are capped at whatever
-  // cache reads leave of input, so the pair cannot exceed it.
-  const clampSubset = (value: number | null | undefined, parent: number) =>
-    value == null ? undefined : Math.min(value, parent);
-  const cachedInputTokens = clampSubset(usage.cachedReadTokens, inputTokens);
-  const cacheCreationTokens = clampSubset(
-    usage.cachedWriteTokens,
-    inputTokens - (cachedInputTokens ?? 0),
-  );
-  const reasoningTokens = clampSubset(usage.thoughtTokens, outputTokens);
-  return {
-    usageScope: "main_agent",
-    usageStatus: terminalStatus === "completed" ? "complete" : "partial",
-    hasSubagents,
-    inputTokens,
-    outputTokens,
-    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-    ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-  };
-}
-
 export interface AcpAdapterV2Flavor {
   readonly buildPrompt?: (input: {
     readonly text: string;
@@ -342,6 +301,7 @@ export interface AcpAdapterV2Flavor {
   readonly rewriteUserText?: (
     text: string,
     turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+    session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
   ) => Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner>;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
@@ -373,6 +333,11 @@ export interface AcpAdapterV2Flavor {
       }
     | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
+  readonly resolveSessionLaunch?: (
+    environment: NodeJS.ProcessEnv,
+    sessionEnvironment: NodeJS.ProcessEnv,
+  ) => Effect.Effect<unknown, EffectAcpErrors.AcpError, Scope.Scope>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
@@ -439,7 +404,10 @@ export interface AcpAdapterV2Flavor {
   ) => AcpAdapterV2SubagentUpdate | undefined;
   readonly isProvisionalSubagentTool?: (toolCall: AcpToolCallState) => boolean;
   readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
-  readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
+  readonly extractProposedPlanMarkdown?: (
+    toolCall: AcpToolCallState,
+    session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
+  ) => string | undefined;
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
   /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
   readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
@@ -556,6 +524,7 @@ export interface AcpAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly flavor: AcpAdapterV2Flavor;
   readonly selfInvocation: SelfInvocation;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly clientTerminals?: {
     readonly environment?: NodeJS.ProcessEnv;
     readonly shellCommands?: boolean;
@@ -1151,13 +1120,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
+        const sessionLaunch = yield* (
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
+          ) ?? Effect.void
+        );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: options.clientTerminals.environment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);
@@ -1735,6 +1713,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
+            sessionEnvironment,
+            sessionLaunch,
             ...(mcpContext.processEnvironment === undefined
               ? {}
               : { processEnvironment: mcpContext.processEnvironment }),
@@ -4106,7 +4086,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             for (const event of parseSessionUpdateEvent(notification).events) {
               if (event._tag !== "ToolCallUpdated") continue;
               const toolCall = flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall;
-              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall);
+              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall, {
+                environment: sessionEnvironment,
+                launch: sessionLaunch,
+              });
               if (proposedPlanMarkdown !== undefined && proposedPlanMarkdown.length > 0) {
                 yield* captureProposedPlan({ planMarkdown: proposedPlanMarkdown });
               }
@@ -7218,7 +7201,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.rewriteUserText === undefined
               ? turnInput.message.text
               : yield* flavor
-                  .rewriteUserText(turnInput.message.text, turnInput)
+                  .rewriteUserText(turnInput.message.text, turnInput, {
+                    environment: sessionEnvironment,
+                    launch: sessionLaunch,
+                  })
                   .pipe(
                     Effect.provideService(
                       ChildProcessSpawner.ChildProcessSpawner,

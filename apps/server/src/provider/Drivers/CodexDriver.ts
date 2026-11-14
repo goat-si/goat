@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -57,14 +58,20 @@ import {
 } from "./CodexHomeLayout.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
 import { codexUsageReader } from "./codexUsage.ts";
+import { withoutOtherHomeUsage } from "./codexUsageHome.ts";
+import type { CodexUsageReporter } from "../../orchestration-v2/Adapters/CodexAdapterV2Options.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
+// A check whose home moved while it ran; no session's home identity equals it.
+const UNESTABLISHED = "unestablished";
+const MAX_REMEMBERED_CHECKS = 16;
 const CODEX_STANDALONE_HOME_PATTERN = /^(.*)\/packages\/standalone\//is;
 
 function codexStandaloneHome(commandPath: string): string | null {
@@ -208,14 +215,96 @@ export const CodexDriver: ProviderDriver<
     const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const baseEnvironment = yield* HostProcess.Environment;
+    const homeDirectory = yield* HostProcess.HomeDirectory;
+    const mergedEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, baseEnvironment),
+    ).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+      Effect.map((env) => ({ ...env })),
+    );
+    const processEnv = { ...(yield* mergedEnvironment) };
     const environmentHome = processEnv.CODEX_HOME;
     const homeConfig =
       !config.homePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
         : config;
     const homeLayout = yield* resolveCodexHomeLayout(homeConfig);
+    // A home the instance sets itself is fixed; otherwise each check and launch uses the host's current CODEX_HOME.
+    const homeConfigured =
+      config.homePath.trim() !== "" ||
+      config.shadowHomePath.trim() !== "" ||
+      environment?.some(
+        (variable) => variable.name === "CODEX_HOME" && variable.value.trim() !== "",
+      ) === true;
+    const pinnedHome = homeConfigured
+      ? (homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath)
+      : undefined;
+    // Every launch names its home explicitly: the host's CODEX_HOME relative to the server's working
+    // directory, else the server user's .codex, so an instance HOME override cannot move one launch.
+    const withExecutionHome = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+      pinnedHome !== undefined
+        ? { ...env, CODEX_HOME: pinnedHome }
+        : {
+            ...env,
+            CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+              cwd: process.cwd(),
+              environment: env,
+            }),
+          };
+    const currentEnvironment = mergedEnvironment.pipe(Effect.map(withExecutionHome));
     const continuationIdentity = codexContinuationIdentity(homeLayout);
+    // The home a check or session process runs under, and its filesystem identity, found once per
+    // check and once per session; a failed lookup keeps the path, so both sides fall back alike.
+    const executionHome = (env: NodeJS.ProcessEnv) =>
+      HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+        home: effectiveConfig.homePath,
+        cwd: process.cwd(),
+        environment: env,
+      });
+    const homeIdentity = (home: string) =>
+      ResetCreditCoordinator.canonicalLoginDirectory(home).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, pathService),
+        Effect.orElseSucceed(() => home),
+      );
+    // The home each check ran under, by its checkedAt: a report is judged by the snapshot shown now,
+    // so a check counts once its snapshot is published. Bounded, never dropping the shown check's
+    // entry; a shown snapshot with no entry and not the initial one counts for no home.
+    const checkHomes = new Map<string, string>();
+    let initialCheckedAt: string | undefined;
+    const rememberCheckHome = (checkedAt: string, identity: string, shownAt: string) => {
+      checkHomes.delete(checkedAt);
+      checkHomes.set(checkedAt, identity);
+      for (const stale of checkHomes.keys()) {
+        if (checkHomes.size <= MAX_REMEMBERED_CHECKS) break;
+        if (stale !== shownAt) checkHomes.delete(stale);
+      }
+    };
+    const homeShownBy = (checkedAt: string) =>
+      checkHomes.get(checkedAt) ?? (checkedAt === initialCheckedAt ? undefined : UNESTABLISHED);
+    // Checks running now, by the home they started under: its path until its identity is known.
+    const runningChecks = new Map<object, string>();
+    const publishedCheckedAt: Effect.Effect<string> = Effect.suspend(
+      () => snapshot.getSnapshot,
+    ).pipe(Effect.map((shown) => shown.checkedAt));
+    const ignoreUsage: CodexUsageReporter = () => Effect.void;
+    const reportUsageFor =
+      (identity: string): CodexUsageReporter =>
+      (update) =>
+        snapshot.applyUsageLimits(update, {
+          appliesTo: (shown) => {
+            const home = homeShownBy(shown.checkedAt);
+            if (home !== undefined && home !== identity) return false;
+            // A check for another home, running or not yet shown, publishes next; one that reads no
+            // usage would keep a report applied meanwhile, so another home's report waits for it.
+            for (const running of runningChecks.values()) if (running !== identity) return false;
+            for (const [checkedAt, checked] of checkHomes) {
+              if (checkedAt > shown.checkedAt && checked !== identity) return false;
+            }
+            return true;
+          },
+        });
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,
@@ -238,25 +327,43 @@ export const CodexDriver: ProviderDriver<
       ...config,
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
-      homePath: homeLayout.effectiveHomePath ?? "",
+      homePath: pinnedHome ?? "",
     } satisfies CodexSettings;
-    const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
+    const maintenanceForEnvironment = (
+      env: NodeJS.ProcessEnv,
+      resolvedCommandPath?: string | null,
+    ) =>
       resolveProviderMaintenanceCapabilitiesEffect(
         makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
         {
           binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
+          env,
+          ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         },
       ).pipe(
+        // Inside the cache, so a cache hit returns the same capabilities object.
+        Effect.map((capabilities) => withCodexNativeLatestVersion(capabilities, httpClient)),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
-      ),
-    );
-    const resolveMaintenance: typeof resolveInstallation = (options) =>
-      resolveInstallation(options).pipe(
-        Effect.map((capabilities) => withCodexNativeLatestVersion(capabilities, httpClient)),
       );
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
+      {
+        lookup: currentEnvironment.pipe(
+          Effect.flatMap((env) =>
+            resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+              Effect.map((resolvedCommandPath) => ({ env, resolvedCommandPath })),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, pathService),
+              Effect.provideService(CommandResolutionCache, new Map()),
+            ),
+          ),
+        ),
+        resolve: ({ env, resolvedCommandPath }) =>
+          maintenanceForEnvironment(env, resolvedCommandPath),
+      },
+    );
 
     const memoryAdmission = yield* Effect.serviceOption(
       AdapterInfrastructure.ProviderMemoryAdmission,
@@ -268,10 +375,27 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config: homeConfig,
+        // A home the instance sets names the session home; otherwise each new session reads the
+        // host's CODEX_HOME when it opens, through currentEnvironment.
+        config: homeConfigured ? homeConfig : config,
       },
       {
-        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        // A home that moved while the process started is not one GOAT can attribute usage to.
+        sessionUsage: (home) =>
+          homeIdentity(home).pipe(
+            Effect.map(
+              (opened) => (reattached: boolean) =>
+                reattached
+                  ? Effect.succeed(snapshot.applyUsageLimits)
+                  : homeIdentity(home).pipe(
+                      Effect.map((started) =>
+                        started === opened ? reportUsageFor(started) : ignoreUsage,
+                      ),
+                    ),
+            ),
+          ),
+        // New sessions read the same environment the status check uses.
+        currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
         offeredModels: Effect.suspend(() => snapshot.getSnapshot).pipe(
           Effect.map((value) => value.models),
@@ -297,16 +421,57 @@ export const CodexDriver: ProviderDriver<
     );
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
-    // manifest, so a slow or hung fetch never delays the provider check.
-    const checkProvider = modelCatalog.refreshInBackground.pipe(
-      Effect.andThen(
-        Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, processEnv).pipe(provideHomeRoute),
-          currentCatalog,
-          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
-          { concurrent: true },
+    // manifest, so a slow or hung fetch never delays the provider check. Each check's checkedAt
+    // is moved past the previous one so it names that check's snapshot alone.
+    let lastCheckAt = 0;
+    const checkUnder = (merged: NodeJS.ProcessEnv, token: object) =>
+      modelCatalog.refreshInBackground.pipe(
+        Effect.andThen(
+          Effect.zipWith(
+            Effect.gen(function* () {
+              const env = withExecutionHome(merged);
+              const home = executionHome(env);
+              const before = yield* homeIdentity(home);
+              runningChecks.set(token, before);
+              // A home the host names is the one the sign-in hint shows, as for a pinned home.
+              const named = pinnedHome !== undefined || Boolean(merged.CODEX_HOME?.trim());
+              const status = yield* checkCodexProviderStatus(
+                named ? { ...effectiveConfig, homePath: home } : effectiveConfig,
+                undefined,
+                env,
+              ).pipe(provideHomeRoute);
+              const identity = before === (yield* homeIdentity(home)) ? before : UNESTABLISHED;
+              const shownAt = yield* publishedCheckedAt;
+              const shown = homeShownBy(shownAt);
+              lastCheckAt = Math.max(Date.parse(status.checkedAt), lastCheckAt + 1);
+              const checkedAt = DateTime.formatIso(DateTime.makeUnsafe(lastCheckAt));
+              rememberCheckHome(checkedAt, identity, shownAt);
+              return withoutOtherHomeUsage(
+                { ...status, checkedAt },
+                identity === UNESTABLISHED
+                  ? "unknown"
+                  : shown !== undefined && shown !== identity
+                    ? "other"
+                    : "same",
+                DateTime.formatIso(yield* DateTime.now),
+              );
+            }),
+            currentCatalog,
+            (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+          ),
         ),
-      ),
+      );
+    // A check is registered from its start, so no report lands unjudged while it runs.
+    const checkProvider = Effect.suspend(() => {
+      const token = {};
+      return mergedEnvironment.pipe(
+        Effect.tap((merged) =>
+          Effect.sync(() => runningChecks.set(token, executionHome(withExecutionHome(merged)))),
+        ),
+        Effect.flatMap((merged) => checkUnder(merged, token)),
+        Effect.ensuring(Effect.sync(() => runningChecks.delete(token))),
+      );
+    }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
@@ -322,6 +487,14 @@ export const CodexDriver: ProviderDriver<
           makePendingCodexProvider(settings.provider),
           currentCatalog,
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+        ).pipe(
+          // Shown before any check: usage counts for it, and no check may share its checkedAt.
+          Effect.tap((initial) =>
+            Effect.sync(() => {
+              initialCheckedAt = initial.checkedAt;
+              lastCheckAt = Math.max(lastCheckAt, Date.parse(initial.checkedAt));
+            }),
+          ),
         ),
       checkProvider,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
@@ -348,13 +521,14 @@ export const CodexDriver: ProviderDriver<
     );
     const textGeneration = yield* makeCodexTextGeneration(
       effectiveConfig,
-      processEnv,
+      undefined,
       snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       undefined,
       {
         providerInstanceId: instanceId,
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
+      currentEnvironment,
     );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
@@ -362,6 +536,7 @@ export const CodexDriver: ProviderDriver<
         : Effect.all([
             snapshot.getSnapshot,
             Effect.gen(function* () {
+              const processEnv = yield* currentEnvironment;
               const route = yield* HomeRoute.resolveCodexRouteContext({
                 settings: effectiveConfig,
                 binaryPath: effectiveConfig.binaryPath,
@@ -401,57 +576,71 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
-    const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+    // It runs under the home a status check and a new session use for the same environment.
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
-      resetCreditCoordinator
-        .redeem(accountKey, (idempotencyKey) =>
-          Effect.gen(function* () {
-            const { client } = yield* withCodexAppServerClient({
-              binaryPath: effectiveConfig.binaryPath,
-              homePath: effectiveConfig.homePath,
-              launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-              cwd: process.cwd(),
-              environment: processEnv,
-            });
-            const response = yield* client.request("account/rateLimitResetCredit/consume", {
-              idempotencyKey,
-            });
-            return response.outcome;
-          }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
-        )
-        .pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.mapError(
-            (cause) =>
-              new ProviderDriverError({
-                driver: DRIVER_KIND,
-                instanceId,
-                detail: "Codex could not redeem the reset credit.",
-                cause,
-              }),
-          ),
-          Effect.tap((outcome) =>
-            ResetCreditCoordinator.refreshAfterRedemption({
-              outcome,
-              getSnapshot: snapshot.getSnapshot,
-              refresh: snapshot.refresh,
-            }).pipe(
-              Effect.filterOrFail(
-                (confirmed) => confirmed,
-                () =>
-                  new ProviderDriverError({
-                    driver: DRIVER_KIND,
-                    instanceId,
-                    detail:
-                      "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
-                  }),
+      currentEnvironment.pipe(
+        Effect.flatMap((processEnv) =>
+          Effect.succeed(executionHome(processEnv)).pipe(
+            Effect.flatMap((accountKey) =>
+              resetCreditCoordinator.redeem(accountKey, (idempotencyKey) =>
+                Effect.gen(function* () {
+                  const { client } = yield* withCodexAppServerClient({
+                    binaryPath: effectiveConfig.binaryPath,
+                    homePath: accountKey,
+                    launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+                    cwd: process.cwd(),
+                    environment: processEnv,
+                    // The captured environment alone, so nothing the host adds later reaches it.
+                    extendEnv: false,
+                  });
+                  const response = yield* client.request("account/rateLimitResetCredit/consume", {
+                    idempotencyKey,
+                  });
+                  return response.outcome;
+                }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
               ),
             ),
           ),
-        );
+        ),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail:
+                cause._tag === "ResetCreditAccountLimitError"
+                  ? cause.message
+                  : "Codex could not redeem the reset credit.",
+              cause,
+            }),
+        ),
+        Effect.tap((outcome) =>
+          ResetCreditCoordinator.refreshAfterRedemption({
+            outcome,
+            getSnapshot: snapshot.getSnapshot,
+            refresh: snapshot.refresh,
+          }).pipe(
+            Effect.filterOrFail(
+              (confirmed) => confirmed,
+              () =>
+                new ProviderDriverError({
+                  driver: DRIVER_KIND,
+                  instanceId,
+                  detail:
+                    "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
+                }),
+            ),
+          ),
+        ),
+      );
 
-    if (effectiveConfig.enabled) {
-      yield* fileSystem.watch(accountKey).pipe(
+    // The home current at creation; a home the host moves to later is seen at the next check.
+    const watchedHome = effectiveConfig.enabled
+      ? (yield* currentEnvironment).CODEX_HOME
+      : undefined;
+    if (watchedHome) {
+      yield* fileSystem.watch(watchedHome).pipe(
         Stream.filter((event) => pathService.basename(event.path) === "auth.json"),
         Stream.debounce(Duration.millis(250)),
         Stream.runForEach(() => snapshot.refresh.pipe(Effect.ignoreCause({ log: true }))),

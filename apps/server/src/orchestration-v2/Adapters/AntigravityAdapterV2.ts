@@ -72,6 +72,8 @@ const AntigravityProviderCapabilitiesV2 = {
 export interface AntigravityAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly selfInvocation: SelfInvocation;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
+  readonly resolveSessionLaunch?: AcpAdapterV2Flavor["resolveSessionLaunch"];
   readonly makeRuntime: (
     input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
   ) => Effect.Effect<
@@ -206,6 +208,9 @@ export function makeAntigravityAcpAdapterFlavor(
     driver: ANTIGRAVITY_PROVIDER,
     runtimeHarness: "Antigravity",
     capabilities: AntigravityProviderCapabilitiesV2,
+    ...(options.resolveSessionLaunch === undefined
+      ? {}
+      : { resolveSessionLaunch: options.resolveSessionLaunch }),
     makeRuntime,
     buildPrompt: ({
       text,
@@ -294,6 +299,9 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
     instanceId: options.instanceId,
     flavor: makeAntigravityAcpAdapterFlavor({ ...options, ...services }),
     selfInvocation: options.selfInvocation,
+    ...(options.currentEnvironment === undefined
+      ? {}
+      : { currentEnvironment: options.currentEnvironment }),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.continuationRequests === undefined
       ? {}

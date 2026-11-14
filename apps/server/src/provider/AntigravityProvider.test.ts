@@ -141,6 +141,8 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly enabled?: boolean;
     readonly safe?: boolean;
     readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
+    readonly clearUsage?: Effect.Effect<void>;
+    readonly currentProfile?: Effect.Effect<string>;
   } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
@@ -156,6 +158,8 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
       ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
+      ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
+      ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -400,13 +404,94 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
+  it.effect(
+    "a sign-out from another home clears the current profile, since every home shares the credentials",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({ currentProfile: Effect.succeed("/home/b") });
+          yield* harness.initialize;
+          yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("authenticated");
+          // A logout that began under the previous home finishes after this home was confirmed.
+          yield* harness.provider.onSignedOut("/home/a");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe(
+            "unauthenticated",
+          );
+          // A sign-in failure from that old session still leaves the current profile alone.
+          yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+          yield* harness.provider.onAuthRequired("/home/a");
+          expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        }),
+      ),
+  );
+
+  it.effect("old session events cannot replace the current profile catalog", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = yield* Ref.make("/home/a");
+        const release = yield* Deferred.make<void>();
+        const waiting = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({ currentProfile: Ref.get(home) });
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/a");
+        const oldEvents = yield* Effect.gen(function* () {
+          yield* Deferred.succeed(waiting, undefined);
+          yield* Deferred.await(release);
+          yield* harness.provider.onConfigOptionsUpdated([], "/home/a");
+          yield* harness.provider.onAvailableCommands(
+            [{ name: "old", description: "Old command" }],
+            undefined,
+            "/home/a",
+          );
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(waiting);
+        yield* Ref.set(home, "/home/b");
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+        yield* harness.provider.onAvailableCommands(commands, undefined, "/home/b");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(oldEvents);
+        const snapshot = yield* harness.provider.snapshot.getSnapshot;
+        expect({ models: snapshot.models, commands: snapshot.slashCommands }).toEqual({
+          models: buildAntigravityModelsFromSession(sessionSetupResult),
+          commands: expectedCommands,
+        });
+      }),
+    ),
+  );
+
+  it.effect("a sign-out is not lost when the home changes while it is applied", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = yield* Ref.make("/home/b");
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          currentProfile: Ref.get(home),
+          clearUsage: Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+        });
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, undefined, "/home/b");
+        const signOut = yield* harness.provider.onSignedOut("/home/b").pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Ref.set(home, "/home/c");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(signOut);
+        yield* Ref.set(home, "/home/b");
+        expect((yield* harness.provider.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
+      }),
+    ),
+  );
+
   it.effect("clears all account metadata on sign-out and authentication failure", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const auth = { type: "gemini-api-key", label: "Gemini API key" };
         const harness = yield* makeHarness({ auth });
         yield* harness.initialize;
-        for (const clear of [harness.provider.onSignedOut, harness.provider.onAuthRequired]) {
+        for (const clear of [harness.provider.onSignedOut(), harness.provider.onAuthRequired()]) {
           yield* harness.provider.onSessionStarted(started, "/workspace");
           yield* harness.provider.onAvailableCommands(commands, "/workspace");
           yield* clear;
@@ -517,7 +602,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         const harness = yield* makeHarness();
         yield* harness.initialize;
         yield* harness.provider.onSessionStarted(started);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* harness.provider.onSessionStarted({
           ...started,
           sessionSetupResult: {
@@ -616,7 +701,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         );
         const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
         yield* Deferred.await(probeEntered);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* Deferred.succeed(releaseProbe, initializeResult);
         const snapshot = yield* Fiber.join(refresh);
         expect(snapshot).toMatchObject({
@@ -739,7 +824,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           yield* harness.provider.snapshot.refresh;
           yield* Deferred.await(failedReadApplied);
           expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
-          yield* harness.provider.onSignedOut;
+          yield* harness.provider.onSignedOut();
           expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
           yield* Ref.set(usage, {
             checkedAt: "2026-10-09T12:02:00.000Z",
@@ -772,7 +857,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         );
         const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
         yield* Deferred.await(readStarted);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* Deferred.succeed(readResult, {
           checkedAt: "2026-10-09T12:01:00.000Z",
           windows: [

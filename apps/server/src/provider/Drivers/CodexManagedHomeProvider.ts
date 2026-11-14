@@ -8,6 +8,7 @@ import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentit
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import { withoutLocalCli } from "@goat/provider-core/server/snapshotProbe";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -42,7 +43,14 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const host = yield* ProviderHost.ProviderHost;
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
-  const environment = yield* mergeProviderInstanceEnvironment(input.environment);
+  const baseEnvironment = yield* HostProcess.Environment;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const currentEnvironment = Effect.suspend(() =>
+    mergeProviderInstanceEnvironment(input.environment, baseEnvironment),
+  ).pipe(
+    Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+    Effect.map((env) => ({ ...env })),
+  );
   const homeLayout = yield* resolveManagedCodexHomeLayout(server.stateDir, instanceId, config);
   const continuationIdentity = codexContinuationIdentity(homeLayout);
   const stamp = withInstanceIdentity({
@@ -73,12 +81,17 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
           : provided,
     );
   const runtime = (acquisition: "acquire" | "installed") =>
-    resolveAuthlessManagedRuntime({
-      settings: { ...config, enabled },
-      instanceId,
-      environment,
-      acquisition,
-    }).pipe(provideHost);
+    currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        resolveAuthlessManagedRuntime({
+          settings: { ...config, enabled },
+          instanceId,
+          environment,
+          acquisition,
+        }),
+      ),
+      provideHost,
+    );
   const resolveRuntime = runtime("acquire");
   const pending = makePendingCodexProvider({ ...config, enabled, customModels: [] }).pipe(
     Effect.map((draft) => stamp({ ...draft, models: [], setup, runtimePaths })),
@@ -141,7 +154,7 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
     ),
   );
   const orchestrationAdapter = yield* createCodexAdapterV2(input, {
-    onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+    sessionUsage: () => Effect.succeed(() => Effect.succeed(snapshot.applyUsageLimits)),
     offeredModels: snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
     resolveRuntime,
   }).pipe(

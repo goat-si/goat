@@ -10,7 +10,7 @@ import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import type * as Crypto from "effect/Crypto";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
@@ -33,9 +33,18 @@ export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Read once when a session opens, so a new session sees the host as it is then. */
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
-  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
+  /**
+   * Called before a session's process starts, with the home it will run under; the result, called
+   * once the process is up (reattached: GOAT did not start it, so its home is unknown), returns where
+   * that session's usage reports go.
+   */
+  readonly sessionUsage?: (
+    home: string,
+  ) => Effect.Effect<(reattached: boolean) => Effect.Effect<CodexUsageReporter>>;
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly compatibility?: (
     version: string,
@@ -57,5 +66,25 @@ export interface CodexAdapterV2Options {
 /** What a Codex driver adds to the adapter it builds. */
 export type CodexAdapterV2Hooks = Pick<
   CodexAdapterV2Options,
-  "onUsageLimits" | "resolveRuntime" | "compatibility" | "offeredModels"
+  "sessionUsage" | "resolveRuntime" | "compatibility" | "offeredModels" | "currentEnvironment"
 >;
+
+export type CodexUsageReporter = ManagedServerProvider["applyUsageLimits"];
+
+const ignoreUsage: CodexUsageReporter = () => Effect.void;
+
+/** Starts a session's usage reporter before its process starts; finish it once it is known. */
+export const codexSessionUsage = (
+  options: Pick<CodexAdapterV2Options, "sessionUsage">,
+  route: { readonly execution: { readonly home: string } },
+): Effect.Effect<(reattached: boolean) => Effect.Effect<CodexUsageReporter>> =>
+  options.sessionUsage?.(route.execution.home) ?? Effect.succeed(() => Effect.succeed(ignoreUsage));
+
+/** The environment a new session opens with: its managed runtime's, else the host's as it is now. */
+export const codexSessionEnvironment = (
+  options: Pick<CodexAdapterV2Options, "environment" | "currentEnvironment">,
+  runtime: CodexEffectiveRuntime | undefined,
+): Effect.Effect<NodeJS.ProcessEnv> =>
+  runtime === undefined
+    ? (options.currentEnvironment ?? Effect.succeed(options.environment))
+    : Effect.succeed(runtime.environment);

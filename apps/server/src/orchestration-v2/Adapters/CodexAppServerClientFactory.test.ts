@@ -422,6 +422,63 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
   }),
 );
 
+it.effect.each([
+  { settled: "connect" as const, reattached: true },
+  { settled: "release" as const, reattached: false },
+])(
+  "a kept record that settles to $settled marks the connection reattached: $reattached",
+  ({ settled, reattached }) =>
+    Effect.gen(function* () {
+      const layer = layerAppServerClientFactory.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerSettings.ServerSettingsService)({}),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+            Layer.mock(CodexSurvivors.CodexSurvivors)({
+              get: () => Effect.void.pipe(Effect.as(undefined)),
+              list: Effect.succeed([]),
+              listGoalBlocksByInstance: () => Effect.succeed([]),
+            }),
+            Layer.mock(CodexDetachedAppServers)({
+              settleKept: () => Effect.succeed(settled),
+              socketTransportEnabled: true,
+              socketTransportMode: "socket",
+              ensureNotBlocked: () => Effect.void,
+              ensureReleasedClear: () => Effect.void,
+              listPreservedForSession: () => Effect.succeed(["codex-abcdefabcdef"]),
+              connectExisting: () =>
+                Effect.fail(new CodexDetachedAppServerError({ detail: "test connection" })),
+              open: () => Effect.fail(new CodexDetachedAppServerError({ detail: "test launch" })),
+            }),
+            Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+              spawn: () => Effect.die("test stdio"),
+            }),
+            Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
+              native: undefined,
+              canonical: undefined,
+            }),
+          ),
+        ),
+      );
+      const connection = { reattached: false };
+      yield* Effect.gen(function* () {
+        const factory = yield* CodexAppServerClientFactory;
+        yield* factory
+          .open({
+            instanceId: ProviderInstanceId.make("codex"),
+            threadId: ThreadId.make("thread"),
+            providerSessionId: ProviderSessionId.make("session"),
+            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+            settings: defaultSettings,
+            environment: {},
+            connection,
+          })
+          .pipe(Effect.scoped, Effect.exit);
+      }).pipe(Effect.provide(layer));
+      assert.equal(connection.reattached, reattached);
+    }),
+);
+
 function openRecordedProtocolLogger(input: {
   readonly threadId: ThreadId;
   readonly threadFor?: (nativeThreadId: string) => ThreadId | undefined;
