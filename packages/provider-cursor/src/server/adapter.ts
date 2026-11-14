@@ -53,11 +53,7 @@ import {
   makeCursorAgentOptions,
 } from "./agentOptions.ts";
 import { cursorContextWindowTokens, cursorSdkModelSelection } from "./sdkModel.ts";
-import {
-  discoverCursorSkills,
-  hasCursorSkillMention,
-  rewriteCursorSkillMentions,
-} from "./skills.ts";
+import { makeCursorSkillTextResolver } from "./skills.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { goatOrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildCursorRuntimeInstructions } from "./screenInstructions.ts";
@@ -1703,7 +1699,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Ref.set(liveAgent, next);
           return next;
         });
-        let cursorSkillNames: ReadonlySet<string> | undefined;
+        const resolveCursorSkillText = makeCursorSkillTextResolver(adapterOptions.environment);
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           config: McpProviderSession.McpProviderSessionConfig | undefined,
@@ -1714,26 +1710,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
             return { message: "/compress", prompt: undefined };
           }
-          if (hasCursorSkillMention(rawText) && cursorSkillNames === undefined) {
-            const skills = yield* discoverCursorSkills(
-              turnInput.runtimePolicy.cwd ?? undefined,
-              adapterOptions.environment,
-            ).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            );
-            cursorSkillNames = new Set(
-              skills
-                .filter((skill) => skill.enabled && skill.userInvocable !== false)
-                .map((skill) => skill.name),
-            );
-          }
           const newText = goatOrchestrationPromptForFirstRun({
             prompt: yield* providerMessageTextWithAttachmentPaths({
-              text:
-                cursorSkillNames === undefined
-                  ? rawText
-                  : rewriteCursorSkillMentions(rawText, cursorSkillNames),
+              text: yield* resolveCursorSkillText(
+                rawText,
+                turnInput.runtimePolicy.cwd ?? undefined,
+              ).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              ),
               attachments: turnInput.message.attachments,
               resolveAttachmentPath: host.resolveAttachmentPath,
               resolveExtractedTextPath: host.resolveExtractedTextPath,

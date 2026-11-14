@@ -14,6 +14,7 @@ const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const SKILL_MENTION_PATTERN =
   /(^|\s)\p{Sc}(?![0-9][0-9_]*(?:[kKmMbBtT]|[eE][0-9]+)?(?:\s|$))(?=[a-zA-Z0-9:_-]*[a-zA-Z])([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
 const HAS_SKILL_MENTION_PATTERN = new RegExp(SKILL_MENTION_PATTERN.source, "u");
+const SLASH_SKILL_PATTERN = /(?:^|\s)\/([a-zA-Z0-9][a-zA-Z0-9:_-]*)(?=\s|$)/gu;
 const MAX_SKILL_DEPTH = 10;
 const MAX_SKILL_BYTES = ByteSize.bytes(1_000_000);
 const MAX_SKILL_SCAN_ENTRIES = 10_000;
@@ -305,3 +306,56 @@ export function rewriteCursorSkillMentions(
     skillNames.has(name) ? `${prefix}/${name}` : match,
   );
 }
+
+/** Names invoked as `/name`, the form Cursor uses and `rewriteCursorSkillMentions` produces. */
+function cursorSlashSkillNames(prompt: string): ReadonlySet<string> {
+  return new Set(Array.from(prompt.matchAll(SLASH_SKILL_PATTERN), (match) => match[1] ?? ""));
+}
+
+/** Cursor hides `disable-model-invocation` skills from the model, so the prompt carries them. */
+function appendCursorInvokedSkills(
+  prompt: string,
+  skills: ReadonlyArray<{ readonly name: string; readonly contents: string }>,
+): string {
+  if (skills.length === 0) return prompt;
+  const blocks = skills.map(
+    (skill) =>
+      `<skill name="${skill.name}">\n${skill.contents.replace(FRONTMATTER_PATTERN, "").trim()}\n</skill>`,
+  );
+  return `${prompt}\n\nThe user invoked these skills. Follow their instructions:\n\n${blocks.join("\n\n")}`;
+}
+
+/** Rewrites one session's prompts for Cursor; skills are discovered on the first prompt naming one. */
+export const makeCursorSkillTextResolver = (environment: NodeJS.ProcessEnv) => {
+  let skillsByName: ReadonlyMap<string, ServerProviderSkill> | undefined;
+  return Effect.fn("CursorAdapterV2.resolveCursorSkillText")(function* (
+    rawText: string,
+    cwd: string | undefined,
+  ) {
+    if (
+      skillsByName === undefined &&
+      (hasCursorSkillMention(rawText) || cursorSlashSkillNames(rawText).size > 0)
+    ) {
+      const skills = yield* discoverCursorSkills(cwd, environment);
+      skillsByName = new Map(
+        skills
+          .filter((skill) => skill.enabled && skill.userInvocable !== false)
+          .map((skill) => [skill.name, skill]),
+      );
+    }
+    if (skillsByName === undefined) return rawText;
+    const known = skillsByName;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const text = rewriteCursorSkillMentions(rawText, new Set(known.keys()));
+    const invoked = yield* Effect.forEach(cursorSlashSkillNames(text), (name) => {
+      const skill = known.get(name);
+      return skill?.userInvocationOnly === true
+        ? fileSystem.readFileString(skill.path).pipe(
+            Effect.map((contents) => [{ name, contents }]),
+            Effect.orElseSucceed(() => []),
+          )
+        : Effect.succeed([]);
+    });
+    return appendCursorInvokedSkills(text, invoked.flat());
+  });
+};
