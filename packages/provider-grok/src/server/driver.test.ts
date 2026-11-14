@@ -187,6 +187,54 @@ it.layer(layerTest)("GrokDriver", (it) => {
   });
 
   it.effect(
+    "a host PATH change while a check resolves the executable keeps that check on one install",
+    () => {
+      const host = { PATH: "", HOME: "/tmp" };
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "grok-maintenance-race-" });
+        const dirs = [path.join(root, "first"), path.join(root, "second")];
+        for (const dir of dirs) {
+          yield* fs.makeDirectory(dir);
+          yield* fs.writeFileString(path.join(dir, "grok"), "#!/bin/sh\n");
+          yield* fs.chmod(path.join(dir, "grok"), 0o755);
+        }
+        host.PATH = dirs[0]!;
+        const first = path.join(dirs[0]!, "grok");
+        let moved = false;
+        // The host moves to the second install while the check is looking at the first.
+        const movingFs: FileSystem.FileSystem = {
+          ...fs,
+          stat: (target) => {
+            if (target === first && !moved) {
+              moved = true;
+              host.PATH = dirs[1]!;
+            }
+            return fs.stat(target);
+          },
+        };
+        const instance = yield* GrokDriver.create({
+          instanceId: ProviderInstanceId.make("grok-maintenance-race"),
+          displayName: undefined,
+          enabled: false,
+          environment: [],
+          config: GrokDriver.defaultConfig(),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, movingFs));
+        expect((yield* instance.snapshot.resolveMaintenance()).update?.executable).toBe(first);
+        expect(moved).toBe(true);
+        expect((yield* instance.snapshot.resolveMaintenance()).update?.executable).toBe(
+          path.join(dirs[1]!, "grok"),
+        );
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+        Effect.scoped,
+      );
+    },
+  );
+
+  it.effect(
     "regression #3079: maintenance detects a newly installed executable in the same PATH",
     () => {
       const host = { PATH: "", HOME: "/tmp" };

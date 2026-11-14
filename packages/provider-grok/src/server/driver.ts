@@ -217,10 +217,14 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
-    const maintenanceForEnvironment = (env: NodeJS.ProcessEnv) =>
+    const maintenanceForEnvironment = (
+      env: NodeJS.ProcessEnv,
+      resolvedCommandPath?: string | null,
+    ) =>
       resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env,
+        ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(CommandResolutionCache, new Map()),
@@ -231,8 +235,10 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
       {
         lookup: currentEnvironment.pipe(
-          Effect.flatMap((env) =>
+          // A copy: with no instance variables the merged environment is the live host object.
+          Effect.flatMap((live) =>
             Effect.gen(function* () {
+              const env = { ...live };
               const resolved = effectiveConfig.binaryPath
                 ? yield* resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
                     Effect.provideService(CommandResolutionCache, new Map()),
@@ -248,7 +254,8 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         ),
-        resolve: ({ env }) => maintenanceForEnvironment(env),
+        resolve: ({ env, resolvedCommandPath }) =>
+          maintenanceForEnvironment(env, resolvedCommandPath),
       },
     );
     const orchestrationAdapter = yield* GrokAdapterV2Driver.create({
