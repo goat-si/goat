@@ -45,6 +45,7 @@ import * as ModelManifest from "./ModelManifest.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
+import { makeTildeProviderFixtures } from "./ProviderInstanceRegistry.testkit.ts";
 import { ProviderDriverError } from "./Errors.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
@@ -114,59 +115,6 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   autoCompactWindow: "",
   idleCompaction: "default",
   ...overrides,
-});
-
-const makeTildeProviderFixtures = Effect.fn(
-  "ProviderInstanceRegistry.test.makeTildeProviderFixtures",
-)(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const homePath = yield* HostProcess.HomeDirectory;
-  const fixtureDir = yield* fileSystem.makeTempDirectory({
-    directory: homePath,
-    prefix: ".goat-provider-path-test-",
-  });
-  yield* fileSystem.writeFileString(
-    path.join(fixtureDir, "package.json"),
-    JSON.stringify({ type: "commonjs" }),
-  );
-  const codexPath = path.join(fixtureDir, "codex");
-  const claudePath = path.join(fixtureDir, "claude.mjs");
-  const claudeHomePath = path.join(fixtureDir, "claude-home");
-  const codexScriptPath = path.join(fixtureDir, "codex-script.json");
-  const codexFixtureDir = path.join(import.meta.dirname, "testFixtures");
-
-  yield* fileSystem.copyFile(path.join(codexFixtureDir, "codexCollabMockPeer.sh"), codexPath);
-  yield* fileSystem.copyFile(
-    path.join(codexFixtureDir, "codexCollabMockPeer.mjs"),
-    path.join(fixtureDir, "codexCollabMockPeer.mjs"),
-  );
-  yield* fileSystem.copyFile(
-    path.join(codexFixtureDir, "codexMultiAgentWire.json"),
-    path.join(fixtureDir, "codexMultiAgentWire.json"),
-  );
-  yield* fileSystem.writeFileString(
-    codexScriptPath,
-    JSON.stringify({ rootThreadId: "probe-thread", notifications: [] }),
-  );
-  yield* fileSystem.chmod(codexPath, 0o755);
-
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(
-      new URL("./testing/ProviderInstanceRegistryLive.fixture.mjs", import.meta.url),
-    ),
-    claudePath,
-  );
-  yield* fileSystem.chmod(claudePath, 0o755);
-  yield* fileSystem.makeDirectory(claudeHomePath);
-
-  const asTildePath = (filePath: string) => `~/${path.relative(homePath, filePath)}`;
-  return {
-    codexBinaryPath: asTildePath(codexPath),
-    claudeBinaryPath: asTildePath(claudePath),
-    claudeHomePath,
-    codexScriptPath,
-  };
 });
 
 describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
