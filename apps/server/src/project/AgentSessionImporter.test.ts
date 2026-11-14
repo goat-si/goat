@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  AgentSessionImportSource,
   type AgentSessionSource,
   EventId,
   ProjectId,
@@ -19,6 +20,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -34,6 +36,10 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectService from "./ProjectService.ts";
+
+const decodeImport = Schema.decodeUnknownOption(
+  Schema.Struct({ importedTranscripts: Schema.optional(Schema.Array(AgentSessionImportSource)) }),
+);
 
 const projectId = ProjectId.make("agent-session-import-project");
 const timestamp = "2026-09-01T10:00:00.000Z";
@@ -415,4 +421,45 @@ it.effect(
         runtimePayload: { importedTranscripts: [source.source] },
       });
     }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("does not record a changed transcript as imported without its new messages", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const first = candidate(
+      CLAUDE_MODEL_SELECTION,
+      "6f1c2a7e-3b4d-4e5f-9a8b-1c2d3e4f5a6b",
+      "claudeAgent",
+    );
+    const threadId = importId(first);
+    expect(yield* (yield* makeImporter([first])).run).toEqual({
+      importedCount: 1,
+      skippedCount: 0,
+    });
+
+    const continued = candidate(
+      CLAUDE_MODEL_SELECTION,
+      first.source.providerSessionId,
+      "claudeAgent",
+    );
+    continued.source.size = 200;
+    continued.source.mtimeMs = 3;
+    continued.thread.messages.push(
+      { role: "user", text: "Continue", createdAt: timestamp },
+      { role: "assistant", text: "Continued", createdAt: timestamp },
+    );
+    yield* (yield* makeImporter([continued])).run;
+
+    const recorded = decodeImport(
+      Option.getOrThrow(yield* runtimes.getByThreadId({ threadId })).runtimePayload,
+    ).pipe(Option.getOrThrow).importedTranscripts;
+    const texts = (yield* projections.getThreadRecords(threadId, ["messages"])).messages.map(
+      (message) => message.text,
+    );
+    expect({
+      recordsChangedTranscript: recorded?.some((source) => source.size === 200) ?? false,
+      showsNewMessages: texts.includes("Continued"),
+    }).not.toEqual({ recordsChangedTranscript: true, showsNewMessages: false });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
