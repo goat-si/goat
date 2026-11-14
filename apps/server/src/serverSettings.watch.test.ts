@@ -330,7 +330,7 @@ it.effect("computer use policy is published at rename before cleanup", () =>
       ...fs,
       remove: (path, options) =>
         Effect.gen(function* () {
-          if (hold && path.includes("settings.json.")) {
+          if (hold && path.includes("goat-write-")) {
             hold = false;
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);
