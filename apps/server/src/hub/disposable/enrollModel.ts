@@ -444,7 +444,9 @@ export const leftPenMessage = (
         linkId +
         " for it; the link and the Child on the machine stay. Remove the link on the hub with ocx link revoke --link-id " +
         linkId +
-        " (add --force --yes if the machine is gone).",
+        "; if the machine is gone, add --force --yes, then run ocx link recover --forget --link-id " +
+        linkId +
+        " --yes for the cleanup it leaves.",
       nextAction: "A person runs the ocx link revoke command above on the hub.",
     };
   return {
