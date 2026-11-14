@@ -134,19 +134,67 @@ it.live.each(
             );
             assert.isFalse(yield* fs.exists(path.join(effective.config.homePath, "auth.json")));
           }
-          assert.isUndefined(effective.environment.ACCESS_TOKEN);
-          assert.isUndefined(effective.environment.OPENAI_API_KEY);
-          assert.isUndefined(effective.environment.OPENAI_BASE_URL);
-          assert.isUndefined(effective.environment.GOAT_CODEX_LAUNCH_ARGS);
+          if (source === "managed" && account === "primary") {
+            const names = [
+              "ACCESS_TOKEN",
+              "OPENAI_API_KEY",
+              "OPENAI_BASE_URL",
+              "GOAT_CODEX_LAUNCH_ARGS",
+              "T3CODE_CODEX_LAUNCH_ARGS",
+            ];
+            yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                const previous = names.map((name) => process.env[name]);
+                for (const name of names) process.env[name] = "synthetic-host-value";
+                return previous;
+              }),
+              (previous) =>
+                Effect.sync(() => {
+                  names.forEach((name, index) => {
+                    if (previous[index] === undefined) delete process.env[name];
+                    else process.env[name] = previous[index];
+                  });
+                }),
+            );
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+            const output = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const child = yield* spawner.spawn(
+                  ChildProcess.make(
+                    process.execPath,
+                    [
+                      "-e",
+                      `process.stdout.write(JSON.stringify(${JSON.stringify(names)}.map(name => process.env[name])))`,
+                    ],
+                    {
+                      env: effective.environment,
+                      extendEnv: true,
+                    },
+                  ),
+                );
+                const stdout = yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString);
+                assert.equal(Number(yield* child.exitCode), 0);
+                return JSON.parse(stdout);
+              }),
+            );
+            assert.deepEqual(
+              output,
+              names.map(() => ""),
+            );
+          }
+          assert.equal(effective.environment.ACCESS_TOKEN, "");
+          assert.equal(effective.environment.OPENAI_API_KEY, "");
+          assert.equal(effective.environment.OPENAI_BASE_URL, "");
+          assert.equal(effective.environment.GOAT_CODEX_LAUNCH_ARGS, "");
           const initialPath = effective.environment.PATH;
           ambient.PATH = "/updated/runtime/bin";
           const next = yield* runtime.resolve.pipe(Effect.scoped);
           assert.strictEqual(next.environment.PATH, "/updated/runtime/bin");
           assert.strictEqual(effective.environment.PATH, initialPath);
-          assert.isUndefined(next.environment.ACCESS_TOKEN);
-          assert.isUndefined(next.environment.OPENAI_API_KEY);
-          assert.isUndefined(next.environment.OPENAI_BASE_URL);
-          assert.isUndefined(next.environment.GOAT_CODEX_LAUNCH_ARGS);
+          assert.equal(next.environment.ACCESS_TOKEN, "");
+          assert.equal(next.environment.OPENAI_API_KEY, "");
+          assert.equal(next.environment.OPENAI_BASE_URL, "");
+          assert.equal(next.environment.GOAT_CODEX_LAUNCH_ARGS, "");
           const args = codexAppServerArgs(effective.config.launchArgs);
           assert.include(args, 'model_provider="openai_token_sharing"');
           const provider = args.find((arg) =>
