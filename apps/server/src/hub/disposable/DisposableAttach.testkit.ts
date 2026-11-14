@@ -239,7 +239,7 @@ export const world = <A, E>(
       contracts: Set<string>;
       settingsUnreadable: boolean;
       contractsAsked: number;
-      /** Completed by the next settings read or locked snapshot. */
+      /** Completed once the next settings read has read, or a locked snapshot is asked for. */
       settingsAccess?: Deferred.Deferred<void> | undefined;
     },
     grant: Grant,
@@ -312,7 +312,7 @@ export const world = <A, E>(
               ? Effect.fail(
                   new ServerSettingsError({ settingsPath: "<memory>", operation: "read-file" }),
                 )
-              : Effect.andThen(accessed(), inner.getSettings),
+              : Effect.tap(inner.getSettings, accessed),
           ),
           withSettingsSnapshot: (use) =>
             Effect.andThen(accessed(), inner.withSettingsSnapshot(use)),

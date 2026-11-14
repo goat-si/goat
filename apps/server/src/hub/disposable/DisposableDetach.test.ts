@@ -727,8 +727,8 @@ it.effect(
     ),
 );
 
-// The race the lock closes (a thread's read finishing before a person's write starts, its commit
-// after it) has no deterministic order without polling; this pins that a held change decides it.
+// A consent read before the lock sees the thread still named while the person's change holds it;
+// only a read under the lock sees the change, so a pre-lock check lets this detach through.
 it.effect(
   "a person's provisioner change that holds the settings lock decides a thread's detach waiting on it",
   () =>
