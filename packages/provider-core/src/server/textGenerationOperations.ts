@@ -314,6 +314,7 @@ export function fromRunner(
       attachments: input.attachments,
       ...buildThreadTitlePrompt({
         message: input.message,
+        projectTitle: input.projectTitle,
         previousTitle: input.previousTitle,
         forkSource: input.forkSource,
         linkedContext: input.linkedContext,
