@@ -109,6 +109,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           .spawn(
             ChildProcess.make(resolved.command, resolved.args, {
               shell: resolved.shell,
+              stdin: "ignore",
               ...env,
             }),
           )

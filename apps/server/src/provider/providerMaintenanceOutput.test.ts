@@ -1,4 +1,5 @@
 import { describe, it, assert } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
@@ -240,6 +241,34 @@ const makeTestRunner = (
   );
 
 describe("provider maintenance failure output", () => {
+  it.live("runs update commands without a piped stdin", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeRegistry(baseProvider);
+      const updater = yield* makeTestRunner({
+        ...registry,
+        getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+          Effect.succeed({
+            ...lifecycleFor(provider),
+            update: {
+              command: "codex update",
+              executable: process.execPath,
+              args: [
+                "-e",
+                "process.exit(require('node:fs').fstatSync(0).isCharacterDevice() ? 0 : 1)",
+              ],
+              lockKey: "codex-native",
+            },
+          }),
+      });
+      const result = yield* updater.updateProvider(CODEX_DRIVER);
+      assert.strictEqual(
+        result.providers[0]?.updateState?.message,
+        "Update command completed, but GOAT still detects an outdated provider version.",
+      );
+    }).pipe(
+      Effect.provide(Layer.mergeAll(NodeServices.layer, layerLatestVersionHttpClient("1.0.0"))),
+    ),
+  );
   it.effect("reports the updater's error rather than a trailing hint after it", () =>
     Effect.forEach(
       [
