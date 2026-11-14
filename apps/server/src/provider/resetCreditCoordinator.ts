@@ -1,16 +1,19 @@
 /** Instances sharing a login directory share credits; serialize redemptions on that directory. */
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import type { ProviderConsumeResetCreditOutcome } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as PlatformError from "effect/PlatformError";
-import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
 interface AccountRedemptionState {
   readonly lock: Semaphore.Semaphore;
-  readonly pendingKey: Ref.Ref<string | null>;
+  /** Read and written only while holding the lock. */
+  pendingKey: string | null;
+  holders: number;
 }
 
 export class ResetCreditCoordinator extends Context.Service<
@@ -28,42 +31,54 @@ export class ResetCreditCoordinator extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  const statesRef = yield* Ref.make<ReadonlyMap<string, AccountRedemptionState>>(new Map());
-
-  // Create account locks atomically so concurrent first redemptions cannot use separate locks.
-  const stateFor = Effect.fn("ResetCreditCoordinator.stateFor")(function* (accountKey: string) {
-    const existing = (yield* Ref.get(statesRef)).get(accountKey);
-    if (existing) return existing;
-    const candidate = {
-      lock: yield* Semaphore.make(1),
-      pendingKey: yield* Ref.make<string | null>(null),
-    };
-    return yield* Ref.modify(statesRef, (states) => {
-      const current = states.get(accountKey);
-      if (current) return [current, states] as const;
-      const next = new Map(states);
-      next.set(accountKey, candidate);
-      return [candidate, next] as const;
+  const fileSystem = yield* FileSystem.FileSystem;
+  // An entry lives while a redemption holds it or an uncertain outcome keeps its idempotency key.
+  const states = new Map<string, AccountRedemptionState>();
+  // Links to one login directory are one account; a missing directory keeps its given path.
+  const canonical = (accountKey: string) =>
+    fileSystem.realPath(accountKey).pipe(Effect.orElseSucceed(() => accountKey));
+  const acquire = (accountKey: string) =>
+    Effect.sync(() => {
+      const state = states.get(accountKey) ?? {
+        lock: Semaphore.makeUnsafe(1),
+        pendingKey: null,
+        holders: 0,
+      };
+      state.holders += 1;
+      states.set(accountKey, state);
+      return state;
     });
-  });
+  const release = (accountKey: string, state: AccountRedemptionState) =>
+    Effect.sync(() => {
+      state.holders -= 1;
+      if (state.holders === 0 && state.pendingKey === null) states.delete(accountKey);
+    });
 
   const redeem: ResetCreditCoordinator["Service"]["redeem"] = Effect.fn(
     "resetCreditCoordinator.redeem",
   )(function* (accountKey, consume, isSettled) {
-    const state = yield* stateFor(accountKey);
-    return yield* state.lock.withPermits(1)(
-      Effect.gen(function* () {
-        const existing = yield* Ref.get(state.pendingKey);
-        const idempotencyKey = existing ?? (yield* crypto.randomUUIDv4());
-        yield* Ref.set(state.pendingKey, idempotencyKey);
-        const outcome = yield* consume(idempotencyKey).pipe(
-          Effect.tapError((error) =>
-            isSettled?.(error) ? Ref.set(state.pendingKey, null) : Effect.void,
-          ),
-        );
-        yield* Ref.set(state.pendingKey, null);
-        return outcome;
-      }),
+    const key = yield* canonical(accountKey);
+    return yield* Effect.acquireUseRelease(
+      acquire(key),
+      (state) =>
+        state.lock.withPermits(1)(
+          Effect.gen(function* () {
+            const idempotencyKey = state.pendingKey ?? (yield* crypto.randomUUIDv4());
+            state.pendingKey = idempotencyKey;
+            const outcome = yield* consume(idempotencyKey).pipe(
+              Effect.tapError((error) =>
+                isSettled?.(error)
+                  ? Effect.sync(() => {
+                      state.pendingKey = null;
+                    })
+                  : Effect.void,
+              ),
+            );
+            state.pendingKey = null;
+            return outcome;
+          }),
+        ),
+      (state) => release(key, state),
     );
   });
 
@@ -87,6 +102,7 @@ export const layerTest = Layer.effect(
           digest: (_algorithm, data) => Effect.succeed(data),
         }),
       ),
+      Effect.provide(NodeFileSystem.layer),
     );
   }),
 );
