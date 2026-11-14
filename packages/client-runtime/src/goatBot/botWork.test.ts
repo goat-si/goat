@@ -8,7 +8,7 @@ import {
   type ChannelTaskChip,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { botHomeWork, groupBotWork } from "./botWork.ts";
+import { botHomeWork, COLLAPSED_FINISHED, groupBotWork, workRowCollapsed } from "./botWork.ts";
 
 const row = Schema.decodeUnknownSync(BotThreadRow);
 const group = Schema.decodeUnknownSync(ChannelChildWorkGroup);
@@ -239,5 +239,35 @@ describe("botHomeWork", () => {
     );
     expect(home.waiting.map((task) => task.row.task.taskId)).toEqual(["approval-left"]);
     expect(home.finished).toEqual([]);
+  });
+});
+
+describe("workRowCollapsed", () => {
+  // Back from a peek opened Show more for a row Home lists under waiting, not behind Show more.
+  it("does not hold finished work with an open approval behind Show more, since Home lists it as waiting", () => {
+    const finished = Array.from({ length: COLLAPSED_FINISHED + 1 }, (_, index) =>
+      statusRow(`done-${index}`, "completed", "2026-11-04T05:00:00.000Z"),
+    );
+    const rows = [...finished, statusRow("approval-left", "completed", "2026-11-04T01:00:00.000Z")];
+    const chips = new Map([
+      [
+        ChannelTaskId.make("approval-left"),
+        {
+          taskId: "approval-left",
+          taskVersion: 3,
+          status: "completed",
+          openQuestionCount: 0,
+          observed: {
+            pullRequests: [],
+            needsYou: [{ kind: "approval", since: "2026-11-04T00:30:00.000Z" }],
+          },
+        } as unknown as ChannelTaskChip,
+      ],
+    ]);
+    const env = EnvironmentId.make("env");
+    const id = ChannelTaskId.make("approval-left");
+    expect(workRowCollapsed(rows, env, [], id, chips)).toBe(false);
+    // Without the chip the row is finished and sits past the collapsed tail.
+    expect(workRowCollapsed(rows, env, [], id)).toBe(true);
   });
 });
