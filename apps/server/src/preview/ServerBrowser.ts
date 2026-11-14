@@ -96,6 +96,7 @@ import {
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
   browserSessionView,
@@ -293,6 +294,7 @@ interface ServerTab {
   readonly createdAt: number;
   usedAt: number;
   readonly viewers: Set<ViewerState>;
+  viewerAttached: PromiseWithResolvers<void> | null;
   readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
   readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
   readonly diagnostics: ServerBrowserDiagnostics;
@@ -553,6 +555,7 @@ const make = Effect.gen(function* () {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
     tab.closing = true;
+    viewerArrived(tab);
     blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
@@ -680,6 +683,7 @@ const make = Effect.gen(function* () {
         createdAt: Date.now(),
         usedAt: Date.now(),
         viewers: new Set(),
+        viewerAttached: null,
         consoleEntries: diagnostics.consoleEntries,
         networkEntries: diagnostics.networkEntries,
         diagnostics,
@@ -1732,6 +1736,7 @@ const make = Effect.gen(function* () {
             if (url) await recordAction(tab, "navigate", loading, { url });
             else if (!existing) await loading();
             const reveal = open.open ?? open.show;
+            let shown: Promise<void> | undefined;
             if (reveal !== false) {
               await runPromise(
                 manager.requestReveal({
@@ -1740,6 +1745,7 @@ const make = Effect.gen(function* () {
                   force: reveal === true,
                 }),
               );
+              shown = awaitRevealedViewer(tab, reveal, deadlineMs);
             }
             if (!existing && url) {
               await tab.page
@@ -1750,6 +1756,7 @@ const make = Effect.gen(function* () {
               () => blockedTabs.assertTab(tab, request.runId, url),
               navigationSent,
             );
+            await shown;
             return statusWithTitle(tab, request.agentSessionId);
           },
           deadlineMs,
@@ -2424,6 +2431,7 @@ const make = Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         tab.viewers.add(viewer);
+        viewerArrived(tab);
         reportLiveTabs();
       }),
       () =>
