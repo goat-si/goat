@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { RegistryContext } from "@effect/atom-react";
 import { AtomRegistry } from "effect/reactivity";
 import { act } from "react";
@@ -244,4 +245,43 @@ it("before a computer's capabilities are read, member support is unknown rather 
   await act(async () => root?.render(<Probe />));
   expect(value.membersUnknown).toBe(true);
   expect(value.supportsMembers).toBe(false);
+});
+
+it("an answer already on its way to the kept list is not kept once its computer has left the app", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
+  // Removed after the roster rendered its answer but before that render's effects ran: layout
+  // effects run first, so this lands exactly in that gap.
+  function RemoveAfterRender() {
+    useLayoutEffect(() => {
+      registry.set(catalog.atom!, listed([]));
+    }, []);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+        <RemoveAfterRender />
+      </RegistryContext>,
+    ),
+  );
+  state.connected = false;
+  registry.set(catalog.atom!, listed(["env"]));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(memberNames()).toEqual([]);
 });

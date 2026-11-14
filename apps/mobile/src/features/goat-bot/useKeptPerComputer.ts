@@ -69,8 +69,14 @@ export function useKeptPerComputer<A>(
     if (environmentId === null) return;
     if (denied) {
       if (stored !== null) store(null);
-    } else if (settled !== null && settled !== stored) store(settled);
-  }, [environmentId, settled, stored, denied, store]);
+      return;
+    }
+    // The computer may have left the catalog since this render; its answer is no longer kept then.
+    const stillListed = registry
+      .get(environmentCatalog.catalogValueAtom)
+      .entries.has(environmentId);
+    if (stillListed && settled !== null && settled !== stored) store(settled);
+  }, [registry, environmentId, settled, stored, denied, store]);
   if (!offline || live.data !== null) return live.data;
   return listed ? stored : null;
 }
