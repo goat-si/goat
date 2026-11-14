@@ -1,3 +1,4 @@
+import { startPaletteThreadDrag } from "./CommandPalette.drag";
 import { type ResolvedKeybindingsConfig } from "@goat/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { ChevronRightIcon } from "~/components/solar";
@@ -32,6 +33,7 @@ interface CommandPaletteResultsProps {
   isActionsOnly: boolean;
   keybindings: ResolvedKeybindingsConfig;
   onExecuteItem: (item: CommandPaletteActionItem | CommandPaletteSubmenuItem) => void;
+  onDragStart?: (() => void) | undefined;
 }
 
 function CommandPaletteEmptyState(props: { emptyStateMessage?: string; isActionsOnly: boolean }) {
@@ -71,6 +73,7 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
                   keybindings={props.keybindings}
                   isActive={props.highlightedItemValue === item.value}
                   onExecuteItem={props.onExecuteItem}
+                  onDragStart={props.onDragStart}
                 />
               )
             }
@@ -142,6 +145,7 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
               keybindings={props.keybindings}
               isActive={props.highlightedItemValue === row.item.value}
               onExecuteItem={props.onExecuteItem}
+              onDragStart={props.onDragStart}
             />
           )
         }
@@ -237,6 +241,7 @@ function CommandPaletteResultRow(props: {
   isActive: boolean;
   keybindings: ResolvedKeybindingsConfig;
   onExecuteItem: (item: CommandPaletteActionItem | CommandPaletteSubmenuItem) => void;
+  onDragStart?: (() => void) | undefined;
 }) {
   const shortcutLabel = props.item.shortcutCommand
     ? shortcutLabelForCommand(props.keybindings, props.item.shortcutCommand)
@@ -247,6 +252,17 @@ function CommandPaletteResultRow(props: {
       {...(props.index === undefined ? {} : { index: props.index })}
       value={props.item.value}
       active={props.isActive}
+      onPointerDown={(event) => {
+        if (props.item.threadRef && props.onDragStart) {
+          startPaletteThreadDrag(
+            event.nativeEvent,
+            props.item.threadRef,
+            props.item.searchTitle ??
+              (typeof props.item.title === "string" ? props.item.title : "Thread"),
+            props.onDragStart,
+          );
+        }
+      }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}

@@ -1,3 +1,4 @@
+import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { resolvePastedPath } from "@goat/shared/path";
 import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
 import { validateMemorySettingsSearch } from "./settings/MemorySettings.logic";
@@ -414,6 +415,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   return (
     <ComposerHandleContext value={composerHandleRef}>
+      <ThreadContextDragGhost />
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
@@ -3035,6 +3037,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
+        onDragStart={() => props.setOpen(false)}
         rows={resultRows.rows}
         listRef={resultListRef}
         highlightedItemValue={highlightedItemValue}
