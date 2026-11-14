@@ -4121,6 +4121,7 @@ export default function ChatView(props: ChatViewProps) {
                   )
                 }
                 gitCwd={isGlobalAgentActive ? null : gitCwd}
+                workspaceMutationId={workspaceMutationId}
                 isGitRepo={isGitRepo && !isGlobalAgentActive && !isCloudThread}
                 envLocked={envLocked}
                 availableEnvironments={logicalProjectEnvironments}

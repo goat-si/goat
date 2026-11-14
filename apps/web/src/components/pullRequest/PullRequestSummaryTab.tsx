@@ -1,5 +1,6 @@
 import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
+import { pullRequestCommentPreview } from "./pullRequestMarkdown.logic";
 import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -273,14 +274,7 @@ function CollapsedComment({
               className="mt-2 block w-full truncate text-left text-xs text-muted-foreground hover:text-foreground"
               onClick={() => statusTriggerRef.current?.focus({ preventScroll: true })}
             >
-              {body
-                .replace(/<!--[\s\S]*?-->/gu, "")
-                .replace(/^\s*>?\s*\[!\w+\]\s*$/gmu, "")
-                .replace(/!?(\[([^\]]+)\])\([^)]*\)/gu, "$2")
-                .replace(/^[\s>#*-]+/gmu, "")
-                .replace(/[*`]/gu, "")
-                .replace(/\s+/g, " ")
-                .trim()}
+              {pullRequestCommentPreview(body)}
             </CollapsibleTrigger>
           ) : null}
         </div>

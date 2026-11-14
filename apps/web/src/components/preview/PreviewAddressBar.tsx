@@ -128,7 +128,7 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
               setOpen(false);
             }}
             onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) {
                 if (event.key === "Enter") event.preventDefault();
                 event.preventBaseUIHandler();
                 return;

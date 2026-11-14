@@ -25,6 +25,7 @@ function Fixture(props: {
   audio?: boolean;
   open?: boolean;
   close?: (surface: RightPanelSurface, finish: () => void) => void;
+  rename?: (surfaceId: string, title: string) => void;
 }) {
   const [surfaces, setSurfaces] = useState(props.initial);
   const [active, setActive] = useState(props.initial[0]?.id ?? null);
@@ -98,6 +99,7 @@ function Fixture(props: {
         onCloseOtherSurfaces={noop}
         onCloseSurfacesToRight={noop}
         onCloseAllSurfaces={noop}
+        {...(props.rename ? { onRenameDevice: props.rename } : {})}
         onCopyFilePath={noop}
         onAddBrowser={noop}
         onAddBrowserInProfile={noop}
@@ -368,4 +370,32 @@ it("moves focus without activating, ignores modified or composing keys, and reta
   } finally {
     unregister();
   }
+});
+
+it("keeps a device tab editor open while Enter confirms an IME candidate", async () => {
+  const device: RightPanelSurface = {
+    id: "device:host:phone",
+    kind: "device",
+    target: { hostId: "host", deviceId: "phone", platform: "ios", name: "Phone" },
+  };
+  const rename = vi.fn();
+  await using screen = await render(<Fixture initial={[device]} rename={rename} />);
+  await userEvent.dblClick(screen.getByRole("tab", { name: "Phone", exact: true }));
+  const input = screen.getByRole("textbox", { name: "Device tab name" });
+  await userEvent.fill(input, "にほん");
+  for (const shape of [
+    { isComposing: true, keyCode: 13 },
+    { isComposing: false, keyCode: 229 },
+  ]) {
+    input
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...shape }),
+      );
+  }
+  await expect.element(input).toHaveFocus();
+  expect(rename).not.toHaveBeenCalled();
+  await userEvent.fill(input, "日本語");
+  await userEvent.keyboard("{Enter}");
+  expect(rename).toHaveBeenCalledExactlyOnceWith(device.id, "日本語");
 });
