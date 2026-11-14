@@ -453,7 +453,7 @@ const effectOf = (action: MachineAction, penMember: boolean) => {
       : "GOAT removes its OpenCodex link and the lightweight Child; it has left Pen; its slot is free once the detach ends.";
   return penMember
     ? "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke."
-    : "GOAT removes the link without the machine; it has left Pen, so its slot is free once a person forgets its cleanup on the hub.";
+    : "GOAT removes the link without the machine; it has left Pen, so its slot is free once the detach ends, which after a forced removal waits for a person to forget its cleanup on the hub.";
 };
 const REMOVABLE = new Set(["linked", "detaching", "retired"]);
 const DETACHABLE = new Set([
