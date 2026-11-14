@@ -1,4 +1,3 @@
-import { assertPrototypeNamedInstances } from "./serverSettingsPrototype.testkit.ts";
 import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -909,7 +908,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.equal(results.filter((result) => result._tag === "Success").length, 1);
       assert.equal(results.filter((result) => result._tag === "Failure").length, 1);
-      yield* assertPrototypeNamedInstances(serverSettings, instanceId);
+      assert.isTrue(
+        ["First", "Second"].includes(
+          (yield* serverSettings.getSettings).providerInstances[instanceId]?.displayName ?? "",
+        ),
+      );
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
