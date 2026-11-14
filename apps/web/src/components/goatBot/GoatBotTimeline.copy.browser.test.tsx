@@ -74,6 +74,29 @@ it("reports clipboard failure", async () => {
   );
 });
 
+it("does not let a removed reply's pending copy clear the current copied reply", async () => {
+  let resolveFirst: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    resolveFirst = resolve;
+  });
+  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
+    router: false,
+  }); // No navigation links.
+  using _write = vi
+    .spyOn(navigator.clipboard, "writeText")
+    .mockReturnValueOnce(pending)
+    .mockResolvedValue(undefined);
+  await userEvent.click(screen.getByRole("button", { name: "Copy" }).first());
+  await screen.rerender(<GoatBotTimeline rows={[rows[1]!]} onRetry={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+  await expect.element(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  await act(async () => {
+    resolveFirst();
+    await pending;
+  });
+  await expect.element(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+});
+
 it("shows Copied in the active row tooltip and resets both labels after 1200ms", async () => {
   await using screen = await render(
     <TooltipProvider delay={0}>
