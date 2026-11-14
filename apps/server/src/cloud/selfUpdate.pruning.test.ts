@@ -36,6 +36,8 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
     readonly legacyUnit?: boolean;
     readonly servicePlistThroughLink?: boolean;
     readonly linuxLookupFailure?: boolean;
+    readonly linuxNoSystemd?: boolean;
+    readonly staleUsedBy?: "process" | "path";
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -53,6 +55,11 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
       yield* fs.utimes(sentinel, 0, 0);
     }
     if (input.symlinkedHome) yield* fs.symlink(realHome, baseDir);
+    const binDir = path.join(tempDir, "bin");
+    if (input.staleUsedBy === "path") {
+      yield* fs.makeDirectory(binDir);
+      yield* fs.symlink(path.join(versionsDir, staleVersion, "goat"), path.join(binDir, "goat"));
+    }
     const userHome = path.join(tempDir, "user");
     if (input.servicePlistStarts !== undefined) {
       const agentsDir = path.join(userHome, "Library", "LaunchAgents");
@@ -96,13 +103,30 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, {
         ...fs,
+        stat: (file) =>
+          file === "/run/systemd/system" && input.linuxLookupFailure
+            ? fs.stat(tempDir)
+            : file === "/run/systemd/system" && input.linuxNoSystemd
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "stat",
+                    pathOrDescriptor: file,
+                  }),
+                )
+              : fs.stat(file),
         readDirectory: (directory, options) =>
-          input.linuxLookupFailure && directory === "/proc"
+          (input.linuxLookupFailure || input.linuxNoSystemd) && directory === "/proc"
             ? Effect.succeed(["42"])
             : fs.readDirectory(directory, options),
         readLink: (file) =>
-          input.linuxLookupFailure && file === "/proc/42/exe"
-            ? Effect.succeed("/usr/bin/unrelated")
+          (input.linuxLookupFailure || input.linuxNoSystemd) && file === "/proc/42/exe"
+            ? Effect.succeed(
+                input.staleUsedBy === "process"
+                  ? path.join(versionsDir, staleVersion, "goat")
+                  : "/usr/bin/unrelated",
+              )
             : fs.readLink(file),
         readFileString: (file, options) =>
           input.unreadableUnit && file.endsWith("si.goat.service.plist")
@@ -117,10 +141,17 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
             : fs.readFileString(file, options),
       }),
       Effect.provideService(HostProcess.ExecutablePath, executablePath),
-      Effect.provideService(HostProcess.Platform, input.linuxLookupFailure ? "linux" : "darwin"),
+      Effect.provideService(
+        HostProcess.Platform,
+        input.linuxLookupFailure || input.linuxNoSystemd ? "linux" : "darwin",
+      ),
       Effect.provideService(
         HostProcess.Environment,
-        input.linuxLookupFailure ? { XDG_CONFIG_HOME: path.join(userHome, "other-config") } : {},
+        input.linuxLookupFailure
+          ? { XDG_CONFIG_HOME: path.join(userHome, "other-config") }
+          : input.staleUsedBy === "path"
+            ? { PATH: binDir }
+            : {},
       ),
       Effect.provideService(HostProcess.HomeDirectory, userHome),
       Effect.provideService(
@@ -196,6 +227,31 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
       expect(removed).toEqual([]);
       expect(remaining).toEqual([staleVersion, packageJson.version].toSorted());
     }),
+  );
+
+  it.effect("prunes on Linux without systemd while protecting the running runtime", () =>
+    Effect.gen(function* () {
+      const { removed, remaining } = yield* pruneOnStart({
+        executable: "own runtime",
+        linuxNoSystemd: true,
+      });
+      expect(removed).toEqual([staleVersion]);
+      expect(remaining).toEqual([packageJson.version]);
+    }),
+  );
+
+  it.effect.each(["process", "path"] as const)(
+    "keeps a runtime referenced by a %s without systemd",
+    (staleUsedBy) =>
+      Effect.gen(function* () {
+        const { removed, remaining } = yield* pruneOnStart({
+          executable: "own runtime",
+          linuxNoSystemd: true,
+          staleUsedBy,
+        });
+        expect(removed).toEqual([]);
+        expect(remaining).toEqual([staleVersion, packageJson.version].toSorted());
+      }),
   );
 
   it.effect("does not prune when a service unit cannot be inspected", () =>
