@@ -452,6 +452,17 @@ describe("orchestration V2 wire projection", () => {
     });
   });
 
+  it("does not split an emoji at the tool summary boundary", () => {
+    const projected = projectTurnItemForWire({
+      ...base,
+      input: { text: "a".repeat(149) + "😀" + "b".repeat(17_000) },
+    });
+    expect(projected.type === "dynamic_tool" ? projected.input : null).toEqual({
+      summary: '{"text":"' + "a".repeat(149) + "…",
+      truncated: true,
+    });
+  });
+
   it("keeps a page rendered through goat_call when its input is too large to send", () => {
     const htmlRender = { attachmentId: "thread-1-page", title: "Chart", height: 300 };
     const page = (toolName: string, input: unknown) =>

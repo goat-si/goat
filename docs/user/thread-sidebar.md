@@ -455,7 +455,7 @@ fill the screen; close the full-screen view to return to the parent and inspecto
 Stop ends the thread's current turn. Subagents it delegated in the background keep
 working and report back when they finish; a subagent the turn was waiting on stops
 with it. To stop a background subagent, use its stop button under **Lineage** in the
-thread details, or ask the agent to cancel it.
+thread details, or ask the agent to cancel it. Before archiving the parent, wait for its local delegated tasks to finish or cancel them.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent

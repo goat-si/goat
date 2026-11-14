@@ -12,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderTurnId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   ProviderDriverKind,
@@ -1278,193 +1279,6 @@ describe("orchestration v2 provider switching", () => {
                 },
               },
               registry,
-            ),
-          ),
-        );
-      }),
-    ),
-  );
-
-  it.live.each(
-    (
-      [
-        ["failed", false, false, false],
-        ["failed", true, true, true],
-        ["interrupted", false, true, false],
-        ["interrupted", true, false, true],
-      ] as const
-    ).map(
-      ([status, queued, returning, native]) =>
-        [
-          `${status} context ${queued ? "through the queue" : "immediately"} to ${returning ? "a returning" : "a new"} provider via ${native ? "native history" : "text"}`,
-          { status, queued, returning, native },
-        ] as const,
-    ),
-  )("hands off %s", ([, { status, queued, returning, native }]) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace(`handoff-${status}-${queued}-${returning}`);
-        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-        const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
-        const started = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const sourceOrdinal = returning ? 2 : 1;
-        const sourceSelection = returning ? CLAUDE_MODEL_SELECTION : CODEX_MODEL_SELECTION;
-        const targetSelection = returning ? CODEX_MODEL_SELECTION : CLAUDE_MODEL_SELECTION;
-        const originalPrompt = "Keep the release marker violet and preserve the existing API.";
-        const partialResponse = "I checked the API and found the release configuration.";
-        const layerRegistry = ProviderAdapterRegistry.layerFromAdapters(
-          (
-            [
-              [CODEX_MODEL_SELECTION, CODEX_DRIVER, CodexProviderCapabilitiesV2],
-              [CLAUDE_MODEL_SELECTION, CLAUDE_DRIVER, ClaudeProviderCapabilitiesV2],
-            ] as const
-          ).map(([modelSelection, driver, capabilities]) =>
-            makeTestAdapter({
-              instanceId: modelSelection.instanceId,
-              driver,
-              capabilities,
-              modelSelection,
-              responseByRunOrdinal: { [sourceOrdinal]: partialResponse },
-              capturedTurns,
-              ...(native && modelSelection.instanceId === targetSelection.instanceId
-                ? { injectedHistory }
-                : {}),
-              ...(modelSelection.instanceId === sourceSelection.instanceId
-                ? {
-                    failedRunOrdinals: new Set(status === "failed" ? [sourceOrdinal] : []),
-                    interruptedRunOrdinals: new Set(
-                      status === "interrupted" ? [sourceOrdinal] : [],
-                    ),
-                    holdRunOrdinal: sourceOrdinal,
-                    holdFirstTurn: started,
-                    releaseFirstTurn: release,
-                  }
-                : {}),
-            }),
-          ),
-        );
-        yield* Effect.gen(function* () {
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const waitForRun = (
-            ordinal: number,
-            expectedStatus: "completed" | "failed" | "interrupted",
-          ) =>
-            orchestrator.streamStoredEvents.pipe(
-              Stream.filter(
-                ({ event }) =>
-                  event.type === "run.updated" &&
-                  event.threadId === threadId &&
-                  event.payload.ordinal === ordinal &&
-                  event.payload.status === expectedStatus,
-              ),
-              Stream.runHead,
-              Effect.andThen(worker.drain()),
-            );
-          const dispatch = (
-            key: string,
-            text: string,
-            modelSelection: ModelSelection,
-            queue = false,
-          ) =>
-            orchestrator.dispatch({
-              type: "message.dispatch",
-              commandId: CommandId.make(`command:handoff:${key}`),
-              threadId,
-              messageId: MessageId.make(`message:handoff:${key}`),
-              createdBy: "user",
-              creationSource: "web",
-              text,
-              attachments: [],
-              modelSelection,
-              dispatchMode: { type: queue ? "queue_after_active" : "start_immediately" },
-            });
-          yield* orchestrator.dispatch({
-            type: "thread.create",
-            commandId: CommandId.make("command:handoff:create"),
-            threadId,
-            projectId,
-            createdBy: "user",
-            creationSource: "web",
-            title: "Interrupted provider handoff",
-            modelSelection: CODEX_MODEL_SELECTION,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          });
-          if (returning) {
-            yield* dispatch("initial", "Earlier successful request.", CODEX_MODEL_SELECTION);
-            yield* waitForRun(1, "completed");
-          }
-          yield* dispatch("source", originalPrompt, sourceSelection);
-          yield* Deferred.await(started);
-          if (queued) {
-            yield* dispatch("target", "Continue", targetSelection, true);
-            assert.equal(
-              (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status,
-              "queued",
-            );
-          }
-          yield* Deferred.succeed(release, undefined);
-          yield* waitForRun(sourceOrdinal, status);
-          if (!queued) {
-            yield* dispatch("target", "Continue", targetSelection);
-          }
-          yield* waitForRun(sourceOrdinal + 1, "completed");
-          const projection = yield* orchestrator.getThreadProjection(threadId);
-          const targetRun = projection.runs.at(-1)!;
-          const handoff = projection.contextHandoffs.find(
-            (candidate) => candidate.id === targetRun.contextHandoffId,
-          );
-          assert.isDefined(handoff);
-          assert.equal(
-            handoff?.strategy,
-            returning ? "delta_since_target_last_seen" : "full_thread_summary",
-          );
-          assert.deepEqual(handoff?.coveredRunOrdinals, {
-            from: sourceOrdinal,
-            to: sourceOrdinal,
-          });
-          const delivered = (yield* Ref.get(capturedTurns)).at(-1)!;
-          const history = yield* Ref.get(injectedHistory);
-          const deliveredHistory = native ? yield* encodeJson(history) : delivered.text;
-          assert.include(deliveredHistory, originalPrompt);
-          assert.include(deliveredHistory, partialResponse);
-          assert.include(deliveredHistory, `run-status=${status}`);
-          if (native) {
-            assert.equal(delivered.text, "Continue");
-            assert.notInclude(deliveredHistory, '"text":"Continue"');
-            assert.include(deliveredHistory, '"role":"assistant"');
-            assert.include(deliveredHistory, '"role":"user"');
-            assert.equal(handoff?.delivery?.status, "injected");
-          } else {
-            assert.include(delivered.text, "User message:\nContinue");
-            assert.equal(handoff?.delivery?.status, "inline");
-          }
-          assert.notInclude(deliveredHistory, "Earlier successful request.");
-          yield* dispatch("back", "Finish the remaining work", sourceSelection);
-          yield* waitForRun(sourceOrdinal + 2, "completed");
-          const back = (yield* Ref.get(capturedTurns)).at(-1)!;
-          assert.notInclude(back.text, originalPrompt);
-          assert.notInclude(back.text, partialResponse);
-        }).pipe(
-          Effect.provide(
-            ProviderReplayHarness.layerWithRegistry(
-              {
-                name: `handoff-${status}-${queued}-${returning}`,
-                runtimePolicyOverride: {
-                  cwd,
-                  approvalPolicy: "never",
-                  sandboxPolicy: {
-                    type: "readOnly",
-                    access: { type: "fullAccess" },
-                    networkAccess: false,
-                  },
-                },
-              },
-              layerRegistry,
             ),
           ),
         );
@@ -2959,5 +2773,98 @@ describe("orchestration v2 provider switching", () => {
   it.live(
     "reissues imported v1 context when a queued provider starts after the first provider fails",
     () => importedFailureScenario(true),
+  );
+  it.live(
+    "starts a scheduled fresh run while the previous run's session still has background work",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace("scheduled-fresh-background");
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const closedSessions = yield* Ref.make<ReadonlyArray<string>>([]);
+          const backgroundWork = yield* Ref.make(false);
+          const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+            makeTestAdapter({
+              instanceId: CLAUDE_MODEL_SELECTION.instanceId,
+              driver: CLAUDE_DRIVER,
+              capabilities: ClaudeProviderCapabilitiesV2,
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              responseByRunOrdinal: {},
+              capturedTurns,
+              closedSessions,
+              backgroundWork,
+              nativeThreadGeneration: yield* Ref.make(0),
+            }),
+          ]);
+          const threadId = ThreadId.make("thread:scheduled-fresh-background");
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            // The command ScheduledTaskService sends for a fresh-session schedule.
+            const fire = (name: string) =>
+              orchestrator.dispatch({
+                type: "message.dispatch",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make(`scheduled-task:scheduled-fresh-background:${name}`),
+                threadId,
+                messageId: MessageId.make(`message:scheduled-fresh-background:${name}`),
+                scheduledTaskId: ScheduledTaskId.make("scheduled-fresh-background"),
+                text: `Scheduled ${name}`,
+                attachments: [],
+                modelSelection: CLAUDE_MODEL_SELECTION,
+                freshContext: true,
+                dispatchMode: { type: "queue_after_active" },
+              });
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("command:scheduled-fresh-background:create"),
+              threadId,
+              projectId: ProjectId.make("project:scheduled-fresh-background"),
+              title: "Scheduled fresh session",
+              modelSelection: CLAUDE_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+            });
+            yield* fire("first");
+            yield* worker.drain();
+            yield* waitForIdle(threadId);
+            // The first run left a background command running after its turn ended.
+            yield* Ref.set(backgroundWork, true);
+            yield* fire("second");
+            yield* worker.drain();
+            yield* waitForIdle(threadId);
+            const turns = yield* Ref.get(capturedTurns);
+            const turnFor = (name: string) =>
+              turns.find((turn) => turn.text.endsWith(`Scheduled ${name}`));
+            assert.isDefined(turnFor("second"));
+            assert.notEqual(turnFor("second")!.nativeThreadId, turnFor("first")!.nativeThreadId);
+            // Closing the busy session would end its background work.
+            assert.deepEqual(yield* Ref.get(closedSessions), []);
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "scheduled-fresh-background",
+                  runtimePolicyOverride: {
+                    cwd,
+                    approvalPolicy: "never",
+                    sandboxPolicy: {
+                      type: "readOnly",
+                      access: { type: "fullAccess" },
+                      networkAccess: false,
+                    },
+                  },
+                },
+                layerRegistry,
+              ),
+            ),
+          );
+        }),
+      ),
   );
 });

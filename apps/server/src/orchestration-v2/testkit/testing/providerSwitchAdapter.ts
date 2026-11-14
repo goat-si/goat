@@ -66,6 +66,7 @@ export function makeTestAdapter(input: {
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failedRunOrdinals?: ReadonlySet<number>;
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
+  readonly cancelledRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
   readonly pendingBackgroundWork?: Ref.Ref<boolean>;
   readonly subagentOnlyBackgroundWork?: boolean;
@@ -247,7 +248,9 @@ export function makeTestAdapter(input: {
             ? "failed"
             : input.interruptedRunOrdinals?.has(turnInput.runOrdinal)
               ? "interrupted"
-              : "completed";
+              : input.cancelledRunOrdinals?.has(turnInput.runOrdinal)
+                ? "cancelled"
+                : "completed";
           const response =
             input.responseByThreadId?.[turnInput.threadId]?.[turnInput.runOrdinal] ??
             input.responseByRunOrdinal[turnInput.runOrdinal] ??
