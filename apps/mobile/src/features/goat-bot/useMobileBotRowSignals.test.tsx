@@ -14,9 +14,11 @@ vi.mock("@goat/client-runtime/goatBot", () => ({
 }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
-    homeCurrentOpenableWorkByEnvironment: (id: string) => `by-env:${id}`,
     homeCurrentUnreadAtom: ([id, bot]: [string, string]) => `unread:${id}:${bot}`,
   },
+}));
+vi.mock("../../state/goatBotHomeWork", () => ({
+  mobileGoatBotHomeWorkByEnvironment: (id: string) => `by-env:${id}`,
 }));
 vi.mock("effect/reactivity", () => ({
   Atom: {

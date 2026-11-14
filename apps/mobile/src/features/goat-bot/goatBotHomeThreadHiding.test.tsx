@@ -37,6 +37,12 @@ const fx = vi.hoisted(() => ({
   connection: undefined as unknown as (
     id: string,
   ) => import("effect/reactivity").Atom.Writable<any>,
+  /** A server's answer to one read, per tag, computer and bot; unanswered reads wait. */
+  answer: undefined as unknown as (
+    tag: string,
+    environmentId: string,
+    botId?: string,
+  ) => import("effect/reactivity").Atom.Writable<any>,
   openThread: vi.fn(),
 }));
 vi.mock("../../state/atom-registry", async () => {
@@ -78,20 +84,18 @@ vi.mock("../../../../../packages/client-runtime/src/state/commandPermissions.ts"
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
   const { Atom: A, AsyncResult: R } = await import("effect/reactivity");
-  const answer = (tag: string) =>
-    (fx.atoms[tag] ??= A.make<unknown>(R.initial(true)).pipe(A.keepAlive) as never);
+  fx.answer = (tag, environmentId, botId = "main") =>
+    (fx.atoms[tag + ":" + environmentId + ":" + botId] ??= A.make<unknown>(R.initial(true)).pipe(
+      A.keepAlive,
+    ) as never);
   return {
     ...real,
     createEnvironmentRpcQueryAtomFamily: (_runtime: unknown, options: { tag: string }) => {
       const family = A.family((key: string) => {
         const target = JSON.parse(key) as { environmentId: string; input?: { botId?: string } };
-        // Only the main bot on "env" answers a list; any other list read waits.
-        if (
-          options.tag === "channel.listBotThreads" &&
-          (target.environmentId !== "env" || target.input?.botId !== undefined)
-        )
-          return A.make(R.initial(true));
-        return A.make((get) => get(answer(options.tag)));
+        return A.make((get) =>
+          get(fx.answer(options.tag, target.environmentId, target.input?.botId)),
+        );
       });
       return (target: unknown) => family(JSON.stringify(target));
     },
@@ -130,7 +134,12 @@ vi.mock("../../connection/runtime", async () => {
 });
 vi.mock("../../connection/catalog", () => ({ environmentCatalog: {} }));
 vi.mock("../../state/shell", () => ({ environmentShell: {} }));
-vi.mock("../../state/presentation", () => ({ environmentPresentations: {} }));
+vi.mock("../../state/presentation", async () => {
+  const { Atom: A } = await import("effect/reactivity");
+  const presentationsAtom = A.make<unknown>(new Map()).pipe(A.keepAlive);
+  fx.atoms.presentations = presentationsAtom as never;
+  return { environmentPresentations: { presentationsAtom } };
+});
 vi.mock("../../state/preferences", async () => {
   const { Atom: A, AsyncResult: R } = await import("effect/reactivity");
   const preferences = A.make(R.success({ showGoatBotThreads: false })).pipe(A.keepAlive);
@@ -226,18 +235,18 @@ vi.mock("../../state/entities", () => ({
 vi.mock("@expo/ui/community/datetime-picker", () => ({ DateTimePicker: () => null }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
-    presentationById: new Map([
-      [
-        "env",
+    presentationById: new Map(
+      ["env", "far"].map((id) => [
+        id,
         {
           serverConfig: {
             environment: {
-              capabilities: fx.registry.get(fx.config("env"))?.environment.capabilities,
+              capabilities: fx.registry.get(fx.config(id))?.environment.capabilities,
             },
           },
         },
-      ],
-    ]),
+      ]),
+    ),
   }),
 }));
 vi.mock("../../state/use-thread-detail", () => ({
@@ -253,12 +262,37 @@ vi.mock("./MobileBotComputer", () => ({ MobileBotComputer: () => null }));
 vi.mock("./MobileBotLibrary", () => ({ MobileBotLibrary: () => null }));
 vi.mock("./MobileBotMemory", () => ({ MobileBotMemory: () => null }));
 vi.mock("./MobileBotTaskSearch", () => ({ MobileBotTaskSearch: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: true, label: "jun-mac" }),
-}));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
-}));
+// Home picks its computer from the same presentations and saved bot as Threads' selection.
+vi.mock("./useMobileGoatBotHomeMode", async () => {
+  const { useAtomValue } = await import("@effect/atom-react");
+  const { AsyncResult: R } = await import("effect/reactivity");
+  const { mobileGoatBotEnvironmentInput } = await import("./mobileGoatBotEnvironments");
+  return {
+    useMobileGoatBotHomeMode: () => {
+      const presentations = useAtomValue(fx.atoms.presentations as never) as Map<
+        import("@goat/contracts").EnvironmentId,
+        any
+      >;
+      const preferences = useAtomValue(
+        fx.atoms.preferences as never,
+      ) as import("effect/reactivity").AsyncResult.AsyncResult<
+        { goatBotRef?: import("@goat/contracts").ChannelBotRef },
+        never
+      >;
+      return {
+        environments: [...presentations].map(([environmentId, presentation]) =>
+          mobileGoatBotEnvironmentInput({
+            environmentId,
+            label: presentation.entry.target.label,
+            connection: presentation.connection,
+            serverConfig: presentation.serverConfig,
+          }),
+        ),
+        botRef: R.isSuccess(preferences) ? (preferences.value.goatBotRef ?? null) : null,
+      };
+    },
+  };
+});
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("../../components/ui/Button", () => ({
@@ -276,7 +310,13 @@ const conversation = ThreadId.make("channel-bot:main");
 const NOW = Date.parse("2026-11-14T03:00:00.000Z");
 const at = new Date(NOW - 60_000).toISOString();
 const decode = Schema.decodeUnknownSync(BotThreadRow);
-const task = (taskId: string, title: string, worker: string, finishedMinutesAgo?: number) => {
+const task = (
+  taskId: string,
+  title: string,
+  worker: string,
+  finishedMinutesAgo?: number,
+  source: EnvironmentId = env,
+) => {
   const done =
     finishedMinutesAgo === undefined
       ? null
@@ -294,14 +334,20 @@ const task = (taskId: string, title: string, worker: string, finishedMinutesAgo?
     lastActivityAt: done ?? at,
     unread: false,
     mainMessagesSinceQuiet: 0,
-    worker: { environmentId: env, threadId: worker },
+    worker: { environmentId: source, threadId: worker },
   });
 };
-const coding = (threadId: string, taskId: string, title: string, workKind: "coding" | "chore") =>
+const coding = (
+  threadId: string,
+  taskId: string,
+  title: string,
+  workKind: "coding" | "chore",
+  source: EnvironmentId = env,
+) =>
   decode({
     kind: "coding",
     taskId,
-    environmentId: env,
+    environmentId: source,
     threadId,
     title,
     state: "bound",
@@ -325,6 +371,11 @@ const rows = [
   // A chore whose task left the current list: Home has no link for it.
   coding("k1", "t-gone", "Tidy logs", "chore"),
   ...[1, 2, 3, 4, 5, 6].map((n) => task("f" + n, "Finished " + n, "fw" + n, n * 10)),
+];
+// The second computer's own bot: a current task with its worker and a coding thread.
+const farRows = [
+  task("tb1", "Check the far build", "bw1", undefined, far),
+  coding("bc1", "tb1", "Patch far", "coding", far),
 ];
 const capabilities = {
   goatBotTaskThreads: true,
@@ -369,8 +420,28 @@ const hiddenWork = () => {
   const hidden = fx.registry.get(hiddenGoatBotThreadKeysAtom);
   return workKeys.filter((item) => hidden.has(item));
 };
-const setList = (result: unknown) =>
-  fx.registry.set(fx.atoms["channel.listBotThreads"] as never, result as never);
+const hiddenSet = () => [...fx.registry.get(hiddenGoatBotThreadKeysAtom)].sort();
+const setList = (result: unknown, environmentId = "env") =>
+  fx.registry.set(fx.answer("channel.listBotThreads", environmentId), result as never);
+const listed = (list: ReadonlyArray<BotThreadRow>, remoteWork: ReadonlyArray<BotRemoteWork> = []) =>
+  AsyncResult.success({ rows: list, remoteWork, mainMessageCount: 0 });
+// Home opens the bot on this computer; a saved bot names it, otherwise the first connected one.
+const saveBot = (environmentId: string | null) =>
+  fx.registry.set(
+    fx.atoms.preferences as never,
+    AsyncResult.success({
+      showGoatBotThreads: false,
+      ...(environmentId === null
+        ? {}
+        : {
+            goatBotRef: {
+              environmentId,
+              projectId: "bot-project",
+              threadId: "channel-bot:main",
+            },
+          }),
+    }) as never,
+  );
 
 const connected = AsyncResult.success([{ phase: "connected" }, Option.some({})] as const);
 function setup() {
@@ -403,28 +474,43 @@ function setup() {
   } satisfies OrchestrationV2ShellSnapshot);
   fx.registry.set(snapshots("far"), {
     ...v2ShellSnapshot,
-    threads: [shell("r1", launch("coding", "ssh_thread_launch"))],
+    threads: [
+      shell("r1", launch("coding", "ssh_thread_launch")),
+      shell("bw1", { ...launch(), environmentId: far }),
+      shell("bc1", { ...launch("coding"), environmentId: far }),
+    ],
   } satisfies OrchestrationV2ShellSnapshot);
+  // Both computers run a bot; by label, "A-mac" is the one Home opens unless a bot is saved.
+  fx.registry.set(
+    fx.atoms.presentations as never,
+    new Map(
+      [
+        [env, "A-mac"],
+        [far, "B-mac"],
+      ].map(([id, label]) => [
+        id,
+        {
+          entry: { target: target(id as EnvironmentId), profile: Option.none(), enabled: true },
+          connection: { phase: "connected" },
+          serverConfig: {
+            environment: { label, capabilities: { ...capabilities, channelLedger: true } },
+          },
+        },
+      ]),
+    ) as never,
+  );
   fx.registry.set(fx.config("env"), configOf(env));
   fx.registry.set(fx.connection("env"), connected);
   fx.registry.set(fx.atoms.permission as never, true as never);
   fx.registry.set(fx.config("far"), configOf(far));
+  saveBot(null);
   fx.registry.set(
-    fx.atoms.preferences as never,
-    AsyncResult.success({ showGoatBotThreads: false }) as never,
-  );
-  fx.atoms["channel.listBots"] ??= Atom.make<unknown>(null).pipe(Atom.keepAlive) as never;
-  fx.registry.set(
-    fx.atoms["channel.listBots"] as never,
-    AsyncResult.success({ bots: [] }) as never,
-  );
-  fx.atoms["channel.listChildWork"] ??= Atom.make<unknown>(null).pipe(Atom.keepAlive) as never;
-  fx.registry.set(
-    fx.atoms["channel.listChildWork"] as never,
+    fx.answer("channel.listChildWork", "env"),
     AsyncResult.success({ groups: [] }) as never,
   );
-  fx.atoms["channel.listBotThreads"] ??= Atom.make<unknown>(null).pipe(Atom.keepAlive) as never;
-  setList(AsyncResult.success({ rows, remoteWork: [remote], mainMessageCount: 0 }));
+  setList(listed(rows, [remote]));
+  // The second computer's list waits unless a test answers it.
+  setList(AsyncResult.initial(true), "far");
   fx.openThread.mockClear();
 }
 
@@ -522,7 +608,7 @@ it("hides nothing from Home while its first list read is pending, offline, or no
   setup();
   setList(AsyncResult.initial(true));
   expect(hiddenWork()).toEqual([]);
-  setList(AsyncResult.success({ rows, remoteWork: [remote], mainMessageCount: 0 }));
+  setList(listed(rows, [remote]));
   expect(hiddenWork()).toContain(key("env", "c1"));
   // Offline the bot is not eligible, so Home stops governing and the legacy rule decides.
   fx.registry.set(
@@ -547,6 +633,44 @@ it("returns Threads to the legacy rule when either visibility capability is with
       ...[1, 2, 3, 4, 5, 6].map((n) => key("env", "fw" + n)),
     ]);
   }
+});
+
+const envLinks = workKeys.filter((item) => item !== key("env", "k1"));
+const envLegacy = [
+  key("env", "w1"),
+  key("env", "k1"),
+  ...[1, 2, 3, 4, 5, 6].map((n) => key("env", "fw" + n)),
+];
+const farLinks = [key("far", "bw1"), key("far", "bc1")];
+const sorted = (keys: ReadonlyArray<string>) => [...keys].sort();
+
+it("keeps another computer's bot work on dev's rule while Home opens this one", () => {
+  setup();
+  setList(listed(farRows), "far");
+  // B-mac governs its own Home, but this device's Home is A-mac's: B-mac's coding thread stays in
+  // Threads and its worker stays hidden, as on dev.
+  expect(hiddenSet()).toEqual(sorted([...envLinks, key("far", "bw1")]));
+});
+
+it("moves Home's rule to the computer Home opens, and each thread it hides opens from that Home", async () => {
+  setup();
+  setList(listed(farRows), "far");
+  saveBot("far");
+  // A-mac returns to dev's rule (its coding launch and remote coding are listed again).
+  expect(hiddenSet()).toEqual(sorted([...envLegacy, ...farLinks]));
+  await using screen = await renderHome();
+  await screen.openLink("Check the far build", "Work thread: Check the far build");
+  await screen.openLink("Check the far build", "GOAT thread: Patch far");
+  const opened = fx.openThread.mock.calls.map(([thread]) => key(thread.environmentId, thread.id));
+  expect(sorted(opened)).toEqual(sorted(farLinks));
+});
+
+it("governs no computer while no bot computer is selected", () => {
+  setup();
+  setList(listed(farRows), "far");
+  // The saved bot's computer is gone from this device.
+  saveBot("gone");
+  expect(hiddenSet()).toEqual(sorted([...envLegacy, key("far", "bw1")]));
 });
 
 it("hides nothing while this device shows GOAT Bot threads", () => {
