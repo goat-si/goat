@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
@@ -246,46 +247,58 @@ it.live("extracts plans using the environment captured when the session opened",
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
-it.live("finds a workspace-relative grok and launches it with the session's own PATH", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const workspace = yield* fs.makeTempDirectoryScoped({ prefix: "grok-relative-" });
-    const executable = path.join(workspace, "bin", "grok");
-    yield* fs.makeDirectory(path.join(workspace, "bin"));
-    yield* fs.writeFileString(executable, "#!/bin/sh\n");
-    yield* fs.chmod(executable, 0o755);
-    const launches: Array<unknown> = [];
-    const instanceId = ProviderInstanceId.make("grok-relative-path");
-    const makeRuntime = makeMockRuntime({
-      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-      mockAgentPath: yield* path.fromFileUrl(
+// The executable fixture uses a POSIX shell.
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "finds a workspace-relative grok and launches it with the session's own PATH",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspace = yield* fs.makeTempDirectoryScoped({ prefix: "grok-relative-" });
+      const executable = path.join(workspace, "bin", "grok");
+      yield* fs.makeDirectory(path.join(workspace, "bin"));
+      const receipt = path.join(workspace, "receipt");
+      const agent = yield* path.fromFileUrl(
         new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
-      ),
-    });
-    const adapter = yield* makeGrokAdapterV2({
-      instanceId,
-      settings: yield* decodeGrokSettings({}),
-      environment: { PATH: "bin" },
-      currentEnvironment: Effect.succeed({ PATH: "bin" }),
-      readStoredApiKey: Effect.succeed("key"),
-      hostPlatform: "darwin",
-      selfInvocation: yield* resolveSelfInvocation(),
-      makeRuntime: (input) => {
-        launches.push(input.sessionLaunch);
-        return makeRuntime(input);
-      },
-    });
-    yield* adapter.openSession({
-      threadId: ThreadId.make("grok-relative-thread"),
-      providerSessionId: ProviderSessionId.make("grok-relative"),
-      modelSelection: { instanceId, model: "default" },
-      runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: workspace,
-      }),
-    });
-    assert.deepEqual(launches, [{ environment: { PATH: "bin", XAI_API_KEY: "key" }, executable }]);
-  }).pipe(Effect.provide(layer), Effect.scoped),
+      );
+      yield* fs.writeFileString(
+        executable,
+        '#!/bin/sh\nprintf "%s\\n%s\\n" "$0" "$PATH" > "$TEST_RECEIPT"\nexec "$TEST_NODE" "$TEST_AGENT"\n',
+      );
+      yield* fs.chmod(executable, 0o755);
+      const instanceId = ProviderInstanceId.make("grok-relative-path");
+      const adapter = yield* makeGrokAdapterV2({
+        instanceId,
+        settings: yield* decodeGrokSettings({}),
+        environment: {
+          PATH: "bin",
+          TEST_RECEIPT: receipt,
+          TEST_NODE: process.execPath,
+          TEST_AGENT: agent,
+        },
+        currentEnvironment: Effect.succeed({
+          PATH: "bin",
+          TEST_RECEIPT: receipt,
+          TEST_NODE: process.execPath,
+          TEST_AGENT: agent,
+        }),
+        readStoredApiKey: Effect.succeed("key"),
+        hostPlatform: "darwin",
+        selfInvocation: yield* resolveSelfInvocation(),
+      });
+      yield* adapter.openSession({
+        threadId: ThreadId.make("grok-relative-thread"),
+        providerSessionId: ProviderSessionId.make("grok-relative"),
+        modelSelection: { instanceId, model: "default" },
+        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: workspace,
+        }),
+      });
+      assert.deepEqual((yield* fs.readFileString(receipt)).trimEnd().split("\n"), [
+        executable,
+        "bin",
+      ]);
+    }).pipe(Effect.provide(layer), Effect.scoped),
 );
