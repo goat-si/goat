@@ -1,14 +1,12 @@
 import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@goat/contracts";
+import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as FiberHandle from "effect/FiberHandle";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -340,21 +338,12 @@ export const CodexDriver: ProviderDriver<
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
     // manifest, so a slow or hung fetch never delays the provider check.
-    // The host home the last finished status check ran under; unused when the instance pins a home.
-    let checkedHome: string | undefined;
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
           currentEnvironment.pipe(
             Effect.flatMap((env) =>
-              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(
-                provideHomeRoute,
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    checkedHome = env.CODEX_HOME ?? "";
-                  }),
-                ),
-              ),
+              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
             ),
           ),
           currentCatalog,
@@ -401,35 +390,10 @@ export const CodexDriver: ProviderDriver<
           }),
       ),
     );
-    const homeRefresh = yield* FiberHandle.make();
-    const reconcileHome = Effect.fn("CodexDriver.reconcileHome")(function* (value: ServerProvider) {
-      if (pinnedHome !== undefined) return value;
-      // Without a pinned home the merged CODEX_HOME is the host's, so one string read suffices.
-      const home = baseEnvironment.CODEX_HOME ?? "";
-      if (checkedHome === home || (checkedHome === undefined && value.auth.status === "unknown"))
-        return value;
-      yield* FiberHandle.run(homeRefresh, snapshot.refresh.pipe(Effect.asVoid), {
-        onlyIfMissing: true,
-        startImmediately: false,
-      });
-      return {
-        ...value,
-        auth: { status: "unknown" as const },
-        status: "warning" as const,
-        message: "Checking Codex authentication for the current home.",
-        usageLimits: undefined,
-      };
-    });
-    const guardedSnapshot = {
-      ...snapshot,
-      getSnapshot: snapshot.getSnapshot.pipe(Effect.flatMap(reconcileHome)),
-      refresh: snapshot.refresh.pipe(Effect.flatMap(reconcileHome)),
-      streamChanges: snapshot.streamChanges.pipe(Stream.mapEffect(reconcileHome)),
-    };
     const textGeneration = yield* makeCodexTextGeneration(
       effectiveConfig,
       undefined,
-      guardedSnapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
+      snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       undefined,
       {
         providerInstanceId: instanceId,
@@ -439,9 +403,9 @@ export const CodexDriver: ProviderDriver<
     );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
-        ? guardedSnapshot.getSnapshot
+        ? snapshot.getSnapshot
         : Effect.all([
-            guardedSnapshot.getSnapshot,
+            snapshot.getSnapshot,
             Effect.gen(function* () {
               const processEnv = yield* currentEnvironment;
               const route = yield* HomeRoute.resolveCodexRouteContext({
@@ -560,7 +524,7 @@ export const CodexDriver: ProviderDriver<
       displayName,
       accentColor,
       enabled,
-      snapshot: guardedSnapshot,
+      snapshot,
       snapshotForCwd,
       ...(config.modelRoute === "opencodex" ? {} : { consumeResetCredit }),
       orchestrationAdapter,
