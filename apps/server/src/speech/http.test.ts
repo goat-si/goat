@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import {
   AuthOrchestrationOperateScope,
+  AuthFilesystemReadScope,
   AuthVoiceManageScope,
   DEFAULT_SPEECH_CONFIGURATION,
   encodeMonoPcm16Wav,
@@ -27,8 +28,23 @@ const serve = Effect.fn("test.speech.serve")(function* (
   scopes: readonly string[],
   transcription: Effect.Effect<string> = Effect.succeed("recognized"),
 ) {
-  const list = vi.fn(() => Effect.succeed([]));
+  const list = vi.fn(() =>
+    Effect.succeed([
+      {
+        id: "model",
+        name: "Model",
+        description: "Model",
+        size: 1,
+        installed: true,
+        selected: true,
+        benchmark: { cpu: null, accelerated: null },
+        recommended: false,
+        linkedFrom: "/private/model",
+      },
+    ]),
+  );
   const download = vi.fn(() => Effect.void);
+  const link = vi.fn<SpeechManagement.SpeechManagement["Service"]["link"]>(() => Effect.void);
   const remove = vi.fn(() => Effect.void);
   const configure = vi.fn(() => Effect.void);
   const transcribe = vi.fn(() => transcription);
@@ -36,6 +52,7 @@ const serve = Effect.fn("test.speech.serve")(function* (
     list: Effect.suspend(list),
     configuration: Effect.succeed(DEFAULT_SPEECH_CONFIGURATION),
     download,
+    link,
     remove,
     configure,
     transcribe,
@@ -63,6 +80,7 @@ const serve = Effect.fn("test.speech.serve")(function* (
   return {
     list,
     download,
+    link,
     remove,
     configure,
     transcribe,
@@ -92,14 +110,36 @@ it.effect("rejects each management operation without voice:manage", () =>
       ["models", undefined],
       ["configure", undefined],
       ["models/download", { modelId: "model" }],
+      ["models/link", { path: "/models" }],
       ["models/remove", { modelId: "model" }],
       ["configure", DEFAULT_SPEECH_CONFIGURATION],
     ] as const)
       expect((yield* h.send(path, body)).status).toBe(403);
     expect(h.list).not.toHaveBeenCalled();
     expect(h.download).not.toHaveBeenCalled();
+    expect(h.link).not.toHaveBeenCalled();
     expect(h.remove).not.toHaveBeenCalled();
     expect(h.configure).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("link requires filesystem read as well as voice management", () =>
+  Effect.gen(function* () {
+    const h = yield* serve([AuthVoiceManageScope]);
+    const modelList = yield* h.send("models");
+    const listed = yield* Effect.promise(() => modelList.json());
+    expect(listed).not.toHaveProperty("models.0.linkedFrom");
+    expect(listed).toHaveProperty("supportsModelLinking", true);
+    expect((yield* h.send("models/link", { path: "/models" })).status).toBe(403);
+    expect(h.link).not.toHaveBeenCalled();
+    const allowed = yield* serve([AuthVoiceManageScope, AuthFilesystemReadScope]);
+    const allowedList = yield* allowed.send("models");
+    expect(yield* Effect.promise(() => allowedList.json())).toHaveProperty(
+      "models.0.linkedFrom",
+      "/private/model",
+    );
+    expect((yield* allowed.send("models/link", { path: "/models" })).status).toBe(200);
+    expect(allowed.link).toHaveBeenCalledWith("/models");
   }).pipe(Effect.scoped),
 );
 
@@ -159,5 +199,25 @@ it.effect("serves authorized model operations and transcription", () =>
     expect(h.remove).toHaveBeenCalledWith("model");
     expect(h.configure).toHaveBeenCalledWith(DEFAULT_SPEECH_CONFIGURATION);
     expect(h.transcribe).toHaveBeenCalledOnce();
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a link that finds no model says so without asking for a retry", () =>
+  Effect.gen(function* () {
+    const h = yield* serve([AuthVoiceManageScope, AuthFilesystemReadScope]);
+    h.link.mockImplementation(() =>
+      Effect.fail(
+        new SpeechManagement.SpeechManagementError({
+          operation: "link",
+          cause: SpeechManagement.NO_LINKABLE_MODEL,
+        }),
+      ),
+    );
+    const response = yield* h.send("models/link", { path: "/empty" });
+    expect(response.status).not.toBe(200);
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({
+      message: SpeechManagement.NO_LINKABLE_MODEL,
+      retryable: false,
+    });
   }).pipe(Effect.scoped),
 );

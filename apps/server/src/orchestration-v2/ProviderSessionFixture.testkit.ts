@@ -1,3 +1,4 @@
+import type * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Queue from "effect/Queue";
 import type * as Cause from "effect/Cause";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -8,6 +9,8 @@ import {
   type OrchestrationV2ProviderSession,
   type ProviderSessionId,
   type ModelSelection,
+  type ThreadId,
+  type OrchestrationV2ProviderThread,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -69,3 +72,37 @@ export const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
     supportsMultipleProviderThreadsPerSession: false,
   },
 };
+
+export function makeProviderThread(input: {
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
+  readonly threadId: ThreadId;
+  readonly providerSessionId: ProviderSessionId;
+  readonly now: DateTime.Utc;
+  readonly nativeThreadId?: string;
+}): OrchestrationV2ProviderThread {
+  const nativeThreadId = input.nativeThreadId ?? "native-thread";
+  return {
+    id: input.idAllocator.derive.providerThread({
+      driver: CODEX_DRIVER,
+      nativeThreadId,
+    }),
+    driver: CODEX_DRIVER,
+    providerInstanceId: modelSelection.instanceId,
+    providerSessionId: input.providerSessionId,
+    appThreadId: input.threadId,
+    ownerNodeId: null,
+    nativeThreadRef: {
+      driver: CODEX_DRIVER,
+      nativeId: nativeThreadId,
+      strength: "strong",
+    },
+    nativeConversationHeadRef: null,
+    status: "idle",
+    firstRunOrdinal: null,
+    lastRunOrdinal: null,
+    handoffIds: [],
+    forkedFrom: null,
+    createdAt: input.now,
+    updatedAt: input.now,
+  };
+}

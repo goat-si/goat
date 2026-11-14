@@ -4,6 +4,7 @@ import {
   type HostStatusEntry,
   type HubNode,
   type OpenCodexChildSetup,
+  ThreadId,
 } from "@goat/contracts";
 import { useSyncExternalStore, act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -654,4 +655,33 @@ it("tells a phone that the disposable machines consent ended and how to renew it
   state.selectedTargets = [hub];
   await render();
   expect(container.textContent).toContain("Consent has ended: turn the switch off and on");
+});
+
+it("a disposable Hub device shows its class, Pen membership and who attached it; a kept one does not", async () => {
+  state.selectedIds = new Set([first.environmentId]);
+  state.selectedTargets = [first];
+  const base = state.query.getMockImplementation();
+  const classed: HubNode = {
+    ...device,
+    machineClass: {
+      class: "conflict",
+      attachId: "a-1",
+      state: "linked",
+      stateSince: "2026-11-14T10:00:00.000Z",
+      provisioner: { kind: "thread", threadId: ThreadId.make("thread-1") },
+      penMember: true,
+      conflicts: ["other_route"],
+    },
+  };
+  state.query.mockImplementation((target: object) =>
+    "machines" in target || "hostStatus" in target
+      ? base?.(target)
+      : { data: { nodes: [classed], notices: [] }, error: null, cause: null },
+  );
+  await render();
+  expect(container.textContent).toContain("Conflict · Still in Pen · Attached by an agent thread");
+  expect(container.textContent).toContain("the hub reaches it by another route than its Pen alias");
+  state.query.mockImplementation(base ?? (() => undefined));
+  await render();
+  expect(container.textContent).not.toContain("Still in Pen");
 });

@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -25,7 +24,7 @@ const git = (cwd: string, args: ReadonlyArray<string>) =>
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
   beforeEach(() => {
-    vi.stubEnv("GIT_CONFIG_GLOBAL", NodeOS.devNull);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     return () => vi.unstubAllEnvs();
   });

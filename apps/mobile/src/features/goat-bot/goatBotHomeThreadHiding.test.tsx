@@ -777,6 +777,41 @@ it("governs the selected computer only where Home can show its task list", async
   expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
 });
 
+// Both computers store the cluster's Home claim, which names B-mac; the chat talks to B-mac.
+function claimHomeOn(environmentId: string) {
+  const claim = { environmentId, claimedAt: 1, claimId: "claim-1" };
+  const presentations = new Map(
+    fx.registry.get(fx.atoms.presentations as never) as Map<
+      string,
+      { serverConfig: { environment: { capabilities: object } } }
+    >,
+  );
+  for (const [id, current] of presentations)
+    presentations.set(id, {
+      ...current,
+      serverConfig: {
+        ...current.serverConfig,
+        environment: {
+          ...current.serverConfig.environment,
+          capabilities: { ...current.serverConfig.environment.capabilities, goatBotHome: true },
+        },
+        settings: { goatBotHome: claim },
+      } as never,
+    });
+  fx.registry.set(fx.atoms.presentations as never, presentations as never);
+}
+
+it("follows the claimed Home's computer, the one the chat talks to, when Home claims exist", async () => {
+  setup();
+  setList(listed(farRows), "far");
+  claimHomeOn("far");
+  // A-mac sorts first by label, but the Home is claimed on B-mac: Threads follows B-mac's Home.
+  expect(hiddenSet()).toEqual(sorted([...envLegacy, ...farLinks]));
+  await using screen = await renderHome();
+  await screen.openLink("Check the far build", "GOAT thread: Patch far");
+  expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "far", id: "bc1" });
+});
+
 it("governs no computer while no bot computer is selected", () => {
   setup();
   setList(listed(farRows), "far");

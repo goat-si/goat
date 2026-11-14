@@ -265,6 +265,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           args: codexAppServerArgs(
             resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
             input.routeArgs,
+            true,
           ),
           cwd: input.runtimePolicy.cwd ?? undefined,
           env: environment,

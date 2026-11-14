@@ -5,11 +5,6 @@ import {
   deriveThreadRuntime,
 } from "@goat/client-runtime/state/thread-execution";
 import { checkpointFileTotals } from "@goat/client-runtime/state/thread-checkpoints";
-import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
-import {
-  latestUnheldRun,
-  usageLimitRunPresentedAsLatest,
-} from "@goat/shared/orchestrationV2ThreadError";
 import * as Option from "effect/Option";
 import type { SetStateAction } from "react";
 import { applyClaudePromptEffortPrefix, resolvePromptInjectedEffort } from "@goat/shared/model";
@@ -231,16 +226,6 @@ export function resolveProactiveTurnDiffAction(input: {
   }
   const totals = checkpointFileTotals(input.checkpoint);
   return totals.count >= 3 || totals.additions + totals.deletions >= 50 ? "open" : "ignore";
-}
-
-/** Mark reactivated Diff tabs to preserve review scope. Already-active tabs must not leave a marker for
- * the next open. */
-export function resolveExplicitDiffOpenOnActivate(input: {
-  readonly surfaceKind: RightPanelSurface["kind"];
-  readonly diffOpen: boolean;
-  readonly activeThreadRef: ScopedThreadRef;
-}): ScopedThreadRef | null {
-  return input.surfaceKind === "diff" && !input.diffOpen ? input.activeThreadRef : null;
 }
 
 export function codexArtifactTemplatePromptToAppend(
@@ -1628,28 +1613,6 @@ export function presentThreadShellFromProjection(
     latestRun,
     runtime,
   };
-}
-
-/** Background work the provider still runs after the latest run ended. */
-export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure | null) {
-  if (projection === null) return [];
-  const sessionError =
-    projection.providerSessions.findLast(
-      (session) => session.providerInstanceId === projection.thread.providerInstanceId,
-    )?.lastError ?? null;
-  const latestRun =
-    usageLimitRunPresentedAsLatest(projection.runs, projection.turnItems, sessionError) ??
-    latestUnheldRun(projection.runs);
-  return [
-    ...derivePendingBackgroundWork({
-      latestRun,
-      providerThreads: projection.providerThreads,
-      turnItems: projection.turnItems,
-      activeProviderThreadId: projection.thread.activeProviderThreadId,
-      runs: projection.runs,
-      pullRequests: projection.thread.pullRequests,
-    }),
-  ];
 }
 
 /**

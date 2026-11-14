@@ -56,7 +56,12 @@ import { composerDraftHasUserContent, useComposerDraftStore } from "../../compos
 import { useEnvironmentScope } from "~/state/session";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { vcsEnvironment } from "../../state/vcs";
-import { useChildThreadInputs, readThreadShell, waitForThreadShell } from "../../state/entities";
+import {
+  useChildThreadInputs,
+  readThreadShell,
+  waitForThreadShell,
+  readEnvironmentSupportsTitleRegeneration,
+} from "../../state/entities";
 import { environmentShell } from "../../state/shell";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { targetShellOmitsChildren } from "../../lib/relatedThreadOpen";
@@ -117,6 +122,7 @@ interface ThreadLifecycleInput {
   readonly serverConfig: EnvironmentServerConfig | null;
   readonly runtimeMode: RuntimeMode;
   readonly isWorking: boolean;
+  readonly runIsLive: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkBannerItem>[0]["tasks"];
   readonly activePendingApproval: PendingThreadRequests["activePendingApproval"];
   readonly activePendingUserInput: PendingThreadRequests["activePendingUserInput"];
@@ -168,6 +174,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     serverConfig,
     runtimeMode,
     isWorking,
+    runIsLive,
     pendingBackgroundTasks,
     activePendingApproval,
     activePendingUserInput,
@@ -436,9 +443,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const handleSwitchCheckoutToThreadStable = useStableCallback(() => {
     void handleSwitchCheckoutToThread();
   });
-  // The interrupt path also accepts a completed run while its provider still
-  // has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  const activeBackgroundTasks = activeThread ? pendingBackgroundTasks : [];
   const [backgroundWorkStops, setBackgroundWorkStops] = useState<
     Record<string, BackgroundWorkStopRequest | undefined>
   >({});
@@ -645,7 +650,8 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     ? backgroundWorkBannerItem({
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
-        stopDisabled: !canOperateThread || isStoppingBackgroundWork,
+        // Interrupt stops the active run first, not this work; the composer owns that Stop.
+        stopDisabled: runIsLive || !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,
         onOpenThread: onOpenRelatedThreadStable,
@@ -700,6 +706,16 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       );
     };
   const shortcuts = {
+    "thread.regenerateTitle": () => {
+      if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
+      if (!activeThreadShell || !activeThreadRef || activeThreadShell.titleRegeneration != null)
+        return;
+      if (!readEnvironmentSupportsTitleRegeneration(activeThreadRef.environmentId)) return;
+      void updateThreadMetadata({
+        environmentId: activeThreadRef.environmentId,
+        input: { threadId: activeThreadRef.threadId, regenerateTitle: true },
+      }).then(toastThreadActionFailure("Failed to regenerate thread title"));
+    },
     "thread.settle": () => {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
       if (!activeThreadShell || !activeThreadRef || !supportsSettlement) return;

@@ -2,7 +2,7 @@ import {
   USAGE_CONTRACT_VERSION,
   USAGE_MERGE_COMPATIBLE_SINCE,
   type EnvironmentId,
-  type UsageBucket,
+  UsageBucket,
   type UsageDay,
   type UsageProviderKind,
   UsageSummary,
@@ -436,6 +436,13 @@ describe("mergeUsage", () => {
     const merged = mergeUsage([environment("env-a", decoded)], USAGE_CONTRACT_VERSION);
     expect(merged.models).toHaveLength(1);
     expect(merged.models[0]).toMatchObject({ model: "gpt-5", costUsd: 20, totalTokens: 2320 });
+  });
+
+  it("lets an older client decode a bucket containing exact unpriced tokens", () => {
+    const { unpricedTokens: _added, ...legacyFields } = UsageBucket.fields;
+    const decodeLegacy = Schema.decodeUnknownSync(Schema.Struct(legacyFields));
+    const decoded = decodeLegacy(bucket({ unpricedRecords: 1, unpricedTokens: 900 }));
+    expect(decoded.unpricedRecords).toBe(1);
   });
 
   it("marks a model with no known rates as unpriced rather than free", () => {

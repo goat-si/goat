@@ -1,3 +1,5 @@
+import { DiffFileCollapseToggle } from "./diffs/DiffFileCollapseToggle";
+import { useWordWrap } from "~/hooks/useWordWrap";
 import { DiffFileHeaderSuffix } from "./diffs/DiffFileHeaderSuffix";
 import { GIT_REVIEW_SCOPES, type GitReviewScope } from "@goat/client-runtime/state/review";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -20,12 +22,7 @@ import {
   Rows3Icon,
   TextWrapIcon,
 } from "~/components/solar";
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronsDownUp,
-  ChevronsUpDown,
-} from "~/components/solar/nodes";
+import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
@@ -33,7 +30,7 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { useFileContextMenuHandler } from "../fileContextMenu";
 import { type DraftId } from "../composerDraftStore";
-import { openDiffFilePrimaryAction } from "../diffFileActions";
+import { diffRepositoryRoot, openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { revisionedQuery } from "~/state/revisionedQuery";
 import { cn } from "~/lib/utils";
@@ -109,49 +106,6 @@ const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "goat.diffFileTreeOpen";
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 
-function DiffFileCollapseToggle({
-  filePath,
-  fileKey,
-  collapsed,
-  unavailable,
-  iconClassName,
-  onToggle,
-}: {
-  filePath: string;
-  fileKey: string;
-  collapsed: boolean;
-  unavailable: boolean;
-  iconClassName: string;
-  onToggle: (fileKey: string) => void;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="icon-micro"
-            variant="ghost"
-            className="-ms-0.5"
-            aria-label={collapsed ? `Expand ${filePath}` : `Collapse ${filePath}`}
-            aria-expanded={!collapsed}
-            disabled={unavailable}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggle(fileKey);
-            }}
-          />
-        }
-      >
-        <MorphIcon
-          className={cn("size-4", iconClassName)}
-          icon={collapsed ? ChevronRight : ChevronDown}
-        />
-      </TooltipTrigger>
-      <TooltipPopup side="top">{collapsed ? "Expand diff" : "Collapse diff"}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 interface DiffPanelProps {
   mode?: DiffPanelMode;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -174,7 +128,7 @@ export default function DiffPanel({
     wordWrap: settings.wordWrap,
   }));
   const diffLayout = settings.diffLayout;
-  const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+  const [wordWrap, setWordWrapOverride] = useWordWrap(settings.wordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     DIFF_FILE_TREE_STORAGE_KEY,
@@ -199,9 +153,7 @@ export default function DiffPanel({
       : null,
   );
   const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
-  const activeRepositoryRoot = activeThread?.worktreePath
-    ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+  const activeRepositoryRoot = diffRepositoryRoot(activeThread, activeProject);
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -209,6 +161,7 @@ export default function DiffPanel({
   const openInPreferredEditor = useOpenInPreferredEditor(
     activeThread?.environmentId ?? null,
     serverConfig?.availableEditors ?? [],
+    activeCwd,
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const gitStatusQuery = useEnvironmentQuery(
@@ -928,7 +881,7 @@ export default function DiffPanel({
                 size="sm"
                 pressed={wordWrap}
                 onPressedChange={(pressed) => {
-                  setWordWrap(Boolean(pressed));
+                  setWordWrapOverride(Boolean(pressed));
                 }}
               />
             }

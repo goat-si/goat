@@ -132,6 +132,8 @@ export const makeForceStep = (ops: DetachOps) =>
     // OpenCodex asks for one more send of a committed id whose removal recover found pending.
     const pending = before.outcome === "retirement_pending";
     let reuse = false;
+    // A stored id that settled refused or was never recorded owns nothing; GOAT's owner stays.
+    let storedOwnsNothing = false;
     if (stored !== undefined) {
       const known = yield* readEntry(stored, linkId, true);
       // A person's detach after an unreadable read-back: what the id still owes decides.
@@ -143,6 +145,20 @@ export const makeForceStep = (ops: DetachOps) =>
             ? undefined
             : yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
         if (held?.kind === "unreadable") return;
+        // GOAT's owner finished the removal meanwhile: a purge with the Child's receipt, or a force
+        // whose tombstone recover cleans under the owner's id.
+        if (held?.kind === "clean" && ownedBy !== undefined) {
+          if (!ownedBy.includes(".force.")) return yield* finish(row, enroll, "purged");
+          const { owner: _owned, outcome: _checked, ...going } = before;
+          const saved = yield* note(
+            row,
+            withDetach(enroll, { ...going, operationId: ownedBy, step: "recover" }),
+            recovering,
+          );
+          if (saved)
+            yield* audit(row.attach_id, "hub.machine_detach", retire ? "retired" : "forced");
+          return;
+        }
         const owes =
           held !== undefined &&
           (held.kind === "open" || (held.kind === "unsettled" && !held.resolved));
@@ -172,6 +188,8 @@ export const makeForceStep = (ops: DetachOps) =>
             : known.kind === "unsettled"
               ? !known.resolved
               : true;
+      // A never-recorded id is resent with its owner (reuse), so only a settled refusal owns nothing.
+      storedOwnsNothing = known.kind === "failed_clean" && !reuse;
       if (reuse && !pending && (before.sends ?? 0) >= REVOKE_SENDS)
         return yield* halt(row, enroll, before, "revoke_unsettled");
     }
@@ -215,7 +233,7 @@ export const makeForceStep = (ops: DetachOps) =>
       reused ? stored : revokeOperationId(row.attach_id, "force", attempt),
       attempt,
       reuse ? (before.sends ?? 0) + 1 : 1,
-      reused ? owner : (stored ?? owner),
+      reused ? owner : storedOwnsNothing ? (owner ?? stored) : (stored ?? owner),
     );
     if (result === undefined) return;
     // OpenCodex's order for tombstone_limit (cli/link.ts): the same id first, which resumes a removal
@@ -231,8 +249,12 @@ export const makeForceStep = (ops: DetachOps) =>
     if (elsewhere && admitted.owner !== undefined) {
       const ownedBy = admitted.owner;
       const finished = yield* readEntry(ownedBy, linkId, ownedBy.includes(".force."));
-      // Unread: the next pass sends the new id again and reads the owner then.
-      if (finished.kind === "unreadable") return;
+      // Unread: the next pass sends the new id again and reads the owner then; a stop names the read.
+      if (finished.kind === "unreadable")
+        return yield* note(
+          row,
+          withDetach(enroll, { ...admitted, outcome: "unreadable", refusal: "link_not_found" }),
+        );
       if (finished.kind === "clean" && !ownedBy.includes(".force."))
         return yield* finish(row, withDetach(enroll, admitted), "purged");
       if (finished.kind === "clean") {

@@ -185,7 +185,8 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
           (outcome === undefined ||
             outcome === "not_found" ||
             outcome === "unreadable" ||
-            outcome === "retirement_owned");
+            outcome === "retirement_owned" ||
+            outcome === "owner_open");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true

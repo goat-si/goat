@@ -287,7 +287,7 @@ vi.mock("./MobileBotMemory", () => ({
 }));
 vi.mock("./goatBotHomeMode", async (original) => ({
   ...(await original<typeof import("./goatBotHomeMode")>()),
-  pickMobileGoatBotEnvironment: () => ({
+  pickMobileGoatBotHomeEnvironment: () => ({
     environmentId: "env",
     connected: state.connected,
     label: "jun-mac",

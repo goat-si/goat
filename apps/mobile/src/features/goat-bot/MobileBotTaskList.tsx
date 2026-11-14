@@ -1,6 +1,5 @@
 import {
   COLLAPSED_FINISHED,
-  presentTaskStatus,
   type BotHomeWork,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
@@ -18,6 +17,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
+import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -30,8 +30,8 @@ export interface MobileBotHomeItem {
 }
 
 /** The words a task row says and VoiceOver reads: title, status, then unread and pinned. */
-export function mobileBotTaskLabel(row: TaskRow): string {
-  const status = presentTaskStatus(row.task.status, row.view.doneAt).label;
+export function mobileBotTaskLabel(row: TaskRow, chips: MobileTaskChips): string {
+  const status = mobileBotTaskStatus(row, chips);
   return `${row.task.title}, ${status}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`;
 }
 
@@ -43,6 +43,8 @@ export function mobileBotTaskLabel(row: TaskRow): string {
 export function mobileBotTaskListItems(props: {
   readonly botName: string;
   readonly work: BotHomeWork;
+  /** The conversation's newest task chips, which say what a running task's worker asks. */
+  readonly chips: MobileTaskChips;
   readonly showAllFinished: boolean;
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
@@ -157,7 +159,7 @@ export function mobileBotTaskListItems(props: {
             row={
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={mobileBotTaskLabel(row)}
+                accessibilityLabel={mobileBotTaskLabel(row, props.chips)}
                 accessibilityActions={actions(row)
                   .filter(
                     (action) => !("attributes" in action && action.attributes?.disabled === true),
@@ -199,7 +201,7 @@ export function mobileBotTaskListItems(props: {
                       />
                     ) : null}
                     <Text className="text-xs text-foreground-muted">
-                      {presentTaskStatus(row.task.status, row.view.doneAt).label}
+                      {mobileBotTaskStatus(row, props.chips)}
                       {row.unread ? " · Unread" : ""}
                     </Text>
                   </View>

@@ -1,3 +1,4 @@
+import { replaceStreamingMessageRows } from "./timelineStreamingRows";
 import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
@@ -31,8 +32,6 @@ export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
   formatDuration,
-  isStreamingMessageTextUpdate,
-  isStreamingTurnItemTextUpdate,
   timelineEntryIsPersistentResourceCard,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
@@ -87,7 +86,7 @@ import {
   type TurnThreadTarget,
 } from "./turnThreadTargets";
 
-function timelineEntryRunId(entry: TimelineEntry): RunId | null {
+export function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
     return entry.message.role === "assistant" ? (entry.message.runId ?? null) : null;
   }
@@ -298,7 +297,10 @@ export function workEntryIsVisibleInGroup(
 }
 const TIMELINE_MINIMAP_ITEM_SPACING = 8;
 export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
-const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
+export const TIMELINE_MINIMAP_TARGET_OFFSET = 24;
+// Relative to the timeline, not the viewport, so an open terminal shrinks the rail and
+// endpoint previews (centered on their strip) still fit above and below it.
+const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "max(4rem, calc(100% - 14.75rem))";
 const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
 export interface WorkGroupScrollAnchor {
@@ -458,7 +460,6 @@ export function resolveTimelineMinimapHasPersistentGutter(
 
 const TIMELINE_MINIMAP_HIT_STRIP_LEFT = 12;
 const TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-const TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH = "22rem";
 
 export function resolveTimelineMinimapHitStripWidth(
   viewportWidth: number,
@@ -478,13 +479,6 @@ const TIMELINE_MINIMAP_NAVIGATION_REACH = 14;
 
 export function resolveTimelineMinimapNavigationInteractive(collapsedWidth: number): boolean {
   return collapsedWidth >= TIMELINE_MINIMAP_NAVIGATION_REACH;
-}
-
-export function resolveTimelineMinimapInteractiveWidth(
-  collapsedWidth: number,
-  expanded: boolean,
-): number | string {
-  return expanded ? TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
 }
 
 function computeElapsedMs(startIso: string, endIso: string): number | null {
@@ -623,6 +617,7 @@ type MessagesTimelineRowContent =
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       durationStart: string;
       showAssistantMeta: boolean;
+      suppressEmptyResponse?: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -936,7 +931,7 @@ function timelineEntryIsSteer(entry: TimelineEntry): boolean {
   );
 }
 
-function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
+export function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
   return (
     (entry.kind === "message" && entry.message.role === "user" && !timelineEntryIsSteer(entry)) ||
     (entry.kind === "work" && entry.entry.itemType === "notification")
@@ -1444,6 +1439,12 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const embeddedResultRunIds = new Set<RunId>();
+  for (const entry of timelineEntries) {
+    if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
+      embeddedResultRunIds.add(entry.runId);
+    }
+  }
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -2079,6 +2080,10 @@ export function deriveMessagesTimelineRows(input: {
         : { projectedItem: timelineEntry.projectedItem }),
       durationStart,
       showAssistantMeta,
+      suppressEmptyResponse:
+        timelineEntry.message.role === "assistant" &&
+        timelineEntry.message.runId != null &&
+        embeddedResultRunIds.has(timelineEntry.message.runId),
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2291,99 +2296,6 @@ export function timelineTurnFoldRunIdsByEntryId(
   return byEntryId;
 }
 
-function sameCheckpointSummaries(
-  previous: MessagesTimelineRowsInput["turnDiffSummaries"],
-  next: MessagesTimelineRowsInput["turnDiffSummaries"],
-): boolean {
-  if (previous === next) return true;
-  if (previous.length !== next.length) return false;
-  for (const [index, summary] of previous.entries()) {
-    if (!shallow(summary, next[index])) return false;
-  }
-  return true;
-}
-
-function replaceStreamingMessageRows(
-  input: MessagesTimelineRowsInput,
-  previous: MessagesTimelineRowsProjection,
-): MessagesTimelineRow[] | null {
-  const {
-    timelineEntries: previousEntries,
-    latestRun: previousRun,
-    turnDiffSummaries: previousCheckpoints,
-    expandedRunIds: previousExpandedRuns,
-    expandedAttemptIds: previousExpandedAttempts,
-    expandedWorkGroupIds: previousExpandedGroups,
-    availableRevertTurnCounts: previousAvailableRevertTurnCounts,
-    ...previousContext
-  } = previous.input;
-  const {
-    timelineEntries,
-    latestRun,
-    turnDiffSummaries,
-    expandedRunIds,
-    expandedAttemptIds,
-    expandedWorkGroupIds,
-    availableRevertTurnCounts,
-    ...context
-  } = input;
-  // Shell/checkpoint selectors rebuild summaries per event; compare contents.
-  if (
-    timelineEntries.length !== previousEntries.length ||
-    !shallow(previousContext, context) ||
-    !shallow(previousRun, latestRun) ||
-    !shallow(previousExpandedRuns, expandedRunIds) ||
-    !shallow(previousExpandedAttempts, expandedAttemptIds) ||
-    !shallow(previousExpandedGroups, expandedWorkGroupIds) ||
-    !shallow(previousAvailableRevertTurnCounts, availableRevertTurnCounts) ||
-    !sameCheckpointSummaries(previousCheckpoints, turnDiffSummaries)
-  ) {
-    return null;
-  }
-  const replacements = new Map<ChatMessage, Extract<TimelineEntry, { kind: "message" }>>();
-  for (let index = 0; index < timelineEntries.length; index += 1) {
-    const entry = timelineEntries[index]!;
-    const previousEntry = previousEntries[index]!;
-    if (entry === previousEntry) continue;
-    if (
-      entry.kind !== "message" ||
-      previousEntry.kind !== "message" ||
-      entry.id !== previousEntry.id ||
-      entry.createdAt !== previousEntry.createdAt ||
-      entry.attempt !== previousEntry.attempt
-    ) {
-      return null;
-    }
-    if (
-      entry.projectedItem !== previousEntry.projectedItem &&
-      (entry.projectedItem === undefined ||
-        previousEntry.projectedItem === undefined ||
-        !isStreamingTurnItemTextUpdate(previousEntry.projectedItem, entry.projectedItem))
-    ) {
-      return null;
-    }
-    if (
-      entry.message === previousEntry.message &&
-      entry.projectedItem === previousEntry.projectedItem
-    )
-      continue;
-    if (!isStreamingMessageTextUpdate(previousEntry.message, entry.message)) return null;
-    replacements.set(previousEntry.message, entry);
-  }
-  if (replacements.size === 0) return previous.rows;
-  return previous.rows.map((row) => {
-    if (row.kind !== "message" && row.kind !== "assistant-meta") return row;
-    const entry = replacements.get(row.message);
-    return entry
-      ? {
-          ...row,
-          message: entry.message,
-          ...(entry.projectedItem === undefined ? {} : { projectedItem: entry.projectedItem }),
-        }
-      : row;
-  });
-}
-
 export function deriveMessagesTimelineRowsWithState(
   input: MessagesTimelineRowsInput,
   previous: MessagesTimelineRowsProjection | null = null,
@@ -2541,6 +2453,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.suppressEmptyResponse === bm.suppressEmptyResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

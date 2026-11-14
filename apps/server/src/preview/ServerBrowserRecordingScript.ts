@@ -67,7 +67,7 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
   window.__goatRecorder = {
     async frame(base64, cssWidth) {
       if (tooLarge) return false;
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const bytes = Uint8Array.fromBase64(base64);
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
       if (tooLarge) { bitmap.close(); return false; }
       if (!recorder) {
@@ -149,11 +149,18 @@ export const recordingEncoderScript = (frameRate: BrowserRecordingFrameRate) => 
     },
     async chunk(index) {
       const bytes = new Uint8Array(await chunks[index].arrayBuffer());
+      if (typeof bytes.toBase64 === "function") return bytes.toBase64();
       let binary = "";
       for (let offset = 0; offset < bytes.length; offset += 0x8000) {
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
       }
       return btoa(binary);
+    },
+    download() {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
+      link.download = "recording";
+      link.click();
     },
   };
 })()`;

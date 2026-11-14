@@ -177,6 +177,32 @@ linked. If you moved it anyway, move it back to bring the link back.
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
 
+GOAT reaches a disposable machine only through its own Pen route. While its
+record is open, GOAT refuses to add it as an SSH device (in Settings →
+Connections, in **Hub devices** or by an agent), to link its GOAT, to join, move
+or re-link it under another alias, to add a route to it in Settings →
+Connections on web or desktop, or to connect to it from Settings → Remote
+launches on desktop. It is matched by its Pen alias (including Pen's own
+`pen-<name>`, read from Pen's files), the GOAT it runs, or the ED25519 SSH host
+key it offers; Remote launches asks the SSH check of the GOAT that launched them
+and of this desktop, which match the alias and the key. Detach it first in
+Settings → Hub on web or desktop. A machine that
+offers no ED25519 key is matched only by its alias and its GOAT. Pairing a browser,
+desktop or phone (including a phone's Add route) with the machine's own GOAT by
+its address and pairing code is a connection of that client alone: the hub
+never sees it, so GOAT cannot refuse it and **Hub devices** does not mark it as
+a Conflict.
+Its OpenCodex link ends only through Detach. A request to remove it from the
+hub or to repair it, from an agent or from **Repair** and **Leave** in **Hub
+devices**, is refused by its Pen alias or its link before anything is asked
+or changed. Repair is not needed for a dropped tunnel:
+OpenCodex retries the link by itself, at least every 5 minutes, unless the
+machine's host key changed or a removal holds the link, and GOAT checks the
+machine every 30 minutes; a changed host key shows on its row.
+Its row in **Hub devices** shows **Disposable**, or **Conflict** when something
+about it is ambiguous, **Still in Pen** while its key is a Pen member, who
+attached it and how long it has been in its state.
+
 Each machine is a full Pen member and can reach services on your machines'
 loopback, and it stays a Pen member until you remove it with
 [`pen revoke`](pen.md#remove-a-machine).
@@ -198,12 +224,13 @@ check on it and names `ocx link operations resolve --operation-id <id> --yes` to
 run before you force it. A forced revoke that reads unknown goes the other way
 round, as OpenCodex asks: a force repeats it first, and the list names the
 resolve only if it stays unknown after that. If an unfinished removal by another revoke holds the
-link, the list says how to find it and names the
-`ocx link revoke --link-id <id> --force --yes` that finishes it on the hub; then
-detach it again. A revoke OpenCodex left running, or never recorded, goes again
+link, the list says how to find it; it names the
+`ocx link revoke --link-id <id> --force --yes` that finishes it on the hub unless
+another revoke is still open there, which you fix first; then detach it again.
+A revoke OpenCodex left running, or never recorded, goes again
 under its own id when you fix what stopped it and detach again. GOAT marks each
-purge it gives up on for a silent machine as resolved itself, so OpenCodex's
-journal does not fill up. If GOAT's removal of a silent machine's link stops,
+purge it gives up on for a silent machine as resolved itself, and its own
+earlier revoke once a removal is done, so OpenCodex's journal does not fill up. If GOAT's removal of a silent machine's link stops,
 the machine list says why; once that is fixed, detach it.
 **Force detach** removes the link now, without the machine; only a person can
 force, and it is also the way out for a machine that presents another SSH host

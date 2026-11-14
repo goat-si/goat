@@ -117,6 +117,7 @@ vi.mock("/src/components/PullRequestThreadDialog", () => ({ PullRequestThreadDia
 vi.mock("/src/components/ThreadTerminalDrawer", () => ({ default: () => null }));
 vi.mock("/src/components/ui/sidebar", () => ({
   useSidebar: () => ({ state: "expanded", isMobile: false }),
+  useMobileSidebarSheetMounted: () => false,
   SidebarInset: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 import { AppAtomRegistryProvider, appAtomRegistry } from "~/rpc/atomRegistry";

@@ -387,3 +387,29 @@ export const runCleanupTest = <A, E>(
     Effect.provide(cleanupTestLayer),
     Effect.scoped,
   );
+
+export const submoduleCleanupFixture = () =>
+  Effect.gen(function* () {
+    const fixture = yield* cleanupFixture();
+    const { command, repo, worktree } = fixture;
+    const submodule = `${worktree}/module`;
+    const child = `${submodule}/child`;
+    for (const [cwd, name] of [
+      [worktree, "module"],
+      [submodule, "child"],
+    ] as const) {
+      yield* command(cwd, ["-c", "protocol.file.allow=always", "submodule", "add", repo, name]);
+      yield* command(`${cwd}/${name}`, ["config", "user.name", "Cleanup test"]);
+      yield* command(`${cwd}/${name}`, ["config", "user.email", "cleanup@example.test"]);
+    }
+    const recordSubmodules = () =>
+      Effect.gen(function* () {
+        yield* command(submodule, ["commit", "-am", "record child"]);
+        yield* command(submodule, ["push", "origin", "HEAD:submodule"]);
+        yield* command(worktree, ["commit", "-am", "record module"]);
+        // Shipped to the project branch, so only the submodule rules decide.
+        yield* command(repo, ["merge", "--ff-only", "feature"]);
+      });
+    yield* recordSubmodules();
+    return { ...fixture, submodule, child, recordSubmodules };
+  });

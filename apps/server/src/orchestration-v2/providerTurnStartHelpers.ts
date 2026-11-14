@@ -24,3 +24,17 @@ export function nativeForkTurns(
     (turn) => turn.runAttemptId === null || !rolledBackAttempts.has(turn.runAttemptId),
   );
 }
+
+export function hasNativeGoals(
+  session: Pick<
+    import("@goat/provider-core/server/ProviderAdapter").ProviderAdapterV2SessionRuntime,
+    "driver" | "providerSession"
+  >,
+) {
+  return (
+    session.driver === "codex" ||
+    session.driver === "claudeAgent" ||
+    (session.driver === "opencode" &&
+      session.providerSession.capabilities.turns.supportsNativeGoals === true)
+  );
+}

@@ -1,3 +1,5 @@
+import { rootAppThread } from "./RunExecutionService.compactCases.ts";
+import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
 import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
 import { registerAgentOomRunCases } from "./RunExecutionService.oomCases.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -17,7 +19,6 @@ import {
   MessageId,
   NodeId,
   ScheduledTaskId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2CheckpointScope,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
@@ -81,12 +82,6 @@ import {
   rootTerminalEvent,
   type BackgroundScenarioIds,
 } from "./RunExecutionService.testkit.ts";
-
-const rootAppThread = (id: ThreadId) =>
-  ({
-    id,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
-  }) as OrchestrationV2AppThread;
 
 it.effect("routes shared-runtime events only to their owning root run", () =>
   Effect.gen(function* () {
@@ -2711,6 +2706,8 @@ it.effect("records a provider's input rejection at turn start in the terminal er
   }),
 );
 
+registerCompactUnsupportedCase(captureRootRunTermination);
+
 it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as const)(
   "stops the live provider and background work before settling an ingestion %s",
   (failureMode) =>
@@ -3224,6 +3221,7 @@ export function captureRootRunTermination(input: {
   >;
   readonly startTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
   readonly interruptTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["interruptTurn"];
+  readonly messageText?: string;
   readonly initialProviderTurnId?: ProviderTurnId | null;
   readonly refreshAfterTurn?: Effect.Effect<void>;
   readonly shouldStartProviderTurn?: RunExecutionService.RunExecutionServiceV2StartRootRunInput["shouldStartProviderTurn"];
@@ -3336,6 +3334,7 @@ export function captureRootRunTermination(input: {
         appThread: rootAppThread(ids.threadId),
         providerSessionId: ProviderSessionId.make(`session:${input.key}`),
         session: {
+          driver,
           events: Stream.empty,
           subscribeEvents: Effect.succeed({
             events:
@@ -3413,7 +3412,7 @@ export function captureRootRunTermination(input: {
           : { loadRunInterruptReason: input.loadRunInterruptReason }),
         message: {
           messageId: MessageId.make(`message:${input.key}`),
-          text: "interrupt projection",
+          text: input.messageText ?? "interrupt projection",
           attachments: [],
           createdBy: "user",
           creationSource: "web",

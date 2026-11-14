@@ -95,6 +95,11 @@ export interface MoveDeps {
     decisionId: string | undefined,
     steps: HubDeviceStep[],
   ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure | HubOcxError>;
+  /** Why a kept path may not route to the alias; the environment is identified when absent. */
+  readonly disposableRoute: (
+    alias: string,
+    environmentId?: string | null,
+  ) => Effect.Effect<string | undefined>;
 }
 
 const invalid = (message: string) =>
@@ -156,6 +161,11 @@ export const makeMove = (deps: MoveDeps) =>
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
       if (status.role === "child")
         return done("failed", "This machine is a Child and cannot be a Home.");
+      // A disposable machine's Pen alias is refused by name, before any network read.
+      for (const alias of [from, to]) {
+        const named = yield* deps.disposableRoute(alias, null);
+        if (named !== undefined) return done("failed", named);
+      }
       const fromEnvironment = yield* deps.ocx.identify(from);
       const toEnvironment = yield* deps.ocx.identify(to);
       if (fromEnvironment === undefined || toEnvironment === undefined)
@@ -165,6 +175,8 @@ export const makeMove = (deps: MoveDeps) =>
         );
       if (fromEnvironment !== toEnvironment)
         return done("failed", `${from} and ${to} name different machines, so this is not a move.`);
+      const machine = yield* deps.disposableRoute(from, fromEnvironment);
+      if (machine !== undefined) return done("failed", machine);
       // Target first: nothing at the old alias is touched for a target that is already linked.
       if (status.links.some((entry) => entry.alias === to))
         return done("failed", `${to} is already linked; nothing was changed.`);

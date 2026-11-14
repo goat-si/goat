@@ -619,3 +619,40 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     }),
   );
 });
+
+if (HostProcess.Platform.defaultValue() !== "win32") {
+  it.live("enters the cwd in the child and fails the CLI for a missing directory", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cli = fakeClaudeCli('pwd -P > "$(dirname "$0")/cwd"');
+        const dir = NodePath.dirname(cli);
+        const workspace = NodePath.join(dir, "work space");
+        NodeFS.mkdirSync(workspace);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+        );
+        const signal = yield* Effect.abortSignal;
+        const exitCode = (cwd: string) =>
+          Effect.promise(
+            () =>
+              new Promise<number | null>((resolve) => {
+                const child = spawnClaudeProcessGroup({
+                  command: cli,
+                  args: [],
+                  cwd,
+                  env: process.env,
+                  signal,
+                });
+                child.once("exit", resolve);
+              }),
+          );
+        assert.equal(yield* exitCode(workspace), 0);
+        assert.equal(
+          NodeFS.readFileSync(NodePath.join(dir, "cwd"), "utf8"),
+          `${NodeFS.realpathSync(workspace)}\n`,
+        );
+        assert.equal(yield* exitCode(NodePath.join(dir, "missing")), 125);
+      }),
+    ),
+  );
+}

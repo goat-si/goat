@@ -12,6 +12,8 @@ import { AppRoot } from "~/AppRoot";
 import "~/components/ChatView";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { selectThreadDiffPanelSelection, useDiffPanelStore } from "~/diffPanelStore";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
@@ -24,7 +26,7 @@ import {
   threadWithHistory,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
-import { act, render } from "../../test/render";
+import { act, fakeTimers, render } from "../../test/render";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -147,6 +149,7 @@ it("a mounted thread view lets go of the thread structures it has replaced", asy
   });
   const router = getRouter(createMemoryHistory({ initialEntries: ["/"] }));
   await router.load();
+  // AppRoot brings its own router.
   await using _app = await render(<AppRoot router={router} />, { router: false });
   const open = async (threadId: ThreadId, text: string) => {
     await act(() =>
@@ -184,4 +187,113 @@ it("a mounted thread view lets go of the thread structures it has replaced", asy
   // The thread keeps its latest structure, and the timeline may remember the one before it.
   const kept = shown.slice(0, -2).flatMap((structure, round) => (structure.deref() ? [round] : []));
   expect(kept).toEqual([]);
+});
+
+it("retains each thread's diff selection when returning from another thread or Settings", async () => {
+  const a = threadWithHistory("diff-selection-a", 1);
+  const b = threadWithHistory("diff-selection-b", 1);
+  using _environment = installFakeEnvironment([a, b]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const aRef = scopeThreadRef(ENVIRONMENT_ID, a.id);
+  const bRef = scopeThreadRef(ENVIRONMENT_ID, b.id);
+  useRightPanelStore.getState().open(aRef, "diff");
+  useRightPanelStore.getState().open(bRef, "diff");
+  useDiffPanelStore.getState().selectBranchBaseRef(bRef, "origin/release");
+  const router = getRouter(createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${a.id}`] }));
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${a.id}.`)).toBeVisible();
+  await act(() => useDiffPanelStore.getState().selectGitScope(aRef, "unstaged"));
+
+  await act(() =>
+    router.navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: ENVIRONMENT_ID, threadId: b.id },
+    }),
+  );
+  await expect.element(page.getByText(`Answer 0 for ${b.id}.`)).toBeVisible();
+  expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, bRef)).toEqual({
+    kind: "branch",
+    baseRef: "origin/release",
+  });
+  await act(() =>
+    router.navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: ENVIRONMENT_ID, threadId: a.id },
+    }),
+  );
+  await expect.element(page.getByText(`Answer 0 for ${a.id}.`)).toBeVisible();
+  expect(selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, aRef)).toEqual({
+    kind: "unstaged",
+  });
+
+  await act(() => useDiffPanelStore.getState().selectTurn(aRef, a.runs[0]!.id));
+  await act(() => router.navigate({ to: "/settings/general" }));
+  await expect
+    .element(page.getByRole("heading", { name: "Time format", exact: true }))
+    .toBeVisible();
+  await act(() =>
+    router.navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: ENVIRONMENT_ID, threadId: a.id },
+    }),
+  );
+  await expect.element(page.getByText(`Answer 0 for ${a.id}.`)).toBeVisible();
+  expect(
+    selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, aRef),
+  ).toMatchObject({
+    kind: "turn",
+    turnId: a.runs[0]!.id,
+  });
+});
+
+it("opening a thread or returning to the window on a touch tablet does not focus the composer", async () => {
+  const realMatchMedia = window.matchMedia.bind(window);
+  using _touch = vi
+    .spyOn(window, "matchMedia")
+    .mockImplementation((query) => realMatchMedia(query === "(pointer: coarse)" ? "all" : query));
+  const first = threadWithHistory("thread-29469-a", 1);
+  const second = threadWithHistory("thread-29469-b", 1);
+  using _environment = installFakeEnvironment([first, second]);
+  // iPad Pro 11 in landscape: the desktop layout, above max-sm.
+  await page.viewport(1194, 834);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${first.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  const composer = page.getByTestId("composer-editor");
+  await expect.element(page.getByText(`Answer 0 for ${first.id}.`)).toBeVisible();
+
+  // Fake frames hold the next thread entry's focus frame until the test advances it.
+  using _timers = fakeTimers();
+  await act(() =>
+    router.navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: ENVIRONMENT_ID, threadId: second.id },
+    }),
+  );
+  await expect.element(page.getByText(`Answer 0 for ${second.id}.`)).toBeVisible();
+  vi.advanceTimersToNextFrame();
+  // Focusing the editor raises the on-screen keyboard, which shrinks the page on iPadOS.
+  expect(document.activeElement).not.toBe(composer.element());
+
+  // ChatView waits two frames after window focus before refocusing the composer.
+  window.dispatchEvent(new FocusEvent("focus"));
+  vi.advanceTimersToNextFrame();
+  vi.advanceTimersToNextFrame();
+  expect(document.activeElement).not.toBe(composer.element());
 });

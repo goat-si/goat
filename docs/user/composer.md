@@ -257,7 +257,7 @@ composer's microphone (long-press on a touch screen, or press Shift+F10) to open
 dictation options. This sends recordings to that environment and uses a
 speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
-download, select, or remove models from **Manage voice models** in the same menu.
+download, select, or remove models from **Manage voice models** in the same menu. You can also use a verified model file already on the environment by entering its file or folder path; removing the model from GOAT leaves the original file in place.
 Connections through a hub do not currently support this option.
 Model speed figures are CPU and GPU reference measurements, not timings from your
 environment. When acceleration is automatic, both are shown because transcription
@@ -398,14 +398,14 @@ from a handoff of the conversation, as described in
 
 ## Goals
 
-With Codex and Claude, send `/goal` followed by what "done" means, for example
+With Codex, Claude, and OpenCode 2.2.5 or later, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 row above the composer shows the goal and its progress.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
-- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
-  pauses it, and so does Codex ending its work without meeting the goal.
+- Codex and OpenCode also support `/goal pause` and `/goal resume`. Stopping
+  their goal pauses it. Codex also pauses when its work ends without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current

@@ -250,15 +250,15 @@ export function useTimelineVisibleTurnItems(
   );
 }
 
-/** One assistant message's live text, or null when the thread does not hold the item. */
+/** One assistant row's live text, or null when the thread does not hold that row. */
 export function useAssistantMessageText(
   ref: ScopedThreadRef | null,
-  itemId: string | undefined,
+  row: OrchestrationV2ProjectedTurnItem | undefined,
 ): string | null {
   return useAtomValue(
-    ref === null || itemId === undefined
+    ref === null || row === undefined
       ? EMPTY_ASSISTANT_MESSAGE_TEXT_ATOM
-      : environmentThreadDetails.assistantMessageTextAtom(ref, itemId),
+      : environmentThreadDetails.assistantMessageTextAtom(ref, row.sourceThreadId, row.item.id),
   );
 }
 

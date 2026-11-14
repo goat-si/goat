@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { rejectUnimportedLegacyThreads } from "./legacy-dev-seed.ts";
+import { pruneDevSettleScripts } from "./prune-dev-settle-scripts.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -421,10 +423,9 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
   AND json_extract(root.payload_json, '$.deletedAt') IS NULL
   AND json_extract(root.payload_json, '$.archivedAt') IS NULL`;
 
-// A single read transaction keeps the copy consistent with concurrent server writes.
-const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
+// Reads the attached source inside the copy transaction, so the copied schema and rows come
+// from one snapshot of a database the server may be writing.
+const readSourceSchema = Effect.fn("readDevDbSourceSchema")(function* (sql: SqlClient.SqlClient) {
   const schema = yield* sql<{ type: string; name: string; sql: string }>`
     SELECT type, name, sql FROM src.sqlite_master
     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`;
@@ -499,7 +500,24 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
       }
     }
   }
+  return {
+    schema,
+    shadowTables,
+    virtualTables,
+    threadIdNullable,
+    writableColumns,
+    primaryKeys,
+    foreignKeys,
+    tables,
+    filtered,
+    cleared,
+  };
+});
 
+// A single read transaction keeps the copy consistent with concurrent server writes.
+const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
   // node:sqlite turns foreign keys on by default. The thread filter drops
   // parent rows (remote_report_bindings, and any self-reference) that a child
   // row still points at, so the INSERT fails before prune can run. The pragma
@@ -515,6 +533,19 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
+      const {
+        schema,
+        shadowTables,
+        virtualTables,
+        threadIdNullable,
+        writableColumns,
+        primaryKeys,
+        foreignKeys,
+        tables,
+        filtered,
+        cleared,
+      } = yield* readSourceSchema(sql);
+      yield* rejectUnimportedLegacyThreads(sourcePath, tables, filtered);
       for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
       if (filtered) {
         yield* sql`CREATE TEMP TABLE copied_threads (thread_id TEXT PRIMARY KEY)`;
@@ -705,6 +736,14 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
             AND stream_id NOT IN (SELECT thread_id FROM kept_threads))
            OR (aggregate_kind = 'project'
             AND stream_id NOT IN (SELECT project_id FROM kept_projects))`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.pullRequests', json((
+          SELECT json_group_array(json_remove(link.value, '$.watch') ORDER BY link.key)
+          FROM json_each(payload_json, '$.pullRequests') AS link)))
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(payload_json, '$.pullRequests') AS link
+          WHERE json_extract(link.value, '$.watch') IS NOT NULL)`;
+      yield* pruneDevSettleScripts();
       for (const { name } of orderedClearedTables) {
         yield* sql`DELETE FROM ${sql(name)}`;
       }
@@ -803,8 +842,6 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (modeChange !== undefined) {
     yield* Console.log(describePrivateDevDirectoryChange(stateDir, modeChange));
   }
-  yield* ensureNotInUse(databasePath);
-
   const wrapPhase =
     (phase: MigrateDevDbPhaseError["phase"], phaseDatabasePath: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -819,8 +856,15 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     yield* Console.log(`Copying visible threads from ${sourcePath} (read-only)...`);
     yield* copySourceSlice(sourcePath).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
-      wrapPhase("snapshot", sourcePath),
+      Effect.catchTags({
+        SqlError: (cause) =>
+          Effect.fail(
+            new MigrateDevDbPhaseError({ phase: "snapshot", databasePath: sourcePath, cause }),
+          ),
+      }),
     );
+
+    yield* ensureNotInUse(databasePath);
 
     // Migrate first so prune queries can use columns missing from older sources.
     yield* Console.log("Running migrations on the snapshot...");

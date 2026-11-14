@@ -1,3 +1,7 @@
+import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
+import { runProbe } from "./maintenanceProbe.ts";
+import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
+import { quoteShellWord, quoteUpdateExecutable } from "./maintenanceShellQuote.ts";
 export type {
   ProviderMaintenanceCapabilities,
   ProviderMaintenanceCommandAction,
@@ -13,26 +17,21 @@ import {
 } from "@goat/contracts";
 import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { causeErrorTag } from "@goat/shared/observability";
-import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveCommandPath } from "@goat/shared/shell";
 import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import { providerProbeEnvironment } from "./probeEnvironment.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import {
   CHOCOLATEY_CLAUDE_PACKAGE_ID,
   isBunGlobalCommandPath,
@@ -55,8 +54,6 @@ export {
 } from "./maintenanceCommandPaths.ts";
 
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
-const PROBE_TIMEOUT_MS = 10_000;
-const PROBE_MAX_BYTES = 256 * 1_024;
 const MISE_WRAPPER_MAX_BYTES = 16 * 1_024;
 const PROVIDER_UPDATE_ACTION_TOAST_MESSAGE = "Install the update now or review provider settings.";
 
@@ -120,20 +117,6 @@ const NpmLatestVersionResponse = Schema.Struct({
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function quoteShellWord(word: string, platform: NodeJS.Platform): string {
-  const safeWord = platform === "win32" ? /^[\w./:\\@=-]+$/ : /^[\w./:@=-]+$/;
-  if (safeWord.test(word)) return word;
-  return platform === "win32"
-    ? `'${word.replace(/['\u2018\u2019]/g, "$&$&")}'`
-    : `'${word.replaceAll("'", "'\\''")}'`;
-}
-
-function quoteUpdateExecutable(executable: string, platform: NodeJS.Platform): string {
-  const quoted = quoteShellWord(executable, platform);
-  // Windows terminals default to PowerShell, where a quoted executable needs &.
-  return platform === "win32" && quoted !== executable ? `& ${quoted}` : quoted;
 }
 
 export function makeProviderMaintenanceCapabilities(input: {
@@ -288,49 +271,6 @@ export function parseHomebrewLatestVersion(
   const version = nonEmptyString(raw);
   return version === "latest" ? null : version;
 }
-const runProbe = Effect.fn("runProbe")(function* (
-  command: string,
-  args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv,
-  okExitCodes: ReadonlyArray<number> = [0],
-) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const collect = Effect.gen(function* () {
-    // Windows package managers are `.cmd` shims that need the shell.
-    const probeEnv = providerProbeEnvironment(env);
-    const resolved = yield* resolveSpawnCommand(command, args, { env: probeEnv, extendEnv: true });
-    const child = yield* spawner.spawn(
-      ChildProcess.make(resolved.command, resolved.args, {
-        env: probeEnv,
-        extendEnv: true,
-        shell: resolved.shell,
-      }),
-    );
-    yield* Effect.addFinalizer(() => Effect.ignore(child.kill({ forceKillAfter: "1 second" })));
-    // stderr is drained so a chatty tool cannot block on a full pipe.
-    const [stdout, exitCode] = yield* Effect.all(
-      [
-        collectUint8StreamText({ stream: child.stdout, maxBytes: PROBE_MAX_BYTES }),
-        child.exitCode,
-        Stream.runDrain(child.stderr),
-      ],
-      { concurrency: "unbounded" },
-    );
-    return !okExitCodes.includes(Number(exitCode)) || stdout.truncated ? null : stdout.text;
-  });
-  return yield* collect.pipe(
-    Effect.scoped,
-    Effect.timeoutOption(Duration.millis(PROBE_TIMEOUT_MS)),
-    Effect.map(Option.getOrNull),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Maintenance probe failed", {
-        command,
-        subcommand: args[0],
-        errorTag: causeErrorTag(cause),
-      }).pipe(Effect.as(null)),
-    ),
-  );
-});
 const decodePnpmOutdated = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Record(Schema.String, Schema.Struct({ latest: Schema.optional(Schema.String) })),
@@ -380,6 +320,37 @@ const resolvePnpmGlobalLatestVersion = Effect.fn("resolvePnpmGlobalLatestVersion
   );
   const listedEntries = listed ? Option.getOrUndefined(decodePnpmList(listed)) : undefined;
   return nonEmptyString(listedEntries?.[0]?.dependencies?.[packageName]?.version);
+});
+
+// `bun outdated` has no JSON output; its `Latest` column is what `@latest` installs
+// under minimumReleaseAge (marked `*`). `Update` is only the global package.json range.
+function parseBunOutdatedLatestVersion(output: string, packageName: string): string | null {
+  for (const line of output.split("\n")) {
+    const cells = line.split("|").map((cell) => cell.trim());
+    if (cells.length === 6 && cells[1] === packageName) {
+      return nonEmptyString(cells[4]?.replace(/ \*$/, ""));
+    }
+  }
+  return null;
+}
+
+// bun rejects an exact pin to a release inside minimumReleaseAge, so the update stays `@latest`.
+const resolveBunGlobalLatestVersion = Effect.fn("resolveBunGlobalLatestVersion")(function* (
+  packageName: string,
+  env: NodeJS.ProcessEnv,
+) {
+  // Match the updater's bun and environment.
+  const bunPath = yield* resolveCommandPath("bun", {
+    env: { ...(yield* HostProcess.Environment), ...env },
+  });
+  if (!bunPath) return null;
+  // FORCE_COLOR=1 draws the table with box characters and splits versions with ANSI codes.
+  const outdated = yield* runProbe(bunPath, ["outdated", "-g", packageName], {
+    ...env,
+    FORCE_COLOR: "0",
+  });
+  // A missing row reads the same whether bun is current or its registry failed, so npm decides.
+  return outdated ? parseBunOutdatedLatestVersion(outdated, packageName) : null;
 });
 
 export const resolvePackageManagedProviderMaintenance = Effect.fn(
@@ -437,6 +408,16 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     });
   }
 
+  const macPortsName = yield* resolveMacPortsOwner(context);
+  if (macPortsName !== null) {
+    return makeManualOnlyProviderMaintenanceCapabilities({
+      provider: definition.provider,
+      packageName,
+      installPath: context.realCommandPath,
+      ...(macPortsName ? { manualCommand: `sudo port upgrade ${macPortsName}` } : {}),
+    });
+  }
+
   const nativeUpdate = definition.nativeUpdate;
   const nativeEnv = nativeUpdate?.env;
   const native = nativeUpdate
@@ -480,6 +461,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
     });
   }
   if (commandPaths.some(isBunGlobalCommandPath)) {
+    const services = yield* Effect.context<ProviderMaintenanceResolverServices>();
     return makeProviderMaintenanceCapabilities({
       provider: definition.provider,
       packageName,
@@ -487,6 +469,9 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateArgs: ["i", "-g", `${packageName}@latest`],
       updateLockKey: "bun-global",
       env: context.env,
+      lookupLatestVersion: resolveBunGlobalLatestVersion(packageName, context.env).pipe(
+        Effect.provideContext(services),
+      ),
     });
   }
   if (commandPaths.some(isPnpmGlobalCommandPath)) {
@@ -755,6 +740,14 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
     ...capabilities,
     // npm owns registry, scoped auth and proxy configuration; failure must not retry public npm.
     latestVersion: null,
+    latestVersionCacheKey: [
+      "configured-npm",
+      npmPath,
+      packageName,
+      prefix ?? "",
+      environmentCacheKey(env),
+      installerLatestVersionKey(capabilities) ?? "",
+    ].join("\0"),
     lookupLatestVersion: capabilities.lookupLatestVersion
       ? capabilities.lookupLatestVersion.pipe(
           Effect.filterOrElse(

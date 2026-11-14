@@ -53,3 +53,17 @@ describe("latest answer excerpt on thread shells", () => {
     });
   });
 });
+
+it("reads background wake state across older clients and servers", () => {
+  const decodeOlder = Schema.decodeUnknownSync(
+    OrchestrationV2ThreadShellJson.mapFields(
+      ({ latestRunBackgroundWake: _wake, ...fields }) => fields,
+    ),
+  );
+  expect(decode(shell).latestRunBackgroundWake).toBeUndefined();
+  expect(decode({ ...shell, latestRunBackgroundWake: true }).latestRunBackgroundWake).toBe(true);
+  expect(decodeOlder({ ...shell, latestRunBackgroundWake: true })).toMatchObject({
+    id: "thread-test",
+  });
+  expect(() => decode({ ...shell, latestRunBackgroundWake: "true" })).toThrow();
+});

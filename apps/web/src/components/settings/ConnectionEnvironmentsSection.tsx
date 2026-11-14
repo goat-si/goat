@@ -1,7 +1,7 @@
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
-import { isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
+import { disposableRouteRefusal, isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
 import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
@@ -817,6 +817,12 @@ export function ConnectionEnvironmentsSection({
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
   );
+  // Add route refuses a saved environment the hub reaches as a disposable machine (Pen only).
+  const hubNodes = useEnvironmentQuery(
+    primaryEnvironmentId === null
+      ? null
+      : serverEnvironment.hubNodesLive({ environmentId: primaryEnvironmentId, input: {} }),
+  ).data?.nodes;
   // The discovery atom is kept alive across dialog opens, so re-read SSH config
   // each time the SSH tab is shown; stale hosts stay visible while it refreshes.
   const refreshDesktopSshHosts = desktopSshHosts.refresh;
@@ -1783,6 +1789,17 @@ export function ConnectionEnvironmentsSection({
               setAddBackendDialogOpen(true);
             }}
             onAddRoute={(target) => {
+              const refused = disposableRouteRefusal(hubNodes ?? [], target.environmentId);
+              if (refused !== undefined) {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Could not add a route",
+                    description: refused,
+                  }),
+                );
+                return;
+              }
               setRouteTarget(target);
               setSavedBackendError(null);
               setAddBackendDialogOpen(true);

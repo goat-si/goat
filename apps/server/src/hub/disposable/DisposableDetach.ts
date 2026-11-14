@@ -322,8 +322,12 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     // Gone while GOAT's own revoke finished it (during a restart or a click): read that first.
     if (sent?.refusal?.code === "link_not_found" && owner !== undefined) {
       const finished = yield* readEntry(owner, linkId, owner.includes(".force."));
-      // Unread: the next pass sends this id again and reads the owner then.
-      if (finished.kind === "unreadable") return;
+      // Unread: the next pass sends this id again and reads the owner then; a stop names the read.
+      if (finished.kind === "unreadable")
+        return yield* note(
+          row,
+          withDetach(enroll, { ...admitted, outcome: "unreadable", refusal: "link_not_found" }),
+        );
       if (finished.kind === "clean") return yield* ownerDone(row, enroll, admitted, owner);
     }
     // Removed without a purge receipt: someone else revoked it; recover asks whether a cleanup of
@@ -600,6 +604,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   ) {
     const nowMs = yield* Clock.currentTimeMillis;
     if (enroll.health !== undefined && nowMs - enroll.health.checkedAtMs < CHECK_EVERY_MS) return;
+    // A changed host key waits for a person's force; checking again would only repeat the conflict.
+    if (enroll.stop === "host_key_changed") return;
     const shaken = yield* handshake(row);
     if (shaken === undefined) return;
     const { reached, keyFile } = shaken;

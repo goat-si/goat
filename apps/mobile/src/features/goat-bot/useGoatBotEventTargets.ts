@@ -3,7 +3,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 
 /** What the bot's home should show when it opens from an event line. */
@@ -26,7 +26,7 @@ export function useGoatBotEventTargets(
   readonly key: string;
 } {
   const home = useMobileGoatBotHomeMode();
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities = environmentId

@@ -1,3 +1,4 @@
+import { getSyntaxHighlighterPromise } from "~/lib/syntaxHighlighting";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
@@ -106,6 +107,7 @@ vi.mock(import("../hooks/useSettings"), async (original) => {
 });
 
 import ChatMarkdown from "./ChatMarkdown";
+import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 import { AudioPreview } from "./files/AudioPreview";
 
 it("keeps compact audio playback loaded across signed URL renewals", async () => {
@@ -302,6 +304,23 @@ it("reuses the parse of a remounted message that has stable extra plugins", asyn
   expect(parsed).toHaveBeenCalledTimes(1);
 });
 
+it("highlights a code block's own source when an earlier block of the same length was cached", async () => {
+  setup();
+  const highlightedText = (container: HTMLElement) =>
+    container.querySelector(".chat-markdown-shiki")?.textContent?.trim();
+  // These two lines share a 32-bit FNV-1a hash and a length.
+  const first = 'const commitSha = "f36a6d8fe0aa";';
+  const second = 'const commitSha = "cb06f8d135b3";';
+  // The shared highlighter can load after the short assertion wait on a busy runner.
+  await getSyntaxHighlighterPromise("ts");
+  {
+    await using screen = await renderText(`\`\`\`ts\n${first}\n\`\`\``);
+    await vi.waitFor(() => expect(highlightedText(screen.container)).toBe(first));
+  }
+  await using screen = await renderText(`\`\`\`ts\n${second}\n\`\`\``);
+  await vi.waitFor(() => expect(highlightedText(screen.container)).toBe(second));
+});
+
 describe("ChatMarkdown favicon privacy", () => {
   it("suppresses private link images while preserving public links across updates", async () => {
     setup();
@@ -320,6 +339,23 @@ describe("ChatMarkdown favicon privacy", () => {
     await rerender(markdown("https://github.com/goat-si/goat/pull/1"));
     expect(container.querySelectorAll("img")).toHaveLength(0);
     expect(container.querySelector("a svg")).not.toBeNull();
+  });
+});
+
+describe("ChatMarkdown external link labels", () => {
+  it("keeps a leading emoji whole", async () => {
+    setup();
+    await using screen = await render(
+      <ChatMarkdown cwd="/tmp/project" text="[😀 Read the documentation](https://example.com)" />,
+    );
+    await vi.waitFor(() => {
+      const link = screen.container.querySelector("a");
+      expect(link?.textContent).toContain("😀 Read");
+      const walker = document.createTreeWalker(link!, NodeFilter.SHOW_TEXT);
+      const textNodes: string[] = [];
+      while (walker.nextNode()) textNodes.push(walker.currentNode.nodeValue ?? "");
+      expect(textNodes.filter((node) => /\p{Surrogate}/u.test(node))).toEqual([]);
+    });
   });
 });
 
@@ -558,6 +594,30 @@ describe("ChatMarkdown headings", () => {
       "user-content-install",
       "user-content-install-2",
     ]);
+  });
+});
+
+describe("ChatMarkdown alert copy", () => {
+  it("copies a fully selected callout as alert Markdown and a partial one as text", async () => {
+    setup();
+    await using screen = await renderText("> [!WARNING]\n> Back up first.");
+    const [label, body] = screen.container.querySelectorAll('[role="note"] > p');
+    const select = (startNode: Node, endNode: Node, endOffset: number) => {
+      const range = document.createRange();
+      range.setStart(startNode, 0);
+      range.setEnd(endNode, endOffset);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return chatMarkdownClipboardPayload(selection)?.text;
+    };
+    const labelText = label!.lastChild!;
+    const bodyText = body!.firstChild!;
+
+    expect(select(labelText, bodyText, bodyText.textContent!.length)).toBe(
+      "> [!WARNING]\n> Back up first.",
+    );
+    expect(select(labelText, bodyText, "Back up".length)).toBe("Warning\n\nBack up");
   });
 });
 

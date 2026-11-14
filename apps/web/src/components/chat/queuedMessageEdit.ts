@@ -76,9 +76,16 @@ export async function recoverQueuedMessageEdit(input: {
     store.addImages(input.editTarget, images, { allowDuplicates: true });
     store.addFiles(input.editTarget, attachments, { allowDuplicates: true });
     store.moveComposerPromptAndImages(input.editTarget, input.threadTarget);
-  } else {
-    store.clearComposerContent(input.editTarget);
+    if (draft) {
+      store.setTerminalContexts(input.threadTarget, draft.terminalContexts);
+      store.setReviewComments(input.threadTarget, draft.reviewComments);
+      store.setPreviewAnnotations(input.threadTarget, draft.previewAnnotations);
+      store.setThreadContexts(input.threadTarget, draft.threadContexts);
+      store.setPreviewTabs(input.threadTarget, draft.previewTabs);
+      store.setPrompt(input.threadTarget, draft.prompt);
+    }
   }
+  store.clearComposerContent(input.editTarget);
   return recovery;
 }
 

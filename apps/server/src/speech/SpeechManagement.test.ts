@@ -21,6 +21,7 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
     const installed = new Set<string>();
     let settings = DEFAULT_SERVER_SETTINGS;
     const store = Layer.mock(SpeechModelStore.SpeechModelStore)({
+      linkedFrom: () => Effect.undefined,
       isReady: (model) => Effect.succeed(installed.has(model.id)),
       installedPath: (model) =>
         Effect.succeed(installed.has(model.id) ? model.filename : undefined),
@@ -116,5 +117,80 @@ it.effect("rejects concurrent model mutations without queuing", () =>
     expect(yield* Effect.result(service.remove(modelId))).toMatchObject({ _tag: "Failure" });
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(download);
+  }),
+);
+
+const linked = "handy-computer/parakeet-unified-en-0.6b-gguf";
+// The store links `linked` from "/models" and finds nothing anywhere else; every
+// model reports an origin, as a dangling link does once its file is gone.
+const linkHarness = Effect.fn("test.linkHarness")(function* () {
+  const installed = new Set([modelId]);
+  let settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    speech: { ...DEFAULT_SERVER_SETTINGS.speech, modelId },
+  };
+  const store = Layer.mock(SpeechModelStore.SpeechModelStore)({
+    linkedFrom: () => Effect.succeed("/elsewhere/model.gguf"),
+    isReady: (model) => Effect.succeed(installed.has(model.id)),
+    link: (_models, source) =>
+      Effect.sync(() => {
+        if (source !== "/models") return [];
+        installed.add(linked);
+        return [linked];
+      }),
+  });
+  const settingsLayer = Layer.mock(ServerSettingsService)({
+    getSettings: Effect.sync(() => settings),
+    updateSettings: (patch) =>
+      Effect.sync(() => {
+        if (patch.speech) settings = { ...settings, speech: patch.speech };
+        return settings;
+      }),
+  });
+  const service = yield* SpeechManagement.SpeechManagement.pipe(
+    Effect.provide(
+      SpeechManagement.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(store, settingsLayer, Layer.mock(SpeechInference.SpeechInference)({})),
+        ),
+      ),
+    ),
+  );
+  return { service, installed, selected: () => settings.speech.modelId };
+});
+
+it.effect("link fails when no catalog model file is found at the path", () =>
+  Effect.gen(function* () {
+    const { service, selected } = yield* linkHarness();
+    expect(yield* Effect.result(service.link("/empty"))).toMatchObject({
+      _tag: "Failure",
+      failure: { operation: "link", cause: SpeechManagement.NO_LINKABLE_MODEL },
+    });
+    expect(selected()).toBe(modelId);
+  }),
+);
+
+it.effect("link keeps a working selection and replaces one that is not ready", () =>
+  Effect.gen(function* () {
+    const { service, installed, selected } = yield* linkHarness();
+    yield* service.link("/models");
+    expect(selected()).toBe(modelId);
+    installed.delete(modelId);
+    yield* service.link("/models");
+    expect(selected()).toBe(linked);
+  }),
+);
+
+it.effect("lists a model's link origin only while the model is ready", () =>
+  Effect.gen(function* () {
+    const { service, installed } = yield* linkHarness();
+    installed.delete(modelId);
+    yield* service.link("/models");
+    const listed = yield* service.list;
+    expect(listed.find((entry) => entry.id === modelId)).not.toHaveProperty("linkedFrom");
+    expect(listed.find((entry) => entry.id === linked)).toHaveProperty(
+      "linkedFrom",
+      "/elsewhere/model.gguf",
+    );
   }),
 );

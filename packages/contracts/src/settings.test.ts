@@ -284,6 +284,14 @@ describe("resolveIdleCompaction", () => {
 });
 
 describe("ClientSettings notifications", () => {
+  it("defaults old settings to status and rejects unknown screen reader levels", () => {
+    expect(decodeClientSettings({}).screenReaderAnnouncements).toBe("status");
+    expect(
+      decodeClientSettingsPatch({ screenReaderAnnouncements: "everything" })
+        .screenReaderAnnouncements,
+    ).toBe("everything");
+    expect(() => decodeClientSettingsPatch({ screenReaderAnnouncements: "unknown" })).toThrow();
+  });
   it("requires opt-in when existing settings omit notification preferences", () => {
     expect(decodeClientSettings({}).notificationMode).toBe("off");
     expect(decodeClientSettings({}).inAppNotificationsEnabled).toBe(false);

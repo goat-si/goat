@@ -11,7 +11,6 @@ import {
   type HubDeviceOperationResult,
   type HubDeviceStep,
   type HubDeviceTransport,
-  type HubParityResult,
   hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
 import { windowsRemoteLinkRelease } from "@goat/shared/opencodexRelease";
@@ -29,22 +28,21 @@ import { PERSON } from "../handoffs/HumanStepAuthority.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
-import { Added, Connection, decodeJson, LinkStatus, Probe } from "./hubOcxJson.ts";
+import { Added, Connection, decodeJson, LinkStatus } from "./hubOcxJson.ts";
+import { makeHubProbe } from "./hubProbe.ts";
+import * as DisposableRouteGuard from "./disposable/DisposableRouteGuard.ts";
 import * as HubParity from "./HubParity.ts";
 import {
   childConnectionAdmission,
   type HubChildConnectionAdmission,
   HubOcx,
-  HubOcxError,
   SAFE_ALIAS,
-  type OcxOutput,
 } from "./HubOcx.ts";
 import { makeLeaveSteps } from "./hubLeave.ts";
 import { makeMove } from "./hubMove.ts";
 import { makeRoutes } from "./hubRoutes.ts";
 import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import {
-  deviceExit,
   hubDeviceResult as result,
   linkStatusUnreadable,
   phaseMessage,
@@ -53,7 +51,7 @@ import {
 } from "./hubDeviceResult.ts";
 import { joinPreflight } from "./hubJoinPreflight.ts";
 import { revokeHubClientKey } from "./hubRevokeKey.ts";
-import { failing, finalState, LADDER } from "./hubLadder.ts";
+import { failing, finalState, makeLadder } from "./hubLadder.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
@@ -233,76 +231,13 @@ const make = Effect.gen(function* () {
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
-  const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
-    const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
-    const offered = output.code === 0 ? decodeJson(Probe, output.stdout) : undefined;
-    return offered?.alias === alias
-      ? { ok: true as const, ...offered }
-      : { ok: false as const, phase: output.phase, message: output.message };
-  });
-
-  const unreachable = (error: HubOcxError) => ({
-    outcome: "failed" as const,
-    detail: error.message,
-  });
-
-  /** Steps 1-3. Each executed rung re-runs the verdict; stops as soon as nothing fails. */
-  const ladder = Effect.fn("HubMembership.ladder")(function* (
-    scope: McpInvocationScope,
-    caller: Pick<Caller, "actor" | "profile" | "connection">,
-    alias: string,
-    linkId: string | undefined,
-    initial: HubParityResult,
-    steps: HubDeviceStep[],
-  ) {
-    let current = initial;
-    for (const rung of LADDER) {
-      if (!failing(current)) break;
-      if (!rung.checks.some((id) => current.failingCheckIds.includes(id))) continue;
-      let ran: Pick<HubDeviceStep, "outcome" | "detail">;
-      if (rung.step === "reconnect") {
-        if (linkId === undefined) continue;
-        ran = yield* ocx
-          .home(["link", "reconnect", "--link-id", linkId, "--json"], HOME_TIMEOUT_MS)
-          .pipe(
-            Effect.map((output: OcxOutput) =>
-              output.code === 0
-                ? { outcome: "ok" as const }
-                : { outcome: "failed" as const, detail: phaseMessage(output) },
-            ),
-            Effect.catch((error) => Effect.succeed(unreachable(error))),
-          );
-      } else if (rung.step === "restart" && (yield* ocx.runningTurns(alias, scope)) !== 0) {
-        // ADR-0019's idle rule: never restart under a running turn, and unknown is not idle.
-        ran = {
-          outcome: "deferred",
-          detail: "A turn is running there, or its activity is unknown.",
-        };
-      } else {
-        // A known membership restarts through the device's own GOAT; sync stays its script.
-        ran = yield* (
-          rung.step === "restart" && linkId !== undefined
-            ? ocx.connection(
-                alias,
-                { kind: "restart", expectedLinkId: linkId },
-                DEVICE_TIMEOUT_MS,
-                caller.connection,
-              )
-            : ocx.device(alias, [rung.step], DEVICE_TIMEOUT_MS)
-        ).pipe(
-          Effect.map((output: OcxOutput) =>
-            output.code === 0
-              ? { outcome: "ok" as const }
-              : { outcome: "failed" as const, detail: deviceExit(rung.step, output) },
-          ),
-          Effect.catch((error) => Effect.succeed(unreachable(error))),
-        );
-      }
-      steps.push({ step: rung.step, ...ran });
-      yield* audit(caller, `hub.repair.${rung.step}`, alias, ran.outcome, undefined);
-      if (ran.outcome !== "deferred") current = yield* parity.verify(alias, scope);
-    }
-    return current;
+  const { probe, disposableRoute, ownLink } = yield* makeHubProbe(ocx);
+  const ladder = makeLadder({
+    ocx,
+    parity,
+    audit,
+    deviceTimeoutMs: DEVICE_TIMEOUT_MS,
+    homeTimeoutMs: HOME_TIMEOUT_MS,
   });
 
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
@@ -391,6 +326,7 @@ const make = Effect.gen(function* () {
     readHomeLinks,
     homeUnavailable: (alias, forbidden, steps) => homeUnavailable("move", alias, steps, forbidden),
     probe,
+    disposableRoute,
     phaseMessage,
     request: (caller, input) => consent.request(caller, "move", input),
     approved: (caller, decisionId, binding) =>
@@ -614,6 +550,9 @@ const make = Effect.gen(function* () {
           { parity: verified, transport: "remote-link" },
         );
       }
+      // Both transports: a disposable machine is reached only through its own Pen route.
+      const refused = yield* disposableRoute(alias);
+      if (refused !== undefined) return result("join", alias, "failed", refused, steps);
       const platform = yield* ocx.devicePlatform(alias);
       const pinned = windowsRemoteLinkRelease(releases) !== undefined;
       const preflight = joinPreflight(alias, platform, input.transport, pinned);
@@ -625,8 +564,12 @@ const make = Effect.gen(function* () {
       });
       if (!preflight.ok)
         return result("join", alias, "failed", preflight.detail, steps, { transport });
-      if (transport === "hub-client")
+      if (transport === "hub-client") {
+        const byKey = yield* disposableRoute(alias, null, true);
+        if (byKey !== undefined)
+          return result("join", alias, "failed", byKey, steps, { transport });
         return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
+      }
       if (status === undefined) return homeUnavailable("join", alias, steps, true);
       if (!(yield* ocx.directAlias(alias)))
         return result(
@@ -709,6 +652,8 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* readHomeLinks();
       const record = status?.links.find((entry) => entry.alias === alias);
+      const own = yield* ownLink(alias, record?.id, "leave");
+      if (own !== undefined) return result("leave", alias, "failed", own, steps);
       let member: Member;
       if (record !== undefined)
         member = { kind: "remote-link", id: record.id, tunnelPort: record.tunnelPort };
@@ -812,9 +757,11 @@ const make = Effect.gen(function* () {
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* readHomeLinks();
+      const record = status?.links.find((entry) => entry.alias === alias);
+      const own = yield* ownLink(alias, record?.id, "repair");
+      if (own !== undefined) return result("repair", alias, "failed", own, steps);
       if (status === undefined && (!forbidden || (yield* hubClientKey(alias)) === undefined))
         return homeUnavailable("repair", alias, steps, forbidden);
-      const record = status?.links.find((entry) => entry.alias === alias);
       if (input.decisionId !== undefined) {
         // Step 4, re-link, only after a person approved it for the same host key.
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);
@@ -989,4 +936,8 @@ const make = Effect.gen(function* () {
 });
 
 export const layerWithoutDependencies = Layer.effect(HubMembership, make);
-export const layer = layerWithoutDependencies.pipe(Layer.provide(ApprovalHandoffs.layer));
+// The probe only reads disposable records, so its guard's own store instance takes no shared lock.
+export const layer = layerWithoutDependencies.pipe(
+  Layer.provide(ApprovalHandoffs.layer),
+  Layer.provide(DisposableRouteGuard.layer),
+);

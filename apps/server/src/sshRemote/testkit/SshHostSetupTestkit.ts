@@ -23,6 +23,7 @@ import * as Diagnosis from "../../provider/ProviderDiagnosisRouting.ts";
 import * as Environment from "../../environment/ServerEnvironment.ts";
 import * as Threads from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../../processRunner.ts";
+import { DisposableRouteGuard } from "../../hub/disposable/DisposableRouteGuard.ts";
 import { liveThreadShell, idleThreadProjection } from "../../mcp/McpToolAccess.testkit.ts";
 
 const now = DateTime.makeUnsafe(0);
@@ -68,6 +69,11 @@ export const projection: OrchestrationV2ThreadProjection = {
 };
 export const baseDependencies = Layer.mergeAll(
   NodeServices.layer,
+  // No open disposable machine; SshHostSetup.disposable.test.ts covers the refusals.
+  Layer.succeed(DisposableRouteGuard, {
+    claim: () => Effect.undefined,
+    refusal: () => Effect.undefined,
+  }),
   Layer.succeed(MaintenanceAudit.MaintenanceAudit, { append: () => Effect.void }),
   ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
   Layer.mock(SessionStore.SessionStore)({

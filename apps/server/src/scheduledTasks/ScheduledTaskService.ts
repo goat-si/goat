@@ -1,3 +1,4 @@
+import { hasQueuedOccurrence } from "./queuedOccurrence.ts";
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
 import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
@@ -717,6 +718,10 @@ export const layer = Layer.effect(
           ) {
             return { task: active, threadId: null, firing: null };
           }
+          if (yield* hasQueuedOccurrence(threadManagement, active, trigger)) {
+            yield* rescheduleMissedRun(active, startedAt, "previous occurrence still queued");
+            return { task: active, threadId: null, firing: null };
+          }
           // A queued delivery must not run a task that was paused, deleted and
           // recreated under the same id, or switched to another trigger while
           // it waited for its turn.
@@ -958,10 +963,12 @@ export const layer = Layer.effect(
     const rescheduleMissedRun = Effect.fn("ScheduledTaskService.rescheduleMissedRun")(function* (
       task: ScheduledTask,
       now: DateTime.DateTime,
+      reason = "missed",
     ) {
       const next = nextRunAt(task, now);
-      yield* Effect.logInfo("Skipping missed schedule task run", {
+      yield* Effect.logInfo("Skipping schedule task run", {
         taskId: task.id,
+        reason,
         missedRunAt: task.nextRunAt,
         rescheduledTo: next,
       });

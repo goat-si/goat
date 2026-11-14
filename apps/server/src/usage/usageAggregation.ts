@@ -58,6 +58,7 @@ interface MutableBucket {
   speedPremiumUsd: number;
   records: number;
   unpricedRecords: number;
+  unpricedTokens: number;
   providerReportedRecords: number;
   sessions: Set<string>;
 }
@@ -229,7 +230,14 @@ export class UsageAggregator {
       this.#options.priceOverrides,
     );
     bucket.records += 1;
-    if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
+    if (priced.costSource === "unpriced") {
+      bucket.unpricedRecords += 1;
+      bucket.unpricedTokens +=
+        record.totals.uncachedInputTokens +
+        record.totals.cachedInputTokens +
+        record.totals.cacheCreationTokens +
+        record.totals.outputTokens;
+    }
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
     return true;
@@ -278,6 +286,7 @@ export class UsageAggregator {
         speedPremiumUsd: 0,
         records: 0,
         unpricedRecords: 0,
+        unpricedTokens: 0,
         providerReportedRecords: 0,
         sessions: new Set<string>(),
       };
@@ -321,6 +330,7 @@ export class UsageAggregator {
         costSource: resolveCostSource(bucket),
         records: bucket.records,
         unpricedRecords: bucket.unpricedRecords,
+        unpricedTokens: bucket.unpricedTokens,
         sessions: bucket.sessions.size,
       });
     }

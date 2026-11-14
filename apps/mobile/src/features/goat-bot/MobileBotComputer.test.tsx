@@ -49,6 +49,7 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
   title,
   status: "running",
   updatedAt: "2026-11-07T10:00:00.000Z",
+  openQuestions: [] as unknown[],
   ...(worker === undefined ? {} : { worker }),
 });
 function setup(data: unknown, cause: unknown = null) {
@@ -78,6 +79,19 @@ it("lists running work under the machine it runs on, GOAT Bot's own first", asyn
   expect(text.indexOf("Summarize the inbox")).toBeLessThan(text.indexOf("studio"));
   expect(text.indexOf("studio")).toBeLessThan(text.indexOf("Fix the build"));
   expect(state.refresh).toHaveBeenCalledTimes(1);
+});
+
+it("says what a machine's task waits on the person for, as Home does", async () => {
+  setup({
+    tasks: [
+      { ...task("a", "Pick a disk", {}), openQuestions: [{ questionId: "q" }] },
+      task("b", "Keep building", {}),
+    ],
+  });
+  await render();
+  const text = container.textContent ?? "";
+  expect(text).toContain("Pick a diskWaiting for your answer");
+  expect(text).toContain("Keep buildingWorking");
 });
 
 it("says when nothing runs, when the list is cut short, and offline", async () => {

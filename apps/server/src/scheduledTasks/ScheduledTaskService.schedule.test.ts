@@ -1,15 +1,23 @@
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput } from "@goat/contracts";
+import {
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
+  MessageId,
+  RunId,
+  ScheduledTaskUpsertInput,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -283,6 +291,218 @@ it.effect(
         yield* TestClock.adjust("6 seconds");
         yield* TestClock.adjust("60 seconds");
         expect(yield* Deferred.await(launched)).toBe(created.task.title);
+      }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("keeps one queued occurrence of a recurring task while its bound thread is busy", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-07-01T09:00:00.000Z"));
+    // The bound thread's own run never finishes, so every scheduled send lands
+    // in its queue and stays there.
+    const activeRun = {
+      id: RunId.make("run:busy"),
+      status: "running",
+      userMessageId: MessageId.make("message:busy"),
+    } as OrchestrationV2Run;
+    const thread = yield* Ref.make<{
+      readonly runs: ReadonlyArray<OrchestrationV2Run>;
+      readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
+    }>({ runs: [activeRun], messages: [] });
+    const runDueWork = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+    const layerDependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      // Capture the poll pass so the test drives each due interval directly.
+      Layer.mock(Scheduler.Scheduler)({
+        register: (name, work) =>
+          name !== "scheduled-tasks"
+            ? Effect.void
+            : Effect.context<Effect.Services<typeof work>>().pipe(
+                Effect.flatMap((context) =>
+                  Ref.set(runDueWork, work.pipe(Effect.provideContext(context), Effect.ignore)),
+                ),
+              ),
+      }),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        sendToThread: (input) =>
+          Ref.modify(thread, (current) => {
+            const run = {
+              id: RunId.make(`run:${input.messageId}`),
+              status: "queued",
+              userMessageId: input.messageId,
+            } as OrchestrationV2Run;
+            const message = {
+              id: input.messageId,
+              threadId: input.threadId,
+              runId: run.id,
+              role: "user",
+              text: input.text,
+              ...(input.scheduledTaskId === undefined
+                ? {}
+                : { scheduledTaskId: input.scheduledTaskId }),
+            } as OrchestrationV2ConversationMessage;
+            return [
+              {
+                delivery: "queued",
+                run,
+                message,
+              } as ThreadManagementService.ThreadManagementSendResult,
+              { runs: [...current.runs, run], messages: [...current.messages, message] },
+            ];
+          }),
+        getThreadRecords: (_threadId, _fields, filter) =>
+          Ref.get(thread).pipe(
+            Effect.map(
+              ({ runs, messages }) =>
+                ({
+                  runs: runs.filter((run) => filter?.runStatuses?.includes(run.status) ?? true),
+                  messages,
+                }) as never,
+            ),
+          ),
+        getThreadShell: () =>
+          Effect.succeed({
+            projectId: "project-busy-thread",
+            deletedAt: null,
+            archivedAt: null,
+          } as never),
+      }),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert(
+        yield* decodeUpsertInput({
+          id: "scheduled-task:busy-thread",
+          title: "Check progress",
+          prompt: "Check progress",
+          enabled: true,
+          schedule: { type: "interval", everyMs: 60_000 },
+          projectId: "project-busy-thread",
+          threadId: "thread:busy",
+          workspaceStrategy: { type: "root" },
+          modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        }),
+      );
+
+      for (let interval = 0; interval < 3; interval++) {
+        yield* TestClock.adjust("61 seconds");
+        yield* Effect.flatten(Ref.get(runDueWork));
+      }
+
+      const queuedOccurrencesOf = (taskId: typeof task.id) =>
+        Ref.get(thread).pipe(
+          Effect.map(
+            ({ runs, messages }) =>
+              runs
+                .filter((run) => run.status === "queued")
+                .map((run) => messages.find((message) => message.id === run.userMessageId))
+                .filter((message) => message?.scheduledTaskId === taskId).length,
+          ),
+        );
+      const queuedOccurrences = queuedOccurrencesOf(task.id);
+      expect(yield* queuedOccurrences).toBe(1);
+      // Skipped intervals still move the schedule forward.
+      const [listed] = (yield* service.list()).tasks;
+      expect(Date.parse(listed?.nextRunAt ?? "")).toBeGreaterThan(
+        Date.parse("2026-07-01T09:03:03.000Z"),
+      );
+
+      // Run now is an explicit request, so it still queues behind the held one.
+      yield* service.runNow({ id: task.id });
+      expect(yield* queuedOccurrences).toBe(2);
+
+      // Once the queued copies start, the next interval sends again.
+      yield* Ref.update(thread, (current) => ({
+        ...current,
+        runs: current.runs.map((run) =>
+          run.status === "queued" ? ({ ...run, status: "running" } as OrchestrationV2Run) : run,
+        ),
+      }));
+      yield* TestClock.adjust("61 seconds");
+      yield* Effect.flatten(Ref.get(runDueWork));
+      expect(yield* queuedOccurrences).toBe(1);
+    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "a failed queued-occurrence read falls through to the send, which records the outcome",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-07-01T09:00:00.000Z"));
+      const sends = yield* Ref.make(0);
+      const runDueWork = yield* Ref.make<Effect.Effect<void>>(Effect.void);
+      const layerDependencies = Layer.mergeAll(
+        NodeCrypto.layer,
+        Layer.mock(Scheduler.Scheduler)({
+          register: (name, work) =>
+            name !== "scheduled-tasks"
+              ? Effect.void
+              : Effect.context<Effect.Services<typeof work>>().pipe(
+                  Effect.flatMap((context) =>
+                    Ref.set(runDueWork, work.pipe(Effect.provideContext(context), Effect.ignore)),
+                  ),
+                ),
+        }),
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        // The bound thread's row is gone: the read fails and so does the send.
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: (threadId) =>
+            Effect.fail(new OrchestratorProjectionError({ threadId })),
+          sendToThread: (input) =>
+            Ref.update(sends, (count) => count + 1).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ThreadManagementService.ThreadManagementThreadNotFoundError({
+                    projectId: input.projectId,
+                    threadId: input.threadId,
+                  }),
+                ),
+              ),
+            ),
+          getThreadShell: () => Effect.succeed(null as never),
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        yield* service.upsert(
+          yield* decodeUpsertInput({
+            id: "scheduled-task:gone-thread",
+            title: "Check progress",
+            prompt: "Check progress",
+            enabled: true,
+            schedule: { type: "interval", everyMs: 60_000 },
+            projectId: "project-gone-thread",
+            threadId: "thread:gone",
+            workspaceStrategy: { type: "root" },
+            modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          }),
+        );
+
+        yield* TestClock.adjust("61 seconds");
+        yield* Effect.flatten(Ref.get(runDueWork));
+
+        expect(yield* Ref.get(sends)).toBeGreaterThan(0);
+        const [listed] = (yield* service.list()).tasks;
+        expect(listed?.lastRunStatus).toBe("failed");
+        expect(Date.parse(listed?.nextRunAt ?? "")).toBeGreaterThan(
+          Date.parse("2026-07-01T09:01:01.000Z"),
+        );
       }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

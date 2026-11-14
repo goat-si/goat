@@ -21,7 +21,11 @@ export const removeInheritedGitEnv = (env: NodeJS.ProcessEnv): void => {
 export const isolatedGitEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
   const isolated = { ...env };
   for (const name of Object.keys(isolated)) {
-    if (isGitEnvName(name) && !TEST_GIT_CONFIG_NAME.test(name)) delete isolated[name];
+    const safeIsolation =
+      (name === "GIT_CONFIG_GLOBAL" && isolated[name] === "/dev/null") ||
+      (name === "GIT_CONFIG_NOSYSTEM" && isolated[name] === "1");
+    if (isGitEnvName(name) && !TEST_GIT_CONFIG_NAME.test(name) && !safeIsolation)
+      delete isolated[name];
   }
   return isolated;
 };

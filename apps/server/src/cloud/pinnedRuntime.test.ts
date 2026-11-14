@@ -15,11 +15,13 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ProcessRunner from "../processRunner.ts";
 import {
   ensurePinnedRuntimeInstalled,
+  listPinnedRuntimes,
   pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
   type PinnedRuntimeProgress,
   prunePinnedRuntimes,
+  removeUnusedPinnedRuntime,
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
@@ -776,5 +778,57 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
         );
         assert.deepEqual(removed, ["1.1.0"]);
       }),
+  );
+
+  // regression: #3277 storage cleanup deleted the runtime a stopped service starts
+  it.effect.each([
+    { name: "keeps the runtime a service unit names", unit: "names it", kept: "it is in use now" },
+    { name: "offers a runtime when no service unit exists", unit: "absent", kept: null },
+    {
+      name: "decides nothing when the service unit cannot be read",
+      unit: "unreadable",
+      kept: "whether it is in use could not be checked",
+    },
+  ] as const)("storage cleanup $name", ({ unit, kept }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0"]);
+      const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-user-" });
+      const agentsDir = path.join(userHome, "Library", "LaunchAgents");
+      yield* fs.makeDirectory(agentsDir, { recursive: true });
+      const plist = path.join(agentsDir, "si.goat.service.plist");
+      const program = path.join(versionsDir, "1.0.0", "goat");
+      if (unit === "names it") {
+        yield* fs.writeFileString(
+          plist,
+          `<plist><dict>\n<key>ProgramArguments</key>\n<array>\n<string>${program}</string>\n<string>__service-launcher</string>\n</array>\n</dict></plist>\n`,
+        );
+      }
+      // A folder where the plist belongs cannot be read as one.
+      if (unit === "unreadable") yield* fs.makeDirectory(plist);
+      const onHost = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.provideService(
+            ProcessRunner.ProcessRunner,
+            lsofRunner("p1\nftxt\nn/sbin/launchd\n"),
+          ),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.HomeDirectory, userHome),
+          Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: baseDir }),
+        );
+
+      const listed = yield* onHost(listPinnedRuntimes({ baseDir, keep: ["2.0.0"] }));
+      assert.equal(listed.decided, unit !== "unreadable");
+      assert.deepEqual(
+        listed.runtimes.map((runtime) => [runtime.version, runtime.unused]),
+        [["1.0.0", unit === "absent"]],
+      );
+      const removal = yield* onHost(
+        removeUnusedPinnedRuntime({ baseDir, keep: ["2.0.0"], version: "1.0.0" }),
+      );
+      assert.equal(removal, kept);
+      assert.equal(yield* fs.exists(path.join(versionsDir, "1.0.0")), kept !== null);
+    }),
   );
 });

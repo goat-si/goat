@@ -277,7 +277,7 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("./goatBotHomeMode", async (original) => ({
   ...(await original<typeof import("./goatBotHomeMode")>()),
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: true }),
+  pickMobileGoatBotHomeEnvironment: () => ({ environmentId: "env", connected: true }),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),

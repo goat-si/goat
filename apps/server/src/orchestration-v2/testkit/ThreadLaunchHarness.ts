@@ -197,6 +197,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(false)),
       inspectExistingBranch: () => Effect.succeed(null),
+      listLocalBranchNames: () => Effect.succeed([]),
       remoteExists: options.remoteExists ?? (() => Effect.succeed(true)),
       remoteBranchExists: () => Effect.succeed(true),
       removeWorktree,

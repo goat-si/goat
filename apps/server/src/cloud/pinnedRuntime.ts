@@ -25,6 +25,7 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { bootServiceRuntimeReferences } from "./bootServiceRuntimeReferences.ts";
 import { isExactServiceVersion, parseServiceState, SERVICE_STATE_FILE } from "./serviceProtocol.ts";
 
 const PINNED_RUNTIME_DIR = "runtime";
@@ -615,7 +616,8 @@ const runningExecutables = Effect.fn("cloud.pinned_runtime.running_executables")
 const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(function* (input: {
   readonly baseDir: string;
   readonly keep: ReadonlyArray<string>;
-  readonly references: ReadonlyArray<string>;
+  /** Undefined when the service unit could not be read: it may start any runtime. */
+  readonly references: ReadonlyArray<string> | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -653,6 +655,7 @@ const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(functio
   }
   const undecided = { versionsDir, pruned, completed, unused: null };
   if (completed.length === 0) return { ...undecided, unused: [] as ReadonlyArray<string> };
+  if (input.references === undefined) return undecided;
 
   const keep = new Set(input.keep);
   const stateText = yield* fs
@@ -745,7 +748,7 @@ export interface PinnedRuntimeVersion {
   readonly version: string;
   readonly directory: string;
   readonly completedAt: number;
-  /** Nothing can start it again: no service state, running process or launcher refers to it. */
+  /** Nothing can start it again: no service unit or state, process or launcher refers to it. */
   readonly unused: boolean;
 }
 
@@ -758,7 +761,8 @@ export const listPinnedRuntimes = Effect.fn("cloud.pinned_runtime.list")(functio
   readonly keep: ReadonlyArray<string>;
 }) {
   const path = yield* Path.Path;
-  const found = yield* findUnusedRuntimes({ ...input, references: [] });
+  const references = yield* bootServiceRuntimeReferences();
+  const found = yield* findUnusedRuntimes({ ...input, references });
   const unused = new Set(found.unused ?? []);
   return {
     decided: found.unused !== null,
@@ -774,8 +778,8 @@ export const listPinnedRuntimes = Effect.fn("cloud.pinned_runtime.list")(functio
 /**
  * Removes one runtime a person chose, only if it is still unused under the install lock. Unlike
  * prunePinnedRuntimes it never touches other runtimes or an earlier prune's leftovers.
- * Null when it was removed, otherwise why it stayed: in use, reached through a link below the
- * GOAT home (which could lead outside it), or an earlier removal's leftover in the way.
+ * Null when it was removed, otherwise why it stayed: in use or undecided, reached through a link
+ * below the GOAT home (which could lead outside it), or an earlier removal's leftover in the way.
  */
 export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_one")(
   function* (input: {
@@ -787,7 +791,10 @@ export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_
     const path = yield* Path.Path;
     const renamed = yield* pinnedRuntimeInstallLock.withPermit(
       Effect.gen(function* () {
-        const found = yield* findUnusedRuntimes({ ...input, references: [] });
+        const references = yield* bootServiceRuntimeReferences();
+        const found = yield* findUnusedRuntimes({ ...input, references });
+        if (found.unused === null)
+          return { kept: "whether it is in use could not be checked" } as const;
         if (!(found.unused ?? []).includes(input.version))
           return { kept: "it is in use now" } as const;
         const versionDir = path.join(found.versionsDir, input.version);

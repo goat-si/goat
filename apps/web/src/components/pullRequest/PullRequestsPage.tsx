@@ -1,3 +1,4 @@
+import { PullRequestPanelControls } from "./PullRequestPanelControls";
 import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
 import { getShortcutContext } from "./pullRequestShortcutContext";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -1091,10 +1092,7 @@ export function PullRequestsPage() {
     />
   );
   const openPanelControls = (
-    <div
-      className="absolute top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
-      data-workspace-titlebar-controls
-    >
+    <PullRequestPanelControls>
       {rightPanelState.isOpen ? (
         <RightPanelMaximizeControl
           maximized={rightPanelMaximized}
@@ -1102,7 +1100,7 @@ export function PullRequestsPage() {
         />
       ) : null}
       {panelToggleControls}
-    </div>
+    </PullRequestPanelControls>
   );
   const carriedToNothing =
     shownCount === 0 &&

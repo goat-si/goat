@@ -4,3 +4,5 @@ import { removeInheritedGitEnv } from "./gitEnv.ts";
 // friends. Without this, every git child of a test, including server code under test, would act on
 // the checkout that started the run (#1114).
 removeInheritedGitEnv(process.env);
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";

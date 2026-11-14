@@ -2,6 +2,7 @@ import {
   accessDenied,
   BOT_RUNNING_TASK_STATUSES,
   botComputers,
+  goatBotTaskWait,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
 import { type BotId, CHANNEL_LIST_TASKS_MAX_LIMIT, type EnvironmentId } from "@goat/contracts";
@@ -85,7 +86,11 @@ export function MobileBotComputer(props: {
             <View key={task.taskId}>
               <Text className="text-foreground">{task.title}</Text>
               <Text className="text-foreground-muted">
-                {presentTaskStatus(task.status, null).label}
+                {goatBotTaskWait({
+                  status: task.status,
+                  openQuestionCount: task.openQuestions.length,
+                  observed: task.observed,
+                }) ?? presentTaskStatus(task.status, null).label}
               </Text>
             </View>
           ))}

@@ -29,7 +29,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { mobileBotHomeListShown, pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { mobileBotHomeListShown, pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
@@ -53,6 +53,7 @@ import { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { MobileTaskHeader } from "./MobileTaskHeader";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
+import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 
 /** How far below the top a scrolled-to row lands, clear of the sticky Home/Library tabs. */
 const STICKY_TABS_CLEARANCE = 56;
@@ -130,13 +131,19 @@ export function MobileBotWork(props: {
   readonly notesRefreshKey?: string | undefined;
   /** Changes with every task record in the bot's conversation, including tasks past the list. */
   readonly workRevision?: string | null | undefined;
+  /** The newest chip of each task in the conversation: what its worker asks of the person. */
+  readonly taskChips?: MobileTaskChips | undefined;
   /** What the home opens on, from an event line; seq changes on every request. */
   readonly focus?: (MobileBotHomeFocus & { readonly seq: number }) | null | undefined;
 }) {
   const home = useMobileGoatBotHomeMode();
+  const chips = props.taskChips ?? NO_TASK_CHIPS;
   // The sheet reaches the bottom of the screen; its last entry clears the home indicator.
-  const bottomInset = useSafeAreaInsets().bottom + 24;
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom + 24;
+  // Android draws the sheet edge to edge, so Close starts below the status bar.
+  const sheetTop = Platform.OS === "android" ? { paddingTop: 16 + insets.top } : undefined;
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities = environmentId
@@ -386,7 +393,7 @@ export function MobileBotWork(props: {
       peekTaskId !== null &&
       !showAllFinished &&
       environmentId &&
-      workRowCollapsed(homeRows, environmentId, homeRemote, peekTaskId)
+      workRowCollapsed(homeRows, environmentId, homeRemote, peekTaskId, chips)
     ) {
       setShowAllFinished(true);
       setReturnKey(JSON.stringify(["task", peekTaskId]));
@@ -601,8 +608,9 @@ export function MobileBotWork(props: {
         homeItems.push(
           ...mobileBotTaskListItems({
             botName,
+            chips,
             work: environmentId
-              ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote)
+              ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
             showAllFinished,
             onToggleFinished: () => setShowAllFinished((value) => !value),
@@ -821,6 +829,7 @@ export function MobileBotWork(props: {
       {props.taskId ? (
         <MobileTaskHeader
           task={task}
+          chips={chips}
           screen={actions}
           title={props.taskTitle ?? props.taskCardInfo?.title ?? null}
           botName={botName}
@@ -875,7 +884,7 @@ export function MobileBotWork(props: {
         // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
-        <View className="flex-1 bg-screen px-4 pt-4">
+        <View className="flex-1 bg-screen px-4 pt-4" style={sheetTop}>
           <View className="flex-row items-center justify-between">
             <Pressable
               accessibilityRole="button"
@@ -956,6 +965,7 @@ export function MobileBotWork(props: {
               <MobileBotPeek
                 key={peekEntry.row.task.taskId}
                 entry={peekEntry}
+                chips={chips}
                 rows={homeRows}
                 connected={selected?.connected === true}
                 machineLabel={selected?.label ?? botName}

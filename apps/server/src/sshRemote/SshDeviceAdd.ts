@@ -148,16 +148,40 @@ const make = Effect.gen(function* () {
         ...input,
         address: input.host ?? input.address!,
       });
-      const preflight = toAgentReport(
-        yield* setup.preflight(
-          resolved.host
-            ? { host: resolved.host }
-            : { ...resolved.input, host: resolved.input.address },
-          caller,
-        ),
+      const refusal = (message: string) => ({
+        saved: false as const,
+        reason: message,
+        kind: "error" as const,
+        code: "invalid_request" as const,
+        message,
+        fix: {
+          actor: "human" as const,
+          instruction: "Detach the disposable machine in Settings → Hub on web or desktop first.",
+        },
+      });
+      // A disposable machine's Pen alias is refused by name, before preflight reaches the network.
+      const named =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, identify: false });
+      if (named !== undefined) return refusal(named);
+      const reviewed = yield* setup.preflight(
+        resolved.host
+          ? { host: resolved.host }
+          : { ...resolved.input, host: resolved.input.address },
+        caller,
       );
+      const preflight = toAgentReport(reviewed);
+      // Preflight itself refuses a disposable machine by its alias or the ED25519 key it offers.
       if (preflight.steps.some((step) => step.state === "failed"))
         return { outcome: "failed", preflight };
+      // A disposable machine is reached only through its own Pen route (design section 6): the GOAT
+      // an alias reaches is checked too, before any trust or save.
+      const disposable =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, probeKey: false });
+      if (disposable !== undefined) return { ...refusal(disposable), preflight };
       // Why the connection could not be saved, kept so a later denied step still explains it.
       let saveBlocked: string | undefined;
       const deniedReason = (message: string) =>

@@ -46,7 +46,7 @@ const run = (shim: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv =
   });
 
 const REPORTER =
-  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$GOAT_CLI_PATH home=$GOAT_HOME"\nprintf "%s\\n" "$@"\nexit 3\n';
+  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$GOAT_CLI_PATH home=$GOAT_HOME appimage=$APPIMAGE"\nprintf "%s\\n" "$@"\nexit 3\n';
 
 const fakeAppImage = (canMount = true) => {
   const root = tempRoot();
@@ -180,6 +180,13 @@ describe("renderCliShim", () => {
     expect(result.stdout).toMatch(
       /squashfs-root\/resources\/app\.asar\/apps\/server\/dist\/bin\.mjs/,
     );
+  });
+
+  it.each([true, false])("passes the AppImage path to the CLI (mounted=%s)", (mounted) => {
+    const { appImage, shim } = fakeAppImage(mounted);
+    const result = run(shim, ["--version"]);
+    expect(result.status).toBe(3);
+    expect(result.stdout).toContain(`appimage=${appImage}`);
   });
 
   it("keeps the install's GOAT home under sudo, unless one is set", () => {

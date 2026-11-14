@@ -112,6 +112,14 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+// A top-level name blocked by a nested branch has no slash-free alternative to offer.
+function branchConflictHint(branch: string) {
+  const sibling = branch.replaceAll("/", "-");
+  return `Use a name that does not nest under or contain an existing branch${
+    sibling === branch ? "" : `, such as "${sibling}"`
+  }.`;
+}
+
 /** The refusal plus the step that gets the caller a folder to launch into. */
 function workspaceMissingMessage(error: ThreadLaunch.ThreadLaunchWorkspaceMissingError) {
   if (error.kind === "worktree")
@@ -490,24 +498,26 @@ const make = Effect.gen(function* () {
           if (!cloud && strategy?.type === "worktree")
             yield* ThreadLaunch.ThreadLaunchService.pipe(
               Effect.flatMap((launches) =>
-                launches.checkWorktreeBase({ projectId, workspaceStrategy: strategy }),
+                launches.checkWorktreeBase({ commandId, projectId, workspaceStrategy: strategy }),
               ),
               Effect.mapError(
                 (error) =>
                   new OrchestratorMcpFailure({
                     code: "invalid_request",
                     message:
-                      error._tag === "ThreadLaunchBranchError"
-                        ? `${error.message} No thread was created. ${
-                            error.worktreePath === null
-                              ? "Pass a branch name that does not exist yet."
-                              : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
-                          }`
-                        : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
-                            strategy.startFromOrigin === true
-                              ? "; the project has no origin remote to fetch it from."
-                              : ", or set startFromOrigin:true if it exists only on origin."
-                          }`,
+                      error._tag === "ThreadLaunchBranchConflictError"
+                        ? `${error.message} No thread was created. ${branchConflictHint(error.branch)}`
+                        : error._tag === "ThreadLaunchBranchError"
+                          ? `${error.message} No thread was created. ${
+                              error.worktreePath === null
+                                ? "Pass a branch name that does not exist yet."
+                                : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
+                            }`
+                          : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
+                              strategy.startFromOrigin === true
+                                ? "; the project has no origin remote to fetch it from."
+                                : ", or set startFromOrigin:true if it exists only on origin."
+                            }`,
                   }),
               ),
             );

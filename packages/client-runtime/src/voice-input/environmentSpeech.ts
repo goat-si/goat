@@ -81,6 +81,17 @@ export const downloadEnvironmentSpeechModelEffect = (
     run: (client, headers) => client.download({ headers, payload: { modelId } }),
     timeoutMs: 30 * 60_000,
   });
+export const linkEnvironmentSpeechModelsEffect = (
+  context: EnvironmentVoiceRequestContext,
+  path: string,
+) =>
+  request({
+    context,
+    method: "POST",
+    path: (urls) => urls.link(),
+    run: (client, headers) => client.link({ headers, payload: { path } }),
+    timeoutMs: 30 * 60_000,
+  });
 export const removeEnvironmentSpeechModelEffect = (
   context: EnvironmentVoiceRequestContext,
   modelId: string,
@@ -138,6 +149,15 @@ export const downloadEnvironmentSpeechModel = (
 ) =>
   Effect.runPromise(
     downloadEnvironmentSpeechModelEffect(context, modelId).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );
+export const linkEnvironmentSpeechModels = (
+  context: EnvironmentVoiceRequestContext,
+  path: string,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    linkEnvironmentSpeechModelsEffect(context, path).pipe(Effect.provide(http)),
     signal ? { signal } : undefined,
   );
 export const removeEnvironmentSpeechModel = (

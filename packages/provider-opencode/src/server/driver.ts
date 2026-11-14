@@ -22,6 +22,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { compareSemverVersions } from "@goat/shared/semver";
 import * as OpenCodeAdapterV2 from "./adapter.ts";
 import * as OpenCode2AdapterV2 from "./v2/adapter.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -84,15 +85,32 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
+function openCodeNativeHome(commandPath: string): string | null {
+  const slashed = commandPath.replaceAll("\\", "/");
+  const match = /\/\.opencode\/bin\/opencode(?:\.exe)?$/i.exec(slashed);
+  if (!match) return null;
+  return match.index === 0 ? "/" : slashed.slice(0, match.index);
+}
+
 /** Update only within the installed package generation; 2.x converts the shared database in place. */
 export const openCodeUpdateFor = (generation: ProbedOpenCode["generation"]) =>
   makePackageManagedProviderMaintenanceResolver({
     provider: DRIVER_KIND,
     npmPackageName: generation === "v2" ? "@opencode/cli" : "opencode-ai",
     nativeUpdate: {
-      args: ["upgrade"],
+      // `isOpenCodeNativeCommandPath` is the curl installer's own binary. Name the
+      // method so OpenCode does not have to infer it from `process.execPath`, which
+      // fails when the binary is launched through a wrapper or shim.
+      args: ["upgrade", "--method", "curl"],
       isCommandPath: isOpenCodeNativeCommandPath,
       requiresCommandPath: true,
+      // The curl installer writes to `$HOME/.opencode/bin`, so point HOME at the install it replaces.
+      env: (context) => {
+        const home =
+          openCodeNativeHome(context.realCommandPath) ??
+          openCodeNativeHome(context.resolvedCommandPath);
+        return home ? { HOME: home } : {};
+      },
     },
   });
 
@@ -125,7 +143,20 @@ function selectOpenCodeRuntimeAdapter(input: {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
-    getCapabilities: () => Effect.flatMap(hot, (adapter) => adapter.getCapabilities()),
+    getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
+      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
+      const adapter = yield* pick(Effect.succeed(probed));
+      const capabilities = yield* adapter.getCapabilities();
+      return {
+        ...capabilities,
+        turns: {
+          ...capabilities.turns,
+          supportsNativeGoals:
+            capabilities.turns.supportsNativeGoals ??
+            (probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0),
+        },
+      };
+    }),
     planSelectionTransition: (transition) =>
       Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
     openSession: (session) =>
@@ -405,7 +436,9 @@ export const OpenCodeDriver: ProviderDriver<
     const listOpenCode2Workspace = (cwd: string) =>
       openCode2ProbeServer.withConnection(({ client, events }) =>
         Effect.gen(function* () {
-          const location = { directory: cwd };
+          // OpenCode names a location by its resolved path (no trailing slash or `..`).
+          const directory = pathService.resolve(cwd);
+          const location = { directory };
           const scanned = yield* Deferred.make<void>();
           const pending = new Set(["command.updated", "skill.updated"]);
           const stream = yield* events.pipe(Effect.option);
@@ -413,7 +446,7 @@ export const OpenCodeDriver: ProviderDriver<
             yield* stream.value.pipe(
               Stream.runForEach((event) =>
                 "location" in event &&
-                event.location?.directory === cwd &&
+                event.location?.directory === directory &&
                 pending.delete(event.type) &&
                 pending.size === 0
                   ? Deferred.succeed(scanned, undefined)
@@ -432,6 +465,16 @@ export const OpenCodeDriver: ProviderDriver<
               { concurrency: "unbounded" },
             ),
             Deferred.await(scanned),
+            // Without events no scan can be awaited, so trust the first read as before.
+            stream._tag === "None"
+              ? Effect.succeed(true)
+              : client.debug.location.list().pipe(
+                  Effect.map((loaded) => loaded.some((entry) => entry.directory === directory)),
+                  Effect.timeout("2 seconds"),
+                  Effect.orElseSucceed(() => true),
+                ),
+            // OpenCode answers provider.list for a location only once its skill scan has ended.
+            client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),
           );
         }).pipe(Effect.scoped),
       );
