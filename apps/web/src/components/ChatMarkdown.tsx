@@ -1,3 +1,4 @@
+import { GITHUB_ALERT_PRESENTATIONS } from "./chat/markdownAlertPresentations";
 import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@goat/shared/fileLinks";
 import {
   isWindowsDrivePathHref,
@@ -24,14 +25,7 @@ import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
 } from "@goat/shared/composerContextClipboard";
-import {
-  InfoIcon,
-  LightbulbIcon,
-  MessageSquareWarningIcon,
-  OctagonAlertIcon,
-  SparklesIcon,
-  TriangleAlertIcon,
-} from "~/components/solar";
+import { SparklesIcon } from "~/components/solar";
 import {
   AssetWorkspaceAssetNotFoundError,
   AuthPreviewOperateScope,
@@ -318,42 +312,6 @@ function orderedListGutterStyle(
   if (markerWidth <= 1) return undefined;
   return { "--list-gutter": `${markerWidth + 2}ch` };
 }
-const GITHUB_ALERT_PRESENTATIONS: Record<
-  string,
-  { label: string; Icon: typeof InfoIcon; borderClassName: string; titleClassName: string }
-> = {
-  note: {
-    label: "Note",
-    Icon: InfoIcon,
-    borderClassName: "border-info/70",
-    titleClassName: "text-info-foreground",
-  },
-  tip: {
-    label: "Tip",
-    Icon: LightbulbIcon,
-    borderClassName: "border-success/70",
-    titleClassName: "text-success-foreground",
-  },
-  important: {
-    label: "Important",
-    Icon: MessageSquareWarningIcon,
-    borderClassName: "border-purple-500/70",
-    titleClassName: "text-purple-600 dark:text-purple-400",
-  },
-  warning: {
-    label: "Warning",
-    Icon: TriangleAlertIcon,
-    borderClassName: "border-warning/70",
-    titleClassName: "text-warning-foreground",
-  },
-  caution: {
-    label: "Caution",
-    Icon: OctagonAlertIcon,
-    borderClassName: "border-destructive/70",
-    titleClassName: "text-destructive-foreground",
-  },
-};
-
 function normalizeMarkdownLinkHrefKey(href: string): string {
   const normalizedHref = normalizeMarkdownLinkDestination(href);
   const rewrittenHref = rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
@@ -970,19 +928,21 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills, threadRef)}</p>;
   },
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
-    const alert =
-      GITHUB_ALERT_PRESENTATIONS[String((props as Record<string, unknown>)["data-alert"] ?? "")];
+    const alertKind = String((props as Record<string, unknown>)["data-alert"] ?? "");
+    const alert = GITHUB_ALERT_PRESENTATIONS[alertKind];
     if (!alert) {
       return <blockquote {...props}>{children}</blockquote>;
     }
     return (
       <div
         role="note"
+        data-markdown-alert={alertKind}
         dir={props.dir}
         className={cn("my-1 border-s-2 ps-3", alert.borderClassName)}
       >
         <p
           data-thread-find-ignore="true"
+          data-markdown-alert-label=""
           className={cn("flex items-center gap-1.5 font-medium", alert.titleClassName)}
         >
           <alert.Icon aria-hidden className="size-3.5 shrink-0" />
