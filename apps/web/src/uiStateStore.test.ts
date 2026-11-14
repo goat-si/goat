@@ -277,4 +277,19 @@ describe("uiStateStore persistence", () => {
     expect(saved.sidebarProjectScopeKeys).toEqual(["project-a", "project-b"]);
     expect(saved.sidebarProjectScopeKey).toBeNull();
   });
+
+  it("keeps legacy projects omitted from the expanded list collapsed across a save and reload", () => {
+    const projectAKey = legacyProjectCwdPreferenceKey("/repo/a");
+    const projectBKey = legacyProjectCwdPreferenceKey("/repo/b");
+    const migrated = parsePersistedState({ expandedProjectCwds: ["/repo/a"] });
+    expect(resolveProjectExpanded(migrated.projectExpandedById, [projectBKey])).toBe(false);
+
+    persistState({ ...migrated, pullRequestMergeMethod: "squash" });
+    const reloaded = parsePersistedState(
+      JSON.parse(localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}") as PersistedUiState,
+    );
+
+    expect(resolveProjectExpanded(reloaded.projectExpandedById, [projectAKey])).toBe(true);
+    expect(resolveProjectExpanded(reloaded.projectExpandedById, [projectBKey])).toBe(false);
+  });
 });
