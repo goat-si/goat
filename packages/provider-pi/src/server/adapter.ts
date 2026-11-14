@@ -3,6 +3,7 @@ import * as NodeUtil from "node:util";
 import { readPiEntries, piSessionListing, walkPiBranch, type PiSessionListing } from "./entries.ts";
 import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
+import { piQuestion, piUiResponse } from "./extensionDialog.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
@@ -19,8 +20,6 @@ import {
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
-  type OrchestrationV2UserInputQuestion,
-  type ProviderApprovalDecision,
   type ProviderInstanceId,
   type MessageId,
   type OrchestrationV2ProviderTurnTokenUsage,
@@ -3418,61 +3417,6 @@ function piThreadSnapshot(
   providerThread: OrchestrationV2ProviderThread,
 ): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
   return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
-}
-
-function piQuestion(
-  questionId: string,
-  method: "select" | "input" | "editor",
-  title: string,
-  event: PiRpcRecord,
-): OrchestrationV2UserInputQuestion {
-  const options =
-    method === "select" && Array.isArray(event["options"])
-      ? event["options"]
-          .filter((option): option is string => typeof option === "string")
-          .map((option) => ({
-            label: option || "Empty value",
-            description: option || "Empty value",
-            value: option,
-          }))
-      : method === "editor"
-        ? []
-        : [
-            {
-              label: "Submit empty value",
-              description: "Send an empty string to the extension.",
-              value: "",
-            },
-          ];
-  // Pi's select and editor dialogs carry only a title, so show it once, as the question.
-  // Extensions may send a blank placeholder, which is not a valid question.
-  const detail = [recordString(event, "message"), recordString(event, "placeholder")].find(
-    (text) => text !== undefined && text.trim().length > 0,
-  );
-  const questionTitle = title.trim() ? title : "Question";
-  return {
-    id: questionId,
-    header: detail === undefined ? "Question" : questionTitle,
-    question: detail ?? questionTitle,
-    ...(method === "editor" ? { initialAnswer: recordString(event, "prefill") ?? "" } : {}),
-    options,
-  };
-}
-
-function piUiResponse(
-  pending: PendingPiPrompt,
-  decision: ProviderApprovalDecision | undefined,
-  answers: Record<string, unknown> | undefined,
-): PiRpcRecord {
-  if (pending.method === "confirm") {
-    if (decision === "accept" || decision === "acceptForSession") return { confirmed: true };
-    if (decision === "decline") return { confirmed: false };
-    return { cancelled: true };
-  }
-  const answer = answers?.[pending.questionId];
-  // RPC distinguishes empty dialog values from cancellation (undefined).
-  if (typeof answer === "string") return { value: answer };
-  return { cancelled: true };
 }
 
 export type PiAdapterV2DriverEnv =
