@@ -77,6 +77,7 @@ import {
 } from "@goat/provider-core/server/subagentProjection";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { isCursorSdkError } from "./sdk.ts";
+import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
   assistantTextsFromConversationSteps,
   cursorTodoSteps,
@@ -335,8 +336,8 @@ interface ActiveCursorTurn {
   readonly assistant: ActiveCursorTextStream;
   assistantReply: CursorTransportFailure;
   readonly reasoning: ActiveCursorTextStream;
-  /** The user text this run sent, before runtime instructions; absent for /compress. */
-  readonly prompt: string | undefined;
+  /** The user text this run sent, before GOAT and runtime instructions; absent for /compress. */
+  readonly prompt: CursorRunPrompt | undefined;
   interrupted: boolean;
   finalized: boolean;
   /** The agent's latest turn ended and no new work has started since. */
@@ -426,7 +427,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         // Cursor drops a cancelled run from the conversation, so the next message carries its prompt.
         const interruptedPrompt = yield* Ref.make<{
           readonly agent: string;
-          readonly text: string;
+          readonly prompt: CursorRunPrompt;
         } | null>(null);
         const warnedUnsupportedSandbox = yield* Ref.make(false);
         const activeTurn = yield* Ref.make<ActiveCursorTurn | null>(null);
@@ -1661,7 +1662,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (input.status === "interrupted" && input.context.prompt !== undefined) {
             yield* Ref.set(interruptedPrompt, {
               agent: input.context.run.agentId,
-              text: input.context.prompt,
+              prompt: input.context.prompt,
             });
           }
           yield* Ref.update(activeTurn, (current) =>
@@ -1780,33 +1781,31 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           config: McpProviderSession.McpProviderSessionConfig | undefined,
           memoryClaim: { claimed: boolean },
-          interrupted: string | undefined,
+          interrupted: CursorRunPrompt | undefined,
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
             return { message: "/compress", prompt: undefined };
           }
-          const newText = goatOrchestrationPromptForFirstRun({
-            prompt: yield* providerMessageTextWithAttachmentPaths({
-              text: yield* resolveCursorSkillText(
-                rawText,
-                turnInput.runtimePolicy.cwd ?? undefined,
-              ).pipe(
-                Effect.provideService(FileSystem.FileSystem, fileSystem),
-                Effect.provideService(Path.Path, path),
-              ),
-              attachments: turnInput.message.attachments,
-              resolveAttachmentPath: host.resolveAttachmentPath,
-              resolveExtractedTextPath: host.resolveExtractedTextPath,
-            }),
-            runOrdinal: turnInput.runOrdinal,
+          const newText = yield* providerMessageTextWithAttachmentPaths({
+            text: yield* resolveCursorSkillText(
+              rawText,
+              turnInput.runtimePolicy.cwd ?? undefined,
+            ).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+            attachments: turnInput.message.attachments,
+            resolveAttachmentPath: host.resolveAttachmentPath,
+            resolveExtractedTextPath: host.resolveExtractedTextPath,
+          });
+          const prompt = cursorRunPrompt(newText, turnInput.runOrdinal, interrupted);
+          const userText = goatOrchestrationPromptForFirstRun({
+            prompt: prompt.text,
+            runOrdinal: prompt.runOrdinal,
             hasGoatMcp: config !== undefined,
             browser: config?.browserToolsAvailable,
           });
-          const userText =
-            interrupted === undefined
-              ? newText
-              : `Your previous turn was interrupted and is missing from your history. Some of its work may already be done. Its request was:\n\n${interrupted}\n\nThe new message, which may continue or change that request:\n\n${newText}`;
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
             (attachment: ChatAttachment) =>
@@ -1885,7 +1884,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .join("\n\n");
           return {
             message: images.length === 0 ? text : ({ text, images } satisfies SDKUserMessage),
-            prompt: userText,
+            prompt,
           };
         });
 
@@ -1914,7 +1913,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const memoryClaim = { claimed: memoryToolClaims.has(agent.nativeThreadId) };
             const interrupted = yield* Ref.get(interruptedPrompt);
             const previous =
-              interrupted?.agent === agent.nativeThreadId ? interrupted.text : undefined;
+              interrupted?.agent === agent.nativeThreadId ? interrupted.prompt : undefined;
             const { message, prompt } = yield* resolveUserMessage(
               turnInput,
               mcpSession,

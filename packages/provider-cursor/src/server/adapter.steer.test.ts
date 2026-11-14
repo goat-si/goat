@@ -160,6 +160,12 @@ describe("CursorAdapterV2", () => {
         firstPrompt,
         "the interrupted prompt is missing from the run that replaces it",
       );
+      assert.equal(
+        steered.split("<t3_code_orchestration_instructions>").length,
+        2,
+        "the steer must wrap its combined request once with the instructions the cancelled run carried",
+      );
+      assert(steered.startsWith("<t3_code_orchestration_instructions>"));
 
       yield* Deferred.succeed(runEnds[1]!, "finished");
       yield* runtime.events.pipe(
