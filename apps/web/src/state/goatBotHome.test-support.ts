@@ -138,7 +138,7 @@ export function hiddenFromThreadsAtom() {
   return shells.goatBotObservationThreadKeysAtom;
 }
 
-export const key = (computer: EnvironmentId, id: string) => `${computer}:${id}`;
+const key = (computer: EnvironmentId, id: string) => `${computer}:${id}`;
 /** Computer A's Home governs: its coding thread hides, B keeps the legacy rule. */
 export const GOVERNED = [key(A, "coding"), key(B, "worker")].toSorted();
 /** dev's legacy set: each computer's worker only. */
