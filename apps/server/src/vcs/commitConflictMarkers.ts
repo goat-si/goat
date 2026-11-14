@@ -61,6 +61,14 @@ export const checkConflictMarkers = Effect.fn("GitVcsDriver.checkConflictMarkers
         appendTruncationMarker: true,
       },
     );
+    if (check.stdoutTruncated || (check.exitCode !== 0 && check.exitCode !== 2)) {
+      return yield* new GitCommandError({
+        operation: "GitVcsDriver.commit.conflictMarkers",
+        command: "git diff --check",
+        cwd,
+        detail: "Could not verify merge conflict markers.",
+      });
+    }
     const reports = check.stdout.split("\n");
     const conflicted: string[] = [];
     let topLevel: string | undefined;
