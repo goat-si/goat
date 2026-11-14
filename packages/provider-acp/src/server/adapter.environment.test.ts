@@ -77,6 +77,89 @@ it.live("runtime launches retain the environment captured at session open", () =
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
+it.live("new launches read host changes made after adapter creation", () =>
+  Effect.gen(function* () {
+    const key = "GOAT_ACP_LEGACY_LATE_VARIABLE";
+    const original = process.env[key];
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (original === undefined) delete process.env[key];
+        else process.env[key] = original;
+      }),
+    );
+    const path = yield* Path.Path;
+    const agent = yield* path.fromFileUrl(
+      new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+    );
+    const observed: Array<string> = [];
+    for (const optedIn of [false, true]) {
+      delete process.env[key];
+      const received = yield* Deferred.make<string>();
+      const instanceId = ProviderInstanceId.make(`acp-late-${optedIn}`);
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        ...(optedIn
+          ? {
+              currentEnvironment: Effect.sync(() => ({
+                ...process.env,
+                INSTANCE_VALUE: "instance",
+              })),
+            }
+          : {}),
+        clientTerminals: { environment: { INSTANCE_VALUE: "instance" }, shellCommands: true },
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ProviderDriverKind.make(`acp-late-${optedIn}`),
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: (input) =>
+            AcpSessionRuntime.make({
+              ...input,
+              spawn: {
+                command: process.execPath,
+                args: [
+                  "-e",
+                  `console.error(JSON.stringify([process.env.${key} ?? null, process.env.INSTANCE_VALUE])); import(process.argv[1])`,
+                  agent,
+                ],
+                cwd: input.cwd,
+                env: {
+                  ...(input.sessionEnvironment ?? { INSTANCE_VALUE: "instance" }),
+                  GOAT_ACP_SESSION_LIFECYCLE: "1",
+                },
+                shell: false,
+              },
+              onStderr: (text) => Deferred.succeed(received, text).pipe(Effect.asVoid),
+            }),
+        },
+      });
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const threadId = ThreadId.make(`thread-late-${optedIn}`);
+      process.env[key] = "late";
+      const session = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make(`session-${optedIn}`),
+        modelSelection,
+        runtimePolicy,
+      });
+      process.env[key] = "late";
+      yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+      observed.push((yield* Deferred.await(received)).trim());
+    }
+    assert.deepEqual(
+      observed.map((value) => JSON.parse(value)),
+      [
+        ["late", "instance"],
+        ["late", "instance"],
+      ],
+    );
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.live(
   "keeps the open environment and resolved launch on restart and refreshes them for a new session",
   () =>

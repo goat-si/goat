@@ -1120,9 +1120,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         };
         const environment =
-          options.currentEnvironment === undefined
-            ? options.clientTerminals?.environment
-            : yield* options.currentEnvironment;
+          options.currentEnvironment === undefined ? undefined : yield* options.currentEnvironment;
         const sessionEnvironment = environment === undefined ? undefined : { ...environment };
         const sessionLaunch = yield* (
           flavor.resolveSessionLaunch?.(sessionEnvironment ?? {}) ?? Effect.void
@@ -1133,7 +1131,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: sessionEnvironment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);
