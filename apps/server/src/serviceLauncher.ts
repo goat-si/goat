@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // The launcher must survive unloadable server versions; use Node built-ins without Effect.
+import { copyDatabaseFile, runCp } from "./serviceLauncherCopy.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -156,29 +157,6 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
-function runCp(args: ReadonlyArray<string>): Promise<boolean> {
-  return new Promise((resolve) => {
-    NodeChildProcess.execFile("cp", args, (error) => resolve(error === null));
-  });
-}
-
-// macOS fs.copyFile clone flags fall back to full copies.
-async function copyDatabaseFile(source: string, destination: string): Promise<void> {
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone launcher has no Effect runtime.
-  const platform = process.platform;
-  // cp -c replaces files and breaks hard links; copy into hard-linked destinations instead.
-  const hardLinked =
-    platform === "darwin" &&
-    ((await NodeFSP.stat(destination).catch(() => undefined))?.nlink ?? 1) > 1;
-  const args =
-    platform === "darwin" && !hardLinked
-      ? ["-c", source, destination]
-      : platform === "linux"
-        ? ["--reflink=auto", source, destination]
-        : undefined;
-  if (args === undefined || !(await runCp(args))) await NodeFSP.copyFile(source, destination);
-}
-
 const GIB = 1024 ** 3;
 // Cloned backups still need headroom for trial writes and migrations to diverge.
 const CLONED_BACKUP_MIN_HEADROOM_BYTES = GIB;
@@ -273,7 +251,9 @@ async function backupDatabaseOnce(
   baseDir: string,
   pending: PendingServiceUpdate,
   generation: number,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
   const backupDir = databaseBackupDir(baseDir, pending.id);
   if (await pathExists(backupDir)) return;
 
@@ -282,12 +262,14 @@ async function backupDatabaseOnce(
   await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
   try {
     for (const suffix of DB_FILE_SUFFIXES) {
+      signal.throwIfAborted();
       const source = `${pending.dbPath}${suffix}`;
       if (suffix !== "" && !(await pathExists(source))) continue;
       const destination = databaseBackupFile(stagingDir, suffix);
-      await copyDatabaseFile(source, destination);
+      await copyDatabaseFile(source, destination, signal);
       await syncFile(destination);
     }
+    signal.throwIfAborted();
     const generationPath = NodePath.join(stagingDir, OWNER_GENERATION_FILE);
     await NodeFSP.writeFile(generationPath, `${generation}\n`, { mode: 0o600 });
     await syncFile(generationPath);
@@ -521,6 +503,7 @@ export class Launcher {
   #probationTimer: NodeJS.Timeout | undefined;
   #transitions: Promise<void> = Promise.resolve();
   #stopRequested = false;
+  readonly #stopSignal = new AbortController();
   #stopping = false;
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
@@ -591,6 +574,7 @@ export class Launcher {
       return;
     }
     this.#stopRequested = true;
+    this.#stopSignal.abort();
     this.#clearTimer();
     this.#enqueue(async () => {
       // Let in-progress updates start replacements first; replacements observe the marker and own pre-activation tunnel cleanup.
@@ -688,13 +672,15 @@ export class Launcher {
       return;
     }
     try {
-      await backupDatabaseOnce(this.#baseDir, pending, lock.generation);
+      await backupDatabaseOnce(this.#baseDir, pending, lock.generation, this.#stopSignal.signal);
     } catch {
       lock.release();
+      if (this.#stopRequested) return;
       await this.#returnToPrevious(pending, "failed", "db-backup-failed");
       return;
     }
     lock.release();
+    if (this.#stopRequested) return;
     try {
       await this.#startChild(pending.targetVersion, "trial", pending);
     } catch {

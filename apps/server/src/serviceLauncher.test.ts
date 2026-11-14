@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
+import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { SERVER_EXIT_CODE_DATABASE_AHEAD, SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
@@ -174,28 +175,6 @@ const runUntilActiveExits = (root: string, statePath: string) =>
     return yield* Effect.promise(() => readServiceState(statePath));
   });
 
-const writeFakeRuntime = (
-  fs: FileSystem.FileSystem,
-  path: Path.Path,
-  versionDir: string,
-  childSource: string,
-) =>
-  Effect.gen(function* () {
-    const entryPath = path.join(versionDir, "goat");
-    yield* fs.makeDirectory(versionDir, { recursive: true });
-    // Fixtures import TypeScript, which Node 22 runs only behind this flag.
-    yield* fs.writeFileString(
-      entryPath,
-      `#!${process.execPath} --experimental-strip-types\n${childSource}`,
-    );
-    yield* fs.chmod(entryPath, 0o755);
-    yield* fs.writeFileString(
-      path.join(versionDir, ".install-complete"),
-      `${path.basename(versionDir)}\n`,
-    );
-    return entryPath;
-  });
-
 const refusalCases = [
   {
     code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
@@ -272,40 +251,6 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           EMPTY: "",
         });
       }),
-  );
-
-  it.effect("starts the runtime in a GOAT home whose name ends in a space", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-space-" });
-      const root = path.join(parent, "GOAT data ");
-      const versionDir = path.join(root, "runtime", "goat", "versions", "1.0.0");
-      yield* writeFakeRuntime(
-        fs,
-        path,
-        versionDir,
-        `import { writeFileSync } from "node:fs";
-writeFileSync(new URL("./started", import.meta.url), "");
-process.exit(0);`,
-      );
-      yield* Effect.promise(() =>
-        writeServiceState(path.join(root, "runtime", "service-state.json"), {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-        }),
-      );
-      vi.stubEnv("GOAT_HOME", root);
-      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
-      const failure = yield* Effect.promise(() =>
-        main().then(
-          () => undefined,
-          (error: unknown) => error,
-        ),
-      );
-      assert.include(String(failure), "Active child exited unexpectedly (0).");
-      assert.isTrue(yield* fs.exists(path.join(versionDir, "started")));
-    }),
   );
 
   it.effect("a fresh launcher clears a restart deferred by goat update", () =>
