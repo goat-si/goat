@@ -8,11 +8,7 @@ import { cloudSdkBackendMatches } from "./credentials.ts";
 
 export function guardedStream(run: CloudRun, mismatch: () => Error) {
   if (!cloudSdkBackendMatches()) throw mismatch();
-  const iterator = run.stream();
-  return {
-    next: () => (cloudSdkBackendMatches() ? iterator.next() : Promise.reject(mismatch())),
-    return: () => iterator.return(),
-  };
+  return run.stream();
 }
 
 export type CloudRun = Pick<Run, "id" | "agentId" | "status" | "stream" | "wait" | "createdAt">;
