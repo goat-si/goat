@@ -190,14 +190,20 @@ export const startCommand = Command.make("start", { ...sharedServerCommandFlags 
   Command.withHandler((flags) => runServerCommand(flags, { rejectRunningServer: true })),
 );
 
-export const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
+const { autoBootstrapProjectFromCwd: _autoBootstrapProjectFromCwd, ...serveCommandFlags } =
+  sharedServerCommandFlags;
+
+export const serveCommand = Command.make("serve", serveCommandFlags).pipe(
   Command.withDescription(
     "Run the GOAT server without opening a browser and print headless pairing details.",
   ),
   Command.withHandler((flags) =>
-    runServerCommand(flags, {
-      startupPresentation: "headless",
-      forceAutoBootstrapProjectFromCwd: false,
-    }),
+    runServerCommand(
+      { ...flags, autoBootstrapProjectFromCwd: Option.none() },
+      {
+        startupPresentation: "headless",
+        forceAutoBootstrapProjectFromCwd: false,
+      },
+    ),
   ),
 );
