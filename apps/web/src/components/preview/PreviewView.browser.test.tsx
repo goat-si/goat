@@ -182,6 +182,8 @@ vi.mock(import("~/browser/previewRuntime"), async (original) => ({
 vi.mock(import("~/browser/browserViewportActions"), { spy: true });
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { commitBrowserViewportChange } from "~/browser/browserViewportActions";
+import { resolveResponsiveBrowserViewportSize } from "~/browser/browserViewportLayout";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
@@ -341,6 +343,24 @@ describe("PreviewView", () => {
     } else {
       await expect.element(screen.getByTitle("PDF document")).not.toBeInTheDocument();
     }
+  });
+
+  it("sizes the first device viewport of a streamed tab to its panel", async () => {
+    setup();
+    mocks.serverTab = true;
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex;flex-direction:column;width:800px;height:600px";
+    await using screen = await render(view(), { container });
+    const canvas = screen.container.querySelector("canvas")!;
+    await expect.element(page.elementLocator(canvas)).toBeVisible();
+    const rect = canvas.closest("[data-server-browser-surface]")!.getBoundingClientRect();
+    vi.mocked(commitBrowserViewportChange).mockResolvedValueOnce(undefined);
+    await userEvent.click(screen.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Show device toolbar" }));
+    expect(commitBrowserViewportChange).toHaveBeenCalledWith(expect.anything(), {
+      _tag: "freeform",
+      ...resolveResponsiveBrowserViewportSize(rect, 1),
+    });
   });
 
   it("activates the existing scoped browser surface and refuses closed or replaced results", async () => {
