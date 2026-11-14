@@ -460,7 +460,7 @@ export const CodexDriver: ProviderDriver<
       yield* fileSystem.watch(accountKey).pipe(
         Stream.filter((event) => pathService.basename(event.path) === "auth.json"),
         Stream.debounce(Duration.millis(250)),
-        Stream.runForEach(() => snapshot.refresh),
+        Stream.runForEach(() => snapshot.refresh.pipe(Effect.ignoreCause({ log: true }))),
         Effect.catchReason("PlatformError", "NotFound", () => Effect.void),
         Effect.tapError((error) => Effect.logWarning("Codex auth watch failed", { error })),
         Effect.forkScoped({ startImmediately: true }),

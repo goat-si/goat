@@ -80,4 +80,19 @@ it.layer(layerTest)("CodexDriver auth.json watch", (it) => {
       expect((yield* Queue.takeAll(probes)).length).toBe(1);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("keeps watching auth.json after a refresh dies", () =>
+    Effect.gen(function* () {
+      const { probes, watchEnded, deliver } = yield* startAuthWatch((count) =>
+        count === 2 ? Effect.die(new Error("injected probe defect")) : Effect.void,
+      );
+      yield* deliver("auth.json");
+      yield* Queue.take(probes);
+      const outcome = yield* Effect.raceFirst(
+        Deferred.await(watchEnded).pipe(Effect.as("watch ended")),
+        deliver("auth.json").pipe(Effect.andThen(Queue.take(probes)), Effect.as("probed again")),
+      );
+      expect(outcome).toBe("probed again");
+    }).pipe(Effect.scoped),
+  );
 });
