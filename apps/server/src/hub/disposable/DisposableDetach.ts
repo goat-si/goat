@@ -49,6 +49,14 @@ const encodeConflicts = Schema.encodeSync(Conflicts);
 /** Answers that leave the revoke's own id to be sent again, as OpenCodex asks. */
 const REPEAT = new Set(["open", "not_found", "unreadable"]);
 
+/** What one pass reads once and every record shares. */
+interface PassReads {
+  /** ocx link status, for the key path of linked records. */
+  readonly status: Effect.Effect<OcxOutput | undefined>;
+  /** Whether this hub's Pen answers its member list over its control socket. */
+  readonly penAnswers: Effect.Effect<boolean>;
+}
+
 /**
  * Design section 3: a journalled purge removes the link and Child; 24 silent hours or a person's
  * force remove the link without the machine (a tombstone) and recover cleans it once it answers.
@@ -125,17 +133,17 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   });
 
   /**
-   * A failed check counts only while Pen answers for the machine: a hub cut off from its Pen would
-   * otherwise retire every linked machine after 24 hours. The wait between checks runs either way.
+   * A failed check counts only while this hub's Pen answers its member list, so a stopped Pen does
+   * not retire every linked machine after 24 hours; a key out of that list counts, as it can never
+   * answer through Pen again. A network cut with Pen's daemon up still counts. The wait between
+   * checks runs either way.
    */
   const failedCheck = Effect.fn("DisposableDetach.failedCheck")(function* (
-    row: Row,
     health: Health | undefined,
     nowMs: number,
+    reads: PassReads,
   ) {
-    const penAnswers =
-      (yield* host.route({ nodeId: row.node_id, noisePub: row.expected_noise_pub })) !== undefined;
-    return penAnswers
+    return (yield* reads.penAnswers)
       ? failed(health, nowMs)
       : { ...(health ?? { failures: 0 }), checkedAtMs: nowMs };
   });
@@ -292,7 +300,11 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
    * as one failed check, the next purge waits 30 minutes under a new id once the old one is resolved,
    * and 48 failed checks over 24 hours force the removal.
    */
-  const revokeStep = Effect.fn("DisposableDetach.revoke")(function* (row: Row, enroll: Enroll) {
+  const revokeStep = Effect.fn("DisposableDetach.revoke")(function* (
+    row: Row,
+    enroll: Enroll,
+    reads: PassReads,
+  ) {
     const before = enroll.detach ?? { step: "revoke", attempt: 0 };
     const linkId = row.link_id;
     if (linkId === null) return yield* note(row, withDetach(enroll, { ...before, step: "done" }));
@@ -369,7 +381,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             "revoke_unsettled",
           );
         // The machine did not answer the purge: one failed check.
-        const health = yield* failedCheck(row, enroll.health, nowMs);
+        const health = yield* failedCheck(enroll.health, nowMs, reads);
         const waiting = { ...enroll, health };
         if (retires(health, nowMs))
           return yield* forceStep(
@@ -505,7 +517,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   const healthStep = Effect.fn("DisposableDetach.health")(function* (
     row: Row,
     enroll: Enroll,
-    status: Effect.Effect<OcxOutput | undefined>,
+    reads: PassReads,
   ) {
     const nowMs = yield* Clock.currentTimeMillis;
     if (enroll.health !== undefined && nowMs - enroll.health.checkedAtMs < CHECK_EVERY_MS) return;
@@ -525,14 +537,14 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     });
     if (reached === "host_key_changed") return yield* hostKeyConflict(row, enroll);
     if (reached !== "ok") {
-      const health = yield* failedCheck(row, enroll.health, nowMs);
+      const health = yield* failedCheck(enroll.health, nowMs, reads);
       if (retires(health, nowMs)) return yield* forceStep(row, { ...enroll, health });
       return yield* note(row, { ...enroll, health });
     }
     const keyState =
       row.link_id === null
         ? "unknown"
-        : linkKeyState(yield* status, row.link_id, key.value.privateKeyFile);
+        : linkKeyState(yield* reads.status, row.link_id, key.value.privateKeyFile);
     const { linkKeyMoved: _moved, ...rest } = enroll;
     yield* note(row, {
       ...rest,
@@ -541,10 +553,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     });
   });
 
-  const step = Effect.fn("DisposableDetach.step")(function* (
-    row: Row,
-    status: Effect.Effect<OcxOutput | undefined>,
-  ) {
+  const step = Effect.fn("DisposableDetach.step")(function* (row: Row, reads: PassReads) {
     if (row.final_at !== null) return;
     const enroll = decodeEnroll(row.enroll_json);
     // A conflict stops the record; only a person's force goes past a changed host key.
@@ -558,7 +567,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     if (row.state === "linked")
       return forcing && enroll.detach?.stop === undefined
         ? yield* forceStep(row, enroll)
-        : yield* healthStep(row, enroll, status);
+        : yield* healthStep(row, enroll, reads);
     const detach = enroll.detach;
     // A person's force clears a stop at admission; a stop the force itself met waits for them.
     if (detach?.stop !== undefined) return;
@@ -576,20 +585,20 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       case "done":
         return yield* finish(row, enroll, "purged");
       default:
-        return yield* revokeStep(row, enroll);
+        return yield* revokeStep(row, enroll, reads);
     }
   });
 
   const advance = Effect.fn("DisposableDetach.advance")(function* (
     attachId: string,
-    status: Effect.Effect<OcxOutput | undefined>,
+    reads: PassReads,
   ) {
     const claimed = yield* Ref.modify(running, (set) =>
       set.has(attachId) ? [false, set] : [true, new Set([...set, attachId])],
     );
     if (!claimed) return;
     yield* Effect.flatMap(read(attachId), (row) =>
-      row === undefined ? Effect.void : step(row, status),
+      row === undefined ? Effect.void : step(row, reads),
     ).pipe(
       Effect.ensuring(
         Ref.update(running, (set) => new Set([...set].filter((id) => id !== attachId))),
@@ -665,11 +674,14 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const due = [...tail, ...head].slice(0, limit);
     yield* Ref.set(cursor, due.length < limit ? "" : (due.at(-1)?.attach_id ?? ""));
     // One read of the Home's links serves every linked record's key check in the pass.
-    const status = yield* Effect.cached(host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS));
+    const reads: PassReads = {
+      status: yield* Effect.cached(host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS)),
+      penAnswers: yield* Effect.cached(Effect.map(pen.members, (members) => members !== undefined)),
+    };
     yield* Effect.forEach(
       due,
       ({ attach_id }) =>
-        advance(attach_id, status).pipe(
+        advance(attach_id, reads).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Disposable machine detach step failed", Cause.squash(cause)),
           ),
