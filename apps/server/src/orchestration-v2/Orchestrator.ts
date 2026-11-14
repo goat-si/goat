@@ -5808,7 +5808,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      dispatchMode.type === "queue_after_active" &&
+      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately") &&
       (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
       latestRun.workspacePreparation?.type === "worktree" &&
       projection.thread.worktreePath === null
