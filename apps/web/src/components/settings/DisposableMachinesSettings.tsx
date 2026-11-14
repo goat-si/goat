@@ -138,8 +138,14 @@ export function DisposableMachinesSettings({
           });
     setBusy(false);
     list.refresh();
-    if (result._tag === "Failure")
-      setError(failureText(squashAtomCommandFailure(result), ACTION_FAILED[action]));
+    if (result._tag === "Failure") {
+      const failure = squashAtomCommandFailure(result);
+      setError(
+        isHubMachinesUnsupportedError(failure)
+          ? "Update GOAT on this hub to detach or release machines."
+          : failureText(failure, ACTION_FAILED[action]),
+      );
+    }
   }
   // The hub keeps an ended consent switched on and reads it as closed; only a person renews it.
   const expired = disposableConsentEnded(settings, now);
@@ -376,20 +382,24 @@ export function DisposableMachinesSettings({
                   const key = machine.attachId + ":" + action;
                   const label = ACTION_LABEL[action];
                   return (
-                    <Button
-                      key={action}
-                      size="xs"
-                      variant={confirming === key ? "destructive" : "ghost"}
-                      aria-label={`${confirming === key ? "Confirm " + label.toLowerCase() : label} ${machine.name}`}
-                      disabled={(action === "release" ? !canRelease : !canDetach) || busy}
-                      onClick={() =>
-                        confirming === key
-                          ? void endMachine(action, machine.attachId)
-                          : setConfirming(key)
-                      }
-                    >
-                      {confirming === key ? "Confirm" : label}
-                    </Button>
+                    <span key={action} className="flex items-center gap-1">
+                      {confirming === key && (
+                        <span className="text-muted-foreground">{ACTION_EFFECT[action]}</span>
+                      )}
+                      <Button
+                        size="xs"
+                        variant={confirming === key ? "destructive" : "ghost"}
+                        aria-label={`${confirming === key ? "Confirm " + label.toLowerCase() : label} ${machine.name}`}
+                        disabled={(action === "release" ? !canRelease : !canDetach) || busy}
+                        onClick={() =>
+                          confirming === key
+                            ? void endMachine(action, machine.attachId)
+                            : setConfirming(key)
+                        }
+                      >
+                        {confirming === key ? "Confirm" : label}
+                      </Button>
+                    </span>
                   );
                 })}
                 {machine.state === "invited" && (
@@ -431,6 +441,14 @@ const ACTION_FAILED: Record<MachineAction, string> = {
   force: "Could not force the detach.",
   release: "Could not release the attach.",
 };
+const ACTION_EFFECT: Record<MachineAction, string> = {
+  detach:
+    "GOAT removes its OpenCodex link and the lightweight Child; it stays in Pen and keeps its slot until pen revoke.",
+  force:
+    "GOAT removes the link without the machine and cleans the machine once it answers; it stays in Pen and keeps its slot until pen revoke.",
+  release: "Frees the slot; if the machine joined Pen after all, remove it with pen revoke.",
+};
+const REMOVABLE = new Set(["linked", "detaching", "retired"]);
 const DETACHABLE = new Set([
   "admitted",
   "attaching",
@@ -442,8 +460,11 @@ const DETACHABLE = new Set([
 ]);
 /** What a person may end on this row: detach an admitted machine, force one detaching, or free a slot Pen cannot account for. */
 const actionsOf = (machine: HubMachineStatus): ReadonlyArray<MachineAction> => {
+  // A changed host key blocks every step the machine takes part in; only a force goes on without it.
+  if (machine.class === "conflict" && REMOVABLE.has(machine.state)) return ["force"];
   if (machine.class !== "disposable") return [];
-  if (machine.state === "detaching") return ["force"];
+  // Detach again clears a stop; force removes the link without the machine.
+  if (machine.state === "detaching") return ["detach", "force"];
   if (machine.penMember && DETACHABLE.has(machine.state)) return ["detach"];
   if (!machine.penMember && machine.state === "unknown") return ["release"];
   return [];

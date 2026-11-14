@@ -239,12 +239,21 @@ it("detaches after a confirm, forces a detaching machine, and releases a slot Pe
   );
   await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
   expect(state.detach).not.toHaveBeenCalled();
+  // The confirmation says what a detach does and does not do.
+  await expect
+    .element(
+      screen.getByText(/removes its OpenCodex link and the lightweight Child; it stays in Pen/),
+    )
+    .toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
   expect(state.detach).toHaveBeenCalledWith(expect.anything(), {
     environmentId,
     input: expect.objectContaining({ attachId: "a-1" }),
   });
+  // A detaching row can be detached again, which clears a stop, or forced.
+  await expect.element(screen.getByRole("button", { name: "Detach cc-2" })).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Force detach cc-2" }));
+  await expect.element(screen.getByText(/removes the link without the machine/)).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Confirm force detach cc-2" }));
   expect(state.detach).toHaveBeenLastCalledWith(expect.anything(), {
     environmentId,
@@ -257,4 +266,23 @@ it("detaches after a confirm, forces a detaching machine, and releases a slot Pe
     environmentId,
     input: expect.objectContaining({ attachId: "a-3" }),
   });
+});
+
+it("a hub without detach says to update GOAT instead of a generic failure", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(AsyncResult.success({ machines: [row({})] }));
+  state.detach.mockResolvedValue({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Unknown request tag: hub.machines.detach")),
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
+  await expect
+    .element(screen.getByText("Update GOAT on this hub to detach or release machines."))
+    .toBeVisible();
 });
