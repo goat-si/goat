@@ -445,6 +445,7 @@ type ChatViewProps =
 const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
 const noopHeldRevert = (_targetTurnCount: number) => {};
 const noopHeldAttachment = (_attachment: ChatFileAttachment) => {};
+const ignoreComposerFocus = () => {};
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -2295,9 +2296,9 @@ export default function ChatView(props: ChatViewProps) {
   useFocusComposerOnThreadOpen(
     activeThreadRef,
     workspaceLayoutElement,
-    !embedded && !isCoarsePointer,
+    !embedded,
     terminalUiState.terminalOpen,
-    focusComposerStable,
+    isCoarsePointer ? ignoreComposerFocus : focusComposerStable,
   );
   useEffect(() => {
     if (embedded) return;
