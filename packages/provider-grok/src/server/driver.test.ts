@@ -186,7 +186,8 @@ it.layer(layerTest)("GrokDriver", (it) => {
     );
   });
 
-  it.effect(
+  // The grok fixtures are POSIX shell scripts, which Windows command resolution rejects.
+  it.effect.skipIf(windowsHost)(
     "a host PATH change while a check resolves the executable keeps that check on one install",
     () => {
       const host = { PATH: "", HOME: "/tmp" };
