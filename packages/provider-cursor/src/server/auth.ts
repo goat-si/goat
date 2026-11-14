@@ -53,6 +53,7 @@ export interface CursorAuthOptions {
   readonly apiKey?: string;
   /** The key the instance's environment holds now; it outranks the one read at creation. */
   readonly currentApiKey?: Effect.Effect<string | undefined>;
+  readonly currentBackend?: Effect.Effect<string>;
   readonly store: SdkCredentialStore;
   readonly credentialBinding?: NonNullable<ProviderAuthController["credentialBinding"]>;
   readonly verifyKey: (key: string, backendUrl: string) => Effect.Effect<void, ProviderSetupError>;
@@ -222,9 +223,11 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         Effect.forever,
         Effect.forkScoped,
       );
+      const backendUrl = yield* options.currentBackend ?? Effect.void;
       yield* Effect.tryPromise({
         try: (signal) =>
           (options.login ?? Cursor.auth.login)({
+            ...(backendUrl === undefined ? {} : { backendUrl }),
             openBrowser: false,
             store: pendingStore,
             signal,

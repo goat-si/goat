@@ -142,6 +142,11 @@ export const CursorDriver: ProviderDriver<
       enabled,
       ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
       currentApiKey: currentEnvironment.pipe(Effect.map((env) => env.CURSOR_API_KEY)),
+      currentBackend: currentEnvironment.pipe(
+        Effect.map((env) =>
+          (env.CURSOR_BACKEND_URL || "https://api2.cursor.sh").replace(/\/+$/, ""),
+        ),
+      ),
       store: credentials.store,
       verifyKey: (key, backendUrl) => {
         const checkBackend = currentEnvironment.pipe(

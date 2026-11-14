@@ -81,6 +81,19 @@ const phase = (auth: Auth, phase: ProviderAuthState["phase"], session = owner) =
   );
 
 it.layer(NodeServices.layer)("CursorAuth", (it) => {
+  it.effect("starts browser sign-in against the selected instance backend", () =>
+    Effect.gen(function* () {
+      for (const backend of ["https://instance.invalid", "https://api2.cursor.sh"]) {
+        yield* Effect.gen(function* () {
+          const harness = yield* makeHarness({ currentBackend: Effect.succeed(backend) });
+          yield* harness.auth.controller.start(owner);
+          yield* phase(harness.auth, "waiting");
+          expect(harness.loginOptions()?.backendUrl).toBe(backend);
+        }).pipe(Effect.scoped);
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("closes SDK sessions and interrupts in-flight credential work before signing out", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
