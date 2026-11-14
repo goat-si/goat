@@ -334,6 +334,8 @@ describe("timelineVisibleTurnItemsAtom", () => {
     expect(heldPerToken).toEqual(Array.from({ length: 20 }, () => true));
     // Each reader of the input touches only the replaced row, whatever the conversation's length.
     expect(readsPerToken).toEqual(Array.from({ length: 20 }, () => readsPerToken[0]));
+    // The reducer's copies must inherit the counting array, or every token would read as 0.
+    expect(readsPerToken[0]).toBeGreaterThan(0);
     expect(readsPerToken[0]).toBeLessThanOrEqual(8);
   });
 
