@@ -29,6 +29,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
   profile: PiRuntimeProfile = PI_PROFILE,
+  currentEnvironment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed(environment),
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -45,7 +46,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       }
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
-        environment,
+        environment: yield* currentEnvironment,
         mcpSession: undefined,
         extensionPath: undefined,
         ephemeral: true,

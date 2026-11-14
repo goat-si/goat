@@ -3,6 +3,7 @@ import { ProviderDriverKind, type ServerProvider } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
 import { OmoSettings } from "../omoSettings.ts";
 import { OMO_PROFILE, PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -103,7 +104,11 @@ const makePiFamilyDriver = (
       const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const host = yield* ProviderHost.ProviderHost;
       const { cwd } = host.paths;
-      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+      const hostEnvironment = yield* HostProcess.Environment;
+      const home = yield* HostProcess.HomeDirectory;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -117,10 +122,13 @@ const makePiFamilyDriver = (
       });
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
+        currentEnvironment.pipe(
+          Effect.flatMap((env) =>
+            resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+              binaryPath: effectiveConfig.binaryPath,
+              env,
+            }),
+          ),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, pathService),
@@ -147,9 +155,15 @@ const makePiFamilyDriver = (
               }),
           ),
         );
-      const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv, profile);
+      const textGeneration = yield* makePiTextGeneration(
+        effectiveConfig,
+        undefined,
+        profile,
+        currentEnvironment,
+      );
 
-      const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv, cwd, profile).pipe(
+      const checkProvider = currentEnvironment.pipe(
+        Effect.flatMap((env) => checkPiProviderStatus(effectiveConfig, env, cwd, profile)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
@@ -203,7 +217,10 @@ const makePiFamilyDriver = (
             ? snapshot.getSnapshot
             : Effect.all([
                 snapshot.getSnapshot,
-                discoverPiCommandsForCwd(effectiveConfig, processEnv, workspaceCwd, profile).pipe(
+                currentEnvironment.pipe(
+                  Effect.flatMap((env) =>
+                    discoverPiCommandsForCwd(effectiveConfig, env, workspaceCwd, profile),
+                  ),
                   Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                   Effect.mapError(
                     (cause) =>

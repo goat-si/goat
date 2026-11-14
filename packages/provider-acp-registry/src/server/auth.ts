@@ -47,6 +47,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   readonly settings: AcpRegistrySettings;
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly onChanged: (authenticated: boolean) => Effect.Effect<void>;
   readonly makeRuntime?: (
     spawn: AcpSessionRuntime.AcpSpawnInput,
@@ -68,13 +69,14 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       detail: formatFailureDetail(detail, cause),
       cause,
     });
-  const resolve = catalog
-    .resolve(options.settings, options.cwd, options.environment)
-    .pipe(
-      Effect.mapError((cause) =>
-        failure("start", "Could not prepare the selected ACP agent.", cause),
-      ),
-    );
+  const resolve = (environment: NodeJS.ProcessEnv) =>
+    catalog
+      .resolve(options.settings, options.cwd, environment)
+      .pipe(
+        Effect.mapError((cause) =>
+          failure("start", "Could not prepare the selected ACP agent.", cause),
+        ),
+      );
   const makeRuntime =
     options.makeRuntime ??
     ((spawn) =>
@@ -114,8 +116,9 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
     | undefined;
   const discoverMethods = Effect.scoped(
     Effect.gen(function* () {
+      const environment = yield* options.currentEnvironment ?? Effect.succeed(options.environment);
       const inspected = yield* catalog
-        .inspect(options.settings, options.environment)
+        .inspect(options.settings, environment)
         .pipe(
           Effect.mapError((cause) =>
             failure("methods", "Could not inspect the selected ACP agent.", cause),
@@ -126,7 +129,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       // Path overrides can change in place; cache discovery only for registry versions.
       if (inspected.version !== null && knownMethods?.version === inspected.version)
         return knownMethods.methods;
-      const resolved = yield* resolve;
+      const resolved = yield* resolve(environment);
       const runtime = yield* makeRuntime(resolved.spawn);
       const initialized = yield* runtime
         .initialize()
@@ -176,6 +179,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
     resolved: AcpRegistrySupport.ResolvedAcpRegistryAgent,
     method: Extract<AcpSchema.AuthMethod, { readonly type: "terminal" }>,
     context: ProviderAuthFlow.ProviderAuthFlowContext,
+    environment: NodeJS.ProcessEnv,
   ) {
     if (Option.isNone(pty))
       return yield* failure(
@@ -187,7 +191,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       command: resolved.spawn.command,
       args: [...resolved.spawn.args, ...(method.args ?? [])],
       cwd: options.cwd,
-      env: { ...options.environment, ...resolved.spawn.env, ...method.env },
+      env: { ...environment, ...resolved.spawn.env, ...method.env },
       context,
       failure,
     });
@@ -201,7 +205,10 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       return yield* failure("start", "Enable this provider before signing in.");
     const login = Effect.scoped(
       Effect.gen(function* () {
-        const resolved = yield* resolve;
+        const environment = yield* (
+          options.currentEnvironment ?? Effect.succeed(options.environment)
+        );
+        const resolved = yield* resolve(environment);
         const runtimeScope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(runtimeScope, Exit.void));
         const runtime = yield* makeRuntime(resolved.spawn).pipe(
@@ -245,7 +252,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
           return yield* failure("start", "The agent no longer advertises this sign-in method.");
         if (method.type === "terminal") {
           yield* Scope.close(runtimeScope, Exit.void);
-          yield* runTerminal(resolved, method, context).pipe(Effect.scoped);
+          yield* runTerminal(resolved, method, context, environment).pipe(Effect.scoped);
           // Terminal login is a separate invocation. Reconnect after it exits so
           // the ACP process reads the credentials its login command persisted.
           const verifiedRuntime = yield* makeRuntime(resolved.spawn);
@@ -293,7 +300,8 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   });
   const logout = Effect.scoped(
     Effect.gen(function* () {
-      const resolved = yield* resolve;
+      const environment = yield* options.currentEnvironment ?? Effect.succeed(options.environment);
+      const resolved = yield* resolve(environment);
       const runtime = yield* makeRuntime(resolved.spawn);
       yield* runtime.logout.pipe(
         Effect.mapError((cause) =>

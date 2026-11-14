@@ -1,6 +1,12 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,6 +22,7 @@ import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSp
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import type { PiSettings } from "../settings.ts";
 import { OmoDriver, PiDriver } from "./driver.ts";
@@ -133,6 +140,72 @@ const create = (config: Partial<PiSettings> = {}, enabled = true) =>
   });
 
 it.layer(layerTest)("PiDriver workspace discovery", (it) => {
+  it.effect(
+    "regression #3079: Pi and OmO probes use the current host PATH and respect instance PATH",
+    () =>
+      Effect.gen(function* () {
+        const host = { PATH: "/old/bin", HOME: "/fixture" };
+        const { spawner, launches } = yield* makePiSpawner();
+        for (const driver of [PiDriver, OmoDriver]) {
+          const make = (override: boolean) =>
+            driver
+              .create({
+                instanceId: ProviderInstanceId.make(`${driver.driverKind}-${override}`),
+                displayName: undefined,
+                enabled: true,
+                environment: [
+                  { name: "FIXTURE", value: "1", sensitive: false },
+                  ...(override ? [{ name: "PATH", value: "/old/bin", sensitive: false }] : []),
+                ],
+                config: driver.defaultConfig(),
+              })
+              .pipe(
+                Effect.provideService(HostProcess.Environment, host),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              );
+          host.PATH = "/old/bin";
+          const inherited = yield* make(false);
+          const overridden = yield* make(true);
+          const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/machine",
+          });
+          const sessionInput = {
+            threadId: ThreadId.make(`${driver.driverKind}-thread`),
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-session`),
+            modelSelection: { instanceId: inherited.instanceId, model: "default" },
+            runtimePolicy,
+          };
+          yield* inherited.orchestrationAdapter.openSession(sessionInput);
+          const oldLaunch = launches.at(-1);
+          assert.equal(oldLaunch?.options.env?.PATH, "/old/bin");
+          host.PATH = "/new/bin";
+          yield* inherited.orchestrationAdapter.openSession({
+            ...sessionInput,
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-new-session`),
+          });
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/new/bin");
+          assert.equal(oldLaunch?.options.env?.PATH, "/old/bin");
+          yield* inherited.snapshot.refresh;
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/new/bin");
+          yield* inherited.snapshotForCwd!("/first");
+          assert.equal(
+            launches.findLast((launch) => launch.options.cwd === "/first")?.options.env?.PATH,
+            "/new/bin",
+          );
+          yield* overridden.orchestrationAdapter.openSession({
+            ...sessionInput,
+            providerSessionId: ProviderSessionId.make(`${driver.driverKind}-override-session`),
+            modelSelection: { ...sessionInput.modelSelection, instanceId: overridden.instanceId },
+          });
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/old/bin");
+          yield* overridden.snapshot.refresh;
+          assert.equal(launches.at(-1)?.options.env?.PATH, "/old/bin");
+        }
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps each workspace's skills and commands separate from the machine catalog", () =>
     Effect.gen(function* () {
       const { spawner, launches } = yield* makePiSpawner();

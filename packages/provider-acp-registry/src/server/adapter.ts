@@ -71,6 +71,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: AcpRegistrySettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
@@ -143,18 +144,17 @@ function makeAcpRegistryRuntime(
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const { processEnvironment, ...runtimeInput } = input;
-      const resolved = yield* catalog
-        .resolve(options.settings, input.cwd, options.environment)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EffectAcpErrors.AcpSpawnError({
-                command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
-                cause,
-              }),
-          ),
-        );
+      const { processEnvironment, sessionEnvironment, ...runtimeInput } = input;
+      const environment = sessionEnvironment ?? options.environment;
+      const resolved = yield* catalog.resolve(options.settings, input.cwd, environment).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EffectAcpErrors.AcpSpawnError({
+              command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
+              cause,
+            }),
+        ),
+      );
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
@@ -206,16 +206,14 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^claude-agent-acp(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
-  const runtimeOptions = isClaude
-    ? {
-        ...options,
-        environment: {
-          ...options.environment,
-          CLAUDE_AGENT_ACP_EXPERIMENTAL_V2:
-            options.environment.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 ?? "1",
-        },
-      }
-    : options;
+  const withClaudeEnvironment = (environment: NodeJS.ProcessEnv) =>
+    isClaude
+      ? {
+          ...environment,
+          CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: environment.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 ?? "1",
+        }
+      : environment;
+  const runtimeOptions = { ...options, environment: withClaudeEnvironment(options.environment) };
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
@@ -298,6 +296,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     instanceId: options.instanceId,
     flavor,
     selfInvocation: options.selfInvocation,
+    ...(options.currentEnvironment === undefined
+      ? {}
+      : { currentEnvironment: options.currentEnvironment.pipe(Effect.map(withClaudeEnvironment)) }),
     ...(options.continuationRequests === undefined
       ? {}
       : { continuationRequests: options.continuationRequests }),
@@ -335,13 +336,17 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
   create: Effect.fn("AcpRegistryAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<AcpRegistrySettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const selfInvocation = yield* resolveSelfInvocation();
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       return yield* makeAcpRegistryAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: yield* currentEnvironment,
+        currentEnvironment,
         selfInvocation,
         continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
         nativeLogging: (threadId) =>

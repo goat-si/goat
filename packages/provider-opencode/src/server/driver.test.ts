@@ -180,6 +180,53 @@ const lazyMiseShim = {
 
 it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
   it.effect(
+    "regression #3079: a new OpenCode session uses the current host PATH and honors instance PATH",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const host = { PATH: "/old", HOME: home, XDG_DATA_HOME: home };
+        const launched: NodeJS.ProcessEnv[] = [];
+        const runtime = {
+          ...openCode2Runtime,
+          startOpenCodeServerProcess: (input: { readonly environment?: NodeJS.ProcessEnv }) =>
+            Effect.sync(() => launched.push(input.environment ?? {})).pipe(
+              Effect.andThen(reachedServer("start")),
+            ),
+        };
+        const make = (override: boolean) =>
+          OpenCodeDriver.create({
+            instanceId: ProviderInstanceId.make(override ? "path-override" : "path-inherited"),
+            displayName: undefined,
+            environment: override ? [{ name: "PATH", value: "/old", sensitive: false }] : [],
+            enabled: true,
+            config: OpenCodeDriver.defaultConfig(),
+          }).pipe(
+            Effect.provideService(HttpClient.HttpClient, noHttp),
+            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+            Effect.provideService(HostProcess.Environment, host),
+            Effect.provideService(HostProcess.HomeDirectory, home),
+            Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+          );
+        const inherited = yield* make(false);
+        const overridden = yield* make(true);
+        host.PATH = "/new";
+        yield* inherited.snapshot.refresh;
+        const open = (instance: typeof inherited) =>
+          instance.orchestrationAdapter
+            .openSession({
+              threadId: ThreadId.make("path-thread"),
+              providerSessionId: ProviderSessionId.make("path-session"),
+              modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
+              runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+            })
+            .pipe(Effect.scoped, Effect.flip);
+        yield* open(inherited);
+        assert.strictEqual(launched.at(-1)?.PATH, "/new");
+        yield* open(overridden);
+        assert.strictEqual(launched.at(-1)?.PATH, "/old");
+      }).pipe(Effect.scoped),
+  );
+  it.effect(
     "refreshes the probe environment after the host PATH changes while preserving instance overrides",
     () =>
       Effect.gen(function* () {

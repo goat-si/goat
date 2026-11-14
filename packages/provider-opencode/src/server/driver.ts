@@ -241,9 +241,9 @@ export const OpenCodeDriver: ProviderDriver<
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
     const hostEnvironment = yield* HostProcess.Environment;
-    const currentEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment).pipe(
-      Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
-    );
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
     const processEnv = yield* currentEnvironment;
     const probeEnvironment = currentEnvironment.pipe(Effect.map(providerProbeEnvironment));
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -349,6 +349,7 @@ export const OpenCodeDriver: ProviderDriver<
       serverPassword: effectiveConfig.serverPassword,
       directory: host.paths.cwd,
       environment: processEnv,
+      currentEnvironment,
     }).pipe(
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       Effect.provideService(
@@ -440,6 +441,7 @@ export const OpenCodeDriver: ProviderDriver<
       directory: host.paths.cwd,
       ...(effectiveConfig.serverPassword ? { serverPassword: effectiveConfig.serverPassword } : {}),
       environment: processEnv,
+      currentEnvironment,
     });
     const probeServerOwner = yield* OpenCodeServerOwner.make({
       binaryPath: effectiveConfig.binaryPath,
@@ -453,6 +455,7 @@ export const OpenCodeDriver: ProviderDriver<
       resolveRuntime,
       yield* makeOpenCodeTextGeneration(effectiveConfig, {
         environment: processEnv,
+        currentEnvironment,
         memoryRunnerContext: {
           providerInstanceId: instanceId,
           ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
@@ -467,11 +470,14 @@ export const OpenCodeDriver: ProviderDriver<
       }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server)),
     );
 
-    const checkUsageLimits = readOpenCodeGoUsageLimits({
-      enabled: effectiveConfig.enabled,
-      serverUrl: effectiveConfig.serverUrl,
-      environment: processEnv,
-    }).pipe(
+    const checkUsageLimits = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        readOpenCodeGoUsageLimits({
+          enabled: effectiveConfig.enabled,
+          serverUrl: effectiveConfig.serverUrl,
+          environment,
+        }),
+      ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
       Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -539,7 +545,7 @@ export const OpenCodeDriver: ProviderDriver<
                 ...(effectiveConfig.serverPassword
                   ? { serverPassword: effectiveConfig.serverPassword }
                   : {}),
-                environment: processEnv,
+                environment: yield* currentEnvironment,
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
