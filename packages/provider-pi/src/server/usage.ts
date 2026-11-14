@@ -154,7 +154,7 @@ const makeUsageReader = (
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;
     const platform = yield* HostProcess.Platform;
-    const launchHome = piHome(environment, home, platform);
+    const launchHome = (platform === "win32" ? environment.USERPROFILE : environment.HOME) || home;
     const sessionDirArg = config === undefined ? undefined : piLaunchSessionDir(config.launchArgs);
     const launchDir =
       sessionDirArg === undefined ? undefined : expandHomePath(sessionDirArg, launchHome);
@@ -187,7 +187,7 @@ const makeUsageReader = (
       {
         dir:
           profile.driver === "pi"
-            ? resolvePiSessionsDir(environment, launchHome, path)
+            ? resolvePiSessionsDir(environment, home, path)
             : resolveOmoSessionsDir(environment, launchHome, path, settingsSessionDir),
       },
     ];
@@ -208,15 +208,6 @@ function piLaunchSessionDir(launchArgs: string): string | undefined {
     if (arg === "--session-dir") sessionDir = resolved.args[index] || undefined;
   }
   return sessionDir;
-}
-
-/** The home Pi resolves `~` against: the instance's HOME (USERPROFILE on Windows), else the host's. */
-export function piHome(
-  environment: NodeJS.ProcessEnv,
-  hostHome: string,
-  platform: NodeJS.Platform,
-): string {
-  return (platform === "win32" ? environment.USERPROFILE : environment.HOME) || hostHome;
 }
 
 /** Where Pi stores session JSONL files for a provider environment, matching Pi's own lookup. */
