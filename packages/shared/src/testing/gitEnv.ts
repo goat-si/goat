@@ -1,5 +1,3 @@
-import * as NodeOS from "node:os";
-
 /**
  * Git hooks, `git rebase --exec` and `git bisect run` export GIT_DIR, GIT_INDEX_FILE and friends
  * for the checkout that started them. A git child that inherits them ignores its cwd: `git init`
@@ -24,7 +22,7 @@ export const isolatedGitEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   const isolated = { ...env };
   for (const name of Object.keys(isolated)) {
     const safeIsolation =
-      (name === "GIT_CONFIG_GLOBAL" && isolated[name] === NodeOS.devNull) ||
+      (name === "GIT_CONFIG_GLOBAL" && isolated[name] === "/dev/null") ||
       (name === "GIT_CONFIG_NOSYSTEM" && isolated[name] === "1");
     if (isGitEnvName(name) && !TEST_GIT_CONFIG_NAME.test(name) && !safeIsolation)
       delete isolated[name];
