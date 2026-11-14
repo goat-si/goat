@@ -316,10 +316,13 @@ export const AntigravityDriver: ProviderDriver<
         ...runtime,
         getEvents: () =>
           runtime.getEvents().pipe(
+            // Only the two catalog events read their session's profile; deltas pass untouched.
             Stream.tap((event) =>
-              Effect.sync(() => {
-                eventProfiles.set(event, userHome);
-              }),
+              event._tag === "ConfigOptionsUpdated" || event._tag === "AvailableCommandsUpdated"
+                ? Effect.sync(() => {
+                    eventProfiles.set(event, userHome);
+                  })
+                : Effect.void,
             ),
           ),
         ...(executable.harnessPath === null
