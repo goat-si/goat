@@ -26,6 +26,7 @@ export function useGoatBotFollow({
   listRef,
   followingRef,
   lastScrollTopRef,
+  onExposure,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly baselineIds: ReadonlySet<string> | null | undefined;
@@ -36,6 +37,7 @@ export function useGoatBotFollow({
   readonly listRef: RefObject<HTMLOListElement | null>;
   readonly followingRef: RefObject<boolean>;
   readonly lastScrollTopRef: RefObject<number>;
+  readonly onExposure?: ((rows: ReadonlyArray<GoatBotRow>) => void) | undefined;
 }) {
   const [membership, setMembership] = useState(() => ({
     rows,
@@ -165,6 +167,7 @@ export function useGoatBotFollow({
       }
     }
     if (!initialized.current || baselineIds === null) return;
+    onExposure?.(rows);
     if (baselineIds !== undefined && sourceIds !== undefined) {
       for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.add(id);
     }

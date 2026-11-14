@@ -1,4 +1,4 @@
-import { goatBotActivity } from "@goat/client-runtime/goatBot";
+import { goatBotActivity, type GoatBotRow } from "@goat/client-runtime/goatBot";
 import { useContext, useEffect, useState } from "react";
 
 import { useGoatBotName } from "./goatBotMemberContext";
@@ -14,8 +14,13 @@ const READING = goatBotActivity({ reading: true, task: null, worker: null });
  */
 export function GoatBotActivityStatus({
   replyingSince,
+  announcement = null,
 }: {
   readonly replyingSince: string | null;
+  readonly announcement?: {
+    readonly sequence: number;
+    readonly row: Extract<GoatBotRow, { kind: "bot" }>;
+  } | null;
 }) {
   const botName = useGoatBotName();
   const working = useContext(GoatBotActivityContext);
@@ -54,9 +59,35 @@ export function GoatBotActivityStatus({
           : activity.wait === "usage_limit"
             ? `${botName} is paused on a usage limit`
             : `${botName} is working`;
+  const [reply, setReply] = useState<{
+    sequence: number;
+    toggle: boolean;
+    activity: string;
+    clause: string;
+  } | null>(null);
+  if (announcement !== null && announcement.sequence !== reply?.sequence) {
+    const toggle = !(reply?.toggle ?? false);
+    const row = announcement.row;
+    const clause =
+      row.tone === "question"
+        ? toggle
+          ? `${botName} asked a question.`
+          : `New question from ${botName}.`
+        : row.proactive
+          ? toggle
+            ? `${botName} posted an update.`
+            : `New update from ${botName}.`
+          : toggle
+            ? `${botName} replied.`
+            : `New reply from ${botName}.`;
+    setReply({ sequence: announcement.sequence, toggle, activity: text, clause });
+  } else if (reply !== null && reply.activity !== text && reply.clause !== "") {
+    setReply({ ...reply, activity: text, clause: "" });
+  }
+  const output = reply?.clause ? [text, reply.clause].filter(Boolean).join(". ") : text;
   return (
     <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-      {painted ? text : ""}
+      {painted ? output : ""}
     </span>
   );
 }

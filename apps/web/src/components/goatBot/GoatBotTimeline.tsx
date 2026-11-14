@@ -96,12 +96,14 @@ export function GoatBotTimeline({
   sourceIds,
   submissions = NO_SUBMISSIONS,
   committedSends,
+  onExposure,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly baselineIds?: ReadonlySet<string> | null | undefined;
   readonly sourceIds?: ReadonlySet<string> | undefined;
   readonly submissions?: ReadonlyArray<GoatBotLocalSubmission> | undefined;
   readonly committedSends?: ReadonlyMap<string, string> | undefined;
+  readonly onExposure?: ((rows: ReadonlyArray<GoatBotRow>) => void) | undefined;
   /** When the person last read this chat, read once at open; newer rows get a "New" divider. */
   readonly unreadSince?: string | null | undefined;
   readonly taskDetails?: boolean;
@@ -170,6 +172,7 @@ export function GoatBotTimeline({
     sourceIds,
     submissions,
     committedSends,
+    onExposure,
     scrollRef,
     listRef,
     followingRef,

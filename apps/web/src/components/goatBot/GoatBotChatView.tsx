@@ -51,6 +51,7 @@ import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
+import { useGoatBotReplyAnnouncement } from "./useGoatBotReplyAnnouncement";
 import { useGoatBotReading } from "./useGoatBotFace";
 import {
   buildGoatBotQuote,
@@ -257,6 +258,7 @@ function GoatBotChatViewContent({
       ? lastSource.identity
       : null) ??
     botIdentity;
+  const { announcement, onExposure } = useGoatBotReplyAnnouncement(timelineIdentity, source);
   const [local, setLocal] = useState<{
     identity: string;
     submissions: ReadonlyArray<GoatBotLocalSubmission>;
@@ -481,6 +483,7 @@ function GoatBotChatViewContent({
             <GoatBotActivityStatus
               key={timelineIdentity}
               replyingSince={removed ? null : replyingSince}
+              announcement={announcement}
             />
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null}>
@@ -492,6 +495,7 @@ function GoatBotChatViewContent({
                     rows={rows}
                     baselineIds={source.baselineIds}
                     sourceIds={source.sourceIds}
+                    onExposure={onExposure}
                     committedSends={source.committedSends}
                     submissions={local.identity === timelineIdentity ? local.submissions : []}
                     unreadSince={unreadSince}
