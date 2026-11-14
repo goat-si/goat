@@ -10,6 +10,9 @@ export function launchEnvironment(environment: NodeJS.ProcessEnv = {}, cwd?: str
     resolved[key] = value
       .split(NodePath.delimiter)
       .map((entry) => {
+        // On POSIX an empty entry (leading, trailing or doubled separator) is the current directory.
+        if (entry === "" && NodePath.delimiter === ":")
+          return NodePath.resolve(cwd ?? process.cwd());
         const unquoted = entry.trim().replace(/^"|"$/gu, "");
         return unquoted.length === 0 || NodePath.isAbsolute(unquoted)
           ? entry

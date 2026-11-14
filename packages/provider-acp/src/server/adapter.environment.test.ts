@@ -12,6 +12,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath } from "@goat/shared/shell";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -415,4 +416,74 @@ it.live("resolves relative PATH from the workspace and launches with the session
     });
     assert.deepEqual({ resolved, launchPaths }, { resolved: [executable], launchPaths: ["bin"] });
   }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+// Windows ignores empty PATH entries; on POSIX an empty entry names the current directory.
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "an empty PATH entry finds the session's own executable before a later directory",
+  () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-acp-empty-"))),
+        (directory) =>
+          Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+      );
+      const workspace = NodePath.join(root, "workspace");
+      const bin = NodePath.join(root, "bin");
+      for (const directory of [workspace, bin]) {
+        NodeFS.mkdirSync(directory);
+        NodeFS.writeFileSync(NodePath.join(directory, "goat-acp-test-command"), "#!/bin/sh\n", {
+          mode: 0o755,
+        });
+      }
+      const instanceId = ProviderInstanceId.make("acp-empty-path");
+      const path = yield* Path.Path;
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+        mockAgentPath: yield* path.fromFileUrl(
+          new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+        ),
+      });
+      const resolved: Array<unknown> = [];
+      const launchPaths: Array<string | undefined> = [];
+      for (const sessionPath of [`:${bin}`, `${bin}:`, `/nonexistent::${bin}`]) {
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          currentEnvironment: Effect.succeed({ ...process.env, PATH: sessionPath }),
+          selfInvocation: yield* resolveSelfInvocation(),
+          flavor: {
+            driver: ProviderDriverKind.make("acp-empty-path"),
+            capabilities: AcpProviderCapabilitiesV2,
+            resolveSessionLaunch: (environment, sessionEnvironment) => {
+              launchPaths.push(sessionEnvironment?.PATH);
+              return resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
+                Effect.provide(NodeServices.layer),
+              );
+            },
+            makeRuntime: (input) => {
+              resolved.push(input.sessionLaunch);
+              return makeRuntime(input);
+            },
+          },
+        });
+        yield* adapter.openSession({
+          threadId: ThreadId.make("thread-empty-path"),
+          providerSessionId: ProviderSessionId.make("empty-path"),
+          modelSelection: { instanceId, model: "default" },
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: workspace,
+          }),
+        });
+      }
+      const own = NodePath.join(workspace, "goat-acp-test-command");
+      assert.deepEqual(
+        { resolved, launchPaths },
+        {
+          resolved: [own, NodePath.join(bin, "goat-acp-test-command"), own],
+          launchPaths: [`:${bin}`, `${bin}:`, `/nonexistent::${bin}`],
+        },
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
 );
