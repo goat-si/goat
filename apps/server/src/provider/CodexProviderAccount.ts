@@ -66,11 +66,10 @@ export function routesAwayFromOpenAi(effectiveBaseUrl: string | undefined): bool
   );
 }
 
-export function accountProbeStatus({
-  account,
-  rateLimits,
-  effectiveBaseUrl,
-}: CodexAppServerProviderSnapshot): {
+export function accountProbeStatus(
+  { account, rateLimits, effectiveBaseUrl }: CodexAppServerProviderSnapshot,
+  codexHome?: string,
+): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
@@ -98,7 +97,9 @@ export function accountProbeStatus({
     return {
       status: "error",
       auth: { status: "unauthenticated" },
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: codexHome
+        ? `Codex CLI is not authenticated. Run \`codex login\` with CODEX_HOME set to ${JSON.stringify(codexHome)} and try again.`
+        : "Codex CLI is not authenticated. Run `codex login` and try again.",
     };
   }
 

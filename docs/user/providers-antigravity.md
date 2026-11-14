@@ -54,6 +54,8 @@ account.
 Managed installation supports Apple Silicon macOS, Linux x64 or ARM64, and Windows
 x64 or ARM64. Intel Macs can connect to a supported remote environment. Allow
 several GB of free disk space, especially on Linux.
+On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
+does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.
 
 ### Use a manual installation
 

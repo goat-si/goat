@@ -728,8 +728,7 @@ it.effect("rejects SSH launch attachment arrays above eight through MCP decoding
         })),
       })
       .pipe(Effect.flip, Effect.provide(f.layer));
-    // Like core.test.ts, invalid schema parameters fail callTool with InvalidParams.
-    // The MCP protocol encodes this RPC error; it is not a returned tool isError payload.
+    // Invalid parameters fail callTool with an InvalidParams RPC error, not an isError payload.
     expect(error._tag).toBe("InvalidParams");
     f.assertNoDispatch();
   }),
@@ -1273,6 +1272,7 @@ const runtimeFixture = (
                 }),
             }),
             Layer.mock(HubNodes.HubNodes)({
+              disposableRoute: () => Effect.sync(() => undefined),
               add: (input, options) =>
                 options.beforeSave.pipe(
                   Effect.andThen(

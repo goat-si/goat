@@ -81,6 +81,7 @@ import {
 } from "./SshHostAuthorization.ts";
 import * as Dispatch from "./SshRemoteDispatch.ts";
 import { errorResult, setupFailure } from "./sshHostResults.ts";
+import { makeRefuseDisposable } from "./disposablePreflight.ts";
 import {
   managedAliasRevision,
   type SshAliasListener,
@@ -189,6 +190,7 @@ export const make = (
     const threads = yield* Threads.ThreadManagementService;
     const authorizePrepare = yield* PrepareAuthorization.make;
     const environment = yield* Environment.ServerEnvironment;
+    const refuseDisposable = yield* makeRefuseDisposable;
     const diagnosis = yield* Diagnosis.ProviderDiagnosisRouting;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -563,9 +565,11 @@ export const make = (
           ...(resolved.host ? { alias: resolved.host } : {}),
         }).pipe(Effect.provide(runtime), Effect.provide(FetchHttpClient.layer));
         // Lets Settings offer Forget host for a pinned alias that never became a connection.
-        return resolved.managed && report.destination.alias === resolved.host
-          ? { ...report, destination: { ...report.destination, managed: true as const } }
-          : report;
+        return yield* refuseDisposable(
+          resolved.managed && report.destination.alias === resolved.host
+            ? { ...report, destination: { ...report.destination, managed: true as const } }
+            : report,
+        );
       }).pipe(
         Effect.mapError((cause) =>
           isAuthorizationError(cause) || isProbeError(cause)

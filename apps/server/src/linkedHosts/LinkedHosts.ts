@@ -28,6 +28,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
+import { DisposableRouteGuard } from "../hub/disposable/DisposableRouteGuard.ts";
 
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
@@ -193,6 +194,7 @@ export class LinkedHosts extends Context.Service<
 
 const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const routeGuard = yield* DisposableRouteGuard;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const lock = yield* Semaphore.make(1);
@@ -288,6 +290,12 @@ const make = Effect.gen(function* () {
         ExecutionEnvironmentDescriptor,
         "its environment descriptor",
       )(descriptorResponse.body);
+      // A disposable machine's GOAT is never linked (design section 6): refused before anything is spent.
+      const refused = yield* routeGuard.refusal(
+        { environmentId: descriptor.environmentId },
+        target.baseUrl,
+      );
+      if (refused !== undefined) return yield* fail("invalid_request", refused);
 
       const registered = yield* send(
         HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
