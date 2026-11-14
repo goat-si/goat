@@ -356,3 +356,50 @@ it("returns a relaunched app to the Connections section of the flow it left", as
     expect(peekConnectFlowResume()).toBeNull();
   }
 });
+
+const environmentRow = (id: string, label: string): EnvironmentRow => ({
+  environmentId: EnvironmentId.make(id),
+  label,
+  entry: { enabled: true },
+});
+
+it("Create link's advice for another environment says its link gets Standard permissions, whatever is chosen here", async () => {
+  const actions = setup();
+  mocks.environments = [
+    environmentRow("primary", "Desk PC"),
+    environmentRow("withgame", "Withgame box"),
+  ];
+  await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+  await page.getByRole("button", { name: "Create link" }).click();
+  await dialog().getByRole("button", { name: "Read only" }).click();
+  const advice = dialog().getByText(/also shows Withgame box/);
+  await expect.element(advice).toHaveTextContent(/run goat pair on the machine that runs it/);
+  await expect
+    .element(advice)
+    .toHaveTextContent(/Standard permissions, whatever you choose here, unless you add --scope/);
+  await expect.element(advice).not.toHaveTextContent(/goat auth pairing create/);
+});
+
+it("Create link keeps a long environment name and many environments inside a 390 px dialog", async () => {
+  const actions = setup();
+  const unbroken = "x".repeat(80);
+  mocks.environments = [
+    environmentRow("primary", unbroken),
+    ...Array.from({ length: 12 }, (_, index) =>
+      environmentRow("env-" + index, "Box " + (index + 1)),
+    ),
+  ];
+  await page.viewport(390, 844);
+  try {
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    const description = dialog().getByText(/as an authorized client/);
+    await expect
+      .element(description)
+      .toHaveTextContent(/also shows Box 1, Box 2, Box 3, and 9 more,/);
+    const element = description.element();
+    expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
+  } finally {
+    await page.viewport(1280, 720);
+  }
+});
