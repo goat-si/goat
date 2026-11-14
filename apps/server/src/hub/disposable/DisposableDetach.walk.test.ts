@@ -16,7 +16,9 @@ import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.
 import { decodeEnroll } from "./enrollModel.ts";
 
 // Every detach stop, reached and then left by doing what its own text tells a person to do.
-// A stop whose way out lies outside GOAT names it here: none does.
+// A stop whose way out lies outside GOAT names it here: none does. link_foreign without a force
+// needs an unsettled entry with no reserved id, which v2.100.3 never journals; its force ends it
+// (the alias-sharing test below).
 
 const stopOf = (attachId: string) =>
   Effect.map(rows, (all) => {
@@ -148,6 +150,36 @@ it.effect(
         expect(yield* stopOf(attachId)).toBe("revoke_unsettled");
         resolved(ocx.revokes.get(purge1(attachId)));
         yield* detach(PERSON, attachId, "d-3");
+        yield* settle(attachId);
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
+
+it.effect(
+  "a retirement force that stopped on a linked row: the person recovers or forgets cleanups and detaches it, and the removal goes on",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "unreachable");
+        ocx.machineAnswers = false;
+        ocx.tombstoneLimit = true;
+        yield* detachPass;
+        for (let check = 0; check < 48; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
+        expect((yield* listed(attachId))?.nextAction).toContain("detaches it");
+        ocx.tombstoneLimit = false;
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        expect(yield* stopOf(attachId)).toBeUndefined();
+        expect(ocx.tombstones.size).toBe(1);
+        ocx.machineAnswers = true;
+        host.control.reachAnswers.delete(nodeId);
         yield* settle(attachId);
         expect((yield* listed(attachId))?.state).toBe("purged");
       }),
