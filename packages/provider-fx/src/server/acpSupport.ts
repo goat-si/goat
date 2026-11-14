@@ -230,6 +230,7 @@ export const makeFxAcpRuntime = Effect.fn("makeFxAcpRuntime")(function* (
         args: ["acp"],
         cwd: input.cwd,
         env: { ...environment },
+        extendEnv: false,
       },
       cancelBehavior: FX_ACP_CANCEL_BEHAVIOR,
     }),

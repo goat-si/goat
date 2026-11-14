@@ -1,3 +1,5 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveCommandPath } from "@goat/shared/shell";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 import { type OrchestrationV2ProviderCapabilities } from "@goat/contracts";
@@ -170,24 +172,37 @@ export interface FxAdapterV2Options {
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
 }
 
+interface FxSessionLaunch {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly executable: string;
+}
+
 function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor {
   const makeRuntime =
     options.makeRuntime ??
-    (({ runtimePolicy: _runtimePolicy, processEnvironment, ...input }: AcpAdapterV2RuntimeInput) =>
-      Effect.gen(function* () {
-        const environment = yield* (
-          options.currentEnvironment ?? Effect.succeed(options.environment)
-        );
-        return yield* makeFxAcpRuntime({
-          ...input,
-          fxSettings: options.settings,
-          environment: { ...environment, ...processEnvironment },
-        });
-      }));
+    (({
+      runtimePolicy: _runtimePolicy,
+      processEnvironment,
+      ...input
+    }: AcpAdapterV2RuntimeInput) => {
+      const launch = input.sessionLaunch as FxSessionLaunch;
+      return makeFxAcpRuntime({
+        ...input,
+        fxSettings: { ...options.settings, binaryPath: launch.executable },
+        environment: { ...launch.environment, ...processEnvironment },
+      });
+    });
   return {
     driver: FX_DRIVER_KIND,
     runtimeHarness: "fx",
     capabilities: FxProviderCapabilitiesV2,
+    resolveSessionLaunch: Effect.fn("FxAdapter.resolveSessionLaunch")(function* (environment) {
+      const command = options.settings.binaryPath || "fx";
+      const executable = yield* resolveCommandPath(command, { env: environment }).pipe(
+        Effect.provide(NodeServices.layer),
+      );
+      return { environment, executable: executable ?? command };
+    }),
     makeRuntime: (input) => makeRuntime(input).pipe(Effect.map(withFxSessionMode)),
     applyModelSelection: ({ runtime, modelSelection }) =>
       applyFxModelSelection(runtime, modelSelection, options.defaultModel).pipe(
@@ -207,6 +222,7 @@ export const makeFxAdapterV2 = Effect.fn("makeFxAdapterV2")(function* (
     instanceId: options.instanceId,
     flavor: makeFxAcpAdapterFlavor(options),
     selfInvocation: options.selfInvocation,
+    currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
   });
