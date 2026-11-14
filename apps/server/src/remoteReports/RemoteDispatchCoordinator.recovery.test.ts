@@ -1,8 +1,21 @@
 import * as AutomationHold from "../automationHold.ts";
 import { assert, it } from "@effect/vitest";
-import { RunId, ThreadId } from "@goat/contracts";
+import { ChannelChildWorkId, ChannelTaskId, RunId, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as ChildStore from "../channels/channelChildWorkStore.ts";
+import * as Inbox from "./RemoteReportInbox.ts";
+import {
+  fixture as reportFixture,
+  database as reportDatabase,
+  origin as reportOrigin,
+  remote as reportRemote,
+  runId as reportRun,
+  report as makeReport,
+  answer as reportAnswer,
+} from "./RemoteDispatchCoordinator.testkit.ts";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -476,4 +489,77 @@ it.effect.each(["refusal", "malformed"] as const)(
         assert.lengthOf(f.notices, 0);
       }).pipe(Effect.provide(f.dependencies));
     }).pipe(Effect.provide(database)),
+);
+
+it.effect("a revived launch delivers its report once while its channel child remains failed", () =>
+  Effect.gen(function* () {
+    const f = yield* reportFixture;
+    const childId = ChannelChildWorkId.make("revived-child");
+    const taskId = ChannelTaskId.make("revived-task");
+    const correlation = "channel-child-remote:revived";
+    const child = {
+      childWorkId: childId,
+      ownerId: "owner",
+      taskId,
+      generation: 1,
+      surface: "ssh_thread_launch" as const,
+      callerThreadId: reportOrigin,
+      requestKey: "request",
+      promptDigest: "digest",
+      state: "failed" as const,
+      destination: { correlationId: correlation, host: "box" },
+      createdAt: "1969-12-31T22:00:00.000Z",
+      updatedAt: "1969-12-31T23:00:00.000Z",
+    };
+    yield* f.sql`CREATE TABLE channel_runtime_state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)`;
+    yield* f.sql`INSERT INTO channel_runtime_state (key, value_json, updated_at) VALUES (${`child-work:${taskId}:${childId}`}, ${JSON.stringify(child)}, ${child.updatedAt})`;
+    yield* f.sql`INSERT INTO remote_dispatches (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, end_reason, ended_at, created_at, updated_at)
+      VALUES (${correlation}, 'thread', ${reportOrigin}, 'box', ${"4".repeat(64)}, 'next_turn', 'lost', 'host_unreachable', '1969-12-31T23:00:00.000Z', '1969-12-31T22:00:00.000Z', '1969-12-31T23:00:00.000Z')`;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const resolving = yield* Effect.forkChild(c.resolveLostLaunches);
+      const resolveCall = yield* Queue.take(f.calls);
+      assert.equal(resolveCall.call.tool, "goat_origin_resolve_binding");
+      yield* Queue.offer(
+        resolveCall.reply,
+        Effect.succeed({
+          _tag: "bound",
+          threadId: reportRemote,
+          originThreadId: reportOrigin,
+          threadExists: true,
+          threadDeleted: false,
+          activeRunId: reportRun,
+        }),
+      );
+      yield* Fiber.join(resolving);
+      const first = yield* Queue.take(f.calls);
+      assert.equal(first.call.tool, "goat_origin_reports_wait");
+      yield* Queue.offer(
+        first.reply,
+        Effect.succeed(reportAnswer([makeReport(1, "completed")], "completed", true)),
+      );
+      yield* Queue.take(f.commits);
+      const second = yield* Queue.take(f.calls);
+      yield* Queue.offer(
+        second.reply,
+        Effect.succeed(reportAnswer([makeReport(1, "completed")], "completed")),
+      );
+      yield* Queue.take(f.commits);
+      const inbox = yield* f.sql<{
+        text: string;
+      }>`SELECT text FROM remote_report_inbox WHERE correlation_id = ${correlation}`;
+      assert.lengthOf(inbox, 1);
+      assert.include(inbox[0]!.text, "report-1");
+      const originInbox = yield* Inbox.RemoteReportInbox;
+      const pending = yield* originInbox.pending(reportOrigin);
+      assert.lengthOf(pending.texts, 1);
+      assert.include(pending.texts[0]!, "report-1");
+      assert.isNotNull(pending.throughId);
+      yield* originInbox.consume(reportOrigin, pending.throughId!);
+      assert.lengthOf((yield* originInbox.pending(reportOrigin)).texts, 0);
+      assert.equal((yield* c.get(correlation))?.reportCursor, 1);
+      const stored = yield* ChildStore.ChannelChildWorkStore;
+      assert.equal((yield* stored.get(taskId, childId))?.state, "failed");
+    }).pipe(Effect.provide(Layer.mergeAll(f.layer, ChildStore.layer, Inbox.layer)));
+  }).pipe(Effect.provide(reportDatabase)),
 );
