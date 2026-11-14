@@ -770,4 +770,231 @@ describe("makeManagedServerProvider", () => {
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
+
+  it.effect("masks a committed snapshot when its probe scope no longer matches", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const current = yield* Ref.make("A");
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const count = yield* Ref.make(0);
+        const scopes = new WeakMap<ServerProvider, string>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          currentScope: Ref.get(current),
+          probeScope: (draft) => scopes.get(draft),
+          checkProvider: Effect.gen(function* () {
+            const scope = yield* Ref.get(current);
+            const n = yield* Ref.updateAndGet(count, (x) => x + 1);
+            if (n > 1) {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+            }
+            const draft = { ...refreshedSnapshot };
+            scopes.set(draft, scope);
+            return draft;
+          }),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        yield* Ref.set(current, "B");
+        const masked = yield* provider.getSnapshot;
+        assert.strictEqual(masked.auth.status, "unknown");
+        assert.strictEqual(masked.usageLimits, undefined);
+        yield* Deferred.await(started);
+        yield* Deferred.succeed(release, undefined);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("does not retain usage across probe scopes and ignores stale session updates", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let current = "A";
+        const scopes = new WeakMap<ServerProvider, string>();
+        const limits = {
+          checkedAt: "2026-04-10T00:00:01.000Z",
+          windows: [{ id: "primary", kind: "session" as const, label: "Session", usedPercent: 10 }],
+        };
+        const failed = {
+          checkedAt: "2026-04-10T00:00:02.000Z",
+          windows: [],
+          unavailable: { reason: "probeFailed" as const },
+        };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          currentScope: Effect.sync(() => current),
+          probeScope: (draft) => scopes.get(draft),
+          checkProvider: Effect.sync(() => {
+            const draft = { ...refreshedSnapshot, usageLimits: current === "A" ? limits : failed };
+            scopes.set(draft, current);
+            return draft;
+          }),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        current = "B";
+        const next = yield* provider.refresh;
+        assert.deepStrictEqual(next.usageLimits, failed);
+        const update = {
+          checkedAt: "2026-04-10T00:00:03.000Z",
+          windows: [{ id: "primary", kind: "session" as const, label: "Session", usedPercent: 50 }],
+        };
+        yield* provider.applyUsageLimits(update, "A");
+        assert.deepStrictEqual((yield* provider.getSnapshot).usageLimits, failed);
+        yield* provider.applyUsageLimits(update, "B");
+        assert.strictEqual((yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent, 50);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("refreshes the newest scope after the current scope changes during a probe", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const current = yield* Ref.make("A");
+        const startedB = yield* Deferred.make<void>();
+        const releaseB = yield* Deferred.make<void>();
+        const startedC = yield* Deferred.make<void>();
+        const scopes = new WeakMap<ServerProvider, string>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          currentScope: Ref.get(current),
+          probeScope: (draft) => scopes.get(draft),
+          checkProvider: Effect.gen(function* () {
+            const scope = yield* Ref.get(current);
+            if (scope === "B") {
+              yield* Deferred.succeed(startedB, undefined);
+              yield* Deferred.await(releaseB);
+            }
+            if (scope === "C") yield* Deferred.succeed(startedC, undefined);
+            const draft = { ...refreshedSnapshot, message: scope };
+            scopes.set(draft, scope);
+            return draft;
+          }),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        yield* Ref.set(current, "B");
+        assert.strictEqual((yield* provider.getSnapshot).auth.status, "unknown");
+        yield* Deferred.await(startedB);
+        yield* Ref.set(current, "C");
+        yield* Deferred.succeed(releaseB, undefined);
+        yield* Deferred.await(startedC);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("delivers the newest scope when a request arrives during the fourth probe", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const current = yield* Ref.make("A");
+        const started = yield* Effect.forEach([0, 1, 2, 3], () => Deferred.make<void>());
+        const release = yield* Effect.forEach([0, 1, 2, 3], () => Deferred.make<void>());
+        const subscribed = yield* Deferred.make<void>();
+        const newest = yield* Deferred.make<void>();
+        const scopes = new WeakMap<ServerProvider, string>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          currentScope: Ref.get(current),
+          probeScope: (draft) => scopes.get(draft),
+          checkProvider: Effect.gen(function* () {
+            const scope = yield* Ref.get(current);
+            const index = ["B", "C", "D", "E"].indexOf(scope);
+            if (index >= 0) {
+              yield* Deferred.succeed(started[index]!, undefined);
+              yield* Deferred.await(release[index]!);
+            }
+            const draft = { ...refreshedSnapshot, message: scope };
+            scopes.set(draft, scope);
+            return draft;
+          }),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        yield* provider.streamChanges.pipe(
+          Stream.runForEach((snapshot) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(subscribed, undefined);
+              if (snapshot.message === "F") yield* Deferred.succeed(newest, undefined);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* provider.refresh;
+        yield* Deferred.await(subscribed);
+        yield* Ref.set(current, "B");
+        yield* provider.getSnapshot;
+        for (let index = 0; index < 4; index++) {
+          yield* Deferred.await(started[index]!);
+          yield* Ref.set(current, ["C", "D", "E", "F"][index]!);
+          yield* provider.getSnapshot;
+          yield* Deferred.succeed(release[index]!, undefined);
+        }
+        yield* Deferred.await(newest);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("masks a queued stream event from an older scope at consumption", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const current = yield* Ref.make("A");
+        const received = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const scopes = new WeakMap<ServerProvider, string>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          currentScope: Ref.get(current),
+          probeScope: (draft) => scopes.get(draft),
+          checkProvider: Ref.get(current).pipe(
+            Effect.map((scope) => {
+              const draft = { ...refreshedSnapshot, message: scope };
+              scopes.set(draft, scope);
+              return draft;
+            }),
+          ),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        const updates = yield* provider.streamChanges.pipe(
+          Stream.mapEffect((snapshot) =>
+            Deferred.succeed(received, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(snapshot),
+            ),
+          ),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* provider.refresh;
+        yield* Deferred.await(received);
+        yield* provider.refresh;
+        yield* Ref.set(current, "B");
+        yield* Deferred.succeed(release, undefined);
+        const events = Array.from(yield* Fiber.join(updates));
+        assert.strictEqual(events[1]?.auth.status, "unknown");
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
 });

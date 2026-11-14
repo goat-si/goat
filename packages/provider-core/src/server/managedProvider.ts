@@ -22,6 +22,7 @@ import type { ManagedServerProvider } from "./snapshot.ts";
 interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
   readonly enrichmentGeneration: number;
+  readonly scope: string | undefined;
 }
 
 function withUsageLimits(
@@ -44,6 +45,8 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   readonly haveSettingsChanged: (previous: Settings, next: Settings) => boolean;
   readonly initialSnapshot: (settings: Settings) => Effect.Effect<ServerProvider>;
   readonly checkProvider: Effect.Effect<ServerProvider, ServerSettingsError>;
+  readonly probeScope?: (probed: ServerProvider) => string | undefined;
+  readonly currentScope?: Effect.Effect<string>;
   readonly checkUsageLimits?: Effect.Effect<ServerProvider["usageLimits"]>;
   readonly invalidateUsageCache?: Effect.Effect<void>;
   readonly enrichSnapshot?: (input: {
@@ -64,7 +67,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const refreshSemaphore = yield* Semaphore.make(1);
   const usageRefreshQueued = yield* Ref.make<symbol | null>(null);
   const changesPubSub = yield* Effect.acquireRelease(
-    PubSub.unbounded<ServerProvider>(),
+    PubSub.unbounded<{ snapshot: ServerProvider; scope: string | undefined }>(),
     PubSub.shutdown,
   );
   const initialSettings = yield* input.getSettings;
@@ -72,6 +75,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
     snapshot: initialSnapshot,
     enrichmentGeneration: 0,
+    scope: undefined,
   });
   const settingsRef = yield* Ref.make(initialSettings);
   const enrichmentFiberRef = yield* Ref.make<Fiber.Fiber<void, unknown> | null>(null);
@@ -90,7 +94,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       if (Equal.equals(state.snapshot, merged)) {
         return [null, state] as const;
       }
-      return [merged, { ...state, snapshot: merged }] as const;
+      return [
+        { snapshot: merged, scope: state.scope },
+        { ...state, snapshot: merged },
+      ] as const;
     });
     if (snapshotToPublish === null) {
       return;
@@ -151,6 +158,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     }
 
     const probedSnapshot = yield* input.checkProvider;
+    const probeScope = input.probeScope?.(probedSnapshot);
     const { snapshot: nextSnapshot, generation: nextGeneration } = yield* Ref.modify(
       snapshotStateRef,
       (state) => {
@@ -162,6 +170,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         const differs = (a: string | undefined, b: string | undefined) =>
           a !== undefined && b !== undefined && a !== b;
         const switchedAccount =
+          (state.scope !== undefined && probeScope !== undefined && state.scope !== probeScope) ||
           differs(probedSnapshot.auth.email?.toLowerCase(), previous.email?.toLowerCase()) ||
           (probedSnapshot.auth.workspaceId !== undefined &&
             probedSnapshot.auth.workspaceId !== previous.workspaceId);
@@ -181,12 +190,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         );
         return [
           { snapshot, generation },
-          { snapshot, enrichmentGeneration: generation },
+          { snapshot, enrichmentGeneration: generation, scope: probeScope },
         ] as const;
       },
     );
     yield* Ref.set(settingsRef, nextSettings);
-    yield* PubSub.publish(changesPubSub, nextSnapshot);
+    yield* PubSub.publish(changesPubSub, { snapshot: nextSnapshot, scope: probeScope });
     yield* restartSnapshotEnrichment(nextSettings, nextSnapshot, nextGeneration);
     return nextSnapshot;
   });
@@ -195,8 +204,9 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   // Providers call this on every token-usage tick, usually without changing the snapshot.
   const applyUsageLimits: ManagedServerProvider["applyUsageLimits"] = Effect.fnUntraced(
-    function* (update) {
+    function* (update, updateScope) {
       const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+        if (updateScope !== undefined && updateScope !== state.scope) return [null, state] as const;
         const usageLimits = applyUsageLimitsUpdate({
           previous: state.snapshot.usageLimits,
           update,
@@ -206,7 +216,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           return [null, state] as const;
         }
         const snapshot = withUsageLimits(state.snapshot, usageLimits);
-        return [snapshot, { ...state, snapshot }] as const;
+        return [
+          { snapshot, scope: state.scope },
+          { ...state, snapshot },
+        ] as const;
       });
       if (snapshotToPublish !== null) {
         yield* PubSub.publish(changesPubSub, snapshotToPublish);
@@ -217,6 +230,52 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const refreshSnapshot = Effect.fn("refreshSnapshot")(function* () {
     const nextSettings = yield* input.getSettings;
     return yield* applySnapshot(nextSettings, { forceRefresh: true });
+  });
+
+  const scopeRefresh = yield* Ref.make({ running: false, wanted: false });
+  const runScopeRefresh = Effect.fn("ManagedServerProvider.runScopeRefresh")(function* () {
+    const currentScope = input.currentScope;
+    if (!currentScope) return;
+    while (true) {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        yield* refreshSnapshot().pipe(Effect.ignoreCause({ log: true }));
+        const state = yield* Ref.get(snapshotStateRef);
+        if (state.scope === (yield* currentScope)) break;
+      }
+      const again = yield* Ref.modify(scopeRefresh, (state) =>
+        state.wanted
+          ? ([true, { running: true, wanted: false }] as const)
+          : ([false, { running: false, wanted: false }] as const),
+      );
+      if (!again) return;
+    }
+  });
+  const reconcileScope = Effect.fn("ManagedServerProvider.reconcileScope")(function* (event: {
+    snapshot: ServerProvider;
+    scope: string | undefined;
+  }) {
+    const currentScope = input.currentScope;
+    if (!currentScope || event.scope === undefined || event.scope === (yield* currentScope)) {
+      return event.snapshot;
+    }
+    yield* Effect.uninterruptibleMask((restore) =>
+      Ref.modify(scopeRefresh, (state) =>
+        state.running
+          ? ([false, { running: true, wanted: true }] as const)
+          : ([true, { running: true, wanted: false }] as const),
+      ).pipe(
+        Effect.flatMap((start) =>
+          start ? Effect.forkIn(restore(runScopeRefresh()), scope) : Effect.void,
+        ),
+      ),
+    );
+    return {
+      ...event.snapshot,
+      auth: { status: "unknown" as const },
+      status: "warning" as const,
+      message: "Checking sign-in for the current environment.",
+      usageLimits: undefined,
+    };
   });
 
   const refreshUsage = Effect.fn("ManagedServerProvider.refreshUsage")(function* () {
@@ -278,7 +337,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         probed,
       });
       const snapshot = withUsageLimits(state.snapshot, usageLimits);
-      return [snapshot, { ...state, snapshot }] as const;
+      return [
+        { snapshot, scope: state.scope },
+        { ...state, snapshot },
+      ] as const;
     });
     yield* PubSub.publish(changesPubSub, next);
   });
@@ -367,16 +429,20 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     Effect.forkScoped,
   );
 
+  const refresh = input
+    .resolveMaintenance({ fresh: true })
+    .pipe(Effect.andThen(refreshSnapshot), Effect.tapError(Effect.logError), Effect.orDie);
+
   return {
     resolveMaintenance: input.resolveMaintenance,
-    getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
-    refresh: input
-      .resolveMaintenance({ fresh: true })
-      .pipe(Effect.andThen(refreshSnapshot), Effect.tapError(Effect.logError), Effect.orDie),
+    getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.flatMap(reconcileScope)),
+    refresh: input.currentScope
+      ? refresh.pipe(Effect.andThen(Ref.get(snapshotStateRef)), Effect.flatMap(reconcileScope))
+      : refresh,
     applyUsageLimits,
     refreshUsage: refreshUsage(),
     get streamChanges() {
-      return Stream.fromPubSub(changesPubSub);
+      return Stream.fromPubSub(changesPubSub).pipe(Stream.mapEffect(reconcileScope));
     },
   } satisfies ManagedServerProvider;
 });

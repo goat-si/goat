@@ -19,5 +19,6 @@ export interface ManagedServerProvider {
   /** Merge windows by ID; updates with no usable window leave the snapshot untouched. */
   readonly applyUsageLimits: (
     update: ProviderUsageLimitsUpdate & { readonly checkedAt: string },
+    scope?: string,
   ) => Effect.Effect<void>;
 }

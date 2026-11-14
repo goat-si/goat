@@ -1,7 +1,7 @@
 import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
-import { CodexSettings, ProviderDriverKind } from "@goat/contracts";
+import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -309,7 +309,10 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        onUsageLimits: (update, scope) =>
+          snapshot.applyUsageLimits(update, pinnedHome === undefined ? scope : undefined),
+        // New sessions read the same environment the status check uses.
+        currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
         offeredModels: Effect.suspend(() => snapshot.getSnapshot).pipe(
           Effect.map((value) => value.models),
@@ -336,16 +339,18 @@ export const CodexDriver: ProviderDriver<
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
     // manifest, so a slow or hung fetch never delays the provider check.
+    const probeHomes = new WeakMap<ServerProvider, string>();
     const checkProvider = modelCatalog.refreshInBackground.pipe(
-      Effect.andThen(
+      Effect.andThen(currentEnvironment),
+      Effect.flatMap((env) =>
         Effect.zipWith(
-          currentEnvironment.pipe(
-            Effect.flatMap((env) =>
-              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
-            ),
-          ),
+          checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
           currentCatalog,
-          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+          (draft, catalog) => {
+            const result = stampIdentity(applyCodexModelCatalog(draft, catalog));
+            probeHomes.set(result, env.CODEX_HOME ?? "");
+            return result;
+          },
           { concurrent: true },
         ),
       ),
@@ -366,6 +371,12 @@ export const CodexDriver: ProviderDriver<
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
         ),
       checkProvider,
+      ...(pinnedHome === undefined
+        ? {
+            probeScope: (draft: ServerProvider) => probeHomes.get(draft),
+            currentScope: Effect.sync(() => baseEnvironment.CODEX_HOME ?? ""),
+          }
+        : {}),
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>
@@ -482,7 +493,10 @@ export const CodexDriver: ProviderDriver<
             new ProviderDriverError({
               driver: DRIVER_KIND,
               instanceId,
-              detail: "Codex could not redeem the reset credit.",
+              detail:
+                cause._tag === "ResetCreditAccountLimitError"
+                  ? cause.message
+                  : "Codex could not redeem the reset credit.",
               cause,
             }),
         ),

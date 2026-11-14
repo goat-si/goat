@@ -1548,18 +1548,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
+        const env =
+          resolvedRuntime?.environment ??
+          (yield* adapterOptions.currentEnvironment ?? Effect.succeed(adapterOptions.environment));
         const routeInput = yield* HomeRoute.resolveCodexRouteContext({
           settings: launchSettings,
           binaryPath: launchSettings.binaryPath,
           home: launchSettings.homePath,
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
-          configArgv: codexExecLaunchArgs(
-            resolveCodexLaunchArgs(
-              launchSettings.launchArgs,
-              resolvedRuntime?.environment ?? adapterOptions.environment,
-            ),
-          ),
+          environment: env,
+          configArgv: codexExecLaunchArgs(resolveCodexLaunchArgs(launchSettings.launchArgs, env)),
         }).pipe(Effect.provideService(Path.Path, path), toOpenSessionError);
         const routeArgs =
           launchSettings.modelRoute === "opencodex"
@@ -1579,8 +1577,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           detached,
           survivors,
         });
+        let usageScope = env.CODEX_HOME ?? "";
         const client = yield* clientFactory
           .open({
+            onRetained: () => (usageScope = "\0retained"),
             instanceId: adapterOptions.instanceId,
             threadId: input.threadId,
             providerSessionId: input.providerSessionId,
@@ -4561,7 +4561,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
+              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, usageScope);
             }
           }).pipe(Effect.orDie),
         );
@@ -7283,7 +7283,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             catalog: {
               cwd,
               fileSystem,
-              home: adapterOptions.environment.HOME,
+              home: env.HOME,
               readConfig: ensureInitialized.pipe(
                 Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
               ),
