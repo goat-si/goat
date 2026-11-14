@@ -237,11 +237,16 @@ try {
   const dbus = start("dbus-daemon", ["--session", "--nofork", "--print-address=1"], process.env, [
     "ignore",
     "pipe",
-    "ignore",
+    "pipe",
   ]);
+  const dbusOutput = captureOutput(dbus);
   const busOutput = dbus.stdout;
   if (!busOutput) throw new Error("dbus-daemon has no stdout.");
-  const address = await firstLine(dbus, busOutput, "dbus-daemon");
+  const address = await boundedWait(
+    firstLine(dbus, busOutput, "dbus-daemon"),
+    "dbus-daemon first-line wait",
+    () => "dbus-daemon output: " + dbusOutput(),
+  );
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
