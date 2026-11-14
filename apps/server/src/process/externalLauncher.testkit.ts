@@ -3,6 +3,7 @@ import { assert } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -50,6 +51,7 @@ export function makeMockDetachedHandle(
 export const layerTest = (input: {
   readonly platform: NodeJS.Platform;
   readonly env?: Record<string, string>;
+  readonly path?: Path.Path;
   readonly resolveExecutable?: (command: string) => string | undefined;
   readonly onSpawn?: (command: ChildProcess.StandardCommand) => void;
   readonly onUnref?: () => void;
@@ -75,7 +77,15 @@ export const layerTest = (input: {
   );
 
   return Layer.mergeAll(
-    ExternalLauncher.layer.pipe(Layer.provide(Layer.merge(NodeServices.layer, layerSpawner))),
+    ExternalLauncher.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          layerSpawner,
+          input.path ? Layer.succeed(Path.Path, input.path) : Layer.empty,
+        ),
+      ),
+    ),
     Layer.succeed(HostProcess.Platform, input.platform),
     Layer.succeed(
       SpawnExecutableResolution,
