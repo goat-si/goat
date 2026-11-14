@@ -36,6 +36,11 @@ export function isMiseCommandPath(commandPath: string): boolean {
   );
 }
 
+/** The Nix store is read-only, so no updater can replace a CLI that lives there. */
+export function isNixStoreCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).startsWith("/nix/store/");
+}
+
 const winGetClaudeCommandPath =
   /^[a-z]:\/(?:users\/[^/]+\/appdata\/local\/microsoft|program files(?: \(x86\))?)\/winget\/(?:links|packages\/anthropic\.claudecode_[^/]+)\/claude\.exe$/;
 
