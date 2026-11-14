@@ -45,6 +45,14 @@ const fixture = NodePath.resolve(
   "../apps/server/src/cua/linuxHelper/fixtures/goat-cu-fixture.py",
 );
 
+const ACCESSIBILITY_BUS_WAIT = `from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+loop = GLib.MainLoop()
+watch = Gio.bus_watch_name_on_connection(bus, "org.a11y.Bus", Gio.BusNameWatcherFlags.NONE, lambda *_: loop.quit(), None)
+loop.run()
+Gio.bus_unwatch_name(watch)
+bus.call_sync("org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", None, GLib.VariantType("(s)"), Gio.DBusCallFlags.NO_AUTO_START, GLib.MAXINT, None)`;
+
 const started: NodeChildProcess.ChildProcess[] = [];
 const transcript: Array<Record<string, unknown>> = [];
 const log = (step: string, detail: Record<string, unknown>) => {
@@ -73,24 +81,18 @@ const start = (
   return child;
 };
 
-/** The first line a child prints, failing when it exits, cannot start, or stays silent. */
+/** The first line a child prints, failing if its output closes or it cannot start. */
 const firstLine = (
   child: NodeChildProcess.ChildProcess,
   input: NodeJS.ReadableStream,
   what: string,
 ) =>
-  Promise.race([
-    new Promise<string>((resolve) =>
-      NodeReadline.createInterface({ input }).once("line", (line) => resolve(line.trim())),
-    ),
-    new Promise<never>((_, reject) => {
-      child.once("exit", (code) => reject(new Error(what + " exited with " + code + ".")));
-      child.once("error", (error) => reject(error));
-    }),
-    sleep(10_000).then(() => {
-      throw new Error(what + " did not answer in time.");
-    }),
-  ]);
+  new Promise<string>((resolve, reject) => {
+    const lines = NodeReadline.createInterface({ input });
+    lines.once("line", (line) => resolve(line.trim()));
+    lines.once("close", () => reject(new Error(what + " closed its output without a line.")));
+    child.once("error", (error) => reject(error));
+  });
 /** Child pids of one process, from /proc; the helper's driver is found this way. */
 const children = async (pid: number) => {
   const tasks = await NodeFSP.readdir("/proc/" + pid + "/task").catch(() => []);
@@ -218,8 +220,29 @@ try {
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     GTK_A11Y: "atspi",
   };
-  start("/usr/libexec/at-spi-bus-launcher", ["--launch-immediately"], env);
-  await sleep(800);
+  const launcher = start("/usr/libexec/at-spi-bus-launcher", ["--launch-immediately"], env);
+  // The fixture's GTK bridge asks this bus for its address before its window maps.
+  const busWaiter = start("python3", ["-c", ACCESSIBILITY_BUS_WAIT], env, [
+    "ignore",
+    "ignore",
+    "inherit",
+  ]);
+  await Promise.race([
+    new Promise<void>((resolve, reject) => {
+      busWaiter.once("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error("The accessibility bus wait exited with " + code + ".")),
+      );
+      busWaiter.once("error", reject);
+    }),
+    new Promise<never>((_, reject) => {
+      launcher.once("exit", (code) =>
+        reject(new Error("at-spi-bus-launcher exited with " + code + ".")),
+      );
+      launcher.once("error", reject);
+    }),
+  ]);
   // The fixture's errors go to this run's log; its first line says its window is mapped.
   const app = start("python3", [fixture], env, ["ignore", "pipe", "inherit"]);
   const fixtureOutput = app.stdout;
