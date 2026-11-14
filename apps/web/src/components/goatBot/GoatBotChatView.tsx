@@ -491,7 +491,6 @@ function GoatBotChatViewContent({
           />
           <GoatBotReplyStatus
             key={`${timelineIdentity}:reply`}
-            replyingSince={removed ? null : replyingSince}
             announcement={announcement}
             sends={local.identity === timelineIdentity ? local.sends : 0}
           />

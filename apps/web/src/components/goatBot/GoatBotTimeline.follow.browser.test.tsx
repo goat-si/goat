@@ -744,7 +744,7 @@ it("guard: live history and later exposure of a hidden baseline item are silent"
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
 
-it("announces new bot replies once, batches newest and retains them across one activity change", async () => {
+it("announces new bot replies once, batches the newest and keeps it through activity changes", async () => {
   projection.statuses = { speech: "live" };
   await using screen = await render(<SpeechChat shown={[]} source={[]} />);
   const status = screen.container.querySelector("[data-goat-bot-reply-status]");
@@ -812,8 +812,9 @@ it("announces and cues a filtered new reply only when first exposed", async () =
 
 it("consumes replies exposed during synchronization and announces only the newest on live", async () => {
   projection.statuses = { speech: "live" };
-  const older = reply("sync-older");
-  const newer = reply("sync-newer");
+  // Distinct categories, so the wording shows which reply was announced.
+  const older = { ...reply("sync-older"), proactive: true, tone: "status" as const };
+  const newer = { ...reply("sync-newer"), proactive: true, tone: "question" as const };
   await using screen = await render(<SpeechChat shown={rows} source={rows} />);
   const status = screen.container.querySelector("[data-goat-bot-reply-status]");
   projection.statuses.speech = "synchronizing";
@@ -824,7 +825,7 @@ it("consumes replies exposed during synchronization and announces only the newes
   await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
   projection.statuses.speech = "live";
   await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
-  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  expect(status?.textContent).toBe("GOAT Bot asked a question.");
   const text = status?.textContent;
   await screen.rerender(
     <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
@@ -881,17 +882,17 @@ it("announces replies after a newer send and alternates successive categories", 
   const first = reply("earlier-reply");
   const send = rows[0]!;
   await screen.rerender(<SpeechChat shown={[first, send]} source={[first, send]} />);
-  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  expect(status?.textContent).toBe("GOAT Bot replied.");
   const update = { ...reply("an-update"), proactive: true, tone: "status" as const };
   await screen.rerender(
     <SpeechChat shown={[first, send, update]} source={[first, send, update]} />,
   );
-  expect(status?.textContent).toMatch(/posted an update|New update/);
+  expect(status?.textContent).toBe("New update from GOAT Bot.");
   const question = { ...reply("a-question"), proactive: true, tone: "question" as const };
   await screen.rerender(
     <SpeechChat shown={[first, send, update, question]} source={[first, send, update, question]} />,
   );
-  expect(status?.textContent).toMatch(/asked a question|New question/);
+  expect(status?.textContent).toBe("GOAT Bot asked a question.");
 });
 
 it("failing-first: the viewed thread, not the current bot, owns the live baseline", async () => {

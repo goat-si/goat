@@ -29,7 +29,7 @@ function Status({
   return (
     <>
       <Exposure onExposure={onExposure} rows={rows} />
-      <GoatBotReplyStatus replyingSince={null} announcement={announcement} />
+      <GoatBotReplyStatus announcement={announcement} />
     </>
   );
 }

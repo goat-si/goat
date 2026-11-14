@@ -23,13 +23,10 @@ const row: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 const announcement = { sequence: 1, row };
-const view = (work: boolean, reply = false, reading = false) => (
+const view = (work: boolean, reply = false, reading = false, sends = 0) => (
   <GoatBotActivityContext value={work ? { state: "working", text: "Tool step" } : null}>
     <GoatBotActivityStatus replyingSince={reading ? "now" : null} />
-    <GoatBotReplyStatus
-      replyingSince={reading ? "now" : null}
-      announcement={reply ? announcement : null}
-    />
+    <GoatBotReplyStatus announcement={reply ? announcement : null} sends={sends} />
   </GoatBotActivityContext>
 );
 
@@ -44,10 +41,12 @@ it("keeps the reply unchanged across activity transitions", async () => {
   await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
 });
 
-it("clears the reply when the person sends a message", async () => {
+it("clears the reply on a send this chat accepted, and not on the reading signal", async () => {
   await using screen = await render(view(true));
   const reply = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
   await screen.rerender(view(true, true));
   await screen.rerender(view(true, true, true));
+  await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
+  await screen.rerender(view(true, true, true, 1));
   await expect.element(reply).toHaveTextContent("");
 });

@@ -2,16 +2,18 @@ import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { useEffect, useState } from "react";
 import { useGoatBotName } from "./goatBotMemberContext";
 
+/**
+ * The chat's reply announcement, apart from its activity status. Only a new reply writes it and
+ * only a send this chat accepted clears it, so nothing else makes it speak again.
+ */
 export function GoatBotReplyStatus({
   announcement,
-  replyingSince,
   sends = 0,
 }: {
   readonly announcement: {
     readonly sequence: number;
     readonly row: Extract<GoatBotRow, { kind: "bot" }>;
   } | null;
-  readonly replyingSince: string | null;
   readonly sends?: number;
 }) {
   const botName = useGoatBotName();
@@ -21,15 +23,7 @@ export function GoatBotReplyStatus({
     // oxlint-disable-next-line react/set-state-in-effect -- The first message must follow the initial empty commit.
     setPainted(true);
   }, []);
-  const [reply, setReply] = useState({
-    sequence: 0,
-    toggle: false,
-    text: "",
-    readingKey: replyingSince,
-    sends,
-  });
-  const sending =
-    sends !== reply.sends || (replyingSince !== null && replyingSince !== reply.readingKey);
+  const [reply, setReply] = useState({ sequence: 0, toggle: false, text: "", sends });
   if (announcement !== null && announcement.sequence !== reply.sequence) {
     const toggle = !reply.toggle;
     const row = announcement.row;
@@ -45,15 +39,9 @@ export function GoatBotReplyStatus({
           : toggle
             ? `${botName} replied.`
             : `New reply from ${botName}.`;
-    setReply({
-      sequence: announcement.sequence,
-      toggle,
-      text: sending ? "" : text,
-      readingKey: replyingSince,
-      sends,
-    });
-  } else if (reply.readingKey !== replyingSince || reply.sends !== sends) {
-    setReply({ ...reply, readingKey: replyingSince, sends, text: sending ? "" : reply.text });
+    setReply({ sequence: announcement.sequence, toggle, text, sends });
+  } else if (reply.sends !== sends) {
+    setReply({ ...reply, sends, text: "" });
   }
   return (
     <span role="status" aria-live="polite" data-goat-bot-reply-status="" className="sr-only">

@@ -66,7 +66,7 @@ const view = (rows: ReadonlyArray<GoatBotRow>, work: boolean, reading = false) =
   </GoatBotActivityContext>
 );
 
-it("keeps reply announcements independent of activity, clears on send, and alternates replies", async () => {
+it("keeps reply announcements independent of activity and of the reading signal, and alternates replies", async () => {
   await using screen = await render(view([old], true));
   const replyStatus = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
   expect(replyStatus).not.toBeNull();
@@ -94,7 +94,9 @@ it("keeps reply announcements independent of activity, clears on send, and alter
     expect(replyStatus.textContent).toBe("New reply from GOAT Bot.");
     expect(changes).toHaveLength(2);
     await screen.rerender(view([old, first, second], false, true));
-    expect(replyStatus.textContent).toBe("");
+    // A read the server reports, for a message this chat did not send, changes nothing here.
+    expect(replyStatus.textContent).toBe("New reply from GOAT Bot.");
+    expect(changes).toHaveLength(2);
     expect(activity.textContent).toBe("Reading your message");
   } finally {
     observer.disconnect();
@@ -133,4 +135,34 @@ it("clears the reply as soon as the composer accepts a send", async () => {
   await userEvent.fill(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "Next message");
   await userEvent.keyboard("{Enter}");
   expect(status.textContent).not.toContain("GOAT Bot replied.");
+});
+
+it("keeps a reply that arrives after a send when that send's reading signal comes late", async () => {
+  await using screen = await render(view([old], true));
+  const status = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
+  if (!status) throw new Error("missing reply status");
+  await userEvent.fill(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "Next message");
+  await userEvent.keyboard("{Enter}");
+  const changes: MutationRecord[] = [];
+  const observer = new MutationObserver((batch) => changes.push(...batch));
+  observer.observe(status, { subtree: true, childList: true, characterData: true });
+  try {
+    const update = reply("update");
+    await screen.rerender(view([old, update], true));
+    expect(status.textContent).toBe("GOAT Bot replied.");
+    // The server's read of that send arrives only now.
+    await screen.rerender(view([old, update], true, true));
+    expect(status.textContent).toBe("GOAT Bot replied.");
+    expect(changes).toHaveLength(1);
+  } finally {
+    observer.disconnect();
+  }
+});
+
+it("writes a reply that arrives in the same update as a reading signal", async () => {
+  await using screen = await render(view([old], true));
+  const status = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
+  if (!status) throw new Error("missing reply status");
+  await screen.rerender(view([old, reply("first")], true, true));
+  expect(status.textContent).toBe("GOAT Bot replied.");
 });
