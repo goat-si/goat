@@ -203,6 +203,8 @@ export const layerGoatTransport = Layer.effectDiscard(
             },
             revision: "send",
           });
+          // The message raised its task's unread when it was queued; open lists read it now.
+          if (message.taskId !== undefined) yield* ledger.announceTaskChanges([source.ownerId]);
         }
         const acceptedAt = DateTime.formatIso(yield* DateTime.now);
         return { deliveryId: message.deliveryId, acceptedAt };
