@@ -8,7 +8,87 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
 
+/** A fresh coordinator whose redemptions follow `script`: "uncertain" keeps the key pending. */
+const scriptedCoordinator = (script: Array<"uncertain" | "settled">) =>
+  Effect.gen(function* () {
+    const real = yield* Effect.service(ResetCreditCoordinator.ResetCreditCoordinator).pipe(
+      Effect.provide(ResetCreditCoordinator.layerTest),
+    );
+    const keys: Array<string> = [];
+    const service = ResetCreditCoordinator.ResetCreditCoordinator.of({
+      redeem: (accountKey, _consume, isSettled) =>
+        real.redeem(
+          accountKey,
+          (idempotencyKey) =>
+            Effect.suspend(() => {
+              keys.push(idempotencyKey);
+              return script.shift() === "uncertain"
+                ? Effect.die("timed out")
+                : Effect.succeed("nothingToReset" as const);
+            }),
+          isSettled,
+        ),
+    });
+    return { service, keys };
+  });
+
 it.layer(layerTest)("CodexDriver reset credits", (it) => {
+  it.effect("two homes that differ only by a trailing space are separate accounts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const { service, keys } = yield* scriptedCoordinator(["uncertain", "settled", "settled"]);
+      const host: NodeJS.ProcessEnv = { PATH: "", CODEX_HOME: `${root}/a` };
+      const instance = yield* CodexDriver.create({
+        instanceId: ProviderInstanceId.make("reset-credit-spaced"),
+        displayName: "Codex reset credit test",
+        enabled: true,
+        environment: [],
+        config: CodexDriver.defaultConfig(),
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, host),
+        Effect.provideService(HostProcess.HomeDirectory, root),
+        Effect.provideService(ResetCreditCoordinator.ResetCreditCoordinator, service),
+      );
+      yield* instance.consumeResetCredit!().pipe(Effect.exit);
+      host.CODEX_HOME = `${root}/a `;
+      yield* instance.consumeResetCredit!().pipe(Effect.exit);
+      host.CODEX_HOME = `${root}/a`;
+      yield* instance.consumeResetCredit!().pipe(Effect.exit);
+      const [first, other, retry] = keys;
+      expect(other).not.toBe(first);
+      expect(retry).toBe(first);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a host home ending in a space shares a lock with an instance pinned to it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const home = `${root}/user `;
+      yield* fs.makeDirectory(home);
+      const { service, keys } = yield* scriptedCoordinator(["uncertain", "settled"]);
+      const create = (id: string, homePath: string, host: NodeJS.ProcessEnv) =>
+        CodexDriver.create({
+          instanceId: ProviderInstanceId.make(id),
+          displayName: "Codex reset credit test",
+          enabled: true,
+          environment: [],
+          config: { ...CodexDriver.defaultConfig(), homePath },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(ResetCreditCoordinator.ResetCreditCoordinator, service),
+        );
+      const following = yield* create("reset-credit-host", "", { PATH: "", CODEX_HOME: home });
+      const pinned = yield* create("reset-credit-pinned", home, { PATH: "" });
+      yield* following.consumeResetCredit!().pipe(Effect.exit);
+      yield* pinned.consumeResetCredit!().pipe(Effect.exit);
+      const [first, second] = keys;
+      expect(second).toBe(first);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("a redemption refused at the account limit tells the person why", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

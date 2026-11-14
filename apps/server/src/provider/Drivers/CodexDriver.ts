@@ -450,7 +450,7 @@ export const CodexDriver: ProviderDriver<
     const accountKeyFor = (env: NodeJS.ProcessEnv) =>
       pinnedHome !== undefined
         ? Effect.succeed(pinnedHome)
-        : resolveCodexHomeLayout({ ...config, homePath: env.CODEX_HOME?.trim() ?? "" }).pipe(
+        : resolveCodexHomeLayout({ ...config, homePath: env.CODEX_HOME ?? "" }).pipe(
             Effect.map((layout) => layout.sharedHomePath),
             Effect.provideService(Path.Path, pathService),
             Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
