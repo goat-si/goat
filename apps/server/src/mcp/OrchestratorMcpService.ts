@@ -1300,9 +1300,7 @@ const make = Effect.gen(function* () {
     const target = yield* records.pipe(Effect.mapError(threadManagementFailure));
     return { parent, target, shell } as const;
   });
-
   const loadProviders = providerRegistry.getProviders;
-
   const loadOrchestrationCapableInstanceIds = () =>
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
@@ -1947,14 +1945,7 @@ const make = Effect.gen(function* () {
         MAX_WAIT_TIMEOUT_MS,
         Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
       );
-      const waited = yield* waitForTask(scope, taskId, timeoutMs);
-      if (Option.isSome(waited) && isTerminalTaskStatus(waited.value.status)) {
-        return waited.value;
-      }
-      // An incomplete wait gives up delivery: upgrade so a later terminal
-      // wakes the parent even mid-turn. Best effort; settled_only still
-      // wakes a settled parent if the upgrade fails.
-      yield* threadManagement
+      const upgradeWake = threadManagement
         .dispatch({
           type: "delegated_task.wake-policy",
           commandId: stableCommandId({
@@ -1989,6 +1980,15 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      const waited = yield* waitForTask(scope, taskId, timeoutMs).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) &&
+          Option.isSome(exit.value) &&
+          isTerminalTaskStatus(exit.value.value.status)
+            ? Effect.void
+            : upgradeWake,
+        ),
+      );
       if (Option.isSome(waited)) return waited.value;
       const final = yield* readTask(scope, taskId, false, true);
       return {

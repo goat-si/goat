@@ -3052,6 +3052,14 @@ describe("OrchestratorMcpService provider resolution", () => {
     { name: "terminal-message", delayed: false, terminal: true, wakeFails: false, timeout: false },
     { name: "failed-upgrade", delayed: false, terminal: false, wakeFails: true, timeout: false },
     {
+      name: "cancelled-wait",
+      delayed: true,
+      terminal: false,
+      wakeFails: false,
+      timeout: false,
+      cancelled: true,
+    },
+    {
       name: "timeout-question-race",
       delayed: true,
       terminal: false,
@@ -3203,6 +3211,17 @@ describe("OrchestratorMcpService provider resolution", () => {
         .pipe(Effect.forkChild);
       if (scenario.delayed) {
         yield* Deferred.await(subscribed);
+        if ("cancelled" in scenario) {
+          yield* Fiber.interrupt(fiber);
+          assert.isTrue(
+            commands.some(
+              (command) =>
+                command.type === "delegated_task.wake-policy" &&
+                command.completionWake === "always",
+            ),
+          );
+          return;
+        }
         pending = true;
         if (scenario.timeout) yield* TestClock.adjust(Duration.millis(1000));
         else
