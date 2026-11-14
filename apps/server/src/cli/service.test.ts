@@ -316,7 +316,6 @@ it.effect.each([
   }),
 );
 
-// regression: #9602 diagnose incomplete headless server setup
 it.effect("keeps the manual-server fallback for an unsupported service home", () =>
   Effect.gen(function* () {
     const ready = yield* recoverServiceOnboardingOffer(
@@ -326,6 +325,7 @@ it.effect("keeps the manual-server fallback for an unsupported service home", ()
   }),
 );
 
+// regression: #9602 diagnose incomplete headless server setup
 it.effect("keeps the manual-server fallback when background prerequisites fail", () =>
   Effect.gen(function* () {
     const ready = yield* recoverServiceOnboardingOffer(
