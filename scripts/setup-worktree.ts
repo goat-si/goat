@@ -202,7 +202,8 @@ async function main(): Promise<void> {
     // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
     const hasVp = autoDownload && !isRerun && process.platform !== "win32" && toolOnPath("vp");
     const probe = hasVp ? vpSupportsVerifiedNodeDownload() : undefined;
-    const verifiedVp = probe?.supported ?? false;
+    const signatureBypassed = Boolean(process.env.VP_NODE_SKIP_SIGNATURE_VERIFY);
+    const verifiedVp = (probe?.supported ?? false) && !signatureBypassed;
     const runners = pinnedNodeRunners({ pinned, vp: verifiedVp, autoDownload });
     const tried: string[] = [];
     for (const runner of runners) {
@@ -270,9 +271,11 @@ async function main(): Promise<void> {
     }
     const reason = !autoDownload
       ? "GOAT_SETUP_NO_NODE_DOWNLOAD=1 prevents setup from downloading Node."
-      : hasVp && !verifiedVp
-        ? `${probe?.timedOut ? "vp did not answer its version probe. " : ""}Update vite-plus to 0.2.2 or later to enable verified Node downloads.`
-        : "";
+      : hasVp && signatureBypassed
+        ? "VP_NODE_SKIP_SIGNATURE_VERIFY disables signature verification; unset it before setup downloads Node."
+        : hasVp && !verifiedVp
+          ? `${probe?.timedOut ? "vp did not answer its version probe. " : ""}Update vite-plus to 0.2.2 or later to enable verified Node downloads.`
+          : "";
     failureDetail = [
       unsupportedNode,
       reason,

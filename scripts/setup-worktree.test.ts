@@ -497,6 +497,28 @@ require("node:module").syncBuiltinESMExports();`,
   );
 
   it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "refuses Node download when signature verification is bypassed",
+    () => {
+      const [major = 0] = process.versions.node.split(".").map(Number);
+      for (const value of ["1", "0"]) {
+        const fixture = setupFixture(`${major + 1}.0.0`, "unexpected", 0, "runs-node");
+        fixture.env.VP_NODE_SKIP_SIGNATURE_VERIFY = value;
+        try {
+          const result = fixture.run();
+          assert.equal(result.status, 1);
+          assert.include(
+            NodeFS.readFileSync(NodePath.join(fixture.root, ".goat", "setup-failed"), "utf8"),
+            "VP_NODE_SKIP_SIGNATURE_VERIFY",
+          );
+          assert.isFalse(NodeFS.existsSync(fixture.log));
+        } finally {
+          fixture.cleanup();
+        }
+      }
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "refuses old vp and explains the update",
     () => {
       const [major = 0] = process.versions.node.split(".").map(Number);
