@@ -1,3 +1,4 @@
+import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
 import { runProbe } from "./maintenanceProbe.ts";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
 import { quoteShellWord, quoteUpdateExecutable } from "./maintenanceShellQuote.ts";
@@ -404,6 +405,16 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
         ),
         Effect.provideContext(services),
       ),
+    });
+  }
+
+  const macPortsName = yield* resolveMacPortsOwner(context);
+  if (macPortsName !== null) {
+    return makeManualOnlyProviderMaintenanceCapabilities({
+      provider: definition.provider,
+      packageName,
+      installPath: context.realCommandPath,
+      ...(macPortsName ? { manualCommand: `sudo port upgrade ${macPortsName}` } : {}),
     });
   }
 
