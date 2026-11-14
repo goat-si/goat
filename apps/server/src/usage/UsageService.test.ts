@@ -2024,7 +2024,6 @@ describe("UsageService", () => {
       }
     }).pipe(Effect.scoped),
   );
-
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -2091,6 +2090,7 @@ describe("UsageService", () => {
                 },
                 [ProviderInstanceId.make("codex-work")]: {
                   driver: ProviderDriverKind.make("codex"),
+                  config: { shadowHomePath: NodePath.join(home, "work-shadow") },
                   environment: [{ name: "CODEX_HOME", value: codexHome, sensitive: false }],
                 },
                 [ProviderInstanceId.make("codex-alias")]: {

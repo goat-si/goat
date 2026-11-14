@@ -1,3 +1,6 @@
+import { TestClock } from "effect/testing";
+import * as Fiber from "effect/Fiber";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 /**
  * Replay frames and turn inputs shared by the OpenCode 2 adapter tests.
  */
@@ -51,7 +54,14 @@ export const event = (
     type: "emit_inbound",
     frame: {
       type: "sdk.event",
-      event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
+      event: {
+        id: `evt_${type.replaceAll(".", "")}0000`,
+        created: 1,
+        type,
+        ...(type.startsWith("rpc.") ? { location: { directory: WORK } } : {}),
+        data,
+        ...durable,
+      },
     },
     ...(label === undefined ? {} : { label }),
   };
@@ -132,6 +142,7 @@ const withInstructions = (
         "session.compact",
         "command.list",
         "skill.list",
+        "rpc.call",
       ].includes(String(entry.frame.type)),
   );
   if (
@@ -303,6 +314,8 @@ export const colorForm = {
 export const resumed = (
   entries: ReadonlyArray<ProviderReplayEntry>,
   options?: {
+    readonly version?: "2.2.5";
+    readonly goal?: OrchestrationV2ProviderThread["goal"];
     readonly external?: boolean;
     readonly supervised?: boolean;
     readonly memoryInstructions?: (value: string) => Response;
@@ -316,22 +329,28 @@ export const resumed = (
 ) =>
   Effect.gen(function* () {
     const runtime = yield* openCode2ReplayRuntime(
-      withInstructions([
+      [
         ...opening,
         out("session.get", { sessionID: SESSION }),
         replyData("session.get", sessionInfo()),
         ...noOpenRequests,
-        ...(options?.supervised === true
-          ? [
-              out("agent.list", "<any>"),
-              reply("agent.list", agentList),
-              out("session.update", { sessionID: SESSION, permissions: supervisedRules }),
-              reply("session.update", null),
-            ]
+        ...(options?.version === "2.2.5"
+          ? [out("rpc.call", "<any>"), reply("rpc.call", { output: null })]
           : []),
-        ...entries,
-      ]),
+        ...withInstructions([
+          ...(options?.supervised === true
+            ? [
+                out("agent.list", "<any>"),
+                reply("agent.list", agentList),
+                out("session.update", { sessionID: SESSION, permissions: supervisedRules }),
+                reply("session.update", null),
+              ]
+            : []),
+          ...entries,
+        ]),
+      ],
       {
+        ...(options?.version === undefined ? {} : { version: options.version }),
         ...(options?.onInstructions === undefined
           ? {}
           : { onInstructions: options.onInstructions }),
@@ -351,7 +370,10 @@ export const resumed = (
       },
     );
     const thread = yield* runtime.resumeThread({
-      providerThread: providerThread(yield* DateTime.now),
+      providerThread: {
+        ...providerThread(yield* DateTime.now),
+        ...(options?.goal === undefined ? {} : { goal: options.goal }),
+      },
       threadId,
       modelSelection: bigPickle,
       runtimePolicy: policy(options?.supervised === true ? "approval-required" : "full-access"),
@@ -460,3 +482,107 @@ export const withLineage = (thread: OrchestrationV2ProviderThread) => ({
   } as OrchestrationV2AppThread,
 });
 export const CHILD = "ses_f1485c529ffea4URrYruwEg0Ja";
+
+export const reconnected = (
+  active: Record<string, unknown>,
+  ended?: "succeeded",
+  assistant: Record<string, unknown> = {},
+  deliveredSteer?: string,
+) => [
+  { type: "runtime_exit", status: "success" } as const,
+  out("event.subscribe"),
+  out("session.active"),
+  replyData("session.active", active),
+  out("message.list", { sessionID: SESSION, order: "desc", limit: "50" }),
+  reply("message.list", {
+    data: [
+      ...(ended === undefined
+        ? []
+        : [{ id: "msg_idle_gap", time: { created: 3 }, type: "idle", outcome: ended }]),
+      {
+        id: "msg_assistant_gap",
+        time: { created: 2 },
+        type: "assistant",
+        agent: "build",
+        model: { id: "big-pickle", providerID: "opencode", variant: "default" },
+        content: [
+          { type: "text", text: "Sent while the stream was down." },
+          {
+            type: "tool",
+            id: "call_gap",
+            name: "shell",
+            executed: true,
+            state: {
+              status: "completed",
+              input: { command: "echo GAP" },
+              content: [{ type: "text", text: "GAP" }],
+              metadata: {},
+            },
+            time: { created: 2, ran: 2, completed: 2 },
+          },
+        ],
+        finish: "stop",
+        ...assistant,
+      },
+      ...(deliveredSteer === undefined
+        ? []
+        : [{ id: deliveredSteer, time: { created: 2 }, text: "steered", type: "user" }]),
+      {
+        id: "msg_0eb735d41001NJee1EvVePJAK5",
+        time: { created: 1 },
+        text: "hi",
+        type: "user",
+      },
+    ],
+    cursor: {},
+  }),
+];
+
+export const stopTimedOut: ReadonlyArray<ProviderReplayEntry> = [
+  out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+  promptAccepted,
+  out("session.interrupt", { sessionID: SESSION }),
+  reply("session.interrupt", "<hang>"),
+];
+export const secondTurn = (thread: OrchestrationV2ProviderThread) => ({
+  ...turnInput(thread),
+  runId: RunId.make("run:opencode2-adapter:2"),
+  runOrdinal: 2,
+  providerTurnOrdinal: 2,
+  attemptId: RunAttemptId.make("attempt:opencode2-adapter:2"),
+});
+export const stopFirstTurn = (
+  runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+  thread: OrchestrationV2ProviderThread,
+) =>
+  Effect.gen(function* () {
+    yield* runtime.startTurn(turnInput(thread));
+    const interrupt = yield* runtime
+      .interruptTurn({ providerThread: thread, providerTurnId: yield* providerTurnId })
+      .pipe(Effect.forkScoped);
+    yield* TestClock.adjust("11 seconds");
+    yield* Fiber.join(interrupt);
+  });
+
+export const turnItems = (collected: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
+  collected.flatMap((event) =>
+    event.type === "turn_item.updated" ? [`${event.turnItem.type}:${event.turnItem.status}`] : [],
+  );
+
+export const providerTurnId = Effect.gen(function* () {
+  const ids = yield* IdAllocator.IdAllocatorV2;
+  return ids.derive.providerTurn({
+    driver: OPENCODE_PROVIDER,
+    nativeTurnId: `${SESSION}:attempt:attempt:opencode2-adapter`,
+  });
+}).pipe(Effect.provide(IdAllocator.layer));
+
+export const openRequests = (
+  permissions: ReadonlyArray<unknown>,
+  forms: ReadonlyArray<unknown> = [],
+): ReadonlyArray<ProviderReplayEntry> => [
+  out("permission.list", { sessionID: SESSION }),
+  replyData("permission.list", permissions),
+  out("session.form.list", { sessionID: SESSION }),
+  replyData("session.form.list", forms),
+];

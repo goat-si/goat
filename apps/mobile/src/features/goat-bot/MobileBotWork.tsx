@@ -29,7 +29,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { mobileBotHomeListShown, pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { mobileBotHomeListShown, pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
@@ -139,7 +139,7 @@ export function MobileBotWork(props: {
   const bottomInset = insets.bottom + 24;
   // Android draws the sheet edge to edge, so Close starts below the status bar.
   const sheetTop = Platform.OS === "android" ? { paddingTop: 16 + insets.top } : undefined;
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities = environmentId

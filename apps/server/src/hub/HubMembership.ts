@@ -29,7 +29,9 @@ import { PERSON } from "../handoffs/HumanStepAuthority.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
-import { Added, Connection, decodeJson, LinkStatus, Probe } from "./hubOcxJson.ts";
+import { Added, Connection, decodeJson, LinkStatus } from "./hubOcxJson.ts";
+import { makeHubProbe } from "./hubProbe.ts";
+import * as DisposableRouteGuard from "./disposable/DisposableRouteGuard.ts";
 import * as HubParity from "./HubParity.ts";
 import {
   childConnectionAdmission,
@@ -233,13 +235,7 @@ const make = Effect.gen(function* () {
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
-  const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
-    const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
-    const offered = output.code === 0 ? decodeJson(Probe, output.stdout) : undefined;
-    return offered?.alias === alias
-      ? { ok: true as const, ...offered }
-      : { ok: false as const, phase: output.phase, message: output.message };
-  });
+  const { probe, disposableRoute } = yield* makeHubProbe(ocx);
 
   const unreachable = (error: HubOcxError) => ({
     outcome: "failed" as const,
@@ -391,6 +387,7 @@ const make = Effect.gen(function* () {
     readHomeLinks,
     homeUnavailable: (alias, forbidden, steps) => homeUnavailable("move", alias, steps, forbidden),
     probe,
+    disposableRoute,
     phaseMessage,
     request: (caller, input) => consent.request(caller, "move", input),
     approved: (caller, decisionId, binding) =>
@@ -614,6 +611,9 @@ const make = Effect.gen(function* () {
           { parity: verified, transport: "remote-link" },
         );
       }
+      // Both transports: a disposable machine is reached only through its own Pen route.
+      const refused = yield* disposableRoute(alias);
+      if (refused !== undefined) return result("join", alias, "failed", refused, steps);
       const platform = yield* ocx.devicePlatform(alias);
       const pinned = windowsRemoteLinkRelease(releases) !== undefined;
       const preflight = joinPreflight(alias, platform, input.transport, pinned);
@@ -625,8 +625,12 @@ const make = Effect.gen(function* () {
       });
       if (!preflight.ok)
         return result("join", alias, "failed", preflight.detail, steps, { transport });
-      if (transport === "hub-client")
+      if (transport === "hub-client") {
+        const byKey = yield* disposableRoute(alias, null, true);
+        if (byKey !== undefined)
+          return result("join", alias, "failed", byKey, steps, { transport });
         return yield* joinHubClient(scope, caller, alias, input.decisionId, steps);
+      }
       if (status === undefined) return homeUnavailable("join", alias, steps, true);
       if (!(yield* ocx.directAlias(alias)))
         return result(
@@ -989,4 +993,8 @@ const make = Effect.gen(function* () {
 });
 
 export const layerWithoutDependencies = Layer.effect(HubMembership, make);
-export const layer = layerWithoutDependencies.pipe(Layer.provide(ApprovalHandoffs.layer));
+// The probe only reads disposable records, so its guard's own store instance takes no shared lock.
+export const layer = layerWithoutDependencies.pipe(
+  Layer.provide(ApprovalHandoffs.layer),
+  Layer.provide(DisposableRouteGuard.layer),
+);

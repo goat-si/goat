@@ -382,10 +382,14 @@ export function createEnvironmentThreadDetailAtoms<E>(
   // Holds while only streamed assistant text moves, so the timeline re-renders on structure;
   // each streaming message reads its text through assistantMessageTextAtom.
   const timelineVisibleTurnItemsAtomFamily = Atom.family((key: string) => {
+    let previousInput = EMPTY_VISIBLE_TURN_ITEMS;
     let previous = EMPTY_VISIBLE_TURN_ITEMS;
     return Atom.make((get) => {
       const next = get(visibleTurnItemsAtomFamily(key));
-      if (!sameApartFromStreamedAssistantText(previous, next)) previous = next;
+      // The held value differs from the latest input only by streamed text, and that relation is
+      // transitive, so comparing consecutive inputs decides the same while keeping their hint.
+      if (!sameApartFromStreamedAssistantText(previousInput, next)) previous = next;
+      previousInput = next;
       return previous;
     }).pipe(
       Atom.setIdleTTL(0),
