@@ -17,7 +17,11 @@ const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Ato
 const NO_KEPT = Atom.make<unknown>(null);
 const keyOf = (kind: Kind, environmentId: EnvironmentId) =>
   `${generation}:${kind}:${environmentId}`;
-const following = new WeakSet<AtomRegistry.AtomRegistry>();
+// How many times each computer has left the catalog, per registry. A write prepared before a
+// removal is dropped, even when the same computer has been added again since.
+const removals = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, number>>();
+const removalsOf = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) =>
+  removals.get(registry)?.get(environmentId) ?? 0;
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
@@ -29,15 +33,19 @@ function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentI
 
 /** Once per registry: a computer that leaves the catalog loses what was kept for it. */
 function followCatalog(registry: AtomRegistry.AtomRegistry) {
-  if (following.has(registry)) return;
-  following.add(registry);
+  if (removals.has(registry)) return;
+  const counts = new Map<EnvironmentId, number>();
+  removals.set(registry, counts);
   let known = new Set<EnvironmentId>();
   registry.subscribe(
     environmentCatalog.catalogValueAtom,
     (catalog) => {
       const now = new Set(catalog.entries.keys());
       for (const environmentId of known)
-        if (!now.has(environmentId)) forget(registry, environmentId);
+        if (!now.has(environmentId)) {
+          counts.set(environmentId, (counts.get(environmentId) ?? 0) + 1);
+          forget(registry, environmentId);
+        }
       known = now;
     },
     { immediate: true },
@@ -64,6 +72,8 @@ export function useKeptPerComputer<A>(
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const settled = listed && live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
+  // The computer's removals as this render saw them; the write below is this render's answer.
+  const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
     if (environmentId === null) return;
@@ -71,12 +81,13 @@ export function useKeptPerComputer<A>(
       if (stored !== null) store(null);
       return;
     }
-    // The computer may have left the catalog since this render; its answer is no longer kept then.
-    const stillListed = registry
-      .get(environmentCatalog.catalogValueAtom)
-      .entries.has(environmentId);
-    if (stillListed && settled !== null && settled !== stored) store(settled);
-  }, [registry, environmentId, settled, stored, denied, store]);
+    // The computer may have left the catalog since this render, and even come back: its answer from
+    // before is not kept then.
+    const unchanged =
+      registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
+      removalsOf(registry, environmentId) === removalsAtRender;
+    if (unchanged && settled !== null && settled !== stored) store(settled);
+  }, [registry, environmentId, settled, stored, denied, store, removalsAtRender]);
   if (!offline || live.data !== null) return live.data;
   return listed ? stored : null;
 }

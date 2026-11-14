@@ -285,3 +285,41 @@ it("an answer already on its way to the kept list is not kept once its computer 
   );
   expect(memberNames()).toEqual([]);
 });
+
+it("an answer from before its computer was removed and added again is not kept", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
+  // Removed and added again after the roster rendered its answer, before that render's effects ran.
+  function RemoveAndReAddAfterRender() {
+    useLayoutEffect(() => {
+      registry.set(catalog.atom!, listed([]));
+      registry.set(catalog.atom!, listed(["env"]));
+    }, []);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+        <RemoveAndReAddAfterRender />
+      </RegistryContext>,
+    ),
+  );
+  state.connected = false;
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(memberNames()).toEqual([]);
+});
