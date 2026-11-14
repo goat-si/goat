@@ -187,4 +187,29 @@ describe("ResetCreditCoordinator", () => {
         );
       }).pipe(Effect.provide(ResetCreditCoordinator.layerTest)),
   );
+
+  it.effect(
+    "a link whose login directory does not exist yet keeps one pending key once it does",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const target = NodePath.join(root, "target");
+        const alias = NodePath.join(root, "alias");
+        yield* fs.symlink(target, alias);
+        const { redeem } = yield* ResetCreditCoordinator.ResetCreditCoordinator;
+        const keys = yield* Ref.make<ReadonlyArray<string>>([]);
+        const record = (key: string) => Ref.update(keys, (seen) => [...seen, key]);
+        yield* redeem(alias, (key) =>
+          record(key).pipe(Effect.andThen(Effect.fail("timed out" as const))),
+        ).pipe(Effect.result);
+        yield* fs.makeDirectory(target);
+        yield* redeem(alias, (key) => record(key).pipe(Effect.as("reset" as const)));
+        const [first, second] = yield* Ref.get(keys);
+        assert.strictEqual(second, first);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(ResetCreditCoordinator.layerTest, NodeServices.layer)),
+      ),
+  );
 });
