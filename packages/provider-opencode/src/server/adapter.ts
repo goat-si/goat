@@ -1,3 +1,4 @@
+import { makeCurrentLaunchEnvironment } from "./launchEnvironment.ts";
 import { settingsSecretLiteral } from "@goat/contracts";
 import type {
   Event as OpenCodeEvent,
@@ -77,7 +78,6 @@ import {
   structuralProtocolMethod,
   summarizeNativeProtocolPayload,
 } from "@goat/provider-core/server/nativeProtocolLogging";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildSessionRuntimeInstructions } from "./screenInstructions.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -3727,9 +3727,11 @@ export const OpenCodeAdapterV2Driver: ProviderAdapterDriver<
   create: Effect.fn("OpenCodeAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<OpenCodeSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
-      const currentEnvironment = Effect.suspend(() =>
-        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
+      const currentEnvironment = makeCurrentLaunchEnvironment(
+        input.environment,
+        hostEnvironment,
+        yield* HostProcess.HomeDirectory,
+      );
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       return yield* makeOpenCodeAdapterV2({
         instanceId: input.instanceId,

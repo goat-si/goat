@@ -9,6 +9,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { LaunchEnvironment } from "./launchEnvironment.ts";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
 
 export interface ProbedOpenCode {
@@ -172,19 +173,50 @@ export const probeOpenCodeRuntime = (
     ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
     : probeOpenCodeBinary(settings.binaryPath, environment);
 
-// Only 2.x is kept: 1.x can be upgraded in place while GOAT runs, and 2.x converts the shared
-// database, so going back is unsupported.
-export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode, E>) =>
-  Effect.map(
-    Cache.makeWith(() => probe, {
-      capacity: 1,
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit) && exit.value.generation === "v2" ? Duration.infinity : Duration.zero,
-    }),
+// Keep only the successful probe for the selected executable and environment.
+export const makeOpenCodeRuntimeProbe = <E>(
+  probe: Effect.Effect<ProbedOpenCode, E>,
+  environment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed({}),
+  executableIdentity: (environment: NodeJS.ProcessEnv) => Effect.Effect<unknown> = () =>
+    Effect.succeed(null),
+) => {
+  const key = environment.pipe(
+    Effect.flatMap((env) =>
+      executableIdentity(env).pipe(
+        Effect.map((executable) =>
+          JSON.stringify({
+            environment: Object.fromEntries(
+              Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
+            ),
+            executable,
+          }),
+        ),
+      ),
+    ),
+  );
+  return Effect.map(
+    Cache.makeWith(
+      (identity: string) =>
+        probe.pipe(
+          Effect.provideService(
+            LaunchEnvironment,
+            (JSON.parse(identity) as { environment: NodeJS.ProcessEnv }).environment,
+          ),
+        ),
+      {
+        capacity: 1,
+        timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+      },
+    ),
     (cache) => ({
-      get: Cache.get(cache, undefined),
-      refresh: Cache.refresh(cache, undefined),
-      lastSuccess: Cache.getSuccess(cache, undefined),
-      record: (probed: ProbedOpenCode) => Cache.set(cache, undefined, probed),
+      identity: key,
+      lastSuccessAt: (identity: string) => Cache.getSuccess(cache, identity),
+      recordAt: (identity: string, probed: ProbedOpenCode) => Cache.set(cache, identity, probed),
+      get: Effect.flatMap(key, (identity) => Cache.get(cache, identity)),
+      refresh: Effect.flatMap(key, (identity) => Cache.refresh(cache, identity)),
+      lastSuccess: Effect.flatMap(key, (identity) => Cache.getSuccess(cache, identity)),
+      record: (probed: ProbedOpenCode) =>
+        Effect.flatMap(key, (identity) => Cache.set(cache, identity, probed)),
     }),
   );
+};

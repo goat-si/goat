@@ -197,8 +197,12 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       );
       const first = yield* instance.snapshot.resolveMaintenance();
       assert.strictEqual(first.installPath, `${oldDir}/opencode`);
-      yield* fs.remove(`${oldDir}/opencode`);
       assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).installPath,
+        first.installPath,
+      );
+      yield* fs.remove(`${oldDir}/opencode`);
+      assert.notStrictEqual(
         (yield* instance.snapshot.resolveMaintenance()).installPath,
         first.installPath,
       );

@@ -22,9 +22,10 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as OpenCodeAdapterV2 from "./adapter.ts";
 import * as OpenCode2AdapterV2 from "./v2/adapter.ts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
 import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
@@ -43,6 +44,7 @@ import {
 } from "./status.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { LaunchEnvironment, currentLaunchEnvironment } from "./launchEnvironment.ts";
 import {
   makeOpenCodeRuntimeProbe,
   probeOpenCodeRuntime,
@@ -114,6 +116,7 @@ function byOpenCodeRuntime<A, E, R, PE>(
 function selectOpenCodeRuntimeAdapter(input: {
   readonly probe: OpenCodeRuntimeProbe;
   readonly resolve: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>;
+  readonly currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>;
   readonly v1: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly v2: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly sessionConfigKey: string;
@@ -129,18 +132,57 @@ function selectOpenCodeRuntimeAdapter(input: {
     planSelectionTransition: (transition) =>
       Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
     openSession: (session) =>
-      Effect.flatMap(pick(input.resolve), (adapter) => adapter.openSession(session)),
+      input.currentEnvironment.pipe(
+        Effect.flatMap((environment) =>
+          input.resolve.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: DRIVER_KIND,
+                  providerSessionId: session.providerSessionId,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((result) =>
+              (result.generation === "v2" ? input.v2 : input.v1).openSession(session),
+            ),
+            Effect.provideService(LaunchEnvironment, environment),
+          ),
+        ),
+      ),
   };
 }
 
 function selectOpenCodeRuntimeTextGeneration(
   probe: OpenCodeRuntimeProbe,
   resolve: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>,
+  currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>,
   v1: ProviderTextGeneration,
   v2: ProviderTextGeneration,
 ): ProviderTextGeneration {
   // Memory preflight must not start a probe/server before the identity/isolation gates.
   const memoryProbe = Effect.map(probe.lastSuccess, Option.getOrUndefined);
+  const select = <A, E, R, PE>(
+    operation: string,
+    probe: Effect.Effect<ProbedOpenCode | undefined, PE>,
+    paths: { readonly v1: Effect.Effect<A, E, R>; readonly v2: Effect.Effect<A, E, R> },
+  ) =>
+    currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        probe.pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "Could not determine the OpenCode runtime version.",
+                cause,
+              }),
+          ),
+          Effect.flatMap((result) => (result?.generation === "v2" ? paths.v2 : paths.v1)),
+          Effect.provideService(LaunchEnvironment, environment),
+        ),
+      ),
+    );
   const unsupportedMemory = (operation: MemoryOperationName) =>
     Effect.fail(
       new TextGenerationError({
@@ -151,7 +193,7 @@ function selectOpenCodeRuntimeTextGeneration(
     );
   return {
     resolveMemoryConflict: (input) =>
-      byOpenCodeRuntime(memoryProbe, {
+      select("resolveMemoryConflict", memoryProbe, {
         v1:
           v1.resolveMemoryConflict === undefined
             ? unsupportedMemory("resolveMemoryConflict")
@@ -162,7 +204,7 @@ function selectOpenCodeRuntimeTextGeneration(
             : v2.resolveMemoryConflict(input),
       }),
     generateMemorySummary: (input) =>
-      byOpenCodeRuntime(memoryProbe, {
+      select("generateMemorySummary", memoryProbe, {
         v1:
           v1.generateMemorySummary === undefined
             ? unsupportedMemory("generateMemorySummary")
@@ -173,27 +215,27 @@ function selectOpenCodeRuntimeTextGeneration(
             : v2.generateMemorySummary(input),
       }),
     generateCommitMessage: (input) =>
-      byOpenCodeRuntime(resolve, {
+      select("generateCommitMessage", resolve, {
         v1: v1.generateCommitMessage(input),
         v2: v2.generateCommitMessage(input),
       }),
     generatePrContent: (input) =>
-      byOpenCodeRuntime(resolve, {
+      select("generatePrContent", resolve, {
         v1: v1.generatePrContent(input),
         v2: v2.generatePrContent(input),
       }),
     generateBranchName: (input) =>
-      byOpenCodeRuntime(resolve, {
+      select("generateBranchName", resolve, {
         v1: v1.generateBranchName(input),
         v2: v2.generateBranchName(input),
       }),
     generateThreadTitle: (input) =>
-      byOpenCodeRuntime(resolve, {
+      select("generateThreadTitle", resolve, {
         v1: v1.generateThreadTitle(input),
         v2: v2.generateThreadTitle(input),
       }),
     generateReviewGuide: (input) =>
-      byOpenCodeRuntime(resolve, {
+      select("generateReviewGuide", resolve, {
         v1: v1.generateReviewGuide(input),
         v2: v2.generateReviewGuide(input),
       }),
@@ -241,9 +283,12 @@ export const OpenCodeDriver: ProviderDriver<
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
     const hostEnvironment = yield* HostProcess.Environment;
-    const currentEnvironment = Effect.suspend(() =>
-      mergeProviderInstanceEnvironment(environment, hostEnvironment),
-    ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
+    const currentEnvironment = currentLaunchEnvironment(
+      Effect.suspend(() => mergeProviderInstanceEnvironment(environment, hostEnvironment)).pipe(
+        Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
+        Effect.map((env) => ({ ...env })),
+      ),
+    );
     const processEnv = yield* currentEnvironment;
     const probeEnvironment = currentEnvironment.pipe(Effect.map(providerProbeEnvironment));
     const continuationIdentity = defaultProviderContinuationIdentity({
@@ -268,24 +313,46 @@ export const OpenCodeDriver: ProviderDriver<
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       );
+    const resolveExecutable = yield* SpawnExecutableResolution;
+    const platform = yield* HostProcess.Platform;
+    const executableIdentity = (env: NodeJS.ProcessEnv) => {
+      if (effectiveConfig.serverUrl.trim().length > 0) return Effect.succeed(null);
+      const path = resolveExecutable(effectiveConfig.binaryPath, platform, env);
+      if (path === undefined) return Effect.succeed({ path: effectiveConfig.binaryPath });
+      return fileSystem.stat(path).pipe(
+        Effect.map((stat) => ({
+          path,
+          dev: String(stat.dev),
+          ino: Option.match(stat.ino, { onNone: () => null, onSome: String }),
+          mtime: Option.match(stat.mtime, { onNone: () => null, onSome: (date) => date.getTime() }),
+          size: String(stat.size),
+        })),
+        Effect.orElseSucceed(() => ({ path })),
+      );
+    };
     const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
       probeEnvironment.pipe(Effect.flatMap(probeRuntime)),
+      currentEnvironment,
+      executableIdentity,
     );
     const resolveRuntime =
       effectiveConfig.serverUrl.trim().length > 0
         ? runtimeProbe.get
-        : runtimeProbe.lastSuccess.pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  currentEnvironment.pipe(
-                    Effect.flatMap(probeRuntime),
-                    Effect.tap(runtimeProbe.record),
-                  ),
-              }),
-            ),
-          );
+        : Effect.gen(function* () {
+            const identity = yield* runtimeProbe.identity;
+            const cached = yield* runtimeProbe.lastSuccessAt(identity);
+            const result = Option.isSome(cached)
+              ? cached.value
+              : yield* probeRuntime(yield* currentEnvironment);
+            if ((yield* runtimeProbe.identity) !== identity) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "resolveRuntime",
+                detail: "The OpenCode executable changed during its version check; try again.",
+              });
+            }
+            if (Option.isNone(cached)) yield* runtimeProbe.recordAt(identity, result);
+            return result;
+          });
     const noUpdate = makeManualOnlyProviderMaintenanceCapabilities({
       provider: DRIVER_KIND,
       packageName: null,
@@ -294,23 +361,21 @@ export const OpenCodeDriver: ProviderDriver<
       probed: typeof runtimeProbe.get,
       lookupEnvironment = currentEnvironment,
     ) =>
-      probed.pipe(
-        Effect.map((result) => result.generation),
-        Effect.option,
-        Effect.flatMap((generation) =>
-          Option.isNone(generation)
-            ? Effect.succeed(noUpdate)
-            : lookupEnvironment.pipe(
-                Effect.flatMap((env) =>
-                  resolveProviderMaintenanceCapabilitiesEffect(
+      lookupEnvironment.pipe(
+        Effect.flatMap((env) =>
+          probed.pipe(
+            Effect.map((result) => result.generation),
+            Effect.option,
+            Effect.flatMap((generation) =>
+              Option.isNone(generation)
+                ? Effect.succeed(noUpdate)
+                : resolveProviderMaintenanceCapabilitiesEffect(
                     openCodeUpdateFor(generation.value),
-                    {
-                      binaryPath: effectiveConfig.binaryPath,
-                      env,
-                    },
+                    { binaryPath: effectiveConfig.binaryPath, env },
                   ),
-                ),
-              ),
+            ),
+            Effect.provideService(LaunchEnvironment, env),
+          ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -319,34 +384,12 @@ export const OpenCodeDriver: ProviderDriver<
     const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
       maintenanceFor(runtimeProbe.get),
       {
-        key: currentEnvironment.pipe(
-          Effect.map((env) =>
-            JSON.stringify({
-              binaryPath: effectiveConfig.binaryPath,
-              PATH: env.PATH,
-              Path: env.Path,
-              path: env.path,
-              PATHEXT: env.PATHEXT,
-              Pathext: env.Pathext,
-            }),
-          ),
-        ),
-        resolve: (key) => {
-          const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
-          return maintenanceFor(
+        key: runtimeProbe.identity,
+        resolve: (key) =>
+          maintenanceFor(
             runtimeProbe.get,
-            currentEnvironment.pipe(
-              Effect.map((env) => ({
-                ...env,
-                PATH: lookupEnv.PATH,
-                Path: lookupEnv.Path,
-                path: lookupEnv.path,
-                PATHEXT: lookupEnv.PATHEXT,
-                Pathext: lookupEnv.Pathext,
-              })),
-            ),
-          );
-        },
+            Effect.succeed((JSON.parse(key) as { environment: NodeJS.ProcessEnv }).environment),
+          ),
       },
     );
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
@@ -407,6 +450,7 @@ export const OpenCodeDriver: ProviderDriver<
     const orchestrationAdapter = selectOpenCodeRuntimeAdapter({
       probe: runtimeProbe,
       resolve: resolveRuntime,
+      currentEnvironment,
       v1: openCodeV1Adapter,
       v2: yield* OpenCode2AdapterV2.make(instanceId).pipe(
         Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server),
@@ -494,6 +538,7 @@ export const OpenCodeDriver: ProviderDriver<
     const textGeneration = selectOpenCodeRuntimeTextGeneration(
       runtimeProbe,
       resolveRuntime,
+      currentEnvironment,
       yield* makeOpenCodeTextGeneration(effectiveConfig, {
         environment: processEnv,
         currentEnvironment,

@@ -160,7 +160,30 @@ describe("OpenCode version probe", () => {
     }),
   );
 
-  it.effect("remembers a probed 2.x runtime but re-probes 1.x and failures", () =>
+  it.effect("reprobes when the executable on PATH changes", () =>
+    Effect.gen(function* () {
+      let path = "/v2";
+      let calls = 0;
+      const probe = yield* makeOpenCodeRuntimeProbe(
+        Effect.sync(() => {
+          calls++;
+          return path === "/v2"
+            ? { generation: "v2" as const, version: "2.0.18" }
+            : { generation: "v1" as const, version: "1.18.32" };
+        }),
+        Effect.sync(() => ({ PATH: path })),
+      );
+      assert.strictEqual((yield* probe.get).generation, "v2");
+      assert.strictEqual((yield* probe.get).generation, "v2");
+      assert.strictEqual(calls, 1);
+      path = "/v1";
+      assert.strictEqual((yield* probe.get).generation, "v1");
+      assert.strictEqual((yield* probe.get).generation, "v1");
+      assert.strictEqual(calls, 2);
+    }),
+  );
+
+  it.effect("remembers a successful runtime but re-probes failures", () =>
     Effect.gen(function* () {
       const outputs = ["", "opencode v2.0.18\n", "1.18.32\n", "1.18.32\n"];
       let calls = 0;
@@ -192,7 +215,7 @@ describe("OpenCode version probe", () => {
       assert.strictEqual((yield* probe.refresh).generation, "v1");
       assert.strictEqual(calls, 3);
       assert.strictEqual((yield* probe.get).generation, "v1");
-      assert.strictEqual(calls, 4);
+      assert.strictEqual(calls, 3);
     }),
   );
 });
