@@ -46,7 +46,12 @@ import {
 } from "./status.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
-import { LaunchEnvironment, currentLaunchEnvironment } from "./launchEnvironment.ts";
+import {
+  LaunchEnvironment,
+  currentLaunchEnvironment,
+  makeCurrentLaunchEnvironment,
+} from "./launchEnvironment.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
 import {
   makeOpenCodeRuntimeProbe,
   probeOpenCodeRuntime,
@@ -383,9 +388,10 @@ export const OpenCodeDriver: ProviderDriver<
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
     const hostEnvironment = yield* HostProcess.Environment;
+    const home = yield* HostProcess.HomeDirectory;
     const currentEnvironment = currentLaunchEnvironment(
       Effect.suspend(() => mergeProviderInstanceEnvironment(environment, hostEnvironment)).pipe(
-        Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
+        Effect.provideService(HostProcess.HomeDirectory, home),
         Effect.map((env) => ({ ...env })),
       ),
     );
@@ -484,9 +490,19 @@ export const OpenCodeDriver: ProviderDriver<
     const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
       maintenanceFor(runtimeProbe.get),
       {
-        // The probe identity already fingerprints the executable it would run.
-        lookup: Effect.all({ env: currentEnvironment, install: runtimeProbe.identity }).pipe(
-          Effect.map(({ env, install }) => ({ env, resolvedCommandPath: null, install })),
+        // The probe identity fingerprints the executable and the merged environment; the hash of
+        // the host snapshot resolveMaintenance provides joins it, because a native install's npm
+        // advisory reads the host environment, where an instance override can mask a change.
+        lookup: Effect.all({
+          env: currentEnvironment,
+          identity: runtimeProbe.identity,
+          host: HostProcess.Environment,
+        }).pipe(
+          Effect.map(({ env, identity, host }) => ({
+            env,
+            resolvedCommandPath: null,
+            install: `${identity}\0${hostEnvironmentHash(host)}`,
+          })),
         ),
         resolve: ({ env }) => maintenanceFor(runtimeProbe.get, Effect.succeed(env)),
       },
@@ -494,17 +510,21 @@ export const OpenCodeDriver: ProviderDriver<
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
       !effectiveConfig.enabled
         ? Effect.succeed(noUpdate)
-        : currentEnvironment.pipe(
-            Effect.flatMap((env) =>
-              (options?.fresh === true
-                ? runtimeProbe.refresh.pipe(
-                    Effect.ignore,
-                    Effect.andThen(cachedMaintenance({ fresh: true })),
-                  )
-                : cachedMaintenance()
-              ).pipe(Effect.provideService(LaunchEnvironment, env)),
-            ),
-          );
+        : Effect.suspend(() => {
+            const snapshot = { ...hostEnvironment };
+            return makeCurrentLaunchEnvironment(environment, snapshot, home).pipe(
+              Effect.flatMap((env) =>
+                (options?.fresh === true
+                  ? runtimeProbe.refresh.pipe(
+                      Effect.ignore,
+                      Effect.andThen(cachedMaintenance({ fresh: true })),
+                    )
+                  : cachedMaintenance()
+                ).pipe(Effect.provideService(LaunchEnvironment, env)),
+              ),
+              Effect.provideService(HostProcess.Environment, snapshot),
+            );
+          });
     const openCodeV1Adapter = yield* OpenCodeAdapterV2.OpenCodeAdapterV2Driver.create({
       instanceId,
       displayName,

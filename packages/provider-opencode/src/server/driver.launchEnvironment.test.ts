@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/http/HttpClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -265,5 +266,66 @@ it.layer(layer)("OpenCodeDriver launch environment", (it) => {
         yield* overridden.snapshot.refresh;
         assert.strictEqual(environments.at(-1)?.PATH, "/usr/bin:/bin");
       }).pipe(Effect.scoped),
+  );
+
+  // The npm and OpenCode fixtures are POSIX shell scripts, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host registry change an instance override masks reaches the next native advisory",
+    () => {
+      // Lookups run with the caller's context, so the whole test sees this host environment.
+      const host: NodeJS.ProcessEnv = {
+        PATH: "",
+        HOME: "/",
+        NPM_CONFIG_REGISTRY: "https://x.example",
+      };
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        // The curl installer's own binary, so OpenCode updates natively and npm only advises.
+        const binaryPath = `${root}/.opencode/bin/opencode`;
+        yield* fs.makeDirectory(`${root}/.opencode/bin`, { recursive: true });
+        yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+        yield* fs.chmod(binaryPath, 0o755);
+        const dirs = [`${root}/first`, `${root}/second`];
+        for (const dir of dirs) {
+          yield* fs.makeDirectory(dir);
+          yield* fs.writeFileString(
+            `${dir}/npm`,
+            `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *instance*) echo '"9.0.0"';; *) echo '"1.0.0"';; esac\n`,
+          );
+          yield* fs.chmod(`${dir}/npm`, 0o755);
+        }
+        host.PATH = dirs[0]!;
+        host.HOME = root;
+        const instance = yield* OpenCodeDriver.create({
+          instanceId: ProviderInstanceId.make("opencode-masked-registry"),
+          displayName: undefined,
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          enabled: true,
+          config: { ...OpenCodeDriver.defaultConfig(), binaryPath },
+        }).pipe(
+          Effect.provideService(HttpClient.HttpClient, noHttp),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
+        );
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // A native install's advisory reads the host registry; the instance's own one masks it.
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("50 minutes");
+        host.PATH = dirs[1]!;
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("5 minutes");
+        host.NPM_CONFIG_REGISTRY = "https://y.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.provideService(HostProcess.Environment, host), Effect.scoped);
+    },
   );
 });
