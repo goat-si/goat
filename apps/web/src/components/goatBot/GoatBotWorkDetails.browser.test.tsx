@@ -318,3 +318,77 @@ it("tells two launches on the same machine apart by their thread titles", async 
     .element(screen.getByRole("link", { name: "Restart 3775 on macbookpro2" }))
     .toHaveAttribute("href", "/env-macbook/restart-3775");
 });
+
+const codingRows = (titles: ReadonlyArray<readonly [string, string]>) => [
+  taskWithThreads[0]!,
+  ...titles.map(([threadId, title]) =>
+    decodeRow({
+      kind: "coding",
+      taskId: "task-1",
+      environmentId: "env-studio",
+      threadId,
+      title,
+      state: "bound",
+      lastActivityAt: at,
+    }),
+  ),
+];
+const legacyDetails = (detailRows: readonly BotThreadRow[]) => (
+  <GoatBotWorkDetails
+    environmentId={studio}
+    taskId={ChannelTaskId.make("task-1")}
+    rows={detailRows}
+    remoteWork={[]}
+  />
+);
+const hrefsNamed = (screen: Awaited<ReturnType<typeof render>>, name: string) =>
+  screen
+    .getByRole("link", { name, exact: true })
+    .elements()
+    .map((element) => element.getAttribute("href"));
+
+it("a coding thread titled only with spaces reads Open work thread", async () => {
+  setup();
+  await using screen = await render(legacyDetails(codingRows([["coding-blank", "   "]])));
+  await expect.element(screen.getByRole("link", { name: "Open work thread" }).nth(1)).toBeVisible();
+  expect(hrefsNamed(screen, "Open work thread")).toEqual([
+    "/env-studio/worker-1",
+    "/env-studio/coding-blank",
+  ]);
+});
+
+it("a launch whose thread title is only spaces reads Open work thread on its host", async () => {
+  setup(["env-macbook"]);
+  state.shellTitles = { "restart-3774": "   " };
+  await using screen = await render(details());
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on macbookpro2" }))
+    .toHaveAttribute("href", "/env-macbook/restart-3774");
+});
+
+it("two coding threads with the same title both show, each opening its own thread", async () => {
+  setup();
+  await using screen = await render(
+    legacyDetails(
+      codingRows([
+        ["coding-1", "Fix the build"],
+        ["coding-2", "Fix the build"],
+      ]),
+    ),
+  );
+  await expect.element(screen.getByRole("link", { name: "Fix the build" }).nth(1)).toBeVisible();
+  expect(hrefsNamed(screen, "Fix the build")).toEqual([
+    "/env-studio/coding-1",
+    "/env-studio/coding-2",
+  ]);
+});
+
+it("a coding thread titled like its task keeps that title", async () => {
+  setup();
+  await using screen = await render(
+    legacyDetails(codingRows([["coding-same", "Restart the 3774 server"]])),
+  );
+  await expect
+    .element(screen.getByRole("link", { name: "Restart the 3774 server" }))
+    .toHaveAttribute("href", "/env-studio/coding-same");
+});
