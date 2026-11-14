@@ -44,6 +44,10 @@ other requests that need your attention, including requests from hidden bots. Ex
 an item to open its task. Use the **Open next bot ask** command to move through them. When more
 wait than the list shows, **Show more** lists the next ones.
 
+On a phone, while the computer GOAT Bot runs on is offline, the Bots list and **Needs you** show
+what the phone last read from it, which may be out of date. You can open a bot's conversation, but
+bots can't be added or changed until the computer is back. Closing the app forgets that list.
+
 ## The face
 
 Each bot's avatar shows what it is doing:
