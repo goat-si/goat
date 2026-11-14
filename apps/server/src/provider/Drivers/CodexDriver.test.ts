@@ -1,13 +1,9 @@
-import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
-import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
-import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
@@ -15,7 +11,6 @@ import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -26,84 +21,23 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
-import * as ServerSettings from "../../serverSettings.ts";
-import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import * as ModelManifest from "../ModelManifest.ts";
 import {
   createProviderVersionAdvisory,
   resolveLatestProviderVersion,
 } from "@goat/provider-core/server/maintenanceResolver";
 import { CodexDriver } from "./CodexDriver.ts";
 import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
-import * as ProviderHostLive from "../ProviderHostLive.ts";
 import {
   deriveProviderInstanceEntries,
   isProviderInstancePickerReady,
 } from "../../../../web/src/providerInstances.ts";
 import { getProviderSummary } from "../../../../web/src/components/settings/providerStatus.ts";
 import { mergeProviderSnapshot } from "../ProviderRegistry.ts";
-
-const layerDeps = ServerConfig.layerTest(process.cwd(), {
-  prefix: "goat-codex-driver-maintenance-",
-}).pipe(
-  Layer.provideMerge(NodeServices.layer),
-  Layer.provideMerge(Layer.succeed(HostProcess.Environment, { PATH: "" })),
-  Layer.provideMerge(IdAllocator.layer),
-  Layer.provideMerge(McpProviderSessions.layer),
-  Layer.provideMerge(
-    Layer.mock(CodexAdapterV2.CodexAppServerClientFactory)({
-      open: () => Effect.die("Maintenance resolution must not open a Codex session"),
-    }),
-  ),
-  Layer.provideMerge(
-    Layer.mock(CodexInstallation.CodexInstallation)({
-      managedDirectory: "unused-managed-installation",
-    }),
-  ),
-  Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
-  Layer.provideMerge(
-    Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
-      endpoint: Effect.succeed("unused-private-pipe"),
-      awaitIdle: Effect.void,
-    }),
-  ),
-  Layer.provideMerge(
-    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
-    }),
-  ),
-  Layer.provideMerge(MemoryDerivedCache.layer),
-  Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provideMerge(ModelManifest.layerTest),
-  Layer.provideMerge(ResetCreditCoordinator.layerTest),
-  Layer.provideMerge(
-    Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
-    }),
-  ),
-  Layer.provideMerge(
-    Layer.succeed(
-      ProviderEventLoggers.ProviderEventLoggers,
-      ProviderEventLoggers.NoOpProviderEventLoggers,
-    ),
-  ),
-  Layer.provideMerge(ProviderLatestVersions.layer),
-  Layer.provideMerge(
-    Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() => Effect.die("Disabled Codex must not make an HTTP request")),
-    ),
-  ),
-);
-const layerTest = ProviderHostLive.layer.pipe(Layer.provideMerge(layerDeps));
+import { layerTest } from "./CodexDriver.testkit.ts";
 
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
@@ -116,7 +50,7 @@ const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unkno
 it.layer(layerTest)("CodexDriver", (it) => {
   // The fixture executables are POSIX shell scripts, which Windows cannot execute.
   it.effect.skipIf(windowsHost)(
-    "regression #3079: status and maintenance read current host PATH while instance PATH wins",
+    "regression #3079: status, maintenance and text generation follow the current host PATH and CODEX_HOME while instance values win",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -147,7 +81,14 @@ it.layer(layerTest)("CodexDriver", (it) => {
             displayName: "Codex PATH test",
             enabled: true,
             environment: override
-              ? [{ name: "PATH", value: oldBin, sensitive: false }]
+              ? [
+                  { name: "PATH", value: oldBin, sensitive: false },
+                  {
+                    name: "CODEX_HOME",
+                    value: NodePath.join(root, "instance-home"),
+                    sensitive: false,
+                  },
+                ]
               : [{ name: "TEST_VAR", value: "1", sensitive: false }],
             config: { ...CodexDriver.defaultConfig(), binaryPath: "codex" },
           }).pipe(
@@ -172,7 +113,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
         );
         yield* inherited.snapshot.refresh;
         expect(paths.at(-1)).toBe(newBin);
-        expect(homes.at(-1)).toBe(NodePath.join(root, ".codex"));
+        expect(homes.at(-1)).toBe(NodePath.join(root, "other"));
         const beforeGeneration = homes.length;
         yield* inherited.textGeneration
           .generateThreadTitle({
@@ -182,15 +123,55 @@ it.layer(layerTest)("CodexDriver", (it) => {
           })
           .pipe(Effect.exit);
         expect(homes.length).toBeGreaterThan(beforeGeneration);
-        expect(homes.at(-1)).toBe(NodePath.join(root, ".codex"));
+        expect(homes.at(-1)).toBe(NodePath.join(root, "other"));
         yield* overridden.snapshot.refresh;
         expect(paths.at(-1)).toBe(oldBin);
+        expect(homes.at(-1)).toBe(NodePath.join(root, "instance-home"));
         expect((yield* inherited.snapshot.resolveMaintenance()).update?.executable).toBe(
           NodePath.join(newBin, "codex"),
         );
         expect((yield* overridden.snapshot.resolveMaintenance()).update?.executable).toBe(
           NodePath.join(oldBin, "codex"),
         );
+      }).pipe(Effect.scoped),
+  );
+  // The fixture executable is a POSIX shell script, which Windows cannot execute.
+  it.effect.skipIf(windowsHost)(
+    "an instance with its own Codex home setting ignores a later host CODEX_HOME",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const homes: Array<string | undefined> = [];
+        const observedSpawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) homes.push(command.options.env?.CODEX_HOME);
+          return spawner.spawn(command);
+        });
+        const root = yield* fs.makeTempDirectoryScoped();
+        const bin = NodePath.join(root, "bin");
+        yield* fs.makeDirectory(bin, { recursive: true });
+        yield* fs.writeFileString(NodePath.join(bin, "codex"), "#!/bin/sh\n");
+        yield* fs.chmod(NodePath.join(bin, "codex"), 0o755);
+        const host: NodeJS.ProcessEnv = { PATH: bin };
+        const configured = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("home-setting"),
+          displayName: "Codex home setting test",
+          enabled: true,
+          environment: [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: "codex",
+            homePath: NodePath.join(root, "configured"),
+          },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
+        );
+        host.CODEX_HOME = NodePath.join(root, "later");
+        yield* configured.snapshot.refresh;
+        expect(homes.length).toBeGreaterThan(0);
+        expect(homes.at(-1)).toBe(NodePath.join(root, "configured"));
       }).pipe(Effect.scoped),
   );
   it.effect.each(["ready", "initialize-error", "signed-out"] as const)(
