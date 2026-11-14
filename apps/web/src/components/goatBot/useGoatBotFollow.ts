@@ -166,8 +166,8 @@ export function useGoatBotFollow({
         }
       }
     }
-    if (!initialized.current || baselineIds === null) return;
     onExposure?.(rows);
+    if (!initialized.current || baselineIds === null) return;
     if (baselineIds !== undefined && sourceIds !== undefined) {
       for (const id of sourceIds) if (!baselineIds.has(id)) eligibleSources.add(id);
     }
