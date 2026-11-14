@@ -55,6 +55,7 @@ export interface CursorAuthOptions {
   readonly currentApiKey?: Effect.Effect<string | undefined>;
   readonly store: SdkCredentialStore;
   readonly credentialBinding?: NonNullable<ProviderAuthController["credentialBinding"]>;
+  readonly verifyKey: (key: string) => Effect.Effect<void, ProviderSetupError>;
   readonly onChanged: (signedIn: boolean) => Effect.Effect<void, ProviderSetupError>;
   readonly login?: (options: SdkLoginOptions) => Promise<SdkLoginResult>;
 }
@@ -249,12 +250,23 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
             authorizationUrl: null,
             message: "Checking Cursor sign-in.",
           });
-          yield* Effect.tryPromise({
+          const credentials = yield* Effect.tryPromise({
             try: async () => {
               const credentials = await pendingStore.load();
               if (!credentials) throw new Error("Cursor login did not return credentials");
-              await options.store.save(credentials);
+              return credentials;
             },
+            catch: (cause) =>
+              new ProviderSetupError({
+                instanceId: options.instanceId,
+                operation: "start",
+                detail: "Could not read the Cursor sign-in. Try again.",
+                cause,
+              }),
+          });
+          yield* options.verifyKey(credentials.apiKey);
+          yield* Effect.tryPromise({
+            try: () => options.store.save(credentials),
             catch: (cause) =>
               new ProviderSetupError({
                 instanceId: options.instanceId,
@@ -283,7 +295,9 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
             phase: "succeeded",
             authorizationUrl: null,
             expiresAt: null,
-            message: "Signed in with Cursor.",
+            message: (yield* usesApiKey)
+              ? "Cursor sign-in saved, but CURSOR_API_KEY currently overrides it."
+              : "Signed in with Cursor.",
           });
         }).pipe(Effect.uninterruptible),
       );

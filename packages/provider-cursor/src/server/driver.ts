@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { readCursorUsageLimits } from "./usageLimits.ts";
 
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
@@ -142,6 +143,36 @@ export const CursorDriver: ProviderDriver<
       ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
       currentApiKey: currentEnvironment.pipe(Effect.map((env) => env.CURSOR_API_KEY)),
       store: credentials.store,
+      verifyKey: (key) =>
+        currentEnvironment.pipe(
+          Effect.flatMap((env) =>
+            httpClient.execute(
+              HttpClientRequest.get(
+                `${(env.CURSOR_BACKEND_URL || "https://api.cursor.com").replace(/\/$/, "")}/v1/me`,
+              ).pipe(HttpClientRequest.bearerToken(key)),
+            ),
+          ),
+          Effect.flatMap((response) =>
+            response.status >= 200 && response.status < 300
+              ? Effect.void
+              : Effect.fail(
+                  new ProviderSetupError({
+                    instanceId,
+                    operation: "start",
+                    detail: "Could not verify the Cursor browser sign-in. Try again.",
+                  }),
+                ),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new ProviderSetupError({
+                instanceId,
+                operation: "start",
+                detail: "Could not verify the Cursor browser sign-in. Try again.",
+                cause,
+              }),
+          ),
+        ),
       credentialBinding: credentials.binding,
       onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
         snapshot.refresh.pipe(

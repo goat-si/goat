@@ -42,6 +42,7 @@ const makeHarness = Effect.fn("makeCursorAuthHarness")(function* (
     displayName: "Personal Cursor",
     enabled: true,
     store,
+    verifyKey: () => Effect.void,
     onChanged: (signedIn) =>
       Effect.sync(() => {
         changes.push(signedIn);
@@ -141,6 +142,27 @@ it.layer(NodeServices.layer)("CursorAuth", (it) => {
       expect(harness.changes).toEqual([true]);
       expect(Object.values(succeeded)).not.toContain("browser-key");
       expect(yield* Effect.promise(() => harness.store.load())).toEqual(harness.credentials);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reports an environment override after verifying the browser key", () =>
+    Effect.gen(function* () {
+      let environmentKey: string | undefined;
+      const verified: string[] = [];
+      const harness = yield* makeHarness({
+        currentApiKey: Effect.sync(() => environmentKey),
+        verifyKey: (key) =>
+          Effect.sync(() => {
+            verified.push(key);
+          }),
+      });
+      yield* harness.auth.controller.start(owner);
+      yield* phase(harness.auth, "waiting");
+      environmentKey = "environment-key";
+      harness.complete.resolve();
+      const succeeded = yield* phase(harness.auth, "succeeded");
+      expect(verified).toEqual(["browser-key"]);
+      expect(succeeded.message).toContain("CURSOR_API_KEY currently overrides");
     }).pipe(Effect.scoped),
   );
 
