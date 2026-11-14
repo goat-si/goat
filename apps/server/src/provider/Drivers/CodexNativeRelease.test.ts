@@ -98,7 +98,7 @@ it.layer(layerTest)("Codex native release", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-codex-driver-" })
+        .makeTempDirectoryScoped({ prefix: "goat-codex-driver-" })
         .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
       const home = NodePath.join(tempDir, "codex-home");
       const binaryPath = NodePath.join(home, "packages", "standalone", "current", "bin", "codex");
