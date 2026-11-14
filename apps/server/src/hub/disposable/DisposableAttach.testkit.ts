@@ -210,7 +210,13 @@ export const fakePen = () => {
   return { service, control, book, members };
 };
 
-export type World = Attach.DisposableAttach | Settings.ServerSettingsService | SqlClient.SqlClient;
+export type World =
+  | Attach.DisposableAttach
+  | Settings.ServerSettingsService
+  | SqlClient.SqlClient
+  | EnrollHost
+  | MachineKey
+  | Attach.Provisioners;
 
 /** The provisioner's grant as the fake reports it; the call numbered gateOnCall waits on gate. */
 export interface Grant {

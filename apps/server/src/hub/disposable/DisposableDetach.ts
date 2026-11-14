@@ -12,6 +12,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as Settings from "../../serverSettings.ts";
 import type { OcxOutput } from "../HubOcx.ts";
 import { makeAuthority } from "./attachAuthority.ts";
 import { conflictCount } from "./attachModel.ts";
@@ -47,6 +48,7 @@ import {
   encodeEnroll,
   OPERATION_REPLAY_MS,
   readOperation,
+  STALE_OPEN_MS,
 } from "./enrollModel.ts";
 import { MachineKey } from "./machineKey.ts";
 import { disposableKnownHosts } from "./routeContract.ts";
@@ -60,6 +62,9 @@ const RETENTION_DAYS = 30;
 const PRUNE_LIMIT = 100;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 // A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
+const isMachinesError = Schema.is(HubMachinesError);
+const NOT_PROVISIONER =
+  "Only the thread that attached this machine, while the switch names it, or a person may detach it.";
 const RELEASABLE = new Set(["unknown"]);
 // Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
@@ -84,13 +89,18 @@ const DETACHABLE = new Set([
  */
 export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   exclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>,
+  /** Whether an enrollment step of the record runs now (DisposableEnroll.busy). */
+  enrolling: (attachId: string) => Effect.Effect<boolean>,
+  limit = DETACH_LIMIT,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const host = yield* EnrollHost;
   const machineKey = yield* MachineKey;
-  const { unnamed, settingsNow } = yield* makeAuthority;
+  const { unnamed } = yield* makeAuthority;
+  const settings = yield* Settings.ServerSettingsService;
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
   const running = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const cursor = yield* Ref.make("");
 
   const read = (attachId: string) =>
     sql<Row>`SELECT * FROM disposable_machines WHERE attach_id = ${attachId}`.pipe(
@@ -165,7 +175,9 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const repeat =
       before.force === true &&
       before.operationId?.includes(".force.") === true &&
-      REPEAT.has(before.outcome ?? "");
+      (before.outcome === undefined ||
+        REPEAT.has(before.outcome) ||
+        before.outcome === "tombstone_limit");
     if (repeat && (before.sends ?? 1) >= REVOKE_SENDS)
       return yield* note(row, withDetach(enroll, { ...before, stop: "revoke_unsettled" }));
     const attempt = repeat ? before.attempt : before.attempt + 1;
@@ -242,7 +254,11 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       nowMs - before.triedAtMs < CHECK_EVERY_MS
     )
       return;
-    const repeat = REPEAT.has(before.outcome ?? "") && before.operationId !== undefined;
+    // An id stored without an answer (GOAT stopped after storing it) is repeated, never replaced.
+    const repeat =
+      before.operationId !== undefined &&
+      before.operationId.includes(".purge.") &&
+      (before.outcome === undefined || REPEAT.has(before.outcome));
     if (repeat && (before.sends ?? 1) >= REVOKE_SENDS)
       return yield* note(row, withDetach(enroll, { ...before, stop: "revoke_unsettled" }));
     const attempt = repeat ? before.attempt : before.attempt + 1;
@@ -308,9 +324,14 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   /** Reads what the record's last link operation left before a link it cannot name is removed. */
   const settleStep = Effect.fn("DisposableDetach.settle")(function* (row: Row, enroll: Enroll) {
     const before = enroll.detach ?? { step: "settle", attempt: 0 };
+    // An enrollment step that passed its last check may still be sending its link add.
+    if (yield* enrolling(row.attach_id)) return;
+    if (row.link_id !== null)
+      return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }));
     const operationId = row.link_operation_id;
     if (operationId === null)
       return yield* note(row, withDetach(enroll, { ...before, step: "done" }));
+    const nowMs = yield* Clock.currentTimeMillis;
     const answer = yield* host.ocx(
       ["link", "operations", "--operation-id", operationId, "--json"],
       READ_TIMEOUT_MS,
@@ -319,8 +340,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       answer === undefined
         ? ({ kind: "unreadable" } as const)
         : readOperation(answer, { operationId, alias: `pen-${row.node_id}` });
-    const fresh =
-      (yield* Clock.currentTimeMillis) - (enroll.link?.intentAtMs ?? 0) < OPERATION_REPLAY_MS;
+    const fresh = nowMs - (enroll.link?.intentAtMs ?? 0) < OPERATION_REPLAY_MS;
     switch (outcome.kind) {
       case "committed":
         return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }), {
@@ -331,6 +351,11 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           link_operation_id: null,
         });
       case "not_found":
+        // An add the Home received just before its CLI stopped can still be journalled: 10 quiet
+        // minutes after GOAT last saw no enrollment step running, nothing can start it any more.
+        if (before.idleSinceMs === undefined)
+          return yield* note(row, withDetach(enroll, { ...before, idleSinceMs: nowMs }));
+        if (nowMs - before.idleSinceMs < STALE_OPEN_MS) return;
         if (fresh && (yield* host.journalServed))
           return yield* note(row, withDetach(enroll, { ...before, step: "done" }), {
             link_operation_id: null,
@@ -448,7 +473,11 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     const enroll = decodeEnroll(row.enroll_json);
     if (row.state === "linked") return yield* healthStep(row, enroll, status);
     const detach = enroll.detach;
-    if (detach?.stop !== undefined && detach.force !== true) return;
+    // A person's force clears a stop at admission; a stop the force itself met waits for them.
+    if (detach?.stop !== undefined) return;
+    // Cleaned and out of Pen: nothing is left to detach.
+    if (row.state === "returned")
+      return row.pen_removed_at === null ? undefined : yield* finish(row, enroll, "purged");
     if (row.state === "retired") return yield* recoverStep(row, enroll);
     if (row.state !== "detaching") return;
     switch (detach?.step) {
@@ -513,9 +542,21 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
 
   /** One pass over linked, detaching and retired records; one record's failure never stops the rest. */
   const pass = Effect.gen(function* () {
-    const due = yield* sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
-      WHERE final_at IS NULL AND state IN ('linked', 'detaching', 'retired')
-      ORDER BY created_at LIMIT ${DETACH_LIMIT}`;
+    // Round robin from where the last pass stopped, so a bounded pass never starves later records.
+    const after = yield* Ref.get(cursor);
+    const take = (from: string) =>
+      sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machines
+        WHERE final_at IS NULL AND attach_id > ${from}
+          AND (state IN ('linked', 'detaching', 'retired')
+            OR (state = 'returned' AND pen_removed_at IS NOT NULL))
+        ORDER BY attach_id LIMIT ${limit}`;
+    const tail = yield* take(after);
+    const head =
+      tail.length < limit && after !== ""
+        ? (yield* take("")).filter((row) => row.attach_id <= after)
+        : [];
+    const due = [...tail, ...head].slice(0, limit);
+    yield* Ref.set(cursor, due.length < limit ? "" : (due.at(-1)?.attach_id ?? ""));
     // One read of the Home's links serves every linked record's key check in the pass.
     const status = yield* Effect.cached(host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS));
     yield* Effect.forEach(
@@ -543,7 +584,6 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   ) {
     const requestKey = digest(principal + "\n" + input.clientRequestId);
     const person = caller.provisioner.kind === "person";
-    const current = person ? undefined : yield* settingsNow;
     return yield* exclusive(
       Effect.gen(function* () {
         const row = yield* read(input.attachId).pipe(Effect.mapError(storageFailed));
@@ -560,16 +600,8 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             );
           return status(row);
         }
-        if (
-          !person &&
-          (!sameProvisioner(provisionerOf(row), caller.provisioner) ||
-            current === undefined ||
-            unnamed(row, current))
-        )
-          return yield* fail(
-            "provisioner_refused",
-            "Only the thread that attached this machine, while the switch names it, or a person may detach it.",
-          );
+        if (!person && !sameProvisioner(provisionerOf(row), caller.provisioner))
+          return yield* fail("provisioner_refused", NOT_PROVISIONER);
         if (input.force === true && !person)
           return yield* fail(
             "person_required",
@@ -610,7 +642,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
                 ...(input.force === true ? { force: true as const } : {}),
               };
         const now = yield* nowIso;
-        const saved = yield* sql
+        const commit = sql
           .withTransaction(
             Effect.gen(function* () {
               yield* sql`INSERT INTO disposable_machine_requests ${sql.insert({
@@ -632,6 +664,14 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             }),
           )
           .pipe(Effect.mapError(storageFailed));
+        // A thread's consent is read under the settings lock a person's change takes.
+        const saved = person
+          ? yield* commit
+          : yield* settings
+              .withSettingsSnapshot((locked) =>
+                unnamed(row, locked) ? fail("provisioner_refused", NOT_PROVISIONER) : commit,
+              )
+              .pipe(Effect.mapError((error) => (isMachinesError(error) ? error : storageFailed())));
         const updated = saved[0];
         if (updated === undefined)
           return yield* fail("conflict", "The record changed; read it and detach again.");

@@ -1,12 +1,26 @@
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Attach from "./DisposableAttach.ts";
-import { attach, key, listed, reconcile, rows, world } from "./DisposableAttach.testkit.ts";
+import {
+  attach,
+  key,
+  listed,
+  reconcile,
+  rows,
+  switchTo,
+  world,
+} from "./DisposableAttach.testkit.ts";
+import { makeDetach } from "./DisposableDetach.ts";
+import { makeHold } from "./DisposableEnroll.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
+import { decodeEnroll, encodeEnroll } from "./enrollModel.ts";
 
 const HOUR = 60 * 60 * 1000;
 const THREAD: Attach.AttachCaller = {
@@ -353,4 +367,127 @@ it.effect(
         expect((yield* listed(kept.attachId))?.state).toBe("purged");
       }),
     ),
+);
+
+it.effect(
+  "a detach while enrollment is sending its link add waits for it and removes the link it made",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        yield* enroll; // route
+        yield* enroll; // reach
+        host.control.holdAdd = yield* makeHold();
+        const linking = yield* Effect.forkChild(enroll);
+        yield* Deferred.await(host.control.holdAdd.arrived); // the id is stored, ocx not yet run
+        yield* detach(THREAD, attachId, "d-1");
+        yield* detachPass;
+        expect((yield* listed(attachId))?.state).toBe("detaching");
+        yield* Deferred.succeed(host.control.holdAdd.release, undefined);
+        yield* Fiber.join(linking);
+        for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+        expect(ocx.sent).toEqual([attachId + ".purge.1"]);
+        expect(host.control.links.size).toBe(0);
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
+
+it.effect("a revoke whose id was stored but never answered is sent again under that id", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      yield* detach(THREAD, attachId, "d-1");
+      // GOAT stopped right after storing the id: no answer was saved.
+      const sql = yield* SqlClient.SqlClient;
+      const [stored] = yield* sql<{ readonly enroll_json: string }>`SELECT enroll_json
+        FROM disposable_machines WHERE attach_id = ${attachId}`;
+      const enrolled = decodeEnroll(stored?.enroll_json ?? "{}");
+      const intent = { step: "revoke", attempt: 1, operationId: attachId + ".purge.1", sends: 1 };
+      const json = encodeEnroll({ ...enrolled, detach: intent });
+      yield* sql`UPDATE disposable_machines SET enroll_json = ${json} WHERE attach_id = ${attachId}`;
+      yield* detachPass;
+      expect(ocx.sent).toEqual([attachId + ".purge.1"]);
+      expect((yield* listed(attachId))?.state).toBe("purged");
+    }),
+  ),
+);
+
+it.effect(
+  "a machine removed from Pen while detaching keeps its detach until the link is gone",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId } = yield* linked(pen, home, host, 1);
+        ocx.machineAnswers = false;
+        yield* detach(THREAD, attachId, "d-1");
+        yield* detachPass;
+        pen.members.delete(key(1));
+        yield* reconcile;
+        expect(yield* listed(attachId)).toMatchObject({ state: "detaching", penMember: false });
+        ocx.machineAnswers = true;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        expect(yield* listed(attachId)).toMatchObject({ state: "purged", penMember: false });
+      }),
+    ),
+);
+
+it.effect(
+  "a refused forced revoke waits for a person and is repeated under its own id, as OpenCodex asks",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, linkId } = yield* linked(pen, home, host, 1);
+        ocx.tombstoneLimit = true;
+        yield* detach(PERSON, attachId, "d-1", true);
+        yield* detachPass;
+        yield* TestClock.adjust(2 * HOUR);
+        yield* detachPass;
+        expect(ocx.sent).toEqual([attachId + ".force.1"]);
+        expect((yield* listed(attachId))?.message).toContain("too many links removed");
+        ocx.tombstoneLimit = false;
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        expect(ocx.sent).toEqual([attachId + ".force.1", attachId + ".force.1"]);
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+      }),
+    ),
+);
+
+it.effect("every record gets its turn when a pass takes fewer records than are open", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      fakeDetachHome(host);
+      const first = yield* linked(pen, home, host, 1);
+      const second = yield* linked(pen, home, host, 2);
+      const exclusive = (yield* Semaphore.make(1)).withPermits(1);
+      const small = yield* makeDetach(exclusive, () => Effect.succeed(false), 1);
+      const checked = () => new Set(host.control.reached.map((route) => route.nodeId));
+      const before = host.control.reached.length;
+      yield* small.pass;
+      yield* small.pass;
+      const nodes = new Set(host.control.reached.slice(before).map((route) => route.nodeId));
+      expect(checked().size).toBeGreaterThan(0);
+      expect(nodes).toEqual(new Set([first.nodeId, second.nodeId]));
+    }),
+  ),
+);
+
+it.effect("a thread the switch no longer names cannot detach", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      yield* switchTo({ provisioners: [] });
+      expect((yield* detach(THREAD, attachId, "d-1").pipe(Effect.flip)).reason).toBe(
+        "provisioner_refused",
+      );
+    }),
+  ),
 );

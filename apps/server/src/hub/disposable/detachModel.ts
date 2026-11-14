@@ -21,6 +21,8 @@ export const Detach = Schema.Struct({
   /** A person asked to remove the link without the machine. */
   force: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(Schema.String),
+  /** When the settle step first saw no enrollment step running, for its quiet wait. */
+  idleSinceMs: Schema.optionalKey(Schema.Number),
   /** Why the detach waits for a person (a Child's refusal or an unsettled revoke). */
   stop: Schema.optionalKey(Schema.String),
 });

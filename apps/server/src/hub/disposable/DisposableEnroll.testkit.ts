@@ -122,6 +122,9 @@ export const fakeEnrollHost = () => {
     /** Runs as each link add arrives, before it answers. */
     onAdd: undefined as (() => void) | undefined,
     holdOperations: undefined as Hold | undefined,
+    /** Hold a link add or revoke after GOAT stored its id, before the Home sees it. */
+    holdAdd: undefined as Hold | undefined,
+    holdRevoke: undefined as Hold | undefined,
     journal,
     links,
     /** The Home pruned this settled entry, as it may after 2 hours. */
@@ -226,7 +229,14 @@ export const fakeEnrollHost = () => {
         ),
       ),
     ocx: (args) =>
-      (args[1] === "operations" ? pass(control.holdOperations) : Effect.void).pipe(
+      (args[1] === "operations"
+        ? pass(control.holdOperations)
+        : args[1] === "add"
+          ? pass(control.holdAdd)
+          : args[1] === "revoke"
+            ? pass(control.holdRevoke)
+            : Effect.void
+      ).pipe(
         Effect.andThen(
           Effect.sync(() => {
             control.calls.push(args);

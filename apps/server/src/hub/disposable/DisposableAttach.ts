@@ -78,6 +78,8 @@ export interface AttachCaller {
 }
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
+// States whose link removal DisposableDetach owns; leaving Pen does not end them.
+const REMOVING = new Set(["detaching", "retired", "returned"]);
 /** How long a list waits for Pen's answers before it reads what GOAT has stored. */
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
@@ -206,7 +208,7 @@ export const make = Effect.gen(function* () {
 
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
   const enrollment = yield* makeEnroll(exclusive);
-  const detacher = yield* makeDetach(exclusive);
+  const detacher = yield* makeDetach(exclusive, enrollment.busy);
   /** The public line a machine must trust; attach makes the key, a read never does. */
   const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
@@ -528,12 +530,16 @@ export const make = Effect.gen(function* () {
         view !== undefined && !view.has(row.expected_sign_pub);
       if (missing(yield* members) && missing(yield* pen.members)) {
         // The fence moves with the removal, so an enrollment step in flight commits nothing after it.
-        // A record that holds or started a link stays open until enrollment reads what it left.
+        // A record that holds or started a link stays open until enrollment reads what it left; one
+        // being detached keeps its detach, which still owes the link's or tombstone's cleanup.
         const linking = row.link_id !== null || row.link_operation_id !== null;
+        const detaching = REMOVING.has(row.state);
         row = yield* save(row, effects, {
-          fence: row.fence + 1,
+          ...(detaching ? {} : { fence: row.fence + 1 }),
           pen_removed_at: yield* nowIso,
-          ...(row.final_at === null ? { state: linking ? "left_pen" : "failed" } : {}),
+          ...(row.final_at === null && !detaching
+            ? { state: linking ? "left_pen" : "failed" }
+            : {}),
         });
         yield* audit(row.attach_id, "hub.machine_left_pen", "removed");
       }

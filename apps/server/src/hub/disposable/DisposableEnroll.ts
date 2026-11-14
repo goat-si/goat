@@ -356,7 +356,7 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
         // The link exists whoever moved the fence; its id is a fact the record must not lose.
         else
           yield* sql`UPDATE disposable_machines SET link_id = ${outcome.linkId}
-            WHERE attach_id = ${row.attach_id} AND link_id IS NULL`;
+            WHERE attach_id = ${row.attach_id} AND link_id IS NULL AND final_at IS NULL`;
         return "done" as const;
       case "failed_clean":
         if (FINAL_LINK_CODES.has(outcome.code)) yield* stop(row, as(outcome.code), outcome.code);
@@ -663,5 +663,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
     );
   }).pipe(Effect.withSpan("DisposableEnroll.pass"));
 
-  return { advance, pass };
+  /** Whether a step of this record runs now; a detach waits for it before it reads what is left. */
+  const busy = (attachId: string) => Effect.map(Ref.get(running), (set) => set.has(attachId));
+
+  return { advance, pass, busy };
 });

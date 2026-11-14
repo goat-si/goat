@@ -126,18 +126,22 @@ export const status = (
   const enroll = decodeEnroll(row.enroll_json);
   const leftWithLink =
     row.pen_removed_at !== null && (row.link_id !== null || row.link_operation_id !== null);
+  const removal = detachMessage({
+    state: row.state,
+    name: row.name,
+    linkId: row.link_id,
+    detach: enroll.detach,
+    health: enroll.health,
+    linkKeyMoved: enroll.linkKeyMoved === true,
+  });
+  // A detach that still owes the link's cleanup speaks for the record, also out of Pen.
+  const removing = row.state === "detaching" || row.state === "retired" || row.state === "returned";
   const { message, nextAction } =
+    (removing ? removal : undefined) ??
     (leftWithLink
       ? leftPenMessage(row.name, row.final_at !== null, row.link_id, row.link_operation_id)
       : undefined) ??
-    detachMessage({
-      state: row.state,
-      name: row.name,
-      linkId: row.link_id,
-      detach: enroll.detach,
-      health: enroll.health,
-      linkKeyMoved: enroll.linkKeyMoved === true,
-    }) ??
+    removal ??
     (row.pen_admitted_at === null
       ? undefined
       : enrollMessage(
