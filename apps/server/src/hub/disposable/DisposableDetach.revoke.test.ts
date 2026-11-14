@@ -3,8 +3,12 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
-import { listed, world } from "./DisposableAttach.testkit.ts";
+import { penNodeId } from "./attachModel.ts";
+import * as Attach from "./DisposableAttach.ts";
+import { attach, key, listed, reissue, world } from "./DisposableAttach.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
+import { penRouteOf } from "./DisposableEnroll.testkit.ts";
+import { enroll, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
 import {
   detach,
   detachPass,
@@ -39,6 +43,31 @@ it.effect("a person's force resolves the purge it supersedes only once the force
       yield* detach(PERSON, attachId, "d-3", true);
       yield* detachPass;
       expect(ocx.resolved).toEqual([attachId + ".purge.1"]);
+    }),
+  ),
+);
+
+it.effect("a reissue whose request id embeds a detach's does not answer that detach", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      fakeDetachHome(host);
+      withIdentity(home);
+      const started = yield* attach(1);
+      yield* reissue(started.attachId, "detach\nd-1");
+      pen.control.join(started.attachId + ".2", true);
+      const nodeId = penNodeId(key(1)) ?? "";
+      host.control.routes.set(
+        nodeId,
+        penRouteOf({ nodeId, noisePub: key(101) }, "ssh-ed25519 " + "1".repeat(68)),
+      );
+      yield* listed(started.attachId);
+      for (let pass = 0; pass < 4; pass += 1) yield* enroll;
+      const service = yield* Attach.DisposableAttach;
+      const detaching = yield* service.detach(THREAD, "thread:thread-provisioner", {
+        attachId: started.attachId,
+        clientRequestId: "d-1",
+      });
+      expect(detaching.state).toBe("detaching");
     }),
   ),
 );
