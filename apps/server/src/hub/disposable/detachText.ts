@@ -59,9 +59,9 @@ const unknownRevoke = (operationId: string) =>
       ", and force again."
     : "OpenCodex could not tell what the revoke " +
       operationId +
-      " did to the Child, even after GOAT repeated it. A person checks the machine and forces the detach" +
+      " did to the Child, even after a repeat. A person fixes what stopped it, checks the machine and forces the detach" +
       WHERE +
-      ": GOAT repeats the revoke if it still holds the link and resolves it once the force is done.";
+      ": GOAT repeats it if it still holds the link, then resolves it.";
 /** An unfinished removal holds the link (link_retirement_owned): the owner's way out on the Home. */
 const ownerWayOut = (linkId: string) =>
   "A person on this hub repeats the revoke that owns it (see ocx link operations --json) or runs ocx link revoke --link-id " +
@@ -134,7 +134,9 @@ const STOPS: Record<string, Stop> = {
         ? REPEAT_NEXT
         : operationId.includes(".force.")
           ? REPEAT_FIRST_NEXT
-          : "A person checks the machine, then forces the detach" + WHERE + ".",
+          : "A person fixes what stopped it on the hub, checks the machine, then forces the detach" +
+            WHERE +
+            ".",
   },
   link_retirement_owned: {
     text: (_operationId, outcome, detach, linkId) =>
@@ -366,10 +368,11 @@ export const detachMessage = (
   const { name, linkId, detach } = view;
   const operation =
     detach?.operationId === undefined ? "" : " Operation " + detach.operationId + ".";
-  // A changed host key stops every step for the record; a person's force passes it.
+  // A changed host key stops every step for the record; a person's force passes it. On a linked
+  // row the force is GOAT's stopped retirement, so its conflict row still offers only Force.
   if (
     view.stop === "host_key_changed" &&
-    detach?.force !== true &&
+    (detach?.force !== true || view.state === "linked") &&
     (view.state === "linked" || view.state === "detaching" || view.state === "retired")
   )
     return {
