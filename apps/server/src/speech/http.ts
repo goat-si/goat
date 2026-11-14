@@ -61,6 +61,7 @@ export const layerHttp = HttpApiBuilder.group(
           const session = yield* requireEnvironmentScope(AuthVoiceManageScope);
           const models = yield* mapError(speech.list);
           return {
+            supportsModelLinking: true,
             models: session.scopes.has(AuthFilesystemReadScope)
               ? models
               : models.map(({ linkedFrom: _, ...model }) => model),

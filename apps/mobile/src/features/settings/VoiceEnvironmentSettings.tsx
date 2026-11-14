@@ -180,6 +180,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
   const contexts = useAtomValue(voiceRequestContextsAtom);
   const context = contexts.get(environmentId);
   const [models, setModels] = useState<readonly Model[]>([]);
+  const [serverLinks, setServerLinks] = useState(false);
   const [config, setConfig] = useState<SpeechConfiguration | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +198,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       ([list, current]) => {
         if (controller.signal.aborted) return;
         setModels(list.models);
+        setServerLinks(list.supportsModelLinking === true);
         setConfig(current);
         setBusy(false);
         setError(null);
@@ -257,6 +259,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       .then(([list, nextConfig]) => {
         signal.throwIfAborted();
         setModels(list.models);
+        setServerLinks(list.supportsModelLinking === true);
         setConfig(nextConfig);
         return null;
       })
@@ -274,7 +277,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
     );
   return (
     <View className="gap-2">
-      {canReadFiles ? (
+      {canReadFiles && serverLinks ? (
         <SettingsSection title="Use an existing model">
           <TextInput
             accessibilityLabel="Model file or folder on the environment"

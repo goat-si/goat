@@ -50,9 +50,14 @@ export function VoiceModelDialog(props: {
     environmentId: EnvironmentId;
     models: readonly Model[];
     config: SpeechConfiguration;
+    supportsModelLinking: boolean;
   } | null>(null);
   const models = snapshot?.environmentId === props.environmentId ? snapshot.models : [];
   const config = snapshot?.environmentId === props.environmentId ? snapshot.config : null;
+  const canLink =
+    snapshot?.environmentId === props.environmentId &&
+    snapshot.supportsModelLinking &&
+    readEnvironmentScope(props.environmentId, AuthFilesystemReadScope);
   const tiers = speechBenchmarkTiers(config?.acceleration);
   const selectedSort =
     sorting.environmentId === props.environmentId ? sorting.value : "recommended";
@@ -77,7 +82,12 @@ export function VoiceModelDialog(props: {
       getEnvironmentSpeechConfiguration(context, signal),
     ]);
     signal.throwIfAborted();
-    setSnapshot({ environmentId, models: list.models, config: current });
+    setSnapshot({
+      environmentId,
+      models: list.models,
+      config: current,
+      supportsModelLinking: list.supportsModelLinking === true,
+    });
   });
   // oxlint-disable-next-line goat/react-effect-budget -- Cancel model requests when the dialog closes or the destination changes.
   useEffect(() => {
@@ -145,7 +155,7 @@ export function VoiceModelDialog(props: {
         <DialogPanel>
           {error ? <p role="alert">{error}</p> : null}
           {busy ? <p role="status">Updating voice model…</p> : null}
-          {readEnvironmentScope(props.environmentId, AuthFilesystemReadScope) ? (
+          {canLink ? (
             <div>
               <label>
                 Existing model file or folder on {props.label}{" "}

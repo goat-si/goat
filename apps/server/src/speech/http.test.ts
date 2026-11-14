@@ -127,7 +127,9 @@ it.effect("link requires filesystem read as well as voice management", () =>
   Effect.gen(function* () {
     const h = yield* serve([AuthVoiceManageScope]);
     const modelList = yield* h.send("models");
-    expect(yield* Effect.promise(() => modelList.json())).not.toHaveProperty("models.0.linkedFrom");
+    const listed = yield* Effect.promise(() => modelList.json());
+    expect(listed).not.toHaveProperty("models.0.linkedFrom");
+    expect(listed).toHaveProperty("supportsModelLinking", true);
     expect((yield* h.send("models/link", { path: "/models" })).status).toBe(403);
     expect(h.link).not.toHaveBeenCalled();
     const allowed = yield* serve([AuthVoiceManageScope, AuthFilesystemReadScope]);
