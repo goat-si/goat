@@ -1,6 +1,4 @@
 import {
-  goatBotTaskWait,
-  presentTaskStatus,
   taskAttemptLabel,
   type BotWorkTask,
   type GoatBotTaskCard,
@@ -11,7 +9,11 @@ import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
-import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
+import {
+  mobileBotTaskStatus,
+  mobileTaskSummaryStatus,
+  type MobileTaskChips,
+} from "./mobileBotTaskStatus";
 import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
 import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { useMobileStatusAnnouncement } from "./useMobileStatusAnnouncement";
@@ -92,11 +94,7 @@ export function MobileTaskHeader(props: {
   const status = task
     ? mobileBotTaskStatus(task.row, props.chips)
     : unavailable
-      ? (goatBotTaskWait({
-          status: unavailable.task.task.status,
-          openQuestionCount: props.chips.get(unavailable.task.task.taskId)?.openQuestionCount ?? 0,
-          observed: props.chips.get(unavailable.task.task.taskId)?.observed,
-        }) ?? presentTaskStatus(unavailable.task.task.status).label)
+      ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
       : null;
   const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
   return (
