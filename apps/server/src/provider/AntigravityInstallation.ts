@@ -486,18 +486,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
           .pipe(
             Effect.map((output) => Number(output.trim())),
             Effect.timeout("5 seconds"),
-            Effect.mapError((cause) =>
-              installationError(
-                "download",
-                "Could not determine this kernel's memory page size.",
-                cause,
-              ),
-            ),
-          );
-        if (!Number.isFinite(pageSize) || pageSize <= 0)
-          return yield* installationError(
-            "download",
-            "Could not determine this kernel's memory page size.",
+            Effect.orElseSucceed(() => Number.NaN),
           );
         if (pageSize > 4096) {
           return yield* installationError("download", LARGE_PAGE_KERNEL_MESSAGE);
