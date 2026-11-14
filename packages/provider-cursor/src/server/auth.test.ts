@@ -81,6 +81,33 @@ const phase = (auth: Auth, phase: ProviderAuthState["phase"], session = owner) =
   );
 
 it.layer(NodeServices.layer)("CursorAuth", (it) => {
+  it.effect("refuses admission when sign-out follows validation of a captured key", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Effect.promise(() => harness.store.save(harness.credentials));
+      const validated = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let opened = false;
+      const open = yield* Effect.gen(function* () {
+        yield* harness.auth.validateSessionApiKey("browser-key", undefined);
+        yield* Deferred.succeed(validated, undefined);
+        yield* Deferred.await(resume);
+        return yield* harness.auth.withAccess(
+          Effect.sync(() => {
+            opened = true;
+          }),
+          harness.auth.validateSessionApiKey("browser-key", undefined),
+        );
+      }).pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(validated);
+      yield* harness.auth.controller.logout(Effect.void);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(open);
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(opened).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("starts browser sign-in against the selected instance backend", () =>
     Effect.gen(function* () {
       for (const backend of ["https://instance.invalid", "https://api2.cursor.sh"]) {

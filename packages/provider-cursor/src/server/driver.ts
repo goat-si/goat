@@ -250,7 +250,7 @@ export const CursorDriver: ProviderDriver<
               ),
             (session) => session.close.pipe(Effect.ignore),
           ).pipe(
-            auth.withAccess,
+            (effect) => auth.withAccess(effect, input.validate),
             Effect.mapError((cause) =>
               isSdkRunnerError(cause)
                 ? cause

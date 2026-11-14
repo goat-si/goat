@@ -41,9 +41,10 @@ export interface CursorAuth {
     environmentKey: string | undefined,
   ) => Effect.Effect<void, ProviderSetupError>;
   readonly usesApiKey: Effect.Effect<boolean>;
-  readonly withAccess: <A, E, R>(
+  readonly withAccess: <A, E, R, E2 = never>(
     task: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
+    validate?: Effect.Effect<void, E2>,
+  ) => Effect.Effect<A, E | E2 | ProviderSetupError, R | Scope.Scope>;
 }
 
 export interface CursorAuthOptions {
@@ -147,7 +148,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
   });
 
   // Closing admission before draining these scopes prevents cached credentials surviving sign-out.
-  const withAccess: CursorAuth["withAccess"] = (task) =>
+  const withAccess: CursorAuth["withAccess"] = (task, validate) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const parent = yield* Scope.Scope;
@@ -159,6 +160,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 operation: "session",
                 detail: "Cursor sign-in or sign-out is in progress. Try again after it finishes.",
               });
+            yield* validate ?? Effect.void;
             const child = yield* Scope.make();
             sessions.add(child);
             yield* Scope.addFinalizer(
