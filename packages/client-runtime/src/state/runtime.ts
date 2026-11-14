@@ -1,3 +1,4 @@
+import { revalidateOnMount } from "./runtimeRevalidation.ts";
 import { environmentConnectionAtoms } from "./environmentConnections.ts";
 export { environmentSessionGenerationAtom } from "./environmentConnections.ts";
 import type { QueryPersistence } from "./queryPersistence.ts";
@@ -9,7 +10,6 @@ import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@goat/co
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { identity } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -96,7 +96,6 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
-  readonly revalidateOnRemount?: boolean;
   readonly refreshIntervalMs?: number;
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
@@ -584,12 +583,11 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   readonly input: Input;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
   const connectionAtom = environmentConnectionAtoms(runtime);
+  // Keep the weak family member alive for as long as its cached atom.
+  const membersByCache = new WeakMap<Atom.Atom<unknown>, Atom.Atom<unknown>>();
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
-    const keepWarm = Atom.setIdleTTL(idleTtlMs);
-    const keepSourceWarm = options.revalidateOnRemount ? keepWarm : identity;
-    const keepWrapperWarm = options.revalidateOnRemount ? identity : keepWarm;
     const queryAtom = runtime
       .atom<
         A,
@@ -710,14 +708,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
           );
         });
       })
-      .pipe(
-        keepSourceWarm,
-        Atom.swr({
-          staleTime: options.staleTimeMs ?? 30_000,
-          revalidateOnMount: true,
-        }),
-        keepWrapperWarm,
-      );
+      .pipe(Atom.setIdleTTL(idleTtlMs));
     const isFinal = (result: AsyncResult.AsyncResult<A, unknown>) =>
       options.isFinal !== undefined && Option.exists(AsyncResult.value(result), options.isFinal);
     const intervalQuery =
@@ -725,11 +716,14 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         ? queryAtom
         : queryAtom.pipe(refreshEveryUntilFinal(options.refreshIntervalMs, isFinal));
     const refreshTrigger = options.refreshTrigger?.(target);
-    return (
+    const cache = (
       refreshTrigger === undefined
         ? intervalQuery
         : intervalQuery.pipe(refreshOnSignalWhileRead(refreshTrigger, isFinal))
-    ).pipe(keepWrapperWarm, Atom.withLabel(`${options.label}:${key}`));
+    ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
+    const member = cache.pipe(revalidateOnMount(options.staleTimeMs ?? 30_000));
+    membersByCache.set(cache, member);
+    return member;
   });
   return (target) => family(environmentRpcKey(target));
 }
@@ -823,7 +817,6 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly persistence?: QueryPersistence<EnvironmentRpcSuccess<TTag>>;
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
-    readonly revalidateOnRemount?: boolean;
     readonly refreshIntervalMs?: number;
     readonly refreshTrigger?: (target: {
       readonly environmentId: EnvironmentIdType;
@@ -839,9 +832,6 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
     ...(options.staleTimeMs === undefined ? {} : { staleTimeMs: options.staleTimeMs }),
     ...(options.idleTtlMs === undefined ? {} : { idleTtlMs: options.idleTtlMs }),
-    ...(options.revalidateOnRemount === undefined
-      ? {}
-      : { revalidateOnRemount: options.revalidateOnRemount }),
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
