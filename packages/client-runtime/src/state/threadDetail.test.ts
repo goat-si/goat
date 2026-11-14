@@ -70,6 +70,57 @@ function withItem(item: OrchestrationV2TurnItem, updatedAt = v2Now) {
   };
 }
 
+function withRows(items: ReadonlyArray<OrchestrationV2TurnItem>): OrchestrationV2ThreadProjection {
+  return {
+    ...v2Projection,
+    turnItems: items,
+    visibleTurnItems: items.map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: v2ThreadId,
+      sourceItemId: item.id,
+      item,
+    })),
+  };
+}
+
+// Reducer copies of a counted array stay counted, so every streamed input counts its reads.
+function countSlotReads() {
+  const counter = { reads: 0 };
+  class CountedRows<T> extends Array<T> {
+    constructor(length = 0) {
+      super(length);
+      return new Proxy(this, {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) counter.reads++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    }
+  }
+  return { counter, CountedRows };
+}
+
+const longConversation = (length: number) => {
+  const message = (index: number) => ({
+    ...assistant,
+    id: TurnItemId.make(`item-${index}`),
+    messageId: MessageId.make(`message-${index}`),
+    ordinal: index,
+  });
+  const streaming = message(length - 1);
+  const rows = [
+    ...Array.from({ length: length - 1 }, (_, index) => ({
+      ...message(index),
+      text: "Done",
+      status: "completed" as const,
+      streaming: false,
+    })),
+    streaming,
+  ];
+  return { streaming, rows };
+};
+
 describe("sameThreadStructure", () => {
   const before = withItem(assistant);
 
@@ -232,22 +283,6 @@ describe("timelineVisibleTurnItemsAtom", () => {
     };
   }
 
-  function withRows(
-    items: ReadonlyArray<OrchestrationV2TurnItem>,
-  ): OrchestrationV2ThreadProjection {
-    return {
-      ...v2Projection,
-      turnItems: items,
-      visibleTurnItems: items.map((item, position) => ({
-        position,
-        visibility: "local" as const,
-        sourceThreadId: v2ThreadId,
-        sourceItemId: item.id,
-        item,
-      })),
-    };
-  }
-
   it("holds through streamed assistant text while the message reads its own text", () => {
     const stateAtom = Atom.make(
       AsyncResult.success({
@@ -281,35 +316,9 @@ describe("timelineVisibleTurnItemsAtom", () => {
   });
 
   it("compares one row per consecutive streamed token in a long conversation", () => {
-    let slotReads = 0;
-    // Reducer copies of a counted array stay counted, so every streamed input counts its reads.
-    class CountedRows<T> extends Array<T> {
-      constructor(length = 0) {
-        super(length);
-        return new Proxy(this, {
-          get(target, key, receiver) {
-            if (typeof key === "string" && /^\d+$/.test(key)) slotReads++;
-            return Reflect.get(target, key, receiver);
-          },
-        });
-      }
-    }
-    const message = (index: number) => ({
-      ...assistant,
-      id: TurnItemId.make(`item-${index}`),
-      messageId: MessageId.make(`message-${index}`),
-      ordinal: index,
-    });
-    const streaming = message(199);
-    const initial = withRows([
-      ...Array.from({ length: 199 }, (_, index) => ({
-        ...message(index),
-        text: "Done",
-        status: "completed" as const,
-        streaming: false,
-      })),
-      streaming,
-    ]);
+    const { counter, CountedRows } = countSlotReads();
+    const { streaming, rows } = longConversation(200);
+    const initial = withRows(rows);
     let projection: OrchestrationV2ThreadProjection = {
       ...initial,
       visibleTurnItems: CountedRows.from(initial.visibleTurnItems),
@@ -325,10 +334,10 @@ describe("timelineVisibleTurnItemsAtom", () => {
         text: `Hel${"l".repeat(token)}`,
         updatedAt: later,
       });
-      slotReads = 0;
+      counter.reads = 0;
       timeline.push(projection);
       heldPerToken.push(timeline.read() === held);
-      readsPerToken.push(slotReads);
+      readsPerToken.push(counter.reads);
     }
 
     expect(heldPerToken).toEqual(Array.from({ length: 20 }, () => true));
@@ -399,6 +408,114 @@ describe("timelineVisibleTurnItemsAtom", () => {
     const restored = resync(replaceItem(projection, { ...reasoning, title: "Restored" }));
     expect(restored).not.toBe(finished);
     expect(restored[0]?.item).toMatchObject({ title: "Restored" });
+  });
+});
+
+describe("assistantMessageTextAtom", () => {
+  const ref = { environmentId: EnvironmentId.make("environment-1"), threadId: v2ThreadId };
+
+  function setup(initial: OrchestrationV2ThreadProjection) {
+    const stateAtom = Atom.make(
+      AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(initial) }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
+    const registry = AtomRegistry.make();
+    return {
+      text: (itemId: string) => {
+        const atom = details.assistantMessageTextAtom(ref, itemId);
+        registry.mount(atom);
+        return () => registry.get(atom);
+      },
+      [Symbol.dispose]: () => registry.dispose(),
+      push: (projection: OrchestrationV2ThreadProjection) =>
+        registry.set(
+          stateAtom,
+          AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(projection) }),
+        ),
+    };
+  }
+
+  it("reads a bounded number of rows per token for the streaming last row of a long conversation", () => {
+    const { counter, CountedRows } = countSlotReads();
+    const { streaming, rows } = longConversation(200);
+    const initial = withRows(rows);
+    let projection: OrchestrationV2ThreadProjection = {
+      ...initial,
+      visibleTurnItems: CountedRows.from(initial.visibleTurnItems),
+    };
+    // Only this row's text atom is mounted, so every counted read belongs to it and its inputs.
+    using thread = setup(projection);
+    const text = thread.text(streaming.id);
+    const readsPerToken: number[] = [];
+    const textPerToken: Array<string | null> = [];
+
+    for (let token = 1; token <= 20; token++) {
+      projection = replaceItem(projection, {
+        ...streaming,
+        text: `Hel${"l".repeat(token)}`,
+        updatedAt: later,
+      });
+      counter.reads = 0;
+      thread.push(projection);
+      textPerToken.push(text());
+      readsPerToken.push(counter.reads);
+    }
+
+    expect(textPerToken).toEqual(
+      Array.from({ length: 20 }, (_, index) => `Hel${"l".repeat(index + 1)}`),
+    );
+    // The reducer's copies must inherit the counting array, or every token would read as 0.
+    expect(readsPerToken[0]).toBeGreaterThan(0);
+    expect(readsPerToken).toEqual(Array.from({ length: 20 }, () => readsPerToken[0]));
+    expect(readsPerToken[0]).toBeLessThanOrEqual(8);
+  });
+
+  it("returns the text of any assistant row and null for a missing or non-assistant row", () => {
+    const reasoning: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("reasoning"),
+      type: "reasoning",
+      ordinal: 1,
+    };
+    const finished: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("finished"),
+      messageId: MessageId.make("message-finished"),
+      ordinal: 2,
+      text: "Earlier answer",
+      status: "completed",
+      streaming: false,
+    };
+    const first = {
+      ...assistant,
+      id: TurnItemId.make("first"),
+      messageId: MessageId.make("message-first"),
+      ordinal: 3,
+    };
+    const second = {
+      ...assistant,
+      id: TurnItemId.make("second"),
+      messageId: MessageId.make("message-second"),
+      ordinal: 4,
+      text: "Wor",
+    };
+    let projection = withRows([reasoning, finished, first, second]);
+    using thread = setup(projection);
+    const firstText = thread.text(first.id);
+    const secondText = thread.text(second.id);
+    const finishedText = thread.text(finished.id);
+    const reasoningText = thread.text(reasoning.id);
+    const missingText = thread.text("missing");
+
+    // Two rows stream at once and the earlier, not last, one moves.
+    projection = replaceItem(projection, { ...first, text: "Hello", updatedAt: later });
+    thread.push(projection);
+
+    expect(firstText()).toBe("Hello");
+    expect(secondText()).toBe("Wor");
+    expect(finishedText()).toBe("Earlier answer");
+    expect(reasoningText()).toBeNull();
+    expect(missingText()).toBeNull();
   });
 });
 
