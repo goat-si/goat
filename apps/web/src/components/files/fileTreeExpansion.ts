@@ -87,7 +87,12 @@ const StoredExpandedDirectories = Schema.Array(
 );
 
 function readStoredExpandedDirectories() {
-  return getLocalStorageItem(EXPANDED_DIRECTORIES_STORAGE_KEY, StoredExpandedDirectories) ?? [];
+  try {
+    return getLocalStorageItem(EXPANDED_DIRECTORIES_STORAGE_KEY, StoredExpandedDirectories) ?? [];
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
 }
 
 export function readExpandedDirectories(root: string): readonly string[] {
@@ -97,9 +102,13 @@ export function readExpandedDirectories(root: string): readonly string[] {
 export function writeExpandedDirectories(root: string, paths: readonly string[]): void {
   const others = readStoredExpandedDirectories().filter((entry) => entry.root !== root);
   const next = paths.length > 0 ? [{ root, paths }, ...others] : others;
-  setLocalStorageItem(
-    EXPANDED_DIRECTORIES_STORAGE_KEY,
-    next.slice(0, MAX_STORED_ROOTS),
-    StoredExpandedDirectories,
-  );
+  try {
+    setLocalStorageItem(
+      EXPANDED_DIRECTORIES_STORAGE_KEY,
+      next.slice(0, MAX_STORED_ROOTS),
+      StoredExpandedDirectories,
+    );
+  } catch (error) {
+    console.error(error);
+  }
 }

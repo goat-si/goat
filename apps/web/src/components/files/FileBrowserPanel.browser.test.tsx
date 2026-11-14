@@ -423,4 +423,22 @@ describe("file viewer path copy shortcuts", () => {
     const folder = await row(second.container, "src/");
     await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
   });
+
+  it("opens collapsed when the stored folders cannot be read, and expands when they cannot be saved", async () => {
+    setup();
+    localStorage.setItem("goat.fileTreeExpandedDirectories", "{not json");
+    using _stored = {
+      [Symbol.dispose]: () => localStorage.removeItem("goat.fileTreeExpandedDirectories"),
+    };
+    using log = vi.spyOn(console, "error").mockImplementation(() => {});
+    using _full = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    });
+    await using screen = await renderPanel({ cwd: "/repo-unreadable-expansion" });
+    const folder = await row(screen.container, "src/");
+    expect(folder.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.click(folder);
+    await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
+    expect(log).toHaveBeenCalled();
+  });
 });
