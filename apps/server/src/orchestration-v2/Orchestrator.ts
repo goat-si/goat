@@ -1,3 +1,5 @@
+import { withoutHistoryArchive } from "./goat/HistoryArchive.ts";
+import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { usageLimitHoldsQueue } from "./usageLimitQueue.ts";
 import { wakeWorkStartedAt } from "./wakeWorkStartedAt.ts";
@@ -552,11 +554,6 @@ function isHistoryArchiveOnlyUpdate(
     ...rest
   } = command;
   return historyArchive !== undefined && Object.values(rest).every((value) => value === undefined);
-}
-
-function withoutHistoryArchive<T extends { readonly historyArchive?: unknown }>(thread: T) {
-  const { historyArchive: _historyArchive, ...rest } = thread;
-  return rest;
 }
 
 function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
@@ -12378,6 +12375,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       ];
       yield* writeSystemEvents(completionEvents, [], { updateDelegatedCompletionOnly: true });
+      yield* makeReleaseFinishedDelegate({
+        projections: projectionStore,
+        locks: threadDispatch,
+        dispatch: (command) => dispatchWithReceiptEffect(command),
+        sessionHasBackgroundWork,
+      })(childThreadId, childRun.id);
 
       if (completionPlan.offer && completionPlan.parentRun !== undefined) {
         yield* offerDelegatedCompletionDelivery(parentThreadId, completionPlan.parentRun.id);
