@@ -136,7 +136,11 @@ it("explains an unchanged name and clears the note when the draft changes", asyn
   await expect.element(status).toHaveTextContent("");
   await userEvent.fill(nameField(), "New bot");
   await userEvent.keyboard("{Enter}");
-  await expect.element(status).toHaveTextContent("Already called New bot.");
+  await expect
+    .element(status)
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
 });
 
 it("New bot 2 shows Name this bot; Ada, the main bot, a deleted member and a read-only viewer do not", async () => {
