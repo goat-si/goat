@@ -263,7 +263,8 @@ export const withWebhookService = <A, E>(
         isScratchProject: () => Effect.succeed(false),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
+        getThreadRecords: (threadId) =>
+          Effect.succeed(idleThreadProjection(liveThreadShell(threadId))),
       }),
       Layer.mock(SecretRequests.SecretRequests)({
         consume: ({ ref }) => {
