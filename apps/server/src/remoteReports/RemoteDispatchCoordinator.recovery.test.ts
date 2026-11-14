@@ -432,3 +432,48 @@ it.effect(
       }).pipe(Effect.provide(f.dependencies));
     }).pipe(Effect.provide(database)),
 );
+
+it.effect.each(["refusal", "malformed"] as const)(
+  "an answered %s breaks an unknown launch's outage before another day of failures",
+  (contact) =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.seedLost(LONG_AGO);
+      f.answer(offline);
+      yield* Effect.gen(function* () {
+        yield* resolve();
+        for (let i = 0; i < 138; i++) {
+          yield* TestClock.adjust("10 minutes");
+          yield* resolve();
+        }
+        f.answer(
+          contact === "refusal"
+            ? Effect.fail(
+                new Ssh.SshRemoteDispatchError({
+                  reason: "remote_refused",
+                  message: "no",
+                  hostAnswered: true,
+                }),
+              )
+            : Effect.succeed({ unexpected: true }),
+        );
+        yield* resolve();
+        const answered = yield* f.sql<{
+          since: string | null;
+        }>`SELECT host_unavailable_since AS since FROM remote_dispatches WHERE correlation_id = ${id}`;
+        assert.isNull(answered[0]?.since);
+        f.answer(offline);
+        for (let i = 0; i < 12; i++) {
+          yield* TestClock.adjust("10 minutes");
+          yield* resolve();
+        }
+        const rows = yield* f.sql<{
+          end_reason: string | null;
+          since: string | null;
+        }>`SELECT end_reason, host_unavailable_since AS since FROM remote_dispatches WHERE correlation_id = ${id}`;
+        assert.isNull(rows[0]?.end_reason);
+        assert.equal(rows[0]?.since, "1970-01-01T23:10:00.000Z");
+        assert.lengthOf(f.notices, 0);
+      }).pipe(Effect.provide(f.dependencies));
+    }).pipe(Effect.provide(database)),
+);

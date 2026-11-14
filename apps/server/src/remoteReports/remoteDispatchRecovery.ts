@@ -61,14 +61,20 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
       ceiling,
     )
     .pipe(Effect.result);
+  const clearOutage = sql`UPDATE remote_dispatches SET host_unavailable_since = NULL, host_last_failed_at = NULL
+    WHERE correlation_id = ${row.correlation_id} AND state = 'lost' AND remote_thread_id IS NULL AND end_reason IS NULL`;
   if (answer._tag === "Failure") {
+    if (
+      answer.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+      answer.failure.hostAnswered === true
+    )
+      yield* clearOutage;
     if (!isUnreachable(answer.failure)) return yield* answer.failure;
     yield* recordLostLaunchUnreachable(publicRow(row));
     return { _tag: "pending" } as const satisfies LostLaunchOutcome;
   }
+  yield* clearOutage;
   const resolution = yield* decodeResolution(answer.success);
-  yield* sql`UPDATE remote_dispatches SET host_unavailable_since = NULL, host_last_failed_at = NULL
-    WHERE correlation_id = ${row.correlation_id} AND end_reason IS NULL`;
 
   const at = DateTime.formatIso(yield* DateTime.now);
   // Each write keeps its guard: a row another writer already settled is left as it is.
