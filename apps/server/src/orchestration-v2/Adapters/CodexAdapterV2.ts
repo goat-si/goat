@@ -1548,7 +1548,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
-        const sessionEnvironment =
+        const env =
           resolvedRuntime?.environment ??
           (yield* adapterOptions.currentEnvironment ?? Effect.succeed(adapterOptions.environment));
         const routeInput = yield* HomeRoute.resolveCodexRouteContext({
@@ -1556,10 +1556,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           binaryPath: launchSettings.binaryPath,
           home: launchSettings.homePath,
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
-          environment: sessionEnvironment,
-          configArgv: codexExecLaunchArgs(
-            resolveCodexLaunchArgs(launchSettings.launchArgs, sessionEnvironment),
-          ),
+          environment: env,
+          configArgv: codexExecLaunchArgs(resolveCodexLaunchArgs(launchSettings.launchArgs, env)),
         }).pipe(Effect.provideService(Path.Path, path), toOpenSessionError);
         const routeArgs =
           launchSettings.modelRoute === "opencodex"
@@ -4561,7 +4559,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
+              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, env.CODEX_HOME ?? "");
             }
           }).pipe(Effect.orDie),
         );
@@ -7283,7 +7281,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             catalog: {
               cwd,
               fileSystem,
-              home: sessionEnvironment.HOME,
+              home: env.HOME,
               readConfig: ensureInitialized.pipe(
                 Effect.andThen(client.request("config/read", { cwd, includeLayers: false })),
               ),
