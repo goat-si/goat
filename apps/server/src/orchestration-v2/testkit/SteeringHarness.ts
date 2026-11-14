@@ -36,6 +36,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   selectionNeedsRestart = false,
   threadOverride?: ThreadId,
   canSteer = true,
+  turnCapabilities: Partial<typeof CodexProviderCapabilitiesV2.turns> = {},
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -48,6 +49,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
       ...CodexProviderCapabilitiesV2.turns,
       supportsActiveSteering: canSteer,
       supportsSteeringByInterruptRestart: canRestart,
+      ...turnCapabilities,
     },
   };
   const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
