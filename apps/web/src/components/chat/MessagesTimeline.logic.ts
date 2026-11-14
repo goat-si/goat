@@ -1,3 +1,4 @@
+import { replaceStreamingMessageRows } from "./timelineStreamingRows";
 import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
@@ -31,8 +32,6 @@ export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
   formatDuration,
-  isStreamingMessageTextUpdate,
-  isStreamingTurnItemTextUpdate,
   timelineEntryIsPersistentResourceCard,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
@@ -2298,99 +2297,6 @@ export function timelineTurnFoldRunIdsByEntryId(
     for (const entryId of fold.hiddenEntryIds) byEntryId.set(entryId, fold.runId);
   }
   return byEntryId;
-}
-
-function sameCheckpointSummaries(
-  previous: MessagesTimelineRowsInput["turnDiffSummaries"],
-  next: MessagesTimelineRowsInput["turnDiffSummaries"],
-): boolean {
-  if (previous === next) return true;
-  if (previous.length !== next.length) return false;
-  for (const [index, summary] of previous.entries()) {
-    if (!shallow(summary, next[index])) return false;
-  }
-  return true;
-}
-
-function replaceStreamingMessageRows(
-  input: MessagesTimelineRowsInput,
-  previous: MessagesTimelineRowsProjection,
-): MessagesTimelineRow[] | null {
-  const {
-    timelineEntries: previousEntries,
-    latestRun: previousRun,
-    turnDiffSummaries: previousCheckpoints,
-    expandedRunIds: previousExpandedRuns,
-    expandedAttemptIds: previousExpandedAttempts,
-    expandedWorkGroupIds: previousExpandedGroups,
-    availableRevertTurnCounts: previousAvailableRevertTurnCounts,
-    ...previousContext
-  } = previous.input;
-  const {
-    timelineEntries,
-    latestRun,
-    turnDiffSummaries,
-    expandedRunIds,
-    expandedAttemptIds,
-    expandedWorkGroupIds,
-    availableRevertTurnCounts,
-    ...context
-  } = input;
-  // Shell/checkpoint selectors rebuild summaries per event; compare contents.
-  if (
-    timelineEntries.length !== previousEntries.length ||
-    !shallow(previousContext, context) ||
-    !shallow(previousRun, latestRun) ||
-    !shallow(previousExpandedRuns, expandedRunIds) ||
-    !shallow(previousExpandedAttempts, expandedAttemptIds) ||
-    !shallow(previousExpandedGroups, expandedWorkGroupIds) ||
-    !shallow(previousAvailableRevertTurnCounts, availableRevertTurnCounts) ||
-    !sameCheckpointSummaries(previousCheckpoints, turnDiffSummaries)
-  ) {
-    return null;
-  }
-  const replacements = new Map<ChatMessage, Extract<TimelineEntry, { kind: "message" }>>();
-  for (let index = 0; index < timelineEntries.length; index += 1) {
-    const entry = timelineEntries[index]!;
-    const previousEntry = previousEntries[index]!;
-    if (entry === previousEntry) continue;
-    if (
-      entry.kind !== "message" ||
-      previousEntry.kind !== "message" ||
-      entry.id !== previousEntry.id ||
-      entry.createdAt !== previousEntry.createdAt ||
-      entry.attempt !== previousEntry.attempt
-    ) {
-      return null;
-    }
-    if (
-      entry.projectedItem !== previousEntry.projectedItem &&
-      (entry.projectedItem === undefined ||
-        previousEntry.projectedItem === undefined ||
-        !isStreamingTurnItemTextUpdate(previousEntry.projectedItem, entry.projectedItem))
-    ) {
-      return null;
-    }
-    if (
-      entry.message === previousEntry.message &&
-      entry.projectedItem === previousEntry.projectedItem
-    )
-      continue;
-    if (!isStreamingMessageTextUpdate(previousEntry.message, entry.message)) return null;
-    replacements.set(previousEntry.message, entry);
-  }
-  if (replacements.size === 0) return previous.rows;
-  return previous.rows.map((row) => {
-    if (row.kind !== "message" && row.kind !== "assistant-meta") return row;
-    const entry = replacements.get(row.message);
-    return entry
-      ? {
-          ...row,
-          message: entry.message,
-          ...(entry.projectedItem === undefined ? {} : { projectedItem: entry.projectedItem }),
-        }
-      : row;
-  });
 }
 
 export function deriveMessagesTimelineRowsWithState(
