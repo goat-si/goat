@@ -97,18 +97,10 @@ function stripStringTerminator(value: string): string {
   return value;
 }
 
-function findStringTerminatorIndex(
-  input: string,
-  start: number,
-  belTerminates: boolean,
-): number | null {
+function findStringTerminatorIndex(input: string, start: number, isOsc: boolean): number | null {
   for (let index = start; index < input.length; index += 1) {
     const codePoint = input.charCodeAt(index);
-    if (
-      (belTerminates && codePoint === 0x07) ||
-      codePoint === 0x9c ||
-      isControlSequenceCancel(codePoint)
-    ) {
+    if ((isOsc ? codePoint === 0x07 : codePoint === 0x9c) || isControlSequenceCancel(codePoint)) {
       return index + 1;
     }
     if (codePoint === 0x1b) {

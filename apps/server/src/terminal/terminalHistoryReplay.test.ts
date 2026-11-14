@@ -35,3 +35,8 @@ it.each([
     );
   },
 );
+
+it("keeps decoded U+009C inside a stripped OSC query out of history", () => {
+  const input = "A\u001b]11;?\u009cHIDDEN\u001b\\B\nC\u001bP$qm\u009cSHOWN\u001b\\D\n";
+  expect(sanitizeTerminalHistoryChunk("", input).visibleText).toBe("AB\nCSHOWN\u001b\\D\n");
+});
