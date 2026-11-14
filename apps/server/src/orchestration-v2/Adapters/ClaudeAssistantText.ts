@@ -14,7 +14,6 @@ interface TextBlock {
   text: string;
   published: string;
   completed: boolean;
-  lineFlushed: boolean;
 }
 
 export function makeClaudeAssistantTextProjector() {
@@ -59,7 +58,6 @@ export function makeClaudeAssistantTextProjector() {
           text: event.content_block.text,
           published: "",
           completed: false,
-          lineFlushed: false,
         });
       }
       if (!("index" in event)) return [];
@@ -68,8 +66,7 @@ export function makeClaudeAssistantTextProjector() {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta")
         block.text += event.delta.text;
       if (event.type === "content_block_stop") return update(block, true);
-      if (!block.lineFlushed && block.text.includes("\n")) {
-        block.lineFlushed = true;
+      if (block.text.slice(block.published.length).includes("\n")) {
         return update(block, false, true);
       }
       return [];
@@ -88,7 +85,6 @@ export function makeClaudeAssistantTextProjector() {
           text: "",
           published: "",
           completed: false,
-          lineFlushed: false,
         };
         if (content.text.length > 0) block.text = content.text;
         blocks.set(blockKey, block);
