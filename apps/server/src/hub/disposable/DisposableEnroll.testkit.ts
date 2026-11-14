@@ -79,6 +79,8 @@ interface Operation {
   state: string;
   linkId: string;
   code?: string;
+  /** A person or O5 resolved this residual or unknown entry. */
+  resolvedAt?: string;
 }
 
 /**
@@ -262,6 +264,9 @@ export const fakeEnrollHost = () => {
                   ...(operation.code === undefined
                     ? {}
                     : { error: { code: operation.code, status: 409 } }),
+                  ...(operation.resolvedAt === undefined
+                    ? {}
+                    : { resolvedAt: operation.resolvedAt }),
                 }),
               );
             }

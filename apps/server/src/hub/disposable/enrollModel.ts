@@ -124,13 +124,19 @@ const Operation = Schema.Struct({
   error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
   /** The Child may still hold an enrollment or a plant, whatever the outcome says of the Home. */
   childResidual: Schema.optionalKey(Schema.Boolean),
+  /** A person or O5 resolved this residual or unknown entry. */
+  resolvedAt: Schema.optionalKey(Schema.String),
 });
 const decodeOperation = Schema.decodeUnknownOption(Schema.fromJsonString(Operation));
 
 export type LinkOutcome =
   | { readonly kind: "committed"; readonly linkId: string }
   | { readonly kind: "failed_clean"; readonly code: string }
-  | { readonly kind: "unsettled"; readonly state: "residual" | "unknown" }
+  | {
+      readonly kind: "unsettled";
+      readonly state: "residual" | "unknown";
+      readonly resolved?: true;
+    }
   | { readonly kind: "open" }
   | { readonly kind: "not_found" }
   | { readonly kind: "unreadable" };
@@ -170,7 +176,11 @@ export const readOperation = (
     }
     case "residual":
     case "unknown":
-      return { kind: "unsettled", state: operation.state };
+      return {
+        kind: "unsettled",
+        state: operation.state,
+        ...(operation.resolvedAt === undefined ? {} : { resolved: true as const }),
+      };
     case "open":
       return { kind: "open" };
     default:

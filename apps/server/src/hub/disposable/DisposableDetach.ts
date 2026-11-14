@@ -35,6 +35,7 @@ import {
   type Detach,
   type Health,
   linkKeyState,
+  linkByAlias,
   readRevoke,
   recoverAnswer,
   retires,
@@ -149,7 +150,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
   const finish = Effect.fn("DisposableDetach.finish")(function* (
     row: Row,
     enroll: Enroll,
-    outcome: "purged" | "forgotten" | "elsewhere",
+    outcome: "purged" | "forgotten" | "elsewhere" | "unproven",
   ) {
     yield* host.forgetKnownHosts(row.attach_id);
     const detach = { ...(enroll.detach ?? { step: "done", attempt: 0 }), step: "done", outcome };
@@ -409,6 +410,22 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
         ? ({ kind: "unreadable" } as const)
         : readOperation(answer, { operationId, alias: `pen-${row.node_id}` });
     const fresh = nowMs - (enroll.link?.intentAtMs ?? 0) < OPERATION_REPLAY_MS;
+    // A person's force, or an entry a person resolved: the link OpenCodex lists for the machine
+    // decides, since the journal no longer can.
+    const byList =
+      before.force === true || (outcome.kind === "unsettled" && outcome.resolved === true);
+    if (byList && outcome.kind !== "committed" && outcome.kind !== "failed_clean") {
+      const listed = linkByAlias(
+        yield* host.ocx(["link", "status", "--json"], READ_TIMEOUT_MS),
+        `pen-${row.node_id}`,
+      );
+      if (listed === undefined) return;
+      if (listed !== null)
+        return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }), {
+          link_id: listed,
+        });
+      return yield* finish(row, withDetach(enroll, { ...before, operationId }), "unproven");
+    }
     switch (outcome.kind) {
       case "committed":
         return yield* note(row, withDetach(enroll, { ...before, step: "revoke" }), {
@@ -428,9 +445,9 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           return yield* note(row, withDetach(enroll, { ...before, step: "done" }), {
             link_operation_id: null,
           });
-        return yield* note(row, withDetach(enroll, { ...before, stop: "link_unsettled" }));
+        return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
       case "unsettled":
-        return yield* note(row, withDetach(enroll, { ...before, stop: "link_unsettled" }));
+        return yield* halt(row, enroll, { ...before, operationId }, "link_unsettled");
       default:
         return;
     }

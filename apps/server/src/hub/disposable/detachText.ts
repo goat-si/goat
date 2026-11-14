@@ -25,7 +25,7 @@ const STOPS: Record<string, string> = {
   revoke_unsettled:
     "OpenCodex could not tell what the revoke did to the Child. Check the machine; a person on this hub resolves the operation below with ocx link operations resolve, then forces the detach.",
   link_unsettled:
-    "OpenCodex could not tell what the machine's last link operation left, so GOAT does not remove a link it cannot name. A person resolves it with ocx link operations on this hub.",
+    "OpenCodex could not tell what the machine's last link operation left, so GOAT does not remove a link it cannot name. A person resolves the operation below with ocx link operations resolve, or forces the detach: GOAT then removes whatever link OpenCodex lists for the machine.",
   tombstone_limit:
     "too many links removed without their machines wait for cleanup on this hub; recover or forget some (ocx link recover --list), then force the detach again.",
 };
@@ -62,7 +62,7 @@ export const detachMessage = (
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   const { name, linkId, detach } = view;
   const operation =
-    detach?.operationId === undefined ? "" : " Revoke operation " + detach.operationId + ".";
+    detach?.operationId === undefined ? "" : " Operation " + detach.operationId + ".";
   // A changed host key stops every step for the record; only a person removes it from Pen.
   if (
     view.stop === "host_key_changed" &&
@@ -170,9 +170,13 @@ export const detachMessage = (
           name +
           (detach?.outcome === "forgotten"
             ? " is detached: its OpenCodex link is gone, and a person forgot its cleanup on this hub, so the machine may still hold the lightweight Child."
-            : detach?.outcome === "elsewhere"
-              ? " is detached: its OpenCodex link was removed outside GOAT, so GOAT cannot tell whether the machine still holds the lightweight Child."
-              : " is detached: its OpenCodex link and lightweight Child are gone.") +
+            : detach?.outcome === "unproven"
+              ? " is detached: OpenCodex lists no link for it, but link operation " +
+                (detach.operationId ?? "") +
+                " never settled, so the machine may still hold the planted Child; check it there with ~/.cache/opencodex/bin/ocx-child connect status --json."
+              : detach?.outcome === "elsewhere"
+                ? " is detached: its OpenCodex link was removed outside GOAT, so GOAT cannot tell whether the machine still holds the lightweight Child."
+                : " is detached: its OpenCodex link and lightweight Child are gone.") +
           leave(view.inPen),
         nextAction: null,
       };

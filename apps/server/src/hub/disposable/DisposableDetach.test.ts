@@ -601,3 +601,52 @@ it.effect(
       }),
     ),
 );
+
+it.effect(
+  "a detach stopped at an unsettled link operation is forced by a person: no link listed ends it with a text naming the operation",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        withIdentity(home);
+        const { attachId } = yield* joined(pen, host, 1);
+        host.control.adds.push("unknown");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll; // the add ended unknown
+        expect((yield* listed(attachId))?.state).toBe("unknown");
+        yield* detach(PERSON, attachId, "d-1");
+        yield* detachPass;
+        expect((yield* listed(attachId))?.message).toContain(attachId + ".link.1");
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        const done = yield* listed(attachId);
+        expect(done?.state).toBe("purged");
+        expect(done?.message).toContain(attachId + ".link.1");
+        expect(done?.message).toContain("may still hold");
+        expect(ocx.sent).toEqual([]);
+      }),
+    ),
+);
+
+it.effect(
+  "a link operation a person resolved lets the detach remove the link OpenCodex lists",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        withIdentity(home);
+        const { attachId, nodeId } = yield* joined(pen, host, 1);
+        host.control.adds.push("unknown");
+        for (let pass = 0; pass < 3; pass += 1) yield* enroll;
+        const operation = host.control.journal.get(attachId + ".link.1");
+        if (operation !== undefined) operation.resolvedAt = "2026-11-15T00:00:00.000Z";
+        host.control.links.set("lnk_00000000000000aa", {
+          id: "lnk_00000000000000aa",
+          alias: "pen-" + nodeId,
+        });
+        yield* detach(THREAD, attachId, "d-1");
+        for (let pass = 0; pass < 3; pass += 1) yield* detachPass;
+        expect(ocx.sent).toEqual([attachId + ".purge.1"]);
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
