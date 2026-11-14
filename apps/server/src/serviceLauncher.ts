@@ -24,6 +24,7 @@ import {
   decodeServiceLauncherChildMessage,
   isExactServiceVersion,
   parseServiceState,
+  parseLegacyServiceState,
   SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
@@ -420,7 +421,7 @@ async function discardDatabaseBackup(baseDir: string, updateId: string): Promise
 
 export async function readServiceState(filePath: string): Promise<ServiceState> {
   const contents = await NodeFSP.readFile(filePath, "utf8");
-  const state = parseServiceState(contents);
+  const state = parseServiceState(contents) ?? parseLegacyServiceState(contents);
   if (state === undefined) throw new Error("Service state is invalid or unsupported.");
   return state;
 }
@@ -1089,6 +1090,11 @@ export async function main(): Promise<void> {
   }
   const environment = await readServiceEnvironment(baseDir);
   const statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
-  const state = await readServiceState(statePath);
+  const contents = await NodeFSP.readFile(statePath, "utf8");
+  const current = parseServiceState(contents);
+  const state = current ?? parseLegacyServiceState(contents);
+  if (state === undefined) throw new Error("Service state is invalid or unsupported.");
+  if (current === undefined && !(await runtimeExists(baseDir, state.activeVersion)))
+    throw new Error(`Selected goat@${state.activeVersion} runtime is missing or incomplete.`);
   await new Launcher(baseDir, state, { environment }).run();
 }
