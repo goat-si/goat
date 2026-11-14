@@ -6,6 +6,8 @@ import * as Queue from "effect/Queue";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
+  BotThreadRow,
+  BotWorkResult,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
   ChannelUpdateTaskViewInput,
@@ -26,6 +28,26 @@ const decodeRowsBefore = Schema.decodeUnknownSync(
   }),
 );
 const at = "2026-11-04T10:00:00.000Z";
+const pullRequests = [
+  { repository: "goat-si/goat", number: 42, state: "merged", watching: false },
+  { repository: "goat-si/goat", number: 41, watching: true },
+];
+const taskRow = {
+  kind: "task",
+  task: { taskId: "task-1", title: "Review", status: "completed", updatedAt: at },
+  view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
+  lastActivityAt: at,
+  unread: false,
+  mainMessagesSinceQuiet: 0,
+};
+const withoutPullRequests = <F extends object>(fields: F) => {
+  const {
+    pullRequests: _pullRequests,
+    pullRequestsOmitted: _omitted,
+    ...rest
+  } = fields as F & { pullRequests?: unknown; pullRequestsOmitted?: unknown };
+  return rest as Omit<F, "pullRequests" | "pullRequestsOmitted">;
+};
 
 describe("bot thread contracts", () => {
   it.effect("rejects a NUL query at the RPC boundary the same way as an invalid limit", () =>
@@ -114,6 +136,8 @@ describe("bot thread contracts", () => {
             lastActivityAt: at,
             unread: true,
             mainMessagesSinceQuiet: 1,
+            pullRequests,
+            pullRequestsOmitted: 3,
           },
         },
         codingRows: [coding],
@@ -182,6 +206,47 @@ describe("bot thread contracts", () => {
   it("rejects malformed task views and negative message counts", () => {
     expect(() => decodeUpdate({ taskId: "task-1", readThrough: 42 })).toThrow();
     expect(() => decodeRows({ rows: [], mainMessageCount: -1 })).toThrow();
+  });
+  it("task rows carry their pull requests, which older clients ignore", () => {
+    const row = { ...taskRow, pullRequests, pullRequestsOmitted: 2 };
+    expect(decodeRows({ rows: [row], mainMessageCount: 0 }).rows).toEqual([row]);
+    // Today's row union and lookup row, as clients before the keys decode them.
+    const [taskArm, codingArm] = BotThreadRow.members;
+    const decodeRowsBefore = Schema.decodeUnknownSync(
+      Schema.Array(Schema.Union([taskArm.mapFields(withoutPullRequests), codingArm])),
+    );
+    expect(decodeRowsBefore([row])).toEqual([taskRow]);
+    const knownArm = BotWorkResult.fields.task.members[0];
+    const decodeLookupRowBefore = Schema.decodeUnknownSync(
+      knownArm.fields.row.mapFields(withoutPullRequests),
+    );
+    expect(decodeLookupRowBefore(row)).toEqual(taskRow);
+  });
+  it("bounds a row's pull requests at five", () => {
+    const six = Array.from({ length: 6 }, (_, index) => ({
+      repository: "goat-si/goat",
+      number: index + 1,
+      watching: false,
+    }));
+    const decodeLookup = Schema.decodeUnknownSync(BotWorkResult);
+    const lookup = (row: object) => ({
+      task: { state: "known", row },
+      codingRows: [],
+      remoteWork: [],
+      launchesTruncated: false,
+      partial: false,
+    });
+    expect(
+      decodeRows({ rows: [{ ...taskRow, pullRequests: six.slice(0, 5) }], mainMessageCount: 0 })
+        .rows,
+    ).toHaveLength(1);
+    expect(() =>
+      decodeRows({ rows: [{ ...taskRow, pullRequests: six }], mainMessageCount: 0 }),
+    ).toThrow();
+    expect(() => decodeLookup(lookup({ ...taskRow, pullRequests: six }))).toThrow();
+    expect(() =>
+      decodeRows({ rows: [{ ...taskRow, pullRequestsOmitted: 0 }], mainMessageCount: 0 }),
+    ).toThrow();
   });
   it("carries the bot's work on other machines beside its rows, which older clients ignore", () => {
     const remoteWork = [
