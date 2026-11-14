@@ -1,3 +1,4 @@
+import { CHAT_USER_MARKDOWN_REMARK_PLUGINS } from "@goat/shared/markdownPipeline";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
 import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
@@ -988,6 +989,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       className="text-foreground"
       lineBreaks
       parseRawHtml={false}
+      extraRemarkPlugins={CHAT_USER_MARKDOWN_REMARK_PLUGINS}
       renderContextReference={props.renderContextReference}
       headingLevelOffset={MESSAGE_HEADING_LEVEL}
     />
