@@ -22,6 +22,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { compareSemverVersions } from "@goat/shared/semver";
 import * as OpenCodeAdapterV2 from "./adapter.ts";
 import * as OpenCode2AdapterV2 from "./v2/adapter.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -125,7 +126,20 @@ function selectOpenCodeRuntimeAdapter(input: {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
-    getCapabilities: () => Effect.flatMap(hot, (adapter) => adapter.getCapabilities()),
+    getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
+      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
+      const adapter = yield* pick(Effect.succeed(probed));
+      const capabilities = yield* adapter.getCapabilities();
+      return {
+        ...capabilities,
+        turns: {
+          ...capabilities.turns,
+          supportsNativeGoals:
+            capabilities.turns.supportsNativeGoals ??
+            (probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0),
+        },
+      };
+    }),
     planSelectionTransition: (transition) =>
       Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
     openSession: (session) =>

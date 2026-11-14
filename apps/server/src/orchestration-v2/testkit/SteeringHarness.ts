@@ -21,7 +21,6 @@ import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
-const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 export const runSelection = {
   instanceId,
@@ -36,7 +35,9 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   selectionNeedsRestart = false,
   threadOverride?: ThreadId,
   canSteer = true,
+  nativeGoals?: boolean,
 ) {
+  const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
   const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
@@ -46,6 +47,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     ...CodexProviderCapabilitiesV2,
     turns: {
       ...CodexProviderCapabilitiesV2.turns,
+      ...(nativeGoals === undefined ? {} : { supportsNativeGoals: nativeGoals }),
       supportsActiveSteering: canSteer,
       supportsSteeringByInterruptRestart: canRestart,
     },
@@ -200,8 +202,17 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
 export const goalHarness = Effect.fn("goalHarness")(function* (
   name: string,
   beforeCompaction: Effect.Effect<void> = Effect.void,
+  nativeGoals?: boolean,
 ) {
-  const harness = yield* nextTurnSelectionHarness(name, false, beforeCompaction);
+  const harness = yield* nextTurnSelectionHarness(
+    name,
+    false,
+    beforeCompaction,
+    false,
+    undefined,
+    true,
+    nativeGoals,
+  );
   const send = Effect.fn("SteeringHarness.sendGoalMessage")(function* (
     id: string,
     text: string,
