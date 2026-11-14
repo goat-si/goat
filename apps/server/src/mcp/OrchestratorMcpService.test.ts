@@ -1137,6 +1137,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     "child run completion",
     "child question",
     "child approval",
+    "Node fetch timeout",
   ] as const)("a task wait still returns on %s", (wake) =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
@@ -1242,6 +1243,20 @@ describe("OrchestratorMcpService provider resolution", () => {
           .delegateTask(scope, { task: "Review the change.", mode: "wait" })
           .pipe(Effect.forkChild);
         yield* Deferred.await(subscribed);
+        if (wake === "Node fetch timeout") {
+          const beforeTimeout = yield* Fiber.join(waiting).pipe(
+            Effect.timeoutOption(Duration.seconds(299)),
+            Effect.forkChild,
+          );
+          yield* TestClock.adjust(Duration.seconds(299));
+          const result = yield* Fiber.join(beforeTimeout);
+          assert.isTrue(Option.isSome(result));
+          if (Option.isSome(result)) {
+            assert.equal(result.value.taskId, taskId);
+            assert.isTrue(result.value.waitTimedOut);
+          }
+          return;
+        }
         ready = true;
         if (wake === "parent completion") {
           yield* Queue.offer(events, {

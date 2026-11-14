@@ -1943,7 +1943,7 @@ const make = Effect.gen(function* () {
       }
       const timeoutMs = Math.min(
         MAX_WAIT_TIMEOUT_MS,
-        Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS),
+        Math.max(1, input.timeoutMs ?? 4 * 60 * 1_000),
       );
       const upgradeWake = threadManagement
         .dispatch({
