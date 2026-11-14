@@ -2892,9 +2892,9 @@ export const make = Effect.gen(function* () {
       return detailUncached(ref).pipe(
         Effect.tap(
           Effect.fn("PullRequestService.recordDetailStats")(function* (value: PullRequestDetail) {
-            // GitHub detail includes the same checks; the checks TTL counts from their observation.
             if (
-              value.provider === "github" &&
+              (value.provider === "github" ||
+                (value.provider === "azure-devops" && value.checks.length > 0)) && // Empty may mean a failed read.
               value.observedAt !== undefined &&
               !(yield* Cache.has(checksCache, key))
             ) {
