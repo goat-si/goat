@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -22,13 +23,19 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
 import { OpenCodeDriver } from "./driver.ts";
 
-it.live("holds memory generation when the OpenCode executable is missing", () =>
+const isMemoryGenerationRunnerError = Schema.is(MemoryGenerationRunnerError);
+
+it.live("classifies a missing executable for the memory hold and retries after recovery", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped();
     const host = yield* ProviderHost.ProviderHost;
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+    let available = false;
+    let recoveredProbes = 0;
     const instance = yield* OpenCodeDriver.create({
       instanceId: ProviderInstanceId.make("opencode-test"),
       displayName: undefined,
@@ -42,6 +49,16 @@ it.live("holds memory generation when the OpenCode executable is missing", () =>
       Effect.provideService(ProviderHost.ProviderHost, {
         ...host,
         environmentId: EnvironmentId.make("owner"),
+      }),
+      Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
+        ...runtime,
+        runOpenCodeCommand: (input) =>
+          available
+            ? Effect.sync(() => {
+                recoveredProbes++;
+                return { stdout: "1.18.32", stderr: "", code: 0 };
+              })
+            : runtime.runOpenCodeCommand(input),
       }),
     );
     const input = GenerateMemorySummaryInput.make({
@@ -58,8 +75,13 @@ it.live("holds memory generation when the OpenCode executable is missing", () =>
       messages: [{ messageId: MessageId.make("m1"), text: "hello", completed: true }],
       modelSelection: { instanceId: instance.instanceId, model: "openai/gpt-5" },
     });
+    yield* instance.snapshot.refresh;
     const failure = yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
-    assert.deepInclude(failure.cause, { _tag: "MemoryGenerationRunnerError", code: "unavailable" });
+    assert.isTrue(isMemoryGenerationRunnerError(failure.cause));
+    assert.deepInclude(failure.cause, { code: "unavailable" });
+    available = true;
+    yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.exit);
+    assert.isAbove(recoveredProbes, 0);
   }).pipe(
     Effect.scoped,
     Effect.provide(
