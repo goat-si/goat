@@ -48,6 +48,7 @@ import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotStepsReader } from "./GoatBotStepsProvider";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
 import { useGoatBotSource } from "./useGoatBotSource";
@@ -479,7 +480,11 @@ function GoatBotChatViewContent({
           ) : null}
           {/* Mounted before the first message, so the chat's first status is heard. */}
           <GoatBotActivityStatus
-            key={timelineIdentity}
+            key={`${timelineIdentity}:activity`}
+            replyingSince={removed ? null : replyingSince}
+          />
+          <GoatBotReplyStatus
+            key={`${timelineIdentity}:reply`}
             replyingSince={removed ? null : replyingSince}
             announcement={announcement}
           />

@@ -7,6 +7,7 @@ vi.mock("./useGoatBotFace", async (original) => ({
   useGoatBotReading: (since: string | null) => since !== null,
 }));
 import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { GoatBotActivityContext } from "./GoatBotTimeline";
 
 const row: Extract<GoatBotRow, { kind: "bot" }> = {
@@ -24,37 +25,29 @@ const row: Extract<GoatBotRow, { kind: "bot" }> = {
 const announcement = { sequence: 1, row };
 const view = (work: boolean, reply = false, reading = false) => (
   <GoatBotActivityContext value={work ? { state: "working", text: "Tool step" } : null}>
-    <GoatBotActivityStatus
+    <GoatBotActivityStatus replyingSince={reading ? "now" : null} />
+    <GoatBotReplyStatus
       replyingSince={reading ? "now" : null}
       announcement={reply ? announcement : null}
     />
   </GoatBotActivityContext>
 );
 
-it("keeps a reply across the first activity change and clears it on the second", async () => {
+it("keeps the reply unchanged across activity transitions", async () => {
   await using screen = await render(view(true));
-  const status = screen.getByRole("status");
+  const reply = screen.getByRole("status", { name: "New bot reply" });
   await screen.rerender(view(true, true));
-  await expect.element(status).toHaveTextContent("GOAT Bot is working. GOAT Bot replied.");
+  await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
   await screen.rerender(view(false, true));
-  await expect.element(status).toHaveTextContent("GOAT Bot is done. GOAT Bot replied.");
+  await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
   await screen.rerender(view(true, true));
-  await expect.element(status).toHaveTextContent("GOAT Bot is working");
+  await expect.element(reply).toHaveTextContent("GOAT Bot replied.");
 });
 
-it("clears the reply immediately when the person sends a message", async () => {
-  {
-    await using screen = await render(view(true));
-    const status = screen.getByRole("status");
-    await screen.rerender(view(true, true));
-    await screen.rerender(view(true, true, true));
-    await expect.element(status).toHaveTextContent("Reading your message");
-  }
+it("clears the reply when the person sends a message", async () => {
   await using screen = await render(view(true));
-  const status = screen.getByRole("status");
+  const reply = screen.getByRole("status", { name: "New bot reply" });
   await screen.rerender(view(true, true));
-  await screen.rerender(view(false, true));
-  await expect.element(status).toHaveTextContent("GOAT Bot is done. GOAT Bot replied.");
-  await screen.rerender(view(false, true, true));
-  await expect.element(status).toHaveTextContent("Reading your message");
+  await screen.rerender(view(true, true, true));
+  await expect.element(reply).toHaveTextContent("");
 });

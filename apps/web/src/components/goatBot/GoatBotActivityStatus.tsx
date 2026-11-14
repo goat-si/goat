@@ -1,4 +1,4 @@
-import { goatBotActivity, type GoatBotRow } from "@goat/client-runtime/goatBot";
+import { goatBotActivity } from "@goat/client-runtime/goatBot";
 import { useContext, useEffect, useState } from "react";
 
 import { useGoatBotName } from "./goatBotMemberContext";
@@ -14,13 +14,8 @@ const READING = goatBotActivity({ reading: true, task: null, worker: null });
  */
 export function GoatBotActivityStatus({
   replyingSince,
-  announcement = null,
 }: {
   readonly replyingSince: string | null;
-  readonly announcement?: {
-    readonly sequence: number;
-    readonly row: Extract<GoatBotRow, { kind: "bot" }>;
-  } | null;
 }) {
   const botName = useGoatBotName();
   const working = useContext(GoatBotActivityContext);
@@ -46,18 +41,10 @@ export function GoatBotActivityStatus({
     setPainted(true);
   }, []);
   const activity = reading ? READING : working;
-  const currentDoneDuring =
-    working !== null
-      ? undefined
-      : workOpen
-        ? readingKey
-        : doneDuring !== undefined && readingKey !== null && readingKey !== doneDuring
-          ? undefined
-          : doneDuring;
   // Words follow what the work waits on, so a wait reworded as more is known is heard once.
   const text =
     activity === null
-      ? currentDoneDuring === undefined
+      ? doneDuring === undefined
         ? ""
         : `${botName} is done`
       : activity.state === "reading"
@@ -67,41 +54,9 @@ export function GoatBotActivityStatus({
           : activity.wait === "usage_limit"
             ? `${botName} is paused on a usage limit`
             : `${botName} is working`;
-  const [reply, setReply] = useState<{
-    sequence: number;
-    toggle: boolean;
-    activity: string;
-    clause: string;
-    changes: number;
-  } | null>(null);
-  if (announcement !== null && announcement.sequence !== reply?.sequence) {
-    const toggle = !(reply?.toggle ?? false);
-    const row = announcement.row;
-    const clause =
-      row.tone === "question"
-        ? toggle
-          ? `${botName} asked a question.`
-          : `New question from ${botName}.`
-        : row.proactive
-          ? toggle
-            ? `${botName} posted an update.`
-            : `New update from ${botName}.`
-          : toggle
-            ? `${botName} replied.`
-            : `New reply from ${botName}.`;
-    setReply({ sequence: announcement.sequence, toggle, activity: text, clause, changes: 0 });
-  } else if (reply !== null && reply.activity !== text && reply.clause !== "") {
-    setReply({
-      ...reply,
-      activity: text,
-      clause: reading || reply.changes >= 1 ? "" : reply.clause,
-      changes: reply.changes + 1,
-    });
-  }
-  const output = reply?.clause ? [text, reply.clause].filter(Boolean).join(". ") : text;
   return (
     <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-      {painted ? output : ""}
+      {painted ? text : ""}
     </span>
   );
 }

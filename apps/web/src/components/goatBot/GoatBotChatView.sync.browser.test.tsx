@@ -433,9 +433,9 @@ it("guard: an outcome hidden at baseline stays silent when the task list resolve
   await taskList(["task-1"]);
   expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toBe(source);
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome old-outcome"));
-  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
-    "",
-  );
+  expect(
+    screen.container.querySelector('[role="status"][aria-label="New bot reply"]')?.textContent,
+  ).toBe("");
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
 
@@ -466,7 +466,7 @@ it("announces a new hidden outcome once when the task list exposes it", async ()
   });
   const outcome = taskOutcome(threadRef.threadId, "new-outcome", "task-1", 3);
   await deliver(socket, details, threadRef, outcome, 2);
-  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
   expect(status?.textContent).toBe("");
   expect(screen.container.textContent).not.toContain("Jump to latest");
   const source = appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef));
@@ -517,7 +517,7 @@ it("does not reannounce older replies when a task card hides and restores the ne
     3,
   );
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome newest"));
-  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
   const spoken = status?.textContent;
   expect(spoken).toMatch(/update/);
   const revise = async (card: OrchestrationV2TurnItem, sequence: number) => {
@@ -561,9 +561,9 @@ it("guard: a synchronized empty mounted chat has an empty baseline and status", 
   );
   const { details } = await synchronized(threadRef);
   expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toHaveLength(0);
-  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
-    "",
-  );
+  expect(
+    screen.container.querySelector('[role="status"][aria-label="New bot reply"]')?.textContent,
+  ).toBe("");
 });
 
 it("baselines persisted cached history when the mounted chat becomes live", async () => {
@@ -593,7 +593,7 @@ it("baselines persisted cached history when the mounted chat becomes live", asyn
     items.some(({ item }) => item.id === "cached-reply"),
   );
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Cached reply"));
-  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
   expect(status?.textContent).toBe("");
   const socket = await mocks.server.socket;
   await act(async () => {
@@ -650,7 +650,7 @@ it.each(["above", "following"] as const)(
     );
     await deliver(socket, details, threadRef, answer, 3);
     expect(
-      screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent,
+      screen.container.querySelector('[role="status"][aria-label="New bot reply"]')?.textContent,
     ).toMatch(/Research replied\.|New reply from Research\./);
     const row = screen.container.querySelector<HTMLElement>(`[data-bot-row="${answer.id}"]`)!;
     expect(row).not.toBeNull();

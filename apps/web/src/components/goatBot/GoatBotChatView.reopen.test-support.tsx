@@ -88,7 +88,7 @@ export async function verifySidebarReopen({
   expect(appAtomRegistry.get(details.statusAtom(threadRef))).toBe("live");
   await screen.rerender(<ReopenChat MemberChat={MemberChat} threadRef={threadRef} open />);
   expect(appAtomRegistry.get(details.statusAtom(threadRef))).toBe("live");
-  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const status = screen.container.querySelector('[role="status"][aria-label="New bot reply"]');
   if (!status) throw new Error("missing bot status");
   expect(status.textContent).toBe("");
   expect(screen.container.textContent).toContain("History reply");

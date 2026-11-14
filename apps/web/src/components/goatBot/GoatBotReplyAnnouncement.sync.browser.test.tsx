@@ -2,7 +2,7 @@ import { useLayoutEffect } from "react";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { expect, it } from "vite-plus/test";
 import { render } from "../../../test/render";
-import { GoatBotActivityStatus } from "./GoatBotActivityStatus";
+import { GoatBotReplyStatus } from "./GoatBotReplyStatus";
 import { useGoatBotReplyAnnouncement } from "./useGoatBotReplyAnnouncement";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -29,7 +29,7 @@ function Status({
   return (
     <>
       <Exposure onExposure={onExposure} rows={rows} />
-      <GoatBotActivityStatus replyingSince={null} announcement={announcement} />
+      <GoatBotReplyStatus replyingSince={null} announcement={announcement} />
     </>
   );
 }
