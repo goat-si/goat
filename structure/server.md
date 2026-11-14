@@ -170,7 +170,13 @@ After each pass of the 30 s loop (never a list) GOAT starts an enrollment pass (
 that moves admitted machines on without holding the loop: Pen's exact route and host key, `ssh true` with the hub's own machine key (`machineKey.ts`,
 `routeContract.ts`), and `ocx link add` as an exclusive ephemeral Child under an operation id that is
 stored first and read back from OpenCodex's journal before anything is sent again. Records project
-onto hub nodes as the machine's class, and an unreadable table reads as kept. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are thin transports over it.
+onto hub nodes as the machine's class, and an unreadable table reads as kept. A detach pass
+(`DisposableDetach`) runs after it: detach fences the record and removes the link with a journalled
+`ocx link revoke --purge`, clean only with the Child's purged receipt; a machine silent for 24 hours
+(48 handshakes 30 minutes apart), or a person's force, gets `ocx link revoke --force` and a tombstone
+that `ocx link recover` settles once the machine answers. OpenCodex's refusals are states with their
+own text (`detachModel.ts`, `detachText.ts`), and final records whose key left Pen are pruned after
+30 days. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are thin transports over it.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the
