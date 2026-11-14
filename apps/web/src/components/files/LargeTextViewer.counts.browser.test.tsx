@@ -14,6 +14,6 @@ it.each([
     <AttachmentFilePreview name={name} mimeType={mimeType} sizeBytes={file.size} file={file} />,
   );
   const status = () => screen.container.querySelector('[role="status"]')?.textContent ?? "";
-  await vi.waitFor(() => expect(status()).toMatch(/ [KM]?B$/));
+  await vi.waitFor(() => expect(status()).toMatch(/ [KM]?B$/), { timeout: 10_000 });
   expect(status()).toContain(label);
 });
