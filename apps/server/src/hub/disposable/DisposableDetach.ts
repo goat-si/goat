@@ -59,7 +59,10 @@ const DETACH_CONCURRENCY = 4;
 const RETENTION_DAYS = 30;
 const PRUNE_LIMIT = 100;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-const RELEASABLE = new Set(["unknown", "paused"]);
+// A withdrawn invite whose cancel went unanswered may still be live, so only unknown is released.
+const RELEASABLE = new Set(["unknown"]);
+// Pen refuses an invite, or a delayed mint, past its expiresAt: no join can follow after it.
+const INVITE_LIFETIME_MS = 10 * 60 * 1000;
 /** Answers that leave the revoke's own id to be sent again, as OpenCodex asks. */
 const REPEAT = new Set(["open", "unsettled", "not_found", "unreadable"]);
 const DETACHABLE = new Set([
@@ -677,6 +680,15 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
           return yield* fail(
             "conflict",
             "Only an attach Pen admitted nobody for, whose outcome it cannot tell, can be released.",
+          );
+        const usableUntil =
+          row.invite_expires_at === null
+            ? Date.parse(row.created_at) + INVITE_LIFETIME_MS
+            : Date.parse(row.invite_expires_at);
+        if (!(usableUntil < (yield* Clock.currentTimeMillis)))
+          return yield* fail(
+            "conflict",
+            "Its invite can still be used; release it once the invite has expired.",
           );
         const enroll = decodeEnroll(row.enroll_json);
         const now = yield* nowIso;

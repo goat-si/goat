@@ -43,6 +43,7 @@ export interface Row {
   readonly delegation_json: string;
   readonly grant_id: string;
   readonly invite_expires_at: string | null;
+  readonly created_at: string;
   readonly state: string;
   readonly step: string | null;
   readonly fence: number;

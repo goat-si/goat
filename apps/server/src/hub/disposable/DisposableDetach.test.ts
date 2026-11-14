@@ -311,6 +311,11 @@ it.effect(
         expect((yield* release(THREAD, first.attachId, "r-1").pipe(Effect.flip)).reason).toBe(
           "person_required",
         );
+        // While its invite could still be used, nothing is released.
+        expect((yield* release(PERSON, first.attachId, "r-3").pipe(Effect.flip)).reason).toBe(
+          "conflict",
+        );
+        yield* TestClock.adjust(11 * 60 * 1000);
         const released = yield* release(PERSON, first.attachId, "r-2");
         expect(released.state).toBe("failed");
         expect(released.message).toContain("pen revoke");
