@@ -52,8 +52,9 @@ export function vpSupportsVerifiedNodeDownload(
 ): { supported: boolean; timedOut: boolean } {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-version-"));
   const output = NodePath.join(directory, "stdout");
-  const fd = NodeFS.openSync(output, "w+");
+  let fd: number | undefined;
   try {
+    fd = NodeFS.openSync(output, "wx+");
     // Windows needs a shell for command shims; POSIX uses a group to clean up descendants.
     // oxlint-disable-next-line goat/no-global-process-runtime -- Setup runs before dependencies are installed.
     const windows = process.platform === "win32";
@@ -84,8 +85,11 @@ export function vpSupportsVerifiedNodeDownload(
       timedOut,
     };
   } finally {
-    NodeFS.closeSync(fd);
-    NodeFS.rmSync(directory, { recursive: true, force: true });
+    try {
+      if (fd !== undefined) NodeFS.closeSync(fd);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
   }
 }
 

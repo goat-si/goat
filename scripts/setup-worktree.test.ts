@@ -153,45 +153,56 @@ it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     const reader = NodeChildProcess.spawn("cat", [fifo], { stdio: "ignore" });
     const readerExited = new Promise<number | null>((resolve) => reader.on("exit", resolve));
     let writer: number | undefined = NodeFS.openSync(fifo, "w");
+    const childScript = NodePath.join(root, "child.sh");
     NodeFS.writeFileSync(
-      executable,
-      `#!${process.execPath}
-const fs = require("node:fs");
-const cp = require("node:child_process");
-if (process.argv[2] === "child") {
-  fs.writeFileSync(${JSON.stringify(childFile)}, String(process.pid));
-  process.on("SIGTERM", () => {});
-  setTimeout(() => process.exit(0), 1600);
-} else {
-  fs.writeFileSync(${JSON.stringify(parentFile)}, String(process.pid));
-  process.on("SIGTERM", () => {});
-  const exitPipe = fs.openSync(${JSON.stringify(fifo)}, "w");
-  cp.spawn(process.execPath, [__filename, "child"], { stdio: ["ignore", "inherit", "inherit", exitPipe] });
-  process.stdout.write("vp v0.2.2\\n");
-  setTimeout(() => process.exit(0), 1600);
-}
+      childScript,
+      `#!/bin/sh
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(childFile)}
+sleep 60 &
+wait
 `,
       { mode: 0o755 },
     );
-    const pids: number[] = [];
+    NodeFS.writeFileSync(
+      executable,
+      `#!/bin/sh
+trap '' TERM
+printf '%s' "$$" > ${JSON.stringify(parentFile)}
+exec 3> ${JSON.stringify(fifo)}
+${JSON.stringify(childScript)} &
+printf 'vp v0.2.2\\n'
+sleep 60 &
+wait
+`,
+      { mode: 0o755 },
+    );
+    const pidFiles = [parentFile, childFile];
     try {
-      const result = vpSupportsVerifiedNodeDownload(400, executable);
-      for (const file of [parentFile, childFile])
-        pids.push(Number(NodeFS.readFileSync(file, "utf8")));
+      const result = vpSupportsVerifiedNodeDownload(2_000, executable);
+      for (const file of pidFiles)
+        assert.isTrue(NodeFS.existsSync(file), `stand-in PID file missing: ${file}`);
+      const pids = pidFiles.map((file) => Number(NodeFS.readFileSync(file, "utf8")));
+      assert.isFalse(result.supported);
+      assert.isTrue(result.timedOut);
       NodeFS.closeSync(writer);
       writer = undefined;
       assert.equal(await readerExited, 0);
-      assert.isFalse(result.supported);
-      assert.isTrue(result.timedOut);
       for (const pid of pids)
         assert.throws(() => process.kill(pid, 0), undefined, undefined, `process ${pid} survived`);
     } finally {
       if (writer !== undefined) NodeFS.closeSync(writer);
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {}
+      for (const file of pidFiles) {
+        if (!NodeFS.existsSync(file)) continue;
+        const pid = Number(NodeFS.readFileSync(file, "utf8"));
+        if (!Number.isInteger(pid) || pid <= 0) continue;
+        for (const target of file === parentFile ? [-pid, pid] : [pid]) {
+          try {
+            process.kill(target, "SIGKILL");
+          } catch {}
+        }
       }
+      await readerExited;
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
   },
