@@ -42,7 +42,7 @@ const RECOVER_WAITS: Record<string, string> = {
   host_key_changed:
     "the machine presents another SSH host key than its link pinned, so GOAT sends it nothing.",
   managed_child_missing:
-    "the machine has no planted ocx-child, so recover cannot confirm its cleanup.",
+    "the machine has no planted ocx-child, so only a person can confirm its cleanup.",
 };
 
 export interface DetachView {
