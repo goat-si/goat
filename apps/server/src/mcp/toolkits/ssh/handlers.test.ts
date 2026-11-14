@@ -1272,7 +1272,7 @@ const runtimeFixture = (
                 }),
             }),
             Layer.mock(HubNodes.HubNodes)({
-              disposableRoute: () => Effect.succeed(undefined),
+              disposableRoute: () => Effect.sync(() => undefined),
               add: (input, options) =>
                 options.beforeSave.pipe(
                   Effect.andThen(

@@ -402,7 +402,7 @@ describe("HubNodes", () => {
                   profile,
                   {
                     ...profile,
-                    environmentId: null,
+                    environmentId: EnvironmentId.make("env-other"),
                     ssh: { ...profile.ssh, alias: "pen-" + nodeId },
                   },
                 ],

@@ -29,7 +29,9 @@ import { PERSON } from "../handoffs/HumanStepAuthority.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import { makeHubConsent } from "./HubConsent.ts";
-import { Added, Connection, decodeJson, LinkStatus, Probe } from "./hubOcxJson.ts";
+import { Added, Connection, decodeJson, LinkStatus } from "./hubOcxJson.ts";
+import { makeHubProbe } from "./hubProbe.ts";
+import * as DisposableMachineStore from "./disposable/DisposableMachineStore.ts";
 import * as HubParity from "./HubParity.ts";
 import {
   childConnectionAdmission,
@@ -233,13 +235,7 @@ const make = Effect.gen(function* () {
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
-  const probe = Effect.fn("HubMembership.probe")(function* (alias: string) {
-    const output = yield* ocx.home(["link", "probe", alias, "--json"], HOME_TIMEOUT_MS);
-    const offered = output.code === 0 ? decodeJson(Probe, output.stdout) : undefined;
-    return offered?.alias === alias
-      ? { ok: true as const, ...offered }
-      : { ok: false as const, phase: output.phase, message: output.message };
-  });
+  const probe = yield* makeHubProbe(ocx);
 
   const unreachable = (error: HubOcxError) => ({
     outcome: "failed" as const,
@@ -989,4 +985,8 @@ const make = Effect.gen(function* () {
 });
 
 export const layerWithoutDependencies = Layer.effect(HubMembership, make);
-export const layer = layerWithoutDependencies.pipe(Layer.provide(ApprovalHandoffs.layer));
+// The probe only reads disposable records, so its own store instance takes no shared lock.
+export const layer = layerWithoutDependencies.pipe(
+  Layer.provide(ApprovalHandoffs.layer),
+  Layer.provide(DisposableMachineStore.layer),
+);

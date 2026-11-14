@@ -34,6 +34,8 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
+import type { DisposableRecord } from "./disposable/disposableClass.ts";
+import { DisposableMachineStore } from "./disposable/DisposableMachineStore.ts";
 import * as HubMembership from "./HubMembership.ts";
 import {
   countLinkTunnels,
@@ -137,6 +139,8 @@ export interface Fixture {
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
   /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
   readonly routesRun?: (args: ReadonlyArray<string>) => Effect.Effect<OcxOutput, HubOcxError>;
+  /** Disposable machine records the hub holds; none by default. */
+  readonly disposable?: ReadonlyArray<DisposableRecord>;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -314,6 +318,11 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   });
   const context = yield* Layer.build(
     HubMembership.layerWithoutDependencies.pipe(
+      Layer.provide(
+        Layer.mock(DisposableMachineStore)({
+          recordsOrKept: Effect.succeed(fixture.disposable ?? []),
+        }),
+      ),
       Layer.provide(
         ApprovalHandoffs.layer.pipe(
           Layer.provide(handoffLayer),
