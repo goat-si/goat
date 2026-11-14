@@ -52,7 +52,6 @@ import {
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
-  resolveChangesTotals,
   resolveDefaultBranchActionDialogCopy,
   resolveFeatureBranchUnavailableReason,
   resolveGitActionProgressPresentation,
@@ -106,6 +105,7 @@ import { useQuietThreadProjection, useQuietThreadShell } from "~/state/entities"
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
 import { useThreadWorkspaceStatus, workspaceUnavailable } from "./chat/useThreadWorkspaceStatus";
+import { useChangesTotals } from "./useChangesTotals";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
@@ -136,6 +136,7 @@ interface GitActionsControlProps {
   displayMode?: "toolbar" | "panel";
   compact?: boolean;
   onOpenChanges?: () => void;
+  workspaceMutationId?: string | null;
 }
 
 interface PendingDefaultBranchAction {
@@ -961,6 +962,7 @@ export default function GitActionsControl({
   displayMode = "toolbar",
   compact = false,
   onOpenChanges,
+  workspaceMutationId = null,
 }: GitActionsControlProps) {
   const sshFetchBack = useSshWorkspaceFetchBack(draftId === undefined ? activeThreadRef : null);
   const isPanel = displayMode === "panel";
@@ -1093,14 +1095,18 @@ export default function GitActionsControl({
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
   const gitStatusForActions = gitStatus;
-  const changesTotals = resolveChangesTotals(gitStatusForActions) ?? {
-    baseRef: null,
-    insertions: 0,
-    deletions: 0,
-  };
+  const changesTotals = useChangesTotals({
+    activeThreadRef,
+    activeEnvironmentId,
+    gitCwd,
+    gitStatus: gitStatusForActions,
+    isPanel,
+    isRepo,
+    workspaceMutationId,
+  });
+
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
-  // Changed-file paths are repository-relative, so they must resolve against
-  // the worktree root from the same status snapshot, not the project cwd.
+  // Repository-relative paths need the worktree root from this status snapshot.
   const workingTreeRoot = gitStatusForActions?.workingTree.rootPath ?? null;
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
@@ -1160,7 +1166,6 @@ export default function GitActionsControl({
       : null;
   const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState);
   const redesign = useClientSettings((s) => s.redesignEnabled);
-  // A fresh draft or a thread with no turns hides commit, push, and diff rows until there is work.
   const quietEmptyDraft =
     redesign &&
     isPanel &&
@@ -1178,7 +1183,6 @@ export default function GitActionsControl({
         terminology: changeRequestTerminology,
       })
     : null;
-  // Keep enabled until live status loads; the server rejects stale requests.
   const featureBranchUnavailableReason = pendingDefaultBranchAction
     ? resolveFeatureBranchUnavailableReason({
         branchName: pendingDefaultBranchAction.branchName,
@@ -1812,10 +1816,6 @@ export default function GitActionsControl({
             </ThreadDetailsControl>
           )}
           {isPanel && gitActionProgress && !sshFetchBack.visible ? (
-            // The menu is disabled while an action runs, so its chevron slot
-            // hosts the elapsed counter instead, leaving the full row width to
-            // the status text. Pinned to the title row so it stays put when
-            // the output row expands below.
             <GitActionElapsedTime
               startedAtMs={gitActionProgress.startedAtMs}
               className="flex h-8 shrink-0 items-center self-start pe-2.5 text-2xs font-normal tabular-nums text-muted-foreground"
