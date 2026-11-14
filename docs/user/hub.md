@@ -189,6 +189,8 @@ does not answer keeps its link: GOAT tries again every 30 minutes, and after 24
 hours without an answer it removes the link without the machine and cleans the
 machine once it answers. GOAT does the same for a linked machine that stops
 answering for 24 hours; if it answers again later, detach it to end its record.
+A check counts only while Pen still answers for the machine, so a hub cut off
+from its Pen does not remove its machines' links.
 **Force detach** removes the link now, without the machine; only a person can
 force, and it is also the way out for a machine that presents another SSH host
 key. If a forced or silent machine is gone for good, run
