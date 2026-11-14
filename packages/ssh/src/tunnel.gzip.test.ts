@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Run the real generated shell with an isolated PATH.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
