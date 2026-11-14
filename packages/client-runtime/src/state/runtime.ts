@@ -9,6 +9,7 @@ import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@goat/co
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { identity } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -95,6 +96,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
+  readonly revalidateOnRemount?: boolean;
   readonly refreshIntervalMs?: number;
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
@@ -585,6 +587,9 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
+    const keepWarm = Atom.setIdleTTL(idleTtlMs);
+    const keepSourceWarm = options.revalidateOnRemount ? keepWarm : identity;
+    const keepWrapperWarm = options.revalidateOnRemount ? identity : keepWarm;
     const queryAtom = runtime
       .atom<
         A,
@@ -706,11 +711,12 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         });
       })
       .pipe(
+        keepSourceWarm,
         Atom.swr({
           staleTime: options.staleTimeMs ?? 30_000,
           revalidateOnMount: true,
         }),
-        Atom.setIdleTTL(idleTtlMs),
+        keepWrapperWarm,
       );
     const isFinal = (result: AsyncResult.AsyncResult<A, unknown>) =>
       options.isFinal !== undefined && Option.exists(AsyncResult.value(result), options.isFinal);
@@ -723,7 +729,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       refreshTrigger === undefined
         ? intervalQuery
         : intervalQuery.pipe(refreshOnSignalWhileRead(refreshTrigger, isFinal))
-    ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
+    ).pipe(keepWrapperWarm, Atom.withLabel(`${options.label}:${key}`));
   });
   return (target) => family(environmentRpcKey(target));
 }
@@ -817,6 +823,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly persistence?: QueryPersistence<EnvironmentRpcSuccess<TTag>>;
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
+    readonly revalidateOnRemount?: boolean;
     readonly refreshIntervalMs?: number;
     readonly refreshTrigger?: (target: {
       readonly environmentId: EnvironmentIdType;
@@ -832,6 +839,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
     ...(options.staleTimeMs === undefined ? {} : { staleTimeMs: options.staleTimeMs }),
     ...(options.idleTtlMs === undefined ? {} : { idleTtlMs: options.idleTtlMs }),
+    ...(options.revalidateOnRemount === undefined
+      ? {}
+      : { revalidateOnRemount: options.revalidateOnRemount }),
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
