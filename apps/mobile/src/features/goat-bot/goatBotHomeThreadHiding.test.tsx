@@ -41,6 +41,9 @@ const fx = vi.hoisted(() => ({
   connection: undefined as unknown as (
     id: string,
   ) => import("effect/reactivity").Atom.Writable<any>,
+  permission: undefined as unknown as (
+    tag: string,
+  ) => import("effect/reactivity").Atom.Writable<boolean>,
   /** A server's answer to one read, per tag, computer and bot; unanswered reads wait. */
   answer: undefined as unknown as (
     tag: string,
@@ -83,9 +86,14 @@ vi.mock("../../../../../packages/client-runtime/src/state/environmentConnections
 });
 vi.mock("../../../../../packages/client-runtime/src/state/commandPermissions.ts", async () => {
   const { Atom: A } = await import("effect/reactivity");
-  const allowed = A.make(true).pipe(A.keepAlive);
-  fx.atoms.permission = allowed as never;
-  return { createCommandPermissions: () => ({ permissionAtom: () => allowed }) };
+  // One permission per command, so the bot's own commands can be refused while its list is read.
+  const byTag = A.family((_tag: string) => A.make(true).pipe(A.keepAlive));
+  fx.permission = byTag as never;
+  return {
+    createCommandPermissions: (_runtime: unknown, tag: string) => ({
+      permissionAtom: () => byTag(tag),
+    }),
+  };
 });
 vi.mock("@goat/client-runtime/state/runtime", async (importOriginal) => {
   const real = await importOriginal<typeof import("@goat/client-runtime/state/runtime")>();
@@ -521,7 +529,8 @@ function setup() {
   );
   fx.registry.set(fx.config("env"), configOf(env));
   fx.registry.set(fx.connection("env"), connected);
-  fx.registry.set(fx.atoms.permission as never, true as never);
+  for (const tag of ["channel.listBotThreads", "channel.ensureBot", "channel.ingest"])
+    fx.registry.set(fx.permission(tag), true);
   fx.registry.set(fx.config("far"), configOf(far));
   saveBot(null);
   fx.registry.set(fx.answer("channel.listBots", "env"), AsyncResult.success({ bots: [] }) as never);
@@ -655,7 +664,7 @@ it("hides nothing from Home while its first list read is pending, offline, or no
   expect(hiddenWork()).not.toContain(key("env", "c1"));
   fx.registry.set(fx.connection("env"), connected);
   expect(hiddenWork()).toContain(key("env", "c1"));
-  fx.registry.set(fx.atoms.permission as never, false as never);
+  fx.registry.set(fx.permission("channel.listBotThreads"), false);
   expect(hiddenWork()).not.toContain(key("env", "c1"));
 });
 
@@ -716,6 +725,20 @@ it("governs no computer until preferences have loaded, then hides what the loade
     expect(hiddenSet()).toEqual(sorted(envLegacy));
   }
   saveBot(null);
+  expect(hiddenSet()).toEqual(sorted(envLinks));
+  await using screen = await renderHome();
+  await screen.openLink("Ship the release", "GOAT thread: Patch web");
+  expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
+});
+
+// Mobile's Home opens from the chat whether or not the bot can take messages (GoatBotScreen.naming.test.tsx
+// covers the chat for a failed setup, an unresolved claim and refused permission). This pins the other
+// half: Home's rule reads nothing of the bot's readiness, so the two must change together.
+it("hides a current task's thread and opens it from Home while the bot cannot take messages", async () => {
+  setup();
+  // Without the bot's own commands the chat says this connection cannot message it.
+  fx.registry.set(fx.permission("channel.ensureBot"), false);
+  fx.registry.set(fx.permission("channel.ingest"), false);
   expect(hiddenSet()).toEqual(sorted(envLinks));
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "GOAT thread: Patch web");

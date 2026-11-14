@@ -30,6 +30,8 @@ const screenSession = vi.hoisted(() => ({
   boundedSnapshots: false,
   environmentId: null as string | null,
   threadId: null as string | null,
+  // Whether the bot can take messages now; Home opens either way.
+  availability: "ready" as string,
 }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
 // Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
@@ -460,7 +462,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
   useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
     screenSession.requestedTaskId = taskId;
     return {
-      availability: "ready",
+      availability: screenSession.availability,
       rows: screenSession.rows,
       canSend: true,
       attachmentSupport: { maxUploadBytes: null },
