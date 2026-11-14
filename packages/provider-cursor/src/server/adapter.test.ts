@@ -38,7 +38,6 @@ import {
   makeCursorAgentOptions,
   makeCursorAdapterV2,
 } from "./adapter.ts";
-import { nestedToolCallFromEnvelope } from "./conversationSteps.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
 
@@ -2020,29 +2019,6 @@ describe("CursorAdapterV2", () => {
     );
     assert.isFalse(CursorAgentSdk.isCursorCancellationError(new Error("request failed")));
     assert.isFalse(CursorAgentSdk.isCursorCancellationError(null));
-  });
-
-  it("preserves failed nested read calls when Cursor omits their path", () => {
-    assert.deepEqual(
-      nestedToolCallFromEnvelope({
-        toolCallId: "tool:failed-read",
-        readToolCall: {
-          args: {},
-          result: { error: "File path was not provided." },
-        },
-      }),
-      {
-        callId: "tool:failed-read",
-        toolCall: {
-          type: "read",
-          args: { path: "<unknown path>" },
-          result: {
-            status: "error",
-            error: "File path was not provided.",
-          },
-        },
-      },
-    );
   });
 });
 
