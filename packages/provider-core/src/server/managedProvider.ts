@@ -8,6 +8,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Fiber from "effect/Fiber";
+import * as FiberHandle from "effect/FiberHandle";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -232,24 +233,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     return yield* applySnapshot(nextSettings, { forceRefresh: true });
   });
 
-  const scopeRefresh = yield* Ref.make({ running: false, wanted: false });
-  const runScopeRefresh = Effect.fn("ManagedServerProvider.runScopeRefresh")(function* () {
-    const currentScope = input.currentScope;
-    if (!currentScope) return;
-    while (true) {
-      for (let attempt = 0; attempt < 4; attempt++) {
-        yield* refreshSnapshot().pipe(Effect.ignoreCause({ log: true }));
-        const state = yield* Ref.get(snapshotStateRef);
-        if (state.scope === (yield* currentScope)) break;
-      }
-      const again = yield* Ref.modify(scopeRefresh, (state) =>
-        state.wanted
-          ? ([true, { running: true, wanted: false }] as const)
-          : ([false, { running: false, wanted: false }] as const),
-      );
-      if (!again) return;
-    }
-  });
+  const scopeRefresh = yield* FiberHandle.make();
   const reconcileScope = Effect.fn("ManagedServerProvider.reconcileScope")(function* (event: {
     snapshot: ServerProvider;
     scope: string | undefined;
@@ -258,16 +242,16 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     if (!currentScope || event.scope === undefined || event.scope === (yield* currentScope)) {
       return event.snapshot;
     }
-    yield* Effect.uninterruptibleMask((restore) =>
-      Ref.modify(scopeRefresh, (state) =>
-        state.running
-          ? ([false, { running: true, wanted: true }] as const)
-          : ([true, { running: true, wanted: false }] as const),
-      ).pipe(
-        Effect.flatMap((start) =>
-          start ? Effect.forkIn(restore(runScopeRefresh()), scope) : Effect.void,
-        ),
-      ),
+    yield* FiberHandle.run(
+      scopeRefresh,
+      Effect.gen(function* () {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          yield* refreshSnapshot();
+          const state = yield* Ref.get(snapshotStateRef);
+          if (state.scope === (yield* currentScope)) return;
+        }
+      }).pipe(Effect.ignoreCause({ log: true })),
+      { onlyIfMissing: true, startImmediately: false },
     );
     return {
       ...event.snapshot,

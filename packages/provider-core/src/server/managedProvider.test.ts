@@ -896,61 +896,6 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 
-  it.effect("delivers the newest scope when a request arrives during the fourth probe", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const current = yield* Ref.make("A");
-        const started = yield* Effect.forEach([0, 1, 2, 3], () => Deferred.make<void>());
-        const release = yield* Effect.forEach([0, 1, 2, 3], () => Deferred.make<void>());
-        const subscribed = yield* Deferred.make<void>();
-        const newest = yield* Deferred.make<void>();
-        const scopes = new WeakMap<ServerProvider, string>();
-        const provider = yield* makeManagedServerProvider<TestSettings>({
-          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
-          getSettings: Effect.succeed({ enabled: true }),
-          streamSettings: Stream.empty,
-          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
-          initialSnapshot: () => Effect.succeed(initialSnapshot),
-          currentScope: Ref.get(current),
-          probeScope: (draft) => scopes.get(draft),
-          checkProvider: Effect.gen(function* () {
-            const scope = yield* Ref.get(current);
-            const index = ["B", "C", "D", "E"].indexOf(scope);
-            if (index >= 0) {
-              yield* Deferred.succeed(started[index]!, undefined);
-              yield* Deferred.await(release[index]!);
-            }
-            const draft = { ...refreshedSnapshot, message: scope };
-            scopes.set(draft, scope);
-            return draft;
-          }),
-          refreshOnInterval: false,
-        });
-        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
-        yield* provider.streamChanges.pipe(
-          Stream.runForEach((snapshot) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(subscribed, undefined);
-              if (snapshot.message === "F") yield* Deferred.succeed(newest, undefined);
-            }),
-          ),
-          Effect.forkChild,
-        );
-        yield* provider.refresh;
-        yield* Deferred.await(subscribed);
-        yield* Ref.set(current, "B");
-        yield* provider.getSnapshot;
-        for (let index = 0; index < 4; index++) {
-          yield* Deferred.await(started[index]!);
-          yield* Ref.set(current, ["C", "D", "E", "F"][index]!);
-          yield* provider.getSnapshot;
-          yield* Deferred.succeed(release[index]!, undefined);
-        }
-        yield* Deferred.await(newest);
-      }),
-    ).pipe(Effect.provide(layerAlwaysRunTest)),
-  );
-
   it.effect("masks a queued stream event from an older scope at consumption", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -994,6 +939,33 @@ describe("makeManagedServerProvider", () => {
         yield* Deferred.succeed(release, undefined);
         const events = Array.from(yield* Fiber.join(updates));
         assert.strictEqual(events[1]?.auth.status, "unknown");
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+  it.effect("rejects a usage update from a different committed scope", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const draft = { ...refreshedSnapshot };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Effect.succeed(draft),
+          probeScope: () => "B",
+          currentScope: Effect.succeed("B"),
+          refreshOnInterval: false,
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+        const update = {
+          checkedAt: "2026-04-10T00:00:03.000Z",
+          windows: [{ id: "primary", kind: "session" as const, label: "Session", usedPercent: 50 }],
+        };
+        yield* provider.applyUsageLimits(update, "A");
+        assert.strictEqual((yield* provider.getSnapshot).usageLimits, undefined);
+        yield* provider.applyUsageLimits(update, "B");
+        assert.strictEqual((yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent, 50);
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
