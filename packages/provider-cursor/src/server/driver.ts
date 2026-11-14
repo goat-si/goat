@@ -158,15 +158,16 @@ export const CursorDriver: ProviderDriver<
           ),
         ),
     });
-    const stampSnapshot: typeof stampIdentity = (draft) =>
-      stampIdentity({
-        ...draft,
-        setup: { canAuthenticate: !auth.usesApiKey, canInstall: false },
-        auth: {
-          ...draft.auth,
-          canLogout: !auth.usesApiKey,
-        },
-      });
+    const stampSnapshot = (draft: Parameters<typeof stampIdentity>[0]) =>
+      auth.usesApiKey.pipe(
+        Effect.map((usesApiKey) =>
+          stampIdentity({
+            ...draft,
+            setup: { canAuthenticate: !usesApiKey, canInstall: false },
+            auth: { ...draft.auth, canLogout: !usesApiKey },
+          }),
+        ),
+      );
 
     let catalogModels: ReadonlyArray<ServerProviderModel> = [];
     const orchestrationAdapter = yield* makeCursorAdapterV2({
@@ -260,7 +261,7 @@ export const CursorDriver: ProviderDriver<
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(CursorKeychain.CursorKeychain, keychain),
-      Effect.map(stampSnapshot),
+      Effect.flatMap(stampSnapshot),
       Effect.tap((provider) =>
         Effect.sync(() => {
           // A failed check lists only custom models, so keep the last loaded catalog.
@@ -280,7 +281,7 @@ export const CursorDriver: ProviderDriver<
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
-        buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.map(stampSnapshot)),
+        buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.flatMap(stampSnapshot)),
       checkProvider,
     }).pipe(
       Effect.mapError(

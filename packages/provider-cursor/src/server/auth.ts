@@ -40,7 +40,7 @@ export interface CursorAuth {
     key: string | undefined,
     environmentKey: string | undefined,
   ) => Effect.Effect<void, ProviderSetupError>;
-  readonly usesApiKey: boolean;
+  readonly usesApiKey: Effect.Effect<boolean>;
   readonly withAccess: <A, E, R>(
     task: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
@@ -101,6 +101,9 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
       ? credentials.apiKey
       : undefined;
   });
+  const usesApiKey = (options.currentApiKey ?? Effect.succeed(configuredKey)).pipe(
+    Effect.map((key) => Boolean(key?.trim())),
+  );
   const readApiKey = Effect.suspend(() =>
     (options.currentApiKey ?? Effect.succeed(configuredKey)).pipe(
       Effect.flatMap((key) => readKey(key?.trim() || undefined)),
@@ -354,7 +357,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 operation: "start",
                 detail: "Enable Cursor before signing in.",
               });
-            if (configuredKey)
+            if (yield* usesApiKey)
               return yield* new ProviderSetupError({
                 instanceId: options.instanceId,
                 operation: "start",
@@ -436,7 +439,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         Effect.gen(function* () {
           const flow = yield* lock.withPermits(1)(
             Effect.gen(function* () {
-              if (configuredKey)
+              if (yield* usesApiKey)
                 return yield* new ProviderSetupError({
                   instanceId: options.instanceId,
                   operation: "logout",
@@ -540,6 +543,6 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
     requireSessionApiKey,
     validateSessionApiKey,
     withAccess,
-    usesApiKey: configuredKey !== undefined,
+    usesApiKey,
   } satisfies CursorAuth;
 });

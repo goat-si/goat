@@ -214,7 +214,11 @@ it.layer(layerTest)("CursorDriver", (it) => {
         );
         host.CURSOR_API_KEY = "host-key-new";
         // Labelled by the key the check used, not by what the instance saw when it started.
-        expect((yield* instance.snapshot.refresh).auth).toMatchObject({ type: "api-key" });
+        const withKey = yield* instance.snapshot.refresh;
+        expect(withKey.auth).toMatchObject({ type: "api-key", canLogout: false });
+        expect(withKey.setup?.canAuthenticate).toBe(false);
+        expect((yield* Effect.result(instance.auth!.start("owner")))._tag).toBe("Failure");
+        expect((yield* Effect.result(instance.auth!.logout(Effect.void)))._tag).toBe("Failure");
         expect(authorizations).toContain("Bearer host-key-new");
         const threadId = ThreadId.make("cursor-host-key-thread");
         const modelSelection = { instanceId, model: "auto" };
@@ -231,6 +235,11 @@ it.layer(layerTest)("CursorDriver", (it) => {
         });
         yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
         expect(openedKeys).toEqual(["host-key-new"]);
+        delete host.CURSOR_API_KEY;
+        const withoutKey = yield* instance.snapshot.refresh;
+        expect(withoutKey.setup?.canAuthenticate).toBe(true);
+        expect(withoutKey.auth.canLogout).toBe(true);
+        expect((yield* Effect.result(instance.auth!.logout(Effect.void)))._tag).toBe("Success");
       }).pipe(Effect.scoped),
   );
 
