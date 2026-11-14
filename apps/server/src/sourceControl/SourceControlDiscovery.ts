@@ -120,7 +120,10 @@ export const make = Effect.gen(function* () {
         ),
         Effect.catch((cause) =>
           Effect.gen(function* () {
-            const installHint = yield* failedProbeHint(input, cause);
+            const installHint = yield* failedProbeHint(
+              { executable, versionArgs, installHint: input.installHint },
+              cause,
+            );
             return {
               kind: input.kind,
               label: input.label,
