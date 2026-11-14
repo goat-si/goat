@@ -832,6 +832,18 @@ it("consumes replies exposed during synchronization and announces only the newes
     <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
   );
   expect(status?.textContent).toBe(text);
+  const ghost = reply("sync-ghost");
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(
+    <SpeechChat shown={[...rows, ghost]} source={[...rows, older, newer, ghost]} />,
+  );
+  projection.statuses.other = "synchronizing";
+  await screen.rerender(<SpeechChat thread="other" shown={[]} source={[]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, older, newer, ghost]} />);
+  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
+    "",
+  );
 });
 
 it("announces exposure while following and never revives its cue after scrolling up", async () => {
