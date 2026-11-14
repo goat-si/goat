@@ -167,6 +167,21 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       yield* audit(row.attach_id, "hub.machine_detach", outcome);
   });
 
+  /**
+   * A failed check counts only while Pen answers for the machine: a hub cut off from its Pen would
+   * otherwise retire every linked machine after 24 hours. The wait between checks runs either way.
+   */
+  const failedCheck = Effect.fn("DisposableDetach.failedCheck")(function* (
+    row: Row,
+    health: Health | undefined,
+    nowMs: number,
+  ) {
+    const penAnswers =
+      (yield* host.route({ nodeId: row.node_id, noisePub: row.expected_noise_pub })) !== undefined;
+    return penAnswers
+      ? failed(health, nowMs)
+      : { ...(health ?? { failures: 0 }), checkedAtMs: nowMs };
+  });
   /** Counts one failed handshake; the run starts at the first failure after an answer. */
   const failed = (health: Health | undefined, nowMs: number): Health => ({
     failures: (health?.failures ?? 0) + 1,
@@ -390,7 +405,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             "revoke_unsettled",
           );
         // The machine did not answer the purge: one failed check.
-        const health = failed(enroll.health, nowMs);
+        const health = yield* failedCheck(row, enroll.health, nowMs);
         const waiting = { ...enroll, health };
         if (retires(health, nowMs))
           return yield* forceStep(
@@ -540,7 +555,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     });
     if (reached === "host_key_changed") return yield* hostKeyConflict(row, enroll);
     if (reached !== "ok") {
-      const health = failed(enroll.health, nowMs);
+      const health = yield* failedCheck(row, enroll.health, nowMs);
       if (retires(health, nowMs)) return yield* forceStep(row, { ...enroll, health });
       return yield* note(row, { ...enroll, health });
     }

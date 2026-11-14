@@ -758,3 +758,21 @@ it.effect(
       }),
     ),
 );
+
+it.effect("checks that fail while Pen cannot be read do not count toward retirement", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      fakeDetachHome(host);
+      const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+      host.control.reachAnswers.set(nodeId, "unreachable");
+      // The hub is up, but its Pen does not answer.
+      host.control.routes.delete(nodeId);
+      yield* detachPass;
+      for (let check = 0; check < 50; check += 1) {
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+      }
+      expect((yield* listed(attachId))?.state).toBe("linked");
+    }),
+  ),
+);
