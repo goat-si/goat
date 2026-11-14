@@ -88,7 +88,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     forget: (linkId: string) => tombstones.delete(linkId),
     /**
      * A person's ocx link revoke --force --yes without an operation id: it takes over any unfinished
-     * removal, removes the link with a tombstone, and leaves each owner with its recorded outcome.
+     * removal, removes the link with a tombstone, and leaves each owner of the receipt unknown and
+     * unresolved.
      */
     plainForce: (linkId: string) => {
       // It fences the receipt's owner and settles it unknown and unresolved (fenceRetirementOwnerForForce).
