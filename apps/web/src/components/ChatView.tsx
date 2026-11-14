@@ -3009,6 +3009,8 @@ export default function ChatView(props: ChatViewProps) {
       !appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(primaryEnvironmentId))
     )
       return;
+    // A draft on another machine moves to this device's copy in the same
+    // update, and any machine switch still in flight is dropped.
     cancelEnvironmentChange();
     setDraftThreadContext(draftId, {
       ...(current.environmentId !== primaryEnvironmentId

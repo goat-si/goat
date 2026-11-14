@@ -35,6 +35,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { dispatch, dispatchMessage } from "./dispatch.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -280,8 +281,6 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   const crypto = yield* Crypto.Crypto;
   return CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
 });
-
-import { dispatch, dispatchMessage } from "./dispatch.ts";
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });

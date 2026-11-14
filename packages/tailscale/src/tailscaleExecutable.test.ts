@@ -176,15 +176,21 @@ describe("tailscale executable on macOS", () => {
     const layer = layerHost({ platform: "darwin", installed: [APP_CLI], hang: true, spawned });
 
     return Effect.gen(function* () {
-      for (const run of [
-        readTailscaleStatus.pipe(
-          Effect.asVoid,
-          Effect.mapError((error): Error => error),
-        ),
-        ensureTailscaleServe({ localPort: 13773 }).pipe(Effect.mapError((error): Error => error)),
-      ]) {
+      for (const [run, seconds] of [
+        [
+          readTailscaleStatus.pipe(
+            Effect.asVoid,
+            Effect.mapError((error): Error => error),
+          ),
+          11,
+        ],
+        [
+          ensureTailscaleServe({ localPort: 13773 }).pipe(Effect.mapError((error): Error => error)),
+          21,
+        ],
+      ] as const) {
         const fiber = yield* run.pipe(Effect.flip, Effect.forkChild);
-        yield* TestClock.adjust("21 seconds");
+        yield* TestClock.adjust(`${seconds} seconds`);
         const error = yield* Fiber.join(fiber);
         assert.instanceOf(error, TailscaleCommandTimeoutError);
         assert.equal(error.executable, APP_CLI);
