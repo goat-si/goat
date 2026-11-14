@@ -7,13 +7,14 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 
 /**
- * The SSH host key a destination negotiates now, trusted or not, read with a disposable
- * known_hosts. Kept-machine route paths compare it with disposable machines' sshd pins.
+ * The ED25519 SSH host key a destination negotiates now, trusted or not, read with a disposable
+ * known_hosts. Kept-machine route paths compare it with disposable machines' sshd pins, which are
+ * ED25519 fingerprints; a client that prefers another type (OpenSSH before 8.5) is told to use this one.
  */
 export class SshHostKeys extends Context.Service<
   SshHostKeys,
   {
-    /** The SHA256 fingerprint; undefined when the destination cannot be probed. */
+    /** The SHA256 fingerprint; undefined when the destination cannot be probed or offers no ED25519 key. */
     readonly negotiatedFingerprint: (target: {
       readonly alias: string;
       readonly username: string | null;
@@ -34,8 +35,11 @@ export const layer = Layer.effect(
           target: target.alias,
           ...(target.username === null ? {} : { user: target.username }),
           ...(target.port === null ? {} : { port: target.port }),
+          hostKeyAlgorithms: "ssh-ed25519",
         }).pipe(Effect.provide(services), Effect.option);
-        return key._tag === "Some" ? key.value.fingerprint : undefined;
+        return key._tag === "Some" && key.value.algorithm === "ssh-ed25519"
+          ? key.value.fingerprint
+          : undefined;
       }),
     });
   }),
