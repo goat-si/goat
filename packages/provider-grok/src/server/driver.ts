@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -138,12 +139,39 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       mergeProviderInstanceEnvironment(environment, hostEnvironment),
     ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
     const processEnv = { ...(yield* currentEnvironment) };
-    const hasEnvironmentKey = Boolean(processEnv[GROK_API_KEY_ENV]?.trim());
     const snapshotReady = yield* Deferred.make<Effect.Effect<ServerProvider>>();
     const auth = yield* makeGrokAuth({
       instanceId,
       enabled,
-      hasEnvironmentKey,
+      currentEnvironment,
+      verifyKey: (key) =>
+        httpClient
+          .execute(
+            HttpClientRequest.get("https://api.x.ai/v1/models").pipe(
+              HttpClientRequest.bearerToken(key),
+            ),
+          )
+          .pipe(
+            Effect.flatMap((response) =>
+              response.status >= 200 && response.status < 300
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "start",
+                      detail: "Could not verify the Grok API key. Try again.",
+                    }),
+                  ),
+            ),
+            Effect.mapError(
+              () =>
+                new ProviderSetupError({
+                  instanceId,
+                  operation: "start",
+                  detail: "Could not verify the Grok API key. Try again.",
+                }),
+            ),
+          ),
       onChanged: (expectAuthenticated) =>
         Effect.gen(function* () {
           const provider = yield* yield* Deferred.await(snapshotReady);
@@ -166,7 +194,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
           }),
       ),
     );
-    const presentSnapshot = (snapshot: ServerProvider, hasStoredKey: boolean) =>
+    const presentSnapshot = (
+      snapshot: ServerProvider,
+      hasStoredKey: boolean,
+      hasEnvironmentKey: boolean,
+    ) =>
       withGrokAuthPresentation(snapshot, {
         enabled,
         hasEnvironmentKey,
@@ -247,7 +279,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
                   : Effect.succeed(snapshot),
               ),
               Effect.map((snapshot) =>
-                presentSnapshot(stampIdentity(snapshot), stored !== undefined),
+                presentSnapshot(
+                  stampIdentity(snapshot),
+                  stored !== undefined,
+                  Boolean(env[GROK_API_KEY_ENV]?.trim()),
+                ),
               ),
             );
           }),
@@ -269,9 +305,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       initialSnapshot: (settings) =>
         Effect.gen(function* () {
           const stored = yield* auth.readStored;
+          const env = yield* currentEnvironment;
           return presentSnapshot(
             stampIdentity(yield* buildInitialGrokProviderSnapshot(settings.provider)),
             stored !== undefined,
+            Boolean(env[GROK_API_KEY_ENV]?.trim()),
           );
         }),
       checkProvider,
