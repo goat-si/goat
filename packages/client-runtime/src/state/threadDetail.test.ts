@@ -293,7 +293,7 @@ describe("timelineVisibleTurnItemsAtom", () => {
     );
     const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
     const timelineAtom = details.timelineVisibleTurnItemsAtom(ref);
-    const textAtom = details.assistantMessageTextAtom(ref, assistant.id);
+    const textAtom = details.assistantMessageTextAtom(ref, v2ThreadId, assistant.id);
     const registry = AtomRegistry.make();
     registry.mount(timelineAtom);
     registry.mount(textAtom);
@@ -422,8 +422,8 @@ describe("assistantMessageTextAtom", () => {
     const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
     const registry = AtomRegistry.make();
     return {
-      text: (itemId: string) => {
-        const atom = details.assistantMessageTextAtom(ref, itemId);
+      text: (itemId: string, sourceThreadId: string = v2ThreadId) => {
+        const atom = details.assistantMessageTextAtom(ref, sourceThreadId, itemId);
         registry.mount(atom);
         return () => registry.get(atom);
       },
@@ -519,41 +519,43 @@ describe("assistantMessageTextAtom", () => {
     expect(missingText()).toBeNull();
   });
 
-  it("returns the newest row's text if two visible rows ever share an item id", () => {
+  it("gives each streaming row its own text when a merged page brings back the same item id from the source thread", () => {
+    const parent = ThreadId.make("thread-parent");
     const shared = TurnItemId.make("shared");
+    const local: OrchestrationV2TurnItem = { ...assistant, id: shared, ordinal: 2, text: "Local" };
     const inherited: OrchestrationV2TurnItem = {
       ...assistant,
       id: shared,
+      threadId: parent,
       ordinal: 1,
-      text: "Parent's finished answer",
-      status: "completed",
-      streaming: false,
+      text: "Parent",
     };
-    const local: OrchestrationV2TurnItem = { ...assistant, id: shared, ordinal: 2, text: "Live" };
-    const parent = ThreadId.make("thread-parent");
-    const projection: OrchestrationV2ThreadProjection = {
-      ...v2Projection,
-      turnItems: [local],
-      visibleTurnItems: [
-        {
-          position: 0,
-          visibility: "inherited",
-          sourceThreadId: parent,
-          sourceItemId: shared,
-          item: inherited,
-        },
-        {
-          position: 1,
-          visibility: "local",
-          sourceThreadId: v2ThreadId,
-          sourceItemId: shared,
-          item: local,
-        },
-      ],
-    };
+    // A history page carrying the source's row was answered, then a local update with the same
+    // id was applied before the page, which the merge keys by source thread as well as item id.
+    let projection = replaceItem({ ...v2Projection, turnItems: [], visibleTurnItems: [] }, local);
+    projection = mergeOlderHistoryIntoProjection(projection, [
+      {
+        position: 0,
+        visibility: "inherited",
+        sourceThreadId: parent,
+        sourceItemId: shared,
+        item: inherited,
+      },
+    ]);
+    expect(projection.visibleTurnItems.map((row) => [row.sourceThreadId, row.item.id])).toEqual([
+      [parent, shared],
+      [v2ThreadId, shared],
+    ]);
     using thread = setup(projection);
+    const inheritedText = thread.text(shared, parent);
+    const localText = thread.text(shared);
 
-    expect(thread.text(shared)()).toBe("Live");
+    projection = replaceItem(projection, { ...local, text: "Local reply", updatedAt: later });
+    thread.push(projection);
+
+    expect(projection.visibleTurnItems).toHaveLength(2);
+    expect(inheritedText()).toBe("Parent");
+    expect(localText()).toBe("Local reply");
   });
 });
 
