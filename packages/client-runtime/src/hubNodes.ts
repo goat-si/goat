@@ -96,6 +96,11 @@ export function hubNodeClassView(
   };
 }
 
+const disposableRefusal = (label: string) =>
+  `${label} is a disposable machine: GOAT reaches it only through its own Pen route, so no other route may name it. Detach it in Settings → Hub on web or desktop first.`;
+/** An SSH alias as ssh compares it: case-insensitive, and a trailing dot names the same host. */
+const sshAlias = (alias: string) => alias.trim().toLowerCase().replace(/\.$/u, "");
+
 /**
  * Why a person may not add another route to a saved environment: the hub reaches it as a disposable
  * machine, only through its own Pen route (design section 6). Undefined for a kept machine.
@@ -107,9 +112,27 @@ export function disposableRouteRefusal(
   const node = nodes.find(
     (entry) => entry.environmentId === environmentId && entry.machineClass !== undefined,
   );
-  return node === undefined
-    ? undefined
-    : `${node.label} is a disposable machine: GOAT reaches it only through its own Pen route, so no other route may name it. Detach it in Settings → Hub on web or desktop first.`;
+  return node === undefined ? undefined : disposableRefusal(node.label);
+}
+
+/**
+ * The same refusal for a client that would open its own SSH connection to a host alias: the alias
+ * is a route of a Hub device that is a disposable machine. Undefined while the hub's nodes are
+ * unknown, or for a kept or ended machine.
+ */
+export function disposableAliasRefusal(
+  nodes: ReadonlyArray<Pick<HubNode, "label" | "routes" | "machineClass">>,
+  alias: string,
+): string | undefined {
+  const wanted = sshAlias(alias);
+  const node = nodes.find(
+    (entry) =>
+      entry.machineClass !== undefined &&
+      entry.routes.some(
+        (route) => route.target.kind !== "linked" && sshAlias(route.target.alias) === wanted,
+      ),
+  );
+  return node === undefined ? undefined : disposableRefusal(node.label);
 }
 
 export function hubNodeRouteLabel(route: HubNodeRoute): string {

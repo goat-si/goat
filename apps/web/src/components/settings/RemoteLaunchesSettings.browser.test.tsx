@@ -190,3 +190,81 @@ it.effect("ignores reports from a replaced host and completion after unmount", (
     expect(state.toast).not.toHaveBeenCalled();
   }),
 );
+
+it.effect(
+  "Connect refuses a host that is a disposable Hub device's route and never starts an SSH connection",
+  () =>
+    Effect.gen(function* () {
+      vi.spyOn(serverEnvironment, "hubNodesLive").mockReturnValue(
+        Atom.make(
+          AsyncResult.success({
+            hubEnvironmentId: dispatcher,
+            notices: [],
+            nodes: [
+              {
+                nodeId: EnvironmentId.make("cc-07"),
+                environmentId: EnvironmentId.make("cc-07"),
+                label: "cc-07",
+                kind: "ssh",
+                routes: [
+                  {
+                    routeId: "ssh:FIXTURE-VPS",
+                    source: "registered",
+                    target: {
+                      kind: "ssh",
+                      alias: "FIXTURE-VPS",
+                      hostname: null,
+                      username: null,
+                      port: null,
+                    },
+                    status: "online",
+                    checkedAt: null,
+                    lastSeenAt: null,
+                    lastError: null,
+                  },
+                ],
+                status: "online",
+                lastSeenAt: null,
+                addedBy: null,
+                machineClass: {
+                  class: "disposable",
+                  attachId: "a-1",
+                  state: "linked",
+                  stateSince: "2026-11-14T10:00:00.000Z",
+                  provisioner: { kind: "person" },
+                  penMember: true,
+                  conflicts: [],
+                },
+              },
+            ],
+          }),
+        ) as never,
+      );
+      yield* Effect.promise(async () => {
+        await act(async () =>
+          root.render(
+            <RegistryContext value={registry}>
+              <RemoteLaunchesSettings />
+            </RegistryContext>,
+          ),
+        );
+        const section = [...container.querySelectorAll("button")].find((node) =>
+          node.textContent?.includes("Remote launches"),
+        );
+        if (!section) throw new Error("Missing section");
+        await act(async () => section.click());
+        const button = [...container.querySelectorAll("button")].find(
+          (node) => node.textContent === "Connect",
+        );
+        if (!button) throw new Error("Missing Connect");
+        await act(async () => button.click());
+      });
+      expect(state.connect).not.toHaveBeenCalled();
+      expect(state.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          description: expect.stringContaining("cc-07 is a disposable machine"),
+        }),
+      );
+    }),
+);

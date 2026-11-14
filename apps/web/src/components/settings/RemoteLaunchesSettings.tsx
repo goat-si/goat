@@ -17,6 +17,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import * as Effect from "effect/Effect";
 import { sshRuntimePhaseText } from "@goat/client-runtime/state/sshRuntime";
+import { disposableAliasRefusal } from "@goat/client-runtime/hub-nodes";
 import { isSshConnectionSuperseded } from "./ConnectionsSettings.logic";
 
 import { connectSshEnvironment as connectSshEnvironmentAtom } from "~/connection/onboarding";
@@ -24,6 +25,7 @@ import { useThreadShells } from "~/state/entities";
 import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
 import { environmentPresentations } from "~/state/presentation";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentQuery } from "~/state/query";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -173,6 +175,12 @@ function RemoteHostLaunches({
     [],
   );
   const canConnectOverSsh = window.desktopBridge !== undefined;
+  // A disposable machine is reached only through its Pen route: Connect refuses one of its aliases.
+  const hubNodes = useEnvironmentQuery(
+    hostEnvironment === null && canConnectOverSsh
+      ? serverEnvironment.hubNodesLive({ environmentId: dispatcher.environmentId, input: {} })
+      : null,
+  ).data?.nodes;
   const dismissLaunch = useAtomCommand(serverEnvironment.dismissRemoteLaunch, {
     reportFailure: false,
   });
@@ -202,6 +210,15 @@ function RemoteHostLaunches({
   };
   const connectHost = async () => {
     if (connecting) return;
+    const refused = disposableAliasRefusal(hubNodes ?? [], group.host);
+    if (refused !== undefined) {
+      toastManager.add({
+        type: "error",
+        title: `Could not connect ${group.host}`,
+        description: refused,
+      });
+      return;
+    }
     const submissionId = ++submission.current;
     setConnecting(true);
     const connect = async () => {
