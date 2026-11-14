@@ -297,6 +297,7 @@ it.effect(
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("codex");
       let connected = 0;
+      let retained = false;
       let spawned = false;
       const layer = layerAppServerClientFactory.pipe(
         Layer.provide(
@@ -352,6 +353,9 @@ it.effect(
         yield* factory
           .open({
             instanceId,
+            onRetained: () => {
+              retained = true;
+            },
             threadId: ThreadId.make("unrelated"),
             providerSessionId: ProviderSessionId.make("session"),
             runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
@@ -361,6 +365,7 @@ it.effect(
           .pipe(Effect.scoped, Effect.exit);
       }).pipe(Effect.provide(layer));
       assert.equal(connected, 1);
+      assert.isTrue(retained);
       assert.isFalse(spawned);
     }),
 );

@@ -33,6 +33,8 @@ export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Read once when a session opens, so a new session sees the host as it is then. */
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
@@ -57,5 +59,5 @@ export interface CodexAdapterV2Options {
 /** What a Codex driver adds to the adapter it builds. */
 export type CodexAdapterV2Hooks = Pick<
   CodexAdapterV2Options,
-  "onUsageLimits" | "resolveRuntime" | "compatibility" | "offeredModels"
+  "onUsageLimits" | "resolveRuntime" | "compatibility" | "offeredModels" | "currentEnvironment"
 >;

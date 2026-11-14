@@ -2,6 +2,10 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CodexSettings,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
   ProviderSessionId,
   ProviderThreadId,
   RunAttemptId,
@@ -12,6 +16,8 @@ import {
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Cause from "effect/Cause";
@@ -23,6 +29,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Test fixture paths.
 import * as NodePath from "node:path";
@@ -271,4 +278,120 @@ it.effect(
       yield* writeCatalog(1_048_576, 20_000);
       assert.strictEqual(yield* modelStatus(model), "outdated");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("retained process usage is not applied to the new home", () =>
+  Effect.gen(function* () {
+    const scenario = "retained-usage";
+    const threadId = ThreadId.make("retained-usage");
+    const transcript = makeCodexReplayTranscript({
+      scenario,
+      entries: codexReplayPreamble({
+        nativeThreadId: "native",
+        nativeTurnId: "turn",
+        prompt: "x",
+      }).slice(0, 3),
+    });
+    const driver = yield* CodexReplay.makeReplayDriver(transcript);
+    let notify: ((payload: unknown) => Effect.Effect<void>) | undefined;
+    const snapshot: ServerProvider = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-04-10T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
+    const provider = yield* makeManagedServerProvider({
+      resolveMaintenance: () =>
+        Effect.succeed({
+          provider: ProviderDriverKind.make("codex"),
+          packageName: "codex",
+          update: { command: "codex", executable: "codex", args: [], lockKey: "codex" },
+        }),
+      getSettings: Effect.succeed({ enabled: true }),
+      streamSettings: Stream.empty,
+      haveSettingsChanged: (a, b) => a.enabled !== b.enabled,
+      initialSnapshot: () => Effect.succeed(snapshot),
+      checkProvider: Effect.succeed(snapshot),
+      probeScope: () => "/home/B",
+      currentScope: Effect.succeed("/home/B"),
+      refreshOnInterval: false,
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ProviderHost.ProviderHost)({
+          paths: {
+            cwd: "/",
+            baseDir: "/tmp",
+            stateDir: "/tmp",
+            providerStatusCacheDir: "/tmp",
+            attachmentsDir: "/tmp",
+          },
+          resolveAttachmentPath: () => null,
+          credentials: () => Effect.die("unused"),
+          shouldRunBackgroundWork: () => Effect.succeed(false),
+          settings: {
+            get: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            withSnapshot: (use) => use(DEFAULT_SERVER_SETTINGS),
+            changes: Stream.empty,
+            subscribe: Effect.succeed(Stream.empty),
+          },
+        }),
+      ),
+    );
+    yield* provider.refresh;
+    const adapter = yield* CodexAdapter.makeCodexAdapterV2({
+      instanceId: CodexAdapter.CODEX_DEFAULT_INSTANCE_ID,
+      settings: yield* decodeCodexSettings({}),
+      environment: { CODEX_HOME: "/home/B" },
+      onUsageLimits: provider.applyUsageLimits,
+      clientFactory: {
+        open: (input) =>
+          Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.tap(() => Effect.sync(() => input.onRetained?.())),
+            Effect.map((context) => Context.get(context, CodexClient.CodexAppServerClient)),
+            Effect.map((client): CodexClient.CodexAppServerClient["Service"] => ({
+              ...client,
+              handleServerNotification: (method, handler) =>
+                Effect.sync(() => {
+                  if (method === "account/rateLimits/updated")
+                    notify = handler as (payload: unknown) => Effect.Effect<void>;
+                }).pipe(Effect.andThen(client.handleServerNotification(method, handler))),
+            })),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapter.CODEX_DRIVER_KIND,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          ),
+      },
+      crypto: yield* Crypto.Crypto,
+      fileSystem: yield* FileSystem.FileSystem,
+      idAllocator: yield* IdAllocator.IdAllocatorV2,
+      serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),
+    }).pipe(Effect.provideService(CodexSurvivors.CodexSurvivors, noSurvivors));
+    yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("session"),
+      modelSelection: CODEX_TEST_MODEL_SELECTION,
+      runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+    });
+    assert.isDefined(notify);
+    if (notify)
+      yield* notify({
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 50, resetsAt: 2000100000, windowDurationMins: 300 },
+        },
+      });
+    assert.isUndefined((yield* provider.getSnapshot).usageLimits);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
