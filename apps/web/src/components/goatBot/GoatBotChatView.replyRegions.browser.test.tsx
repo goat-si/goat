@@ -101,3 +101,23 @@ it("keeps reply announcements independent of activity, clears on send, and alter
     observer.disconnect();
   }
 });
+
+it("does not mutate the reply text when the bot finishes working", async () => {
+  await using screen = await render(view([old], true));
+  const first = reply("first");
+  await screen.rerender(view([old, first], true));
+  const status =
+    screen.container.querySelector<HTMLElement>('[role="status"][aria-label="New bot reply"]') ??
+    screen.container.querySelector<HTMLElement>('[role="status"][aria-atomic="true"]');
+  if (!status) throw new Error("missing status");
+  expect(status.textContent).toContain("GOAT Bot replied.");
+  const changes: MutationRecord[] = [];
+  const observer = new MutationObserver((batch) => changes.push(...batch));
+  observer.observe(status, { subtree: true, childList: true, characterData: true });
+  try {
+    await screen.rerender(view([old, first], false));
+    expect(changes).toHaveLength(0);
+  } finally {
+    observer.disconnect();
+  }
+});
