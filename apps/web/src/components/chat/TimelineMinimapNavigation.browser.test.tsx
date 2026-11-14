@@ -38,22 +38,18 @@ describe("timeline minimap navigation", () => {
 
     viewport.scrollTop -= 30;
     await vi.waitFor(() => expect(screen.button("Next turn")).not.toBeDisabled());
-    // Legend re-pins a viewport at its end on resize, so a shrink cannot move the end away.
-    // Growing a detached viewport until the thread fits reaches the end without a scroll event.
+    // Legend keeps its initial end anchor until a scroll leaves the end, and re-pins on resize.
+    viewport.scrollTop = 0;
+    await vi.waitFor(() => expect(strips()[0]?.dataset.inView).toBe("true"));
+
+    // A detached viewport remains navigable after a resize.
     await screen.rerender(
       <MessagesTimeline {...props} timelineEntries={entries} liveFollowEnabled={false} />,
     );
     viewport.scrollTop = 0;
-    await vi.waitFor(() => {
-      expect(strips()[0]?.dataset.inView).toBe("true");
-      expect(screen.button("Next turn")).not.toBeDisabled();
-    });
-    screen.container.style.height = "8000px";
-    await vi.waitFor(() => {
-      expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.clientHeight);
-      expect(screen.button("Next turn")).toBeDisabled();
-    });
-    screen.container.style.height = "1200px";
+    await vi.waitFor(() => expect(screen.button("Next turn")).not.toBeDisabled());
+    screen.container.style.height = "300px";
+    await vi.waitFor(() => expect(screen.button("Next turn")).not.toBeDisabled());
 
     // So does a footer that grows below a detached bottom.
     viewport.scrollTop = viewport.scrollHeight;
@@ -71,6 +67,19 @@ describe("timeline minimap navigation", () => {
         300,
       );
       expect(screen.button("Next turn")).not.toBeDisabled();
+    });
+
+    // Legend re-pins a viewport at its end on resize, so a shrink cannot move the end away.
+    // Growing a detached viewport until the thread fits reaches the end without a scroll event.
+    viewport.scrollTop = 0;
+    await vi.waitFor(() => {
+      expect(strips()[0]?.dataset.inView).toBe("true");
+      expect(screen.button("Next turn")).not.toBeDisabled();
+    });
+    screen.container.style.height = "8000px";
+    await vi.waitFor(() => {
+      expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.clientHeight);
+      expect(screen.button("Next turn")).toBeDisabled();
     });
   });
 
