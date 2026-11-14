@@ -2640,7 +2640,7 @@ it.effect("failed session and browser launches release capacity, as does closing
 
 it.effect.each([
   { refreshFails: false, expected: "final frame" },
-  { refreshFails: true, expected: null },
+  { refreshFails: true, expected: "frame" },
 ])(
   "saves the last page state when stopping a recording ($refreshFails)",
   ({ refreshFails, expected }) =>
@@ -2650,20 +2650,13 @@ it.effect.each([
         const fs = yield* FileSystem.FileSystem;
         yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
         mockFinalRecordingFrame(contexts[0]!.sessions[0]!, refreshFails);
-        const stop = broker.invoke<{ path: string }>({
+        const artifact = yield* broker.invoke<{ path: string }>({
           scope,
           tabId,
           operation: "recordingStop",
           input: {},
         });
-        if (expected === null) {
-          expect(yield* stop.pipe(Effect.flip)).toMatchObject({
-            _tag: "PreviewAutomationExecutionError",
-          });
-        } else {
-          const artifact = yield* stop;
-          expect(yield* fs.readFileString(artifact.path)).toBe(expected);
-        }
+        expect(yield* fs.readFileString(artifact.path)).toBe(expected);
       }),
     ).pipe(Effect.provide(layer)),
 );

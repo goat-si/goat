@@ -85,10 +85,17 @@ import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
-import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
+import {
+  answerBy,
+  answerCall,
+  queueCaptureBy,
+  waitInput,
+  withCaptureLock,
+  withCaptureLockHeld,
+} from "./CaptureLock.ts";
 import { downloadJournal, downloadsOf, journalDownload } from "./downloadJournal.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
-import { captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
+import { answeredFinalFrame, captureFinalRecordingFrame } from "./ServerBrowserRecordingFinal.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
   browserSessionView,
@@ -1527,7 +1534,7 @@ const make = Effect.gen(function* () {
       deadlineMs,
     );
   const stopRecording = (tab: ServerTab) =>
-    withCaptureLock(tab, async () => {
+    withCaptureLockHeld(tab, async (hold) => {
       const recording = tab.recording;
       if (!recording) {
         throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1539,12 +1546,15 @@ const make = Effect.gen(function* () {
         await recording.session.send("Page.stopScreencast").catch(constVoid);
         await recording.frames.finish();
         await recording.session.detach().catch(constVoid);
+        // A failed or unanswered last frame leaves the recording without it.
         if (!tab.closing && !tab.dialog) {
-          const finalFrame = await captureFinalRecordingFrame(
+          const capture = captureFinalRecordingFrame(
             tab.cdp,
             RECORDING_SCREENCAST.quality,
             tab.control,
           );
+          hold(capture);
+          const finalFrame = await answeredFinalFrame(capture);
           if (finalFrame !== undefined && !tab.control.isPrivate) {
             await recording.encoder.evaluate(
               ([data, width]) =>
