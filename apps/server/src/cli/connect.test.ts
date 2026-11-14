@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { AuthSessionId, EnvironmentId } from "@goat/contracts";
 import { guardErrors } from "@goat/shared/errorGuards";
 import * as DateTime from "effect/DateTime";
@@ -25,7 +25,12 @@ import { Command } from "effect/cli";
 import * as TestConsole from "effect/testing/TestConsole";
 import * as FileSystem from "effect/FileSystem";
 import * as NetService from "@goat/shared/Net";
-import { connectCommand, acquireRelayClientForLink, disconnectCloud } from "./connect.ts";
+import {
+  connectCommand,
+  acquireRelayClientForLink,
+  disconnectCloud,
+  checkLiveReachability,
+} from "./connect.ts";
 import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
@@ -325,5 +330,60 @@ it.effect.each([{ SSH_CONNECTION: "203.0.113.1 50000 203.0.113.2 22" }, { SSH_TT
         ),
       ),
       Effect.scoped,
+    ),
+);
+
+it.effect.each([false, true])(
+  "reachability sends credentials only to a living server: %s",
+  (alive) =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const state = yield* makePersistedServerRuntimeState({
+        config: { host: "127.0.0.1", devUrl: undefined },
+        port: 3773,
+      });
+      yield* persistServerRuntimeState({
+        path: config.serverRuntimeStatePath,
+        state: { ...state, pid: alive ? process.pid : 4_194_305 },
+      });
+      let requests = 0;
+      let issued = 0;
+      yield* checkLiveReachability().pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            requests++;
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response("unavailable", { status: 503 })),
+            );
+          }),
+        ),
+        Effect.provide(
+          Layer.mock(EnvironmentAuth.EnvironmentAuth, {
+            issueSession: () => {
+              issued++;
+              return Effect.succeed({
+                sessionId: AuthSessionId.make("test-session"),
+                token: "test-token",
+                method: "bearer-access-token" as const,
+                scopes: [],
+                subject: "cloud-cli",
+                client: { deviceType: "unknown" as const },
+                expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00Z"),
+              });
+            },
+            revokeSession: () => Effect.succeed(true),
+          }),
+        ),
+      );
+      assert.equal(requests, alive ? 1 : 0);
+      assert.equal(issued, alive ? 1 : 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ServerConfig.layerTest("/", { prefix: "goat-connect-live-test-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
     ),
 );

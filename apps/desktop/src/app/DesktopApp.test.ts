@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as HttpClient from "effect/http/HttpClient";
 import * as NetService from "@goat/shared/Net";
+import { ChildProcessSpawner } from "effect/process";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -240,6 +241,7 @@ it.effect.each([false, true])(
             Layer.mock(DesktopHeadlessServer.DesktopHeadlessServer, {}),
             Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial, {}),
             Layer.mock(BrowserImport.BrowserImport, {}),
+            Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
             Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
             Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
             Layer.mock(DesktopClientSettings.DesktopClientSettings, {}),

@@ -15,6 +15,8 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { act, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
+// Home's work signals on bot rows are not under test here.
+vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 
 // A member's chat opened through its route and read, then its roster row: the route, the real

@@ -1,4 +1,5 @@
 import {
+  TailscaleCommandExitError,
   disableTailscaleServe,
   ensureTailscaleServe,
   findExcludedRange,
@@ -14,8 +15,11 @@ import { HttpServer } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 
 import { loopbackUrlHostForAddress } from "../startupAccess.ts";
+
+const isTailscaleCommandExitError = Schema.is(TailscaleCommandExitError);
 
 export interface TailscaleServeTarget {
   readonly localPort: number;
@@ -102,7 +106,12 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
           Ref.get(attempts).pipe(
             Effect.flatMap((attempt) => {
               const log = attempt <= 1 ? Effect.logWarning : Effect.logDebug;
-              return log("Failed to configure Tailscale Serve; retrying", {
+              const message =
+                isTailscaleCommandExitError(cause) &&
+                cause.stderrDiagnostic === "unsupported-target"
+                  ? `Tailscale Serve cannot proxy to ${target.localHost}; bind --host 127.0.0.1 or 0.0.0.0 instead`
+                  : "Failed to configure Tailscale Serve; retrying";
+              return log(message, {
                 cause,
                 localPort,
                 servePort: input.servePort,

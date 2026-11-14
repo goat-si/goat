@@ -1,20 +1,17 @@
+import { makeHarness } from "./bootService.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Tests exercise native Node fixture boundaries.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
+import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Command } from "effect/cli";
-import { HttpClient, HttpClientResponse } from "effect/http";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as NodeHttp from "node:http";
 import { vi } from "vite-plus/test";
 import { updateCommand } from "../cli/update.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -27,7 +24,6 @@ import {
   SERVICE_RESTART_PENDING_FILE,
   serviceStateHasPendingUpdate,
 } from "./serviceProtocol.ts";
-// A real listener: `goat update` builds its own FetchHttpClient, so the mock client never sees the probe.
 
 const linuxRuntime = "/home/sam/.t3/runtime/goat/versions/1.2.3/goat";
 const linuxPlan = {
@@ -36,67 +32,6 @@ const linuxPlan = {
   logPath: "/home/sam/.t3/userdata/logs/boot-service.log",
   unitPath: "/home/sam/.config/systemd/user/goat.service",
 };
-
-it("reads the served T3 home back out of a rendered unit or plist", () => {
-  const plan = (baseDir: string) => ({
-    program: [`${baseDir}/runtime/goat/versions/1.2.3/goat`, "__service-launcher"],
-    baseDir,
-    logPath: `${baseDir}/userdata/logs/boot-service.log`,
-    unitPath: "/home/sam/.config/systemd/user/goat.service",
-  });
-
-  expect(
-    BootService.bootServiceBaseDirOf(BootService.renderBootServiceUnit(plan("/home/sam/.t3"))),
-  ).toBe("/home/sam/.t3");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      BootService.renderBootServiceUnit(plan("/home/sam/T3 Data/100%")),
-    ),
-  ).toBe("/home/sam/T3 Data/100%");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      BootService.renderBootServicePlist(plan("/Users/sam/a&b"), {
-        homeDir: "/Users/sam",
-        environmentPath: "/usr/bin",
-      }),
-    ),
-  ).toBe("/Users/sam/a&b");
-  expect(BootService.bootServiceBaseDirOf("[Service]\nExecStart=/x\n")).toBeUndefined();
-});
-
-it("reads the home of units installed before the GOAT rename", () => {
-  // goat-rename: legacy-begin
-  expect(
-    BootService.bootServiceBaseDirOf("[Service]\nEnvironment=T3CODE_HOME=/home/sam/.t3\n"),
-  ).toBe("/home/sam/.t3");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      "<dict>\n    <key>T3CODE_HOME</key>\n    <string>/Users/sam/.t3</string>\n</dict>",
-    ),
-  ).toBe("/Users/sam/.t3");
-  // goat-rename: legacy-end
-  const unit = BootService.renderBootServiceUnit(linuxPlan);
-  expect(BootService.bootServiceBaseDirOf(unit)).toBe(linuxPlan.baseDir);
-  expect(unit).toContain(`Environment=GOAT_HOME=${linuxPlan.baseDir}`);
-  expect(unit).toContain(`Environment=T3CODE_HOME=${linuxPlan.baseDir}`); // goat-rename: legacy
-});
-
-it.each([
-  ["a unit", '/home/sam/T3 "Data"/100%\\x', BootService.renderBootServiceUnit],
-  [
-    "a plist",
-    "/Users/sam/a&b <c>",
-    (plan: BootService.BootServicePlan) =>
-      BootService.renderBootServicePlist(plan, { homeDir: "/Users/sam", environmentPath: "" }),
-  ],
-] as const)("reads the launcher back out of %s", (_, baseDir, render) => {
-  const program = `${baseDir}/runtime/versions/1.2.3/t3`;
-  expect(
-    BootService.bootServiceProgramOf(
-      render({ program: [program, "__service-launcher"], baseDir, logPath: "/log", unitPath: "" }),
-    ),
-  ).toBe(program);
-});
 
 const macRuntime = "/Users/sam/.t3/runtime/goat/versions/1.2.3/goat";
 const macPlan = {
@@ -109,251 +44,111 @@ const macInstallerPath =
   "/opt/homebrew/bin:/Users/sam/.npm-global/bin:/Users/sam/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
 const macRenderOptions = { homeDir: "/Users/sam", environmentPath: macInstallerPath };
 
-const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
-  platform: NodeJS.Platform = "linux",
-  installerPath = macInstallerPath,
-  xdgConfigHome?: string,
-  managerXdgConfigHome = xdgConfigHome,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-boot-service-test-" });
-  const managerUnitDir = path.join(
-    managerXdgConfigHome !== undefined && path.isAbsolute(managerXdgConfigHome)
-      ? managerXdgConfigHome
-      : path.join(home, ".config"),
-    "systemd",
-    "user",
-  );
-
-  const baseDir = path.join(home, ".t3");
-  const statePath = path.join(baseDir, "runtime", "service-state.json");
-  const runtime = pinnedRuntimePaths(path, baseDir, "1.2.3", platform);
-  yield* fs.makeDirectory(path.dirname(runtime.entryPath), { recursive: true });
-  yield* fs.writeFileString(runtime.entryPath, "#!/bin/sh\n");
-  yield* fs.writeFileString(runtime.sentinelPath, "1.2.3\n");
-
-  const commands: string[] = [];
-  const invocations: ProcessRunner.ProcessRunInput[] = [];
-  const timeouts = new Map<string, unknown>();
-  const control: {
-    failCommand: string | undefined;
-    stateAfterStop?: string;
-    linger: string;
-    enabled: boolean;
-    active: boolean;
-    /** When false, a start command returns success but the server never answers. */
-    answers: boolean;
-    answeredVersion: string | undefined;
-  } = {
-    failCommand: undefined,
-    linger: "yes",
-    enabled: true,
-    active: true,
-    answers: true,
-    answeredVersion: undefined,
-  };
-  const readinessServer = NodeHttp.createServer((request, response) => {
-    if (
-      request.url?.startsWith("/.well-known/goat/environment") &&
-      control.answeredVersion !== undefined
-    ) {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ serverVersion: control.answeredVersion }));
-      return;
-    }
-    response.writeHead(404);
-    response.end();
-  });
-  yield* Effect.acquireRelease(
-    Effect.callback<void>((resume) => {
-      readinessServer.once("error", (error) => {
-        resume(Effect.die(error));
-      });
-      readinessServer.listen(0, "127.0.0.1", () => {
-        resume(Effect.void);
-      });
-    }),
-    () =>
-      Effect.callback<void>((resume) => {
-        readinessServer.close(() => {
-          resume(Effect.void);
-        });
+it.layer(NodeServices.layer)("boot service install", (it) => {
+  it.effect.each(["no", undefined])(
+    "starts the user manager when there is no login session and linger is %s",
+    (linger) =>
+      Effect.gen(function* () {
+        const { makeService, control, invocations } = yield* makeHarness();
+        control.linger = linger;
+        control.managerReachable = false;
+        control.busNeedsRuntimeDir = true;
+        const service = yield* makeService();
+        yield* service.install();
+        expect((yield* service.status).current).toBe(true);
+        expect(
+          invocations
+            .filter(({ command }) => command === "systemctl")
+            .every(({ env }) => env?.XDG_RUNTIME_DIR === "/run/user/501"),
+        ).toBe(true);
       }),
   );
-  const readinessAddress = readinessServer.address();
-  const readinessPort =
-    typeof readinessAddress === "object" && readinessAddress !== null ? readinessAddress.port : 0;
-  const runner = ProcessRunner.ProcessRunner.of({
-    run: Effect.fn("test.run_boot_service_command")(function* (
-      input: ProcessRunner.ProcessRunInput,
-    ) {
-      const command = `${input.command} ${input.args.join(" ")}`;
-      commands.push(command);
-      invocations.push(input);
-      timeouts.set(command, input.timeout);
-      const failed = command === control.failCommand;
-      if (!failed && command === "loginctl enable-linger --no-ask-password 501")
-        control.linger = "yes";
-      if (!failed && command === "systemctl --user enable goat.service") control.enabled = true;
-      const publishAnswer = (unitFile: string) =>
-        Effect.gen(function* () {
-          if (!control.answers) {
-            control.active = false;
-            return;
-          }
-          const contents = yield* fs.readFileString(unitFile).pipe(Effect.option);
-          if (Option.isNone(contents)) return;
-          const served = BootService.bootServiceBaseDirOf(contents.value);
-          const version = /versions\/([^/]+)\/goat/.exec(contents.value)?.[1];
-          if (served === undefined || version === undefined) return;
-          control.answeredVersion = version;
-          control.active = true;
-          const runtimePath = path.join(served, "userdata", "server-runtime.json");
-          const startedAt = DateTime.formatIso(yield* DateTime.now);
-          yield* fs.makeDirectory(path.dirname(runtimePath), { recursive: true });
-          yield* fs.writeFileString(
-            runtimePath,
-            JSON.stringify({
-              version: 1,
-              pid: 4242,
-              port: readinessPort,
-              origin: `http://127.0.0.1:${readinessPort}`,
-              startedAt,
-              serviceManaged: true,
-              serverVersion: version,
-            }),
-          );
-        }).pipe(Effect.orDie);
-      if (!failed && command === "systemctl --user restart goat.service") {
-        yield* publishAnswer(path.join(managerUnitDir, "goat.service"));
-      }
-      if (!failed && command.startsWith("launchctl bootstrap ")) {
-        const plist = input.args.at(-1);
-        if (plist !== undefined) yield* publishAnswer(plist);
-      }
-      // A stop that fails (a timeout, say) has still stopped the service.
-      if (command === "systemctl --user stop goat.service") control.active = false;
-      if (
-        control.stateAfterStop !== undefined &&
-        (command === "systemctl --user stop goat.service" ||
-          command.startsWith("launchctl bootout --wait "))
-      ) {
-        yield* fs.writeFileString(statePath, control.stateAfterStop).pipe(Effect.orDie);
-      }
-      return {
-        stdout:
-          input.command === "busctl"
-            ? JSON.stringify({
-                type: "as",
-                data: [
-                  "/usr/lib/systemd/user",
-                  `${managerUnitDir}.control`,
-                  "/run/user/501/systemd/transient",
-                  managerUnitDir,
-                  "/etc/systemd/user",
-                ],
-              })
-            : input.args[0] === "--version"
-              ? `t3 v${/versions\/([^/]+)\//.exec(input.command)?.[1] ?? "1.2.3"}\n`
-              : input.command === "loginctl" && input.args[0] === "show-user"
-                ? `${control.linger}\n`
-                : input.args[1] === "is-enabled"
-                  ? control.enabled
-                    ? "enabled\n"
-                    : "disabled\n"
-                  : "",
-        stderr: "",
-        code: ChildProcessSpawner.ExitCode(
-          failed ||
-            (input.args[1] === "is-active" && !control.active) ||
-            (input.args[1] === "is-enabled" && !control.enabled)
-            ? 1
-            : 0,
-        ),
-        timedOut: false,
-        stdoutTruncated: false,
-        stderrTruncated: false,
-        stdoutInvalidUtf8: false,
-        stderrInvalidUtf8: false,
-      };
-    }),
-  });
-  const makeService = (
-    environmentPath: string | undefined = installerPath,
-    cliVersion = "1.2.3",
-    serviceBaseDir = baseDir,
-    insideService = false,
-    hostExecPath = "/usr/bin/goat",
-  ) =>
-    Effect.gen(function* () {
-      const paths = pinnedRuntimePaths(path, serviceBaseDir, cliVersion, platform);
-      yield* fs.makeDirectory(path.dirname(paths.entryPath), { recursive: true });
-      yield* fs.writeFileString(paths.entryPath, "#!/bin/sh\n");
-      yield* fs.writeFileString(paths.sentinelPath, `${cliVersion}\n`);
-      return yield* BootService.make({
-        baseDir: serviceBaseDir,
-        logsDir: path.join(serviceBaseDir, "userdata", "logs"),
-        cliVersion,
-        host: { execPath: hostExecPath },
-      });
-    }).pipe(
-      Effect.provideService(ProcessRunner.ProcessRunner, runner),
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(HostProcess.Platform, platform),
-          Layer.succeed(HostProcess.UserId, 501),
-          Layer.succeed(HostProcess.ExecutablePath, hostExecPath),
-          Layer.succeed(
-            HttpClient.HttpClient,
-            HttpClient.make((request) =>
-              Effect.suspend(() => {
-                const url = String(request.url);
-                return url.includes("/.well-known/goat/environment") &&
-                  control.answeredVersion !== undefined
-                  ? Effect.succeed(
-                      HttpClientResponse.fromWeb(
-                        request,
-                        Response.json({ serverVersion: control.answeredVersion }),
-                      ),
-                    )
-                  : Effect.die(`no release download expected: ${url}`);
-              }),
-            ),
-          ),
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                HOME: home,
-                ...(xdgConfigHome === undefined ? {} : { XDG_CONFIG_HOME: xdgConfigHome }),
-                ...(environmentPath === undefined || environmentPath === ""
-                  ? {}
-                  : { PATH: environmentPath }),
-                ...(insideService ? { GOAT_BOOT_SERVICE_UNIT: "goat.service" } : {}),
-              },
-            }),
-          ),
-        ),
-      ),
-    );
-  const service = yield* makeService();
-  return {
-    service,
-    makeService,
-    fs,
-    home,
-    baseDir,
-    statePath,
-    commands,
-    invocations,
-    timeouts,
-    control,
-    runtime,
-    runner,
-  };
-});
 
-it.layer(NodeServices.layer)("boot service install", (it) => {
+  it.effect("does not enable a root service under sudo when the user manager is unavailable", () =>
+    Effect.gen(function* () {
+      const { makeService, control, commands } = yield* makeHarness();
+      control.managerReachable = false;
+      control.linger = undefined;
+      const service = yield* makeService(undefined, "1.2.3", undefined, false, undefined, true);
+      expect(yield* service.install().pipe(Effect.flip)).toMatchObject({
+        _tag: "BootServicePrerequisiteError",
+      });
+      expect(commands.some((command) => command.includes("enable-linger"))).toBe(false);
+    }),
+  );
+
+  it.effect("installs into the directory of the newly started user manager", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const shellConfig = yield* fs.makeTempDirectoryScoped({ prefix: "goat-shell-config-" });
+      const { makeService, home, control } = yield* makeHarness(
+        "linux",
+        undefined,
+        shellConfig,
+        "",
+      );
+      control.linger = "no";
+      control.managerReachable = false;
+      const service = yield* makeService();
+      const result = yield* service.install();
+      expect(result.unitPath).toBe(path.join(home, ".config", "systemd", "user", "goat.service"));
+      expect((yield* service.status).current).toBe(true);
+    }),
+  );
+
+  it.effect("bounds attempts to start an unavailable user manager", () =>
+    Effect.gen(function* () {
+      const { makeService, control } = yield* makeHarness();
+      control.linger = "no";
+      control.managerReachable = false;
+      control.lingerStartsManager = false;
+      const service = yield* makeService();
+      const clock = yield* Clock.Clock;
+      let attempts = 0;
+      const result = yield* service.install().pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          sleep: () =>
+            Effect.sync(() => {
+              attempts += 1;
+            }),
+        }),
+        Effect.flip,
+      );
+      expect(result).toMatchObject({
+        _tag: "BootServicePrerequisiteError",
+        problem: "user-manager-unavailable",
+      });
+      expect(attempts).toBe(10);
+    }),
+  );
+
+  it.effect("leaves another home's unit alone when a user manager starts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const shellConfig = yield* fs.makeTempDirectoryScoped({ prefix: "goat-shell-config-" });
+      const { makeService, home, control } = yield* makeHarness(
+        "linux",
+        undefined,
+        shellConfig,
+        "",
+      );
+      const unitPath = path.join(home, ".config", "systemd", "user", "goat.service");
+      yield* fs.makeDirectory(path.dirname(unitPath), { recursive: true });
+      const foreign = "[Service]\nEnvironment=GOAT_HOME=/another/home\n";
+      yield* fs.writeFileString(unitPath, foreign);
+      control.linger = "no";
+      control.managerReachable = false;
+      const service = yield* makeService();
+      expect(yield* service.install().pipe(Effect.flip)).toMatchObject({
+        _tag: "BootServiceCommandError",
+      });
+      expect(yield* fs.readFileString(unitPath)).toBe(foreign);
+    }),
+  );
+
   it.effect(
     "fails before installing files or validating a runtime when lingering needs an administrator",
     () =>
@@ -600,7 +395,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           ),
         ).toEqual(
           platform === "linux"
-            ? ["systemctl --user stop goat.service", "systemctl --user restart goat.service"]
+            ? [
+                "systemctl --user stop goat.service",
+                "systemctl --user reset-failed goat.service",
+                "systemctl --user restart goat.service",
+              ]
             : [
                 "launchctl bootout --wait gui/501/si.goat.service",
                 `launchctl bootstrap gui/501 ${plan.unitPath}`,
@@ -766,6 +565,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         "systemctl --user is-active goat.service",
         "systemctl --user stop goat.service",
         "repair",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
       expect(control.active).toBe(true);
@@ -878,12 +678,44 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         expect(commands).toEqual([
           "systemctl --user daemon-reload",
           "systemctl --user enable goat.service",
+          "systemctl --user reset-failed goat.service",
           "systemctl --user restart --no-block goat.service",
         ]);
         expect(outcome).toBe("queued");
         expect(yield* fs.readFileString(statePath)).toBe(state);
         expect(yield* fs.readFileString(marker)).toBe("1.2.3\n");
       }),
+  );
+
+  it.effect("rejects an unloadable home before changing an installed service", () =>
+    Effect.gen(function* () {
+      const { service, makeService, fs, commands } = yield* makeHarness();
+      const path = yield* Path.Path;
+      const plan = yield* service.install();
+      const unit = yield* fs.readFileString(plan.unitPath);
+      const other = yield* makeService(undefined, "1.2.3", path.join(plan.baseDir, 'bad"home'));
+      commands.length = 0;
+      const error = yield* other.install().pipe(Effect.flip);
+      expect(error._tag).toBe("BootServiceBaseDirUnsupportedError");
+      expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
+      expect(commands).toEqual([]);
+    }),
+  );
+
+  it.effect("starts a service after its systemd start limit trips", () =>
+    Effect.gen(function* () {
+      const { service, control, makeService } = yield* makeHarness();
+      yield* service.install();
+      control.active = false;
+      control.startLimitHit = true;
+      yield* service.install();
+      expect(control.active).toBe(true);
+      control.active = false;
+      control.startLimitHit = true;
+      const inside = yield* makeService(undefined, "1.2.3", undefined, true);
+      expect(yield* inside.restart).toBe("queued");
+      expect(control.active).toBe(true);
+    }),
   );
 
   it.effect("restarts an installed service when repair fails", () =>
@@ -902,6 +734,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       ).toEqual([
         "systemctl --user stop goat.service",
         "systemctl --user daemon-reload",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
     }),
@@ -933,7 +766,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           commands.filter(
             (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
           ),
-        ).toEqual(["systemctl --user stop goat.service", "systemctl --user restart goat.service"]);
+        ).toEqual([
+          "systemctl --user stop goat.service",
+          "systemctl --user reset-failed goat.service",
+          "systemctl --user restart goat.service",
+        ]);
       }
     }),
   );
@@ -1166,6 +1003,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
         "systemctl --user disable --now t3code.service", // goat-rename: legacy
         "systemctl --user daemon-reload",
         "systemctl --user enable goat.service",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
       expect(yield* harness.service.status).toMatchObject({ installed: true, current: true });
@@ -1271,10 +1109,11 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
       expect(yield* harness.fs.exists(`${harness.home}/.config/systemd/user/goat.service`)).toBe(
         false,
       );
-      expect(harness.commands.slice(-4)).toEqual([
+      expect(harness.commands.slice(-5)).toEqual([
         "systemctl --user disable --now goat.service",
         "systemctl --user daemon-reload",
         "systemctl --user enable t3code.service", // goat-rename: legacy
+        "systemctl --user reset-failed t3code.service", // goat-rename: legacy
         "systemctl --user restart t3code.service", // goat-rename: legacy
       ]);
     }),
@@ -1305,6 +1144,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
         "systemctl --user disable --now t3code.service", // goat-rename: legacy
         "systemctl --user daemon-reload",
         "systemctl --user enable goat.service",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
     }),

@@ -13,6 +13,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { dismissContextMenu } from "~/contextMenuFallback";
 
 import "~/index.css";
 
@@ -52,6 +53,7 @@ vi.mock("./useBotRoster", () => ({
     loaded: true,
     failed: false,
     turnsWaiting: [],
+    chips: new Map(),
     refresh: () => {},
   }),
 }));
@@ -317,6 +319,37 @@ it("in the narrow sheet Escape steps from a task back to Home, then closes the s
   await expect.element(page.getByRole("tab", { name: "Home" })).not.toBeInTheDocument();
   await expect.element(chip).toHaveFocus();
   await expect.element(field).toHaveValue("Half a thought");
+});
+
+it("at 390 px Escape closes a task's Actions menu and leaves the home sheet open, focus back on Actions", async () => {
+  const { view } = setup(true);
+  await using _window = await windowSize(390, 844);
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: { taskId: "task-a", title: "Fix the flaky test", status: "completed", updatedAt: at },
+      view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: true,
+      mainMessagesSinceQuiet: 0,
+      worker: { environmentId: "local", threadId: "channel-worker:a" },
+    },
+  ];
+  await using screen = await render(view([], true));
+  using _menu = { [Symbol.dispose]: dismissContextMenu };
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(homeSheet()).toBeVisible();
+  const actions = page.getByRole("button", { name: "Actions for Fix the flaky test" });
+  actions.element().focus();
+  await userEvent.keyboard("{Enter}");
+  const showWork = page.getByRole("menuitem", { name: "Show work" });
+  await expect.element(showWork).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(showWork).not.toBeInTheDocument();
+  await expect.element(actions).toHaveFocus();
+  // Still open, not merely visible while an exit transition runs.
+  await expect.element(homeSheet()).toHaveAttribute("data-open");
 });
 
 it("New routine starts a routine request in the composer and sends nothing", async () => {

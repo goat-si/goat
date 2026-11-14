@@ -29,7 +29,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { mobileBotHomeListShown, pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
@@ -42,6 +42,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
+import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
 import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 import { useMobileHistoryAnnouncements } from "./useMobileHistoryAnnouncements";
@@ -134,18 +135,22 @@ export function MobileBotWork(props: {
 }) {
   const home = useMobileGoatBotHomeMode();
   // The sheet reaches the bottom of the screen; its last entry clears the home indicator.
-  const bottomInset = useSafeAreaInsets().bottom + 24;
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom + 24;
+  // Android draws the sheet edge to edge, so Close starts below the status bar.
+  const sheetTop = Platform.OS === "android" ? { paddingTop: 16 + insets.top } : undefined;
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities = environmentId
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
   const member = props.member ?? null;
-  const enabled =
-    selected?.connected === true &&
-    capabilities?.goatBotTaskThreads === true &&
-    (member === null || capabilities?.goatBotMembers === true);
+  const enabled = mobileBotHomeListShown({
+    connected: selected?.connected === true,
+    capabilities,
+    member: member !== null,
+  });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
@@ -219,6 +224,7 @@ export function MobileBotWork(props: {
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
+  const current = useMobileHomeCurrentWork(environmentId, botId);
   const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
     closeSheet();
     props.onOpenTask(id, title);
@@ -621,6 +627,7 @@ export function MobileBotWork(props: {
                     groupChildren:
                       expandedData?.groups.find((group) => group.taskId === id)?.children.length ??
                       null,
+                    currentLinks: current.linksFor(id),
                     openThread: (thread) => {
                       closeSheet();
                       props.onOpenThread(thread);
@@ -639,6 +646,7 @@ export function MobileBotWork(props: {
                   supported: history.supported,
                   currentTaskIds: history.currentTaskIds,
                   launchesTruncated: history.launchesTruncated,
+                  currentEligible: current.eligible,
                   hasMore: history.hasMore,
                   loading: history.loading,
                   incomplete: history.incomplete,
@@ -870,7 +878,7 @@ export function MobileBotWork(props: {
         // iOS calls this when the sheet is swiped away; Android when back leaves a peek first.
         onRequestClose={Platform.OS === "android" ? goBack : closeSheet}
       >
-        <View className="flex-1 bg-screen px-4 pt-4">
+        <View className="flex-1 bg-screen px-4 pt-4" style={sheetTop}>
           <View className="flex-row items-center justify-between">
             <Pressable
               accessibilityRole="button"

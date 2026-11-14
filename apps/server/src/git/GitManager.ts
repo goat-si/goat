@@ -1,3 +1,4 @@
+import { resolvePullRequestWorktreeLocalBranchName } from "./pullRequestBranchName.ts";
 import { publishedRemoteName, appendUnique } from "./gitPublishedBranch.ts";
 import { resolveLastKnownPr } from "./lastKnownPr.ts";
 import { shippedByMergedPr } from "./shippedByMergedPr.ts";
@@ -49,7 +50,6 @@ import { hasProjectSettingsOverrides, resolveProjectSettings } from "@goat/share
 import {
   mergeGitStatusParts,
   resolveAutoFeatureBranchName,
-  sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@goat/shared/git";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
@@ -83,6 +83,8 @@ import { makePrLookupGitState } from "./prLookupGitState.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { makeCheckedOutPullRequest } from "./checkedOutPullRequest.ts";
+import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -136,6 +138,11 @@ export class GitManager extends Context.Service<
       input: { readonly cwd: string; readonly branch: string },
       options?: { readonly refresh?: boolean; readonly freshGitState?: boolean },
     ) => Effect.Effect<GitBranchPullRequest | null, GitManagerServiceError>;
+    readonly checkedOutPullRequest: (input: {
+      cwd: string;
+      branch: string;
+      url: string;
+    }) => Effect.Effect<boolean>;
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
@@ -184,7 +191,7 @@ type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
 
 function isNotGitRepositoryError(error: GitCommandError): boolean {
-  return error.message.toLowerCase().includes("not a git repository");
+  return isNonRepositoryGitStderr(error.message);
 }
 
 interface OpenPrInfo {
@@ -247,18 +254,6 @@ export function pullRequestRepositoryKey(value: string): string | null {
 /** Null when the host did not name the repository the head lives in. */
 function resolveHeadRepositoryNameWithOwner(pullRequest: PullRequestHeadRemoteInfo): string | null {
   return normalizeOptionalString(pullRequest.headRepositoryNameWithOwner);
-}
-
-function resolvePullRequestWorktreeLocalBranchName(
-  pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-): string {
-  if (!pullRequest.isCrossRepository) {
-    return pullRequest.headBranch;
-  }
-
-  const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
-  const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
-  return `t3code/pr-${pullRequest.number}/${suffix}`;
 }
 
 export function parseRepositoryNameWithOwnerFromRemoteUrl(
@@ -584,6 +579,7 @@ function toPullRequestHeadRemoteInfo(pr: {
 
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
+  const checkedOutPullRequest = makeCheckedOutPullRequest(gitCore);
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -1658,7 +1654,7 @@ export const make = Effect.gen(function* () {
     return remoteUrl === null ? null : remoteName;
   });
 
-  // worktree add can set origin/main as upstream; this base is not the branch's published PR head.
+  // A worktree's base upstream is not its published PR head.
   const resolveLookupHeadContext = Effect.fn("resolveLookupHeadContext")(function* (
     cwd: string,
     details: {
@@ -1680,15 +1676,16 @@ export const make = Effect.gen(function* () {
         };
       }
     }
-    const upstreamHeadIsDefault =
+    if (headContext.headBranch === details.branch || headContext.isCrossRepository) {
+      return { headContext, lookup: true };
+    }
+    const upstreamHeadIsBase =
       headContext.headBranch === details.defaultBranch ||
       (details.defaultBranch === null &&
-        (headContext.headBranch === "main" || headContext.headBranch === "master"));
-    if (
-      headContext.headBranch === details.branch ||
-      !upstreamHeadIsDefault ||
-      headContext.isCrossRepository
-    ) {
+        (headContext.headBranch === "main" || headContext.headBranch === "master")) ||
+      headContext.headBranch ===
+        (yield* gitCore.readBranchBase(cwd, details.branch).pipe(Effect.orElseSucceed(() => null)));
+    if (!upstreamHeadIsBase) {
       return { headContext, lookup: true };
     }
     const remoteName = yield* findRemoteTrackingRemote(
@@ -2688,8 +2685,11 @@ export const make = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const localPullRequestBranch =
-        resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      const localPullRequestBranch = yield* resolvePullRequestWorktreeLocalBranchName(
+        input.cwd,
+        pullRequestWithRemoteInfo,
+        gitCore,
+      );
 
       // Git refuses to move checked-out branches; advance reused checkouts from inside their worktree.
       const reuseExistingWorktree = Effect.fn("reuseExistingWorktree")(function* (
@@ -2884,7 +2884,12 @@ export const make = Effect.gen(function* () {
         worktreePath: worktree.worktree.path,
         isOnPullRequestHead: true,
       };
-    }).pipe(Effect.ensuring(invalidateStatus(input.cwd)));
+    }).pipe(
+      Effect.tap((result) =>
+        checkedOutPullRequest.write(input.cwd, result.branch, result.pullRequest.url),
+      ),
+      Effect.ensuring(invalidateStatus(input.cwd)),
+    );
   }, asUserAction);
 
   const runFeatureBranchStep = Effect.fn("runFeatureBranchStep")(function* (
@@ -3143,6 +3148,7 @@ export const make = Effect.gen(function* () {
     remoteStatus,
     status,
     branchPullRequest,
+    checkedOutPullRequest: checkedOutPullRequest.read,
     invalidateLocalStatus,
     invalidateRemoteStatus,
     invalidateStatus,

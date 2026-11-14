@@ -24,6 +24,7 @@ import {
   type LaunchSubagentRow,
 } from "../features/threads/threadListV2LaunchFold";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { mobileGoatBotHomeEnvironmentIdAtom } from "./goatBotHomeEnvironment";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 import { appAtomRegistry } from "./atom-registry";
@@ -81,6 +82,8 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   goatBotListedWork: channelEnvironment.listedBotWork,
+  goatBotHomeWork: channelEnvironment.homeCurrentOpenableWorkByEnvironment,
+  goatBotHomeEnvironmentId: mobileGoatBotHomeEnvironmentIdAtom,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,

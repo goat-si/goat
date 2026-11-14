@@ -79,6 +79,8 @@ interface Operation {
   state: string;
   linkId: string;
   code?: string;
+  /** A person or O5 resolved this residual or unknown entry. */
+  resolvedAt?: string;
 }
 
 /**
@@ -111,6 +113,12 @@ export const fakeEnrollHost = () => {
     knownHostsUnwritable: false,
     /** Where GOAT's state folder keeps known_hosts now; a moved home changes it. */
     knownHostsDir: "/srv/goat/disposable/known_hosts/",
+    /** Answers the ocx calls it knows (detach's revoke and recover) before the enrollment fake. */
+    extraOcx: undefined as ((args: ReadonlyArray<string>) => OcxOutput | undefined) | undefined,
+    /** Whether Pen's member list holds the node's key; out of Pen, it has no route and never answers. */
+    inPen: (_nodeId: string): boolean => true,
+    /** A machine that is off or gone; the detach fake sets it. */
+    silent: (_nodeId: string): boolean => false,
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
@@ -120,8 +128,22 @@ export const fakeEnrollHost = () => {
     /** Runs as each link add arrives, before it answers. */
     onAdd: undefined as (() => void) | undefined,
     holdOperations: undefined as Hold | undefined,
+    /** Hold a link add or revoke after GOAT stored its id, before the Home sees it. */
+    holdAdd: undefined as Hold | undefined,
+    holdRevoke: undefined as Hold | undefined,
     journal,
     links,
+    /** The link row an add left residual, unknown or open would commit. */
+    pendingLinks: new Map<string, Record<string, unknown>>(),
+    /** A Home that kept running an open or unsettled add commits it now. */
+    commit: (operationId: string) => {
+      const operation = journal.get(operationId);
+      const row = operation === undefined ? undefined : control.pendingLinks.get(operation.linkId);
+      if (operation === undefined || row === undefined)
+        throw new Error("no pending add " + operationId);
+      operation.state = "committed";
+      links.set(operation.linkId, row);
+    },
     /** The Home pruned this settled entry, as it may after 2 hours. */
     forget: (operationId: string) => journal.delete(operationId),
   };
@@ -161,16 +183,7 @@ export const fakeEnrollHost = () => {
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);
-    if (typeof script === "object" && "failedClean" in script) {
-      operation.state = "failed_clean";
-      operation.code = script.failedClean;
-      return output(1);
-    }
-    if (script === "residual" || script === "unknown" || script === "open") {
-      operation.state = script;
-      return output(1);
-    }
-    links.set(linkId, {
+    const linkRow = {
       id: linkId,
       alias,
       childKind: "ephemeral",
@@ -180,16 +193,36 @@ export const fakeEnrollHost = () => {
         user: args[args.indexOf("--ssh-user") + 1],
         port: Number(args[args.indexOf("--ssh-port") + 1]),
       },
-    });
+    };
+    if (typeof script === "object" && "failedClean" in script) {
+      operation.state = "failed_clean";
+      operation.code = script.failedClean;
+      return output(1);
+    }
+    if (script === "residual" || script === "unknown" || script === "open") {
+      operation.state = script;
+      control.pendingLinks.set(linkId, linkRow);
+      return output(1);
+    }
+    links.set(linkId, linkRow);
     return output(script === "commit" ? 0 : 1, json({ linkId, alias }));
   };
   const service = EnrollHost.of({
     route: (node) =>
       pass(control.holdRoute).pipe(
-        Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
+        Effect.andThen(
+          Effect.sync(() =>
+            control.inPen(node.nodeId) ? control.routes.get(node.nodeId) : undefined,
+          ),
+        ),
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
     keyPath: () => Effect.sync(() => control.keyPath),
+    forgetKnownHosts: (attachId) =>
+      Effect.sync(() => {
+        control.knownHosts.delete(attachId);
+        return true;
+      }),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
@@ -209,6 +242,7 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.reached.push(route);
+            if (!control.inPen(route.nodeId) || control.silent(route.nodeId)) return "unreachable";
             // ssh finds no host key in a file under a home that moved away.
             if (!route.knownHostsFile.startsWith(control.knownHostsDir)) return "host_key_unknown";
             return (
@@ -219,10 +253,19 @@ export const fakeEnrollHost = () => {
         ),
       ),
     ocx: (args) =>
-      (args[1] === "operations" ? pass(control.holdOperations) : Effect.void).pipe(
+      (args[1] === "operations"
+        ? pass(control.holdOperations)
+        : args[1] === "add"
+          ? pass(control.holdAdd)
+          : args[1] === "revoke"
+            ? pass(control.holdRevoke)
+            : Effect.void
+      ).pipe(
         Effect.andThen(
           Effect.sync(() => {
             control.calls.push(args);
+            const extra = control.extraOcx?.(args);
+            if (extra !== undefined) return extra;
             if (args[0] === "link" && args[1] === "add") return add(args);
             if (args[0] === "link" && args[1] === "operations" && control.journalUnreadable)
               return output(1);
@@ -243,6 +286,9 @@ export const fakeEnrollHost = () => {
                   ...(operation.code === undefined
                     ? {}
                     : { error: { code: operation.code, status: 409 } }),
+                  ...(operation.resolvedAt === undefined
+                    ? {}
+                    : { resolvedAt: operation.resolvedAt }),
                 }),
               );
             }

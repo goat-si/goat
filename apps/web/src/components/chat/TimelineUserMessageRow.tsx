@@ -1,4 +1,3 @@
-import { CHAT_USER_MARKDOWN_REMARK_PLUGINS } from "@goat/shared/markdownPipeline";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { TimelineSentByLabel, type SentBySender } from "./TimelineSentByLabel";
 import { useConnectedEnvironmentIds, useEnvironment } from "../../state/environments";
@@ -85,6 +84,7 @@ import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
 import {
   resolvePreviewAnnotationImage,
   userMessageFileLabel,
+  USER_MESSAGE_REMARK_PLUGINS,
 } from "./TimelineUserMessageRow.logic";
 
 function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
@@ -986,10 +986,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
       skills={props.skills}
-      className="text-foreground"
+      className="text-foreground user-message-markdown"
       lineBreaks
       parseRawHtml={false}
-      extraRemarkPlugins={CHAT_USER_MARKDOWN_REMARK_PLUGINS}
+      extraRemarkPlugins={USER_MESSAGE_REMARK_PLUGINS}
       renderContextReference={props.renderContextReference}
       headingLevelOffset={MESSAGE_HEADING_LEVEL}
     />

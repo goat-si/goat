@@ -3,6 +3,7 @@ import {
   LightbulbIcon,
   MessageSquareWarningIcon,
   OctagonAlertIcon,
+  StarIcon,
   TriangleAlertIcon,
 } from "~/components/solar";
 
@@ -10,6 +11,12 @@ export const GITHUB_ALERT_PRESENTATIONS: Record<
   string,
   { label: string; Icon: typeof InfoIcon; borderClassName: string; titleClassName: string }
 > = {
+  insight: {
+    label: "Insight",
+    Icon: StarIcon,
+    borderClassName: "border-info",
+    titleClassName: "text-info",
+  },
   note: {
     label: "Note",
     Icon: InfoIcon,

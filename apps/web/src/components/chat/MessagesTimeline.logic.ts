@@ -58,7 +58,8 @@ import {
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
-import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
+import type { TimelineLatestRun } from "./timelineLatestRun";
+export type { TimelineLatestRun } from "./timelineLatestRun";
 import { deriveUnsettledRunId, timelineIsWorking } from "./timelineLiveRun";
 import {
   resolveGoatMcpItemCall,
@@ -504,11 +505,6 @@ export interface TimelineDurationMessage {
   updatedAt: string;
   streaming: boolean;
 }
-
-export type TimelineLatestRun = Pick<
-  ThreadRunSummary,
-  "runId" | "status" | "startedAt" | "completedAt" | "turnEnded" | "survivingRestartNotice"
->;
 
 const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 

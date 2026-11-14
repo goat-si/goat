@@ -51,6 +51,7 @@ export const remoteStatusWithPr: VcsStatusRemoteResult = {
 export function layerTestFor(state: {
   currentLocalStatus: VcsStatusLocalResult;
   currentRemoteStatus: VcsStatusRemoteResult | null;
+  currentDivergence?: Pick<VcsStatusRemoteResult, "aheadCount" | "behindCount">;
   localStatusCalls: number;
   remoteStatusCalls: number;
   localInvalidationCalls: number;
@@ -87,6 +88,16 @@ export function layerTestFor(state: {
             );
           }),
         currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+        upstreamDivergence: () =>
+          Effect.sync(() =>
+            state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
+              ? {
+                  refName: state.currentLocalStatus.refName,
+                  aheadCount: (state.currentDivergence ?? state.currentRemoteStatus).aheadCount,
+                  behindCount: (state.currentDivergence ?? state.currentRemoteStatus).behindCount,
+                }
+              : null,
+          ),
         remoteStatus: (_input, options) =>
           Effect.suspend(() => {
             return (state.beforeRemoteStatus ?? Effect.void).pipe(

@@ -1,6 +1,6 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BotThreadRow, type ChannelUpdateTaskViewInput } from "@goat/contracts";
+import { BotThreadRow, ChannelTaskId, type ChannelUpdateTaskViewInput } from "@goat/contracts";
 import type { BotWorkTask, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
 import * as Schema from "effect/Schema";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -286,4 +286,27 @@ it("offline, keeps other threads and earlier chat tasks listed but closed, as ta
   });
   expect(calls.thread).not.toHaveBeenCalled();
   expect(calls.open).not.toHaveBeenCalled();
+});
+
+it("says a task's other threads are in Threads only while it is older work, not once it is current again", async () => {
+  const history = {
+    supported: true,
+    currentTaskIds: new Set<ChannelTaskId>(),
+    launchesTruncated: new Set([ChannelTaskId.make("task-1")]),
+    currentEligible: true,
+    hasMore: false,
+    loading: false,
+    incomplete: false,
+    failed: false,
+    onLoadMore: () => {},
+  };
+  await show({ work: work([listedTask]), rows: [task], history });
+  expect(container.textContent).toContain("Some threads are listed in Threads.");
+  // Pinned from the walk, the task is in the current list again.
+  await show({
+    work: work([listedTask]),
+    rows: [task],
+    history: { ...history, currentTaskIds: new Set([ChannelTaskId.make("task-1")]) },
+  });
+  expect(container.textContent).not.toContain("Some threads are listed in Threads.");
 });

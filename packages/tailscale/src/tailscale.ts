@@ -45,6 +45,7 @@ export const TailscaleStderrDiagnostic = Schema.Literals([
   "no-existing-handler",
   "not-logged-in",
   "permission-denied",
+  "unsupported-target",
   "unknown",
 ]);
 export type TailscaleStderrDiagnostic = typeof TailscaleStderrDiagnostic.Type;
@@ -55,6 +56,8 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   [/handler does not exist/i, "no-existing-handler"],
   [/not logged in|logged out|needs? login/i, "not-logged-in"],
   [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
+  // The macOS apps, and tailscaled without SO_MARK, proxy only to localhost, 127.0.0.1 and ::1.
+  [/doesn't support connecting to remote destinations/i, "unsupported-target"],
 ];
 
 const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
@@ -138,12 +141,18 @@ const TailscaleStatusSelf = Schema.Struct({
 });
 
 const TailscaleStatusJson = Schema.Struct({
+  BackendState: Schema.optional(Schema.Unknown),
   Self: Schema.optional(TailscaleStatusSelf),
 });
 
 export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 
 export interface TailscaleStatus {
+  /**
+   * `tailscale down` keeps `Self` from the last netmap, so the DNS name alone
+   * does not mean the tailnet is reachable. `null` when the CLI omits BackendState.
+   */
+  readonly running: boolean | null;
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
   /**
@@ -213,6 +222,7 @@ export const parseTailscaleStatus = (
 
       const capMap = parsed.Self?.CapMap;
       return {
+        running: parsed.BackendState === undefined ? null : parsed.BackendState === "Running",
         magicDnsName: normalizeMagicDnsName(parsed),
         tailnetIpv4Addresses,
         httpsServeEnabled:
@@ -398,8 +408,12 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
     );
     const child = spawned.handle;
     commandContext.executable = spawned.executable;
-    const [stderr, exitCode] = yield* Effect.all(
-      [collectStderr(child.stderr), child.exitCode.pipe(Effect.map(Number))],
+    const [, stderr, exitCode] = yield* Effect.all(
+      [
+        Stream.runDrain(child.stdout),
+        collectStderr(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
       { concurrency: "unbounded" },
     ).pipe(
       Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
@@ -430,16 +444,35 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
   );
 });
 
-export const ensureTailscaleServe = (input: {
+export class TailscaleServeHttpsDisabledError extends Schema.TaggedError<TailscaleServeHttpsDisabledError>()(
+  "TailscaleServeHttpsDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "Tailscale Serve needs HTTPS enabled on the tailnet. Enable HTTPS certificates at https://login.tailscale.com/admin/dns.";
+  }
+}
+
+export const ensureTailscaleServe = Effect.fn("tailscale.ensureTailscaleServe")(function* (input: {
   readonly localPort: number;
   readonly servePort?: number;
   readonly localHost?: string;
-}): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> => {
+}): Effect.fn.Return<
+  void,
+  TailscaleCommandError | TailscaleServeHttpsDisabledError,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  // Without the capability `tailscale serve` prints an enablement notice and exits 0, or blocks on
+  // it, having configured nothing either way.
+  const status = yield* Effect.option(readTailscaleStatus);
+  if (Option.isSome(status) && status.value.httpsServeEnabled === false) {
+    return yield* new TailscaleServeHttpsDisabledError();
+  }
   const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
   const localHost = input.localHost ?? "127.0.0.1";
   const args = ["serve", "--bg", `--https=${servePort}`, `http://${localHost}:${input.localPort}`];
-  return runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT);
-};
+  return yield* runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT);
+});
 
 export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
   input: {

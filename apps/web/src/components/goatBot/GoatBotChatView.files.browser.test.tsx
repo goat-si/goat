@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, TurnItemId } from "@goat/contracts";
 import * as Base64 from "effect/encoding/Base64";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -9,7 +9,7 @@ import { render } from "../../../test/render";
 
 import "~/index.css";
 
-const state = vi.hoisted(() => ({ narrow: false, matched: 0 }));
+const state = vi.hoisted(() => ({ narrow: false, matched: 0, realTimeline: false }));
 // The Library listing query, an object as the real atoms are.
 const artifactsQuery = vi.hoisted(() => ({ query: "artifacts" }));
 vi.mock("../WorkspacePageHeader", () => ({
@@ -24,16 +24,20 @@ vi.mock("./GoatBotAvatar", () => ({
 // The real reply file cards under a stand-in timeline, so the chat's file context reaches them.
 vi.mock("./GoatBotTimeline", async (original) => {
   const { GoatBotReplyFiles } = await import("./GoatBotReplyFiles");
+  const real = await original<typeof import("./GoatBotTimeline")>();
   return {
-    ...(await original<typeof import("./GoatBotTimeline")>()),
-    GoatBotTimeline: ({ rows }: { rows: ReadonlyArray<GoatBotRow> }) => (
-      <>
-        <p>Earlier conversation</p>
-        {rows.map((row) =>
-          row.kind === "bot" ? <GoatBotReplyFiles key={row.id} text={row.text} /> : null,
-        )}
-      </>
-    ),
+    ...real,
+    GoatBotTimeline: (props: Parameters<typeof real.GoatBotTimeline>[0]) =>
+      state.realTimeline ? (
+        <real.GoatBotTimeline {...props} />
+      ) : (
+        <>
+          <p>Earlier conversation</p>
+          {props.rows.map((row) =>
+            row.kind === "bot" ? <GoatBotReplyFiles key={row.id} text={row.text} /> : null,
+          )}
+        </>
+      ),
   };
 });
 vi.mock("@goat/client-runtime/goatBot", async (original) => {
@@ -55,6 +59,7 @@ vi.mock("./useBotRoster", () => ({
     loaded: true,
     failed: false,
     turnsWaiting: [],
+    chips: new Map(),
     refresh: () => {},
   }),
 }));
@@ -144,12 +149,17 @@ const row: GoatBotRow = {
   groupPosition: "single",
 };
 
-function view(threadId = "bot", rows: ReadonlyArray<GoatBotRow> = [row]) {
+function view(
+  threadId = "bot",
+  rows: ReadonlyArray<GoatBotRow> = [row],
+  source?: Parameters<typeof GoatBotChatView>[0]["source"],
+) {
   return (
     <GoatBotChatView
       availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(threadId) } }}
       canOperate
       rows={rows}
+      source={source}
       onSend={() => {}}
       onRetryInput={() => {}}
       legacyAgentRoute={null}
@@ -157,6 +167,34 @@ function view(threadId = "bot", rows: ReadonlyArray<GoatBotRow> = [row]) {
     />
   );
 }
+
+it("announces a reply while a file is open without repeating it on close", async () => {
+  state.narrow = false;
+  state.realTimeline = true;
+  try {
+    const baselineIds = new Set([row.id]);
+    const source = (ids: string[]) => ({
+      identity: "local:bot",
+      baselineIds,
+      sourceIds: new Set(ids.map((id) => TurnItemId.make(id))),
+      committedSends: new Map<string, string>(),
+    });
+    await using screen = await render(view("bot", [row], source([row.id])));
+    await openLibraryFile(screen);
+    await expect.element(screen.getByRole("heading", { name: "Weekly summary" })).toBeVisible();
+    const fresh = { ...row, id: "new", text: "New reply" };
+    await screen.rerender(view("bot", [row, fresh], source([row.id, fresh.id])));
+    const status = screen.container.querySelector<HTMLElement>("[data-goat-bot-reply-status]");
+    if (!status) throw new Error("missing bot status");
+    expect(status.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+    expect(status.closest(".hidden, [hidden], [aria-hidden=true], [inert]")).toBeNull();
+    const spoken = status.textContent;
+    await userEvent.click(screen.getByRole("button", { name: "Close summary.md" }));
+    expect(status.textContent).toBe(spoken);
+  } finally {
+    state.realTimeline = false;
+  }
+});
 
 async function openLibraryFile(screen: Awaited<ReturnType<typeof render>>) {
   await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));

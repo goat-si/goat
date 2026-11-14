@@ -11,6 +11,7 @@ import * as ErrorReporter from "effect/ErrorReporter";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
+import { PreviewScreenshotSaveError } from "./previewScreenshotFile.ts";
 
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeSafety = Schema.decodeUnknownOption(ActionOutcomeSafety);
@@ -33,6 +34,7 @@ function refusalFields(
 const refusalText = (refusal: Readonly<Record<string, unknown>>) => JSON.stringify(refusal);
 
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
+const isPreviewScreenshotSaveError = Schema.is(PreviewScreenshotSaveError);
 
 // Effect's registerToolkit answers a dying handler with this text; image tools register directly
 // and must answer the same way, as a tool result an agent can retry or report (#907).
@@ -72,7 +74,10 @@ export const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   // and it tells the agent what to do next, such as falling back to a shell browser.
   const refusal = refusalFields(firstFailure);
   const message =
-    refusal?.message ?? (isPreviewAutomationError(firstFailure) ? firstFailure.message : undefined);
+    refusal?.message ??
+    (isPreviewAutomationError(firstFailure) || isPreviewScreenshotSaveError(firstFailure)
+      ? firstFailure.message
+      : undefined);
   const safety =
     typeof firstFailure === "object" && firstFailure !== null && "safety" in firstFailure
       ? Option.getOrUndefined(decodeSafety(firstFailure.safety))

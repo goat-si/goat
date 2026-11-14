@@ -532,6 +532,7 @@ process.on("SIGTERM", () => {});
 const quit = () => { fs.writeFileSync(${JSON.stringify(exitRecord)}, "asked to close"); process.exit(0); };
 const reply = (message) => fs.writeSync(4, JSON.stringify(message) + "\\0");
 const results = {
+  "Target.createBrowserContext": { browserContextId: "context" },
   "Target.createTarget": { targetId: "page" },
   "Target.attachToTarget": { sessionId: "session" },
   "Runtime.evaluate": { result: { value: 100 } },
@@ -541,8 +542,12 @@ let buffered = "";
 fs.createReadStream(null, { fd: 3 }).on("end", quit).on("data", (chunk) => {
   const messages = (buffered + chunk).split("\\0");
   buffered = messages.pop();
-  for (const { id, method, sessionId } of messages.map((raw) => JSON.parse(raw))) {
+  for (const { id, method, sessionId, params: requestParams } of messages.map((raw) => JSON.parse(raw))) {
     if (method === "Browser.close") quit();
+    if (method === "Target.createTarget" && requestParams.browserContextId !== "context") {
+      reply({ id, sessionId, error: { code: -32602, message: "browser context required" } });
+      continue;
+    }
     reply({ id, sessionId, result: results[method] ?? {} });
     if (method === "Page.navigate") {
       const value = "x" + "\u{1F600}".repeat(300);
