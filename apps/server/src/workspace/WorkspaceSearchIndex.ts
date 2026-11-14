@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - normalize paths without adding services to the search index layer.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
+import * as NodeFSP from "node:fs/promises";
 
 import type {
   DirItem,
@@ -14,6 +15,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as LayerMap from "effect/LayerMap";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import type {
@@ -313,11 +315,26 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
         "-z",
       ],
       cwd,
+      env: { LC_ALL: "C", LANG: "C" },
       allowNonZeroExit: true,
       timeoutMs: 10_000,
       maxOutputBytes: 16 * 1024 * 1024,
     })
     .pipe(
+      Effect.catch((cause) => {
+        if (
+          cause._tag === "VcsProcessSpawnError" &&
+          cause.cause instanceof PlatformError.PlatformError &&
+          cause.cause.reason._tag === "NotFound"
+        ) {
+          return Effect.tryPromise(() => NodeFSP.stat(cwd)).pipe(
+            Effect.map((stat) => (stat.isDirectory() ? null : cause)),
+            Effect.catch(() => Effect.succeed(cause)),
+            Effect.flatMap((error) => (error === null ? Effect.succeed(null) : Effect.fail(error))),
+          );
+        }
+        return Effect.fail(cause);
+      }),
       Effect.mapError(
         (cause) =>
           new WorkspaceSearchIndexCreateFailed({
@@ -327,6 +344,7 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
           }),
       ),
     );
+  if (result === null) return new Set<string>();
   if (result.exitCode !== 0 && /not a git repository/i.test(result.stderr))
     return new Set<string>();
   if (result.exitCode !== 0 || result.stdoutTruncated)

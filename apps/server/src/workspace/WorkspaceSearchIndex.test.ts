@@ -266,3 +266,83 @@ it.effect.each([
       }),
     ).pipe(Effect.provideService(HostProcess.Platform, platform)),
 );
+
+it.effect("searches a plain directory when Git is unavailable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(cwd, "needle.txt"), "found");
+      const actual = yield* VcsProcess.VcsProcess;
+      const unavailable = VcsProcess.VcsProcess.of({
+        run: (input) => actual.run({ ...input, command: "goat-test-missing-git-executable" }),
+      });
+      const index = yield* WorkspaceSearchIndex.make(cwd).pipe(
+        Effect.provideService(VcsProcess.VcsProcess, unavailable),
+      );
+      const result = yield* index.search("needle", 20, "file");
+      expect(result.entries).toContainEqual({ path: "needle.txt", kind: "file" });
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("searches a non-repository independently of the inherited locale", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(cwd, "needle.txt"), "found");
+      const actual = yield* VcsProcess.VcsProcess;
+      const localized = VcsProcess.VcsProcess.of({
+        run: (input) =>
+          actual
+            .run(input)
+            .pipe(
+              Effect.map((result) =>
+                result.exitCode !== 0 && input.env?.LC_ALL !== "C"
+                  ? { ...result, stderr: "fatal: kein Git-Repository" }
+                  : result,
+              ),
+            ),
+      });
+      const index = yield* WorkspaceSearchIndex.make(cwd).pipe(
+        Effect.provideService(VcsProcess.VcsProcess, localized),
+      );
+      const result = yield* index.search("needle", 20, "file");
+      expect(result.entries).toContainEqual({ path: "needle.txt", kind: "file" });
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("surfaces Git enumeration failures in a repository", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const actual = yield* VcsProcess.VcsProcess;
+      yield* actual.run({ operation: "test.gitInit", command: "git", args: ["init"], cwd });
+      const failing = VcsProcess.VcsProcess.of({
+        run: (input) =>
+          input.args.includes("ls-files")
+            ? Effect.succeed({
+                exitCode: 128 as VcsProcess.VcsProcessOutput["exitCode"],
+                stdout: "",
+                stderr: "fatal: index corrupt",
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              })
+            : actual.run(input),
+      });
+      const error = yield* WorkspaceSearchIndex.make(cwd).pipe(
+        Effect.provideService(VcsProcess.VcsProcess, failing),
+        Effect.flip,
+      );
+      expect(error).toMatchObject({
+        _tag: "WorkspaceSearchIndexCreateFailed",
+        reason: "Could not list Git ignored paths.",
+      });
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
