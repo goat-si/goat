@@ -883,8 +883,18 @@ it("a current task's work opens what Home's shared value links, and a child-only
   await toggleWork("Fix the build");
   expect(home()?.textContent).toContain("Patch web");
   expect(home()?.textContent).not.toContain("Patch mobile");
-  // The child-only thread is listed after the linked one.
-  expect(button("Work thread: Fix the build")?.textContent).toBe("Open work thread");
+  // The child-only thread is listed after the linked one, and opens its own thread.
+  const labels = [...container.querySelectorAll("button")].map((item) =>
+    item.getAttribute("aria-label"),
+  );
+  expect(labels.indexOf("GOAT thread: Patch web")).toBeGreaterThanOrEqual(0);
+  expect(labels.indexOf("Work thread: Fix the build")).toBeGreaterThan(
+    labels.indexOf("GOAT thread: Patch web"),
+  );
+  await press("Work thread: Fix the build");
+  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "child-thread" });
+  // Opening a thread closes Home; reopened, the task's work is still shown.
+  await open();
   await press("GOAT thread: Patch web");
   expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "thread-a" });
 });
