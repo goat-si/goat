@@ -1,3 +1,4 @@
+import { isThreadEnvironmentLocked } from "./chat/threadEnvironmentLock";
 import { deriveThreadPendingBackgroundTasks } from "./chat/threadPendingBackgroundTasks";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
@@ -1313,7 +1314,12 @@ export default function ChatView(props: ChatViewProps) {
   // another machine would leave the remembered global agent behind.
   const envLocked =
     isGlobalAgentActive ||
-    Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
+    (Boolean(activeThread) &&
+      isThreadEnvironmentLocked({
+        messageCount: activeMessageCount,
+        hasRuntime: activeRuntime !== null,
+        activeProviderThreadId: serverThread?.activeProviderThreadId ?? null,
+      }));
   // onEnvironmentChange only retargets an unsent draft. envLocked alone does not
   // rule out a started thread: one whose machine is offline never loads its
   // messages, so it would otherwise be offered a machine picker that does nothing.
