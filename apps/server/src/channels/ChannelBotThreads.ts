@@ -44,6 +44,13 @@ import {
   readHistoryPage,
 } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import {
+  makeMarkWarnings,
+  MessageMarkLookup,
+  messageMarkKey,
+  readMessageMark,
+  taskRowUnread,
+} from "./channelTaskMessageMarks.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
@@ -99,6 +106,7 @@ const make = Effect.gen(function* () {
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
+  const warnMark = makeMarkWarnings();
   /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
     owner: ChannelConnectionOwner,
@@ -136,6 +144,18 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
+    const markKeys = encodeJson(tasks.map((task) => messageMarkKey(owner.ownerId, task.taskId)));
+    // Without marks every row keeps the earlier rule: unread from the task's last update.
+    const markRows = yield* (yield* MessageMarkLookup)(markKeys).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catch((error) =>
+        warnMark("lookup:" + owner.ownerId, "channel task message marks unreadable", {
+          ownerId: owner.ownerId,
+          error,
+        }).pipe(Effect.as([])),
+      ),
+    );
+    const marks = new Map(markRows.map((row) => [row.key, row.value_json]));
     const launchLimit = options.launchLimit;
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
     // cannot hide that a task has more launches than the page lists.
@@ -211,6 +231,16 @@ const make = Effect.gen(function* () {
           doneAt: null,
           readThrough: null,
         };
+        const storedMark = marks.get(messageMarkKey(owner.ownerId, task.taskId));
+        const mark = storedMark === undefined ? undefined : readMessageMark(storedMark);
+        if (storedMark !== undefined && mark === undefined)
+          yield* warnMark(
+            task.taskId,
+            "channel task message mark unreadable; using the last update",
+            {
+              taskId: task.taskId,
+            },
+          );
         rows.push({
           kind: "task",
           task: {
@@ -223,8 +253,7 @@ const make = Effect.gen(function* () {
           },
           view,
           lastActivityAt: task.updatedAt,
-          unread:
-            view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
+          unread: taskRowUnread(task.updatedAt, view.readThrough, mark),
           mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
           // A worker on another machine is not a thread this machine's rows can open.
           ...(task.worker === undefined || task.worker.host !== undefined

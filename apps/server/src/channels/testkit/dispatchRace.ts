@@ -7,7 +7,13 @@ import * as Fiber from "effect/Fiber";
 import * as ChannelLedger from "../ChannelLedger.ts";
 import { PlacementStarted } from "../channelDispatchFences.ts";
 
-type HeldMethod = "findIdentity" | "getRemoteWorker" | "isForwardPending" | "getTask";
+type HeldMethod =
+  | "findIdentity"
+  | "getRemoteWorker"
+  | "isForwardPending"
+  | "getTask"
+  | "recordDelivery"
+  | "releaseUnsentDeliveries";
 type Ledger = ChannelLedger.ChannelLedger["Service"];
 type Input<M extends HeldMethod> = Parameters<Ledger[M]>[0];
 type Hold = { reached: Effect.Effect<void>; release: Effect.Effect<boolean> };
@@ -44,6 +50,8 @@ export class LedgerCallHolds extends Context.Service<
         "getRemoteWorker",
         "isForwardPending",
         "getTask",
+        "recordDelivery",
+        "releaseUnsentDeliveries",
       ];
       const originals = { ...observed };
       const releases = new Set<Deferred.Deferred<void>>();
