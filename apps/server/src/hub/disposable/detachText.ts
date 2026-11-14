@@ -146,6 +146,14 @@ export const detachMessage = (
       };
     }
     case "retired":
+      if (detach?.step === "revoke")
+        return {
+          message:
+            name +
+            " did not answer for 24 hours, and GOAT is finishing the removal of its OpenCodex link without it." +
+            operation,
+          nextAction: null,
+        };
       return {
         message:
           name +

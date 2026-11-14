@@ -185,6 +185,19 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       yield* audit(row.attach_id, "hub.machine_detach", "stopped:" + stop);
   });
 
+  /** A changed SSH host key: every step stops until a person forces the detach. */
+  const hostKeyConflict = Effect.fn("DisposableDetach.hostKeyConflict")(function* (
+    row: Row,
+    enroll: Enroll,
+  ) {
+    const saved = yield* note(
+      row,
+      { ...enroll, stop: "host_key_changed" },
+      { conflicts_json: encodeConflicts(["host_key_changed"]) },
+    );
+    if (saved) yield* audit(row.attach_id, "hub.machine_detach", "conflict:host_key_changed");
+  });
+
   /**
    * Marks a purge id GOAT gave up on resolved, so the Home keeps no trail of unknown entries: it
    * holds at most 256 unsettled ones and then refuses every link operation. An entry that is not
@@ -495,13 +508,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     if (answer === "host_key_changed" && before.force === true)
       return yield* note(row, withDetach(enroll, tried));
     if (answer === "host_key_changed")
-      return yield* note(
-        row,
-        { ...withDetach(enroll, tried), stop: "host_key_changed" },
-        {
-          conflicts_json: encodeConflicts(["host_key_changed"]),
-        },
-      );
+      return yield* hostKeyConflict(row, withDetach(enroll, tried));
     yield* note(row, withDetach(enroll, tried));
   });
 
@@ -531,14 +538,7 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       knownHostsFile: pinned.value,
       identityFile: key.value.privateKeyFile,
     });
-    if (reached === "host_key_changed")
-      return yield* note(
-        row,
-        { ...enroll, stop: "host_key_changed" },
-        {
-          conflicts_json: encodeConflicts(["host_key_changed"]),
-        },
-      );
+    if (reached === "host_key_changed") return yield* hostKeyConflict(row, enroll);
     if (reached !== "ok") {
       const health = failed(enroll.health, nowMs);
       if (retires(health, nowMs)) return yield* forceStep(row, { ...enroll, health });
@@ -568,14 +568,20 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
       !(enroll.detach?.force === true && onlyHostKeyConflict(row.conflicts_json))
     )
       return;
-    if (row.state === "linked") return yield* healthStep(row, enroll, status);
+    // A retirement force or a pending removal is finished under its stored id before anything else.
+    const forcing = enroll.detach?.force === true && enroll.detach.step === "revoke";
+    if (row.state === "linked")
+      return forcing && enroll.detach?.stop === undefined
+        ? yield* forceStep(row, enroll)
+        : yield* healthStep(row, enroll, status);
     const detach = enroll.detach;
     // A person's force clears a stop at admission; a stop the force itself met waits for them.
     if (detach?.stop !== undefined) return;
     // Cleaned and out of Pen: nothing is left to detach.
     if (row.state === "returned")
       return row.pen_removed_at === null ? undefined : yield* finish(row, enroll, "purged");
-    if (row.state === "retired") return yield* recoverStep(row, enroll);
+    if (row.state === "retired")
+      return forcing ? yield* forceStep(row, enroll) : yield* recoverStep(row, enroll);
     if (row.state !== "detaching") return;
     switch (detach?.step) {
       case "settle":

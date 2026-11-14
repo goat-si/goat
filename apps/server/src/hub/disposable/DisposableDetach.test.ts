@@ -697,3 +697,30 @@ it.effect("a released record is kept past 30 days while Pen's list cannot show i
     }),
   ),
 );
+
+it.effect(
+  "a retirement force whose answer was lost is read back before the machine counts as linked again",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId, nodeId, linkId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "unreachable");
+        ocx.machineAnswers = false;
+        yield* detachPass;
+        for (let check = 0; check < 47; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        ocx.loseRead = 1;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass; // the force commits, its answer is lost
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+        host.control.reachAnswers.delete(nodeId);
+        ocx.machineAnswers = true;
+        yield* TestClock.adjust(HOUR / 2);
+        yield* detachPass;
+        expect((yield* listed(attachId))?.state).not.toBe("linked");
+      }),
+    ),
+);
