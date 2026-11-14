@@ -75,6 +75,9 @@ export const fakePen = () => {
     staleMembersOnce: undefined as Set<string> | undefined,
     /** Pen's member list cannot be read. */
     membersUnreadable: false,
+    /** Awaited by the next member-list read after membersStarted completes, so a test can hold it. */
+    membersGate: undefined as Deferred.Deferred<void> | undefined,
+    membersStarted: undefined as Deferred.Deferred<void> | undefined,
     /** Awaited before the mint touches the book, so a test can hold or interrupt it. */
     mintGate: undefined as Deferred.Deferred<void> | undefined,
     mintStarted: undefined as Deferred.Deferred<void> | undefined,
@@ -117,8 +120,13 @@ export const fakePen = () => {
       control.featuresAsked += 1;
       return control.features;
     }),
-    members: Effect.sync(() => {
+    members: Effect.gen(function* () {
       control.membersAsked += 1;
+      const { membersGate: gate, membersStarted: started } = control;
+      control.membersGate = undefined;
+      control.membersStarted = undefined;
+      if (started) yield* Deferred.succeed(started, undefined);
+      if (gate) yield* Deferred.await(gate);
       if (control.membersUnreadable) return undefined;
       const stale = control.staleMembersOnce;
       control.staleMembersOnce = undefined;

@@ -7,15 +7,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Attach from "./DisposableAttach.ts";
-import {
-  attach,
-  key,
-  listed,
-  reconcile,
-  rows,
-  switchTo,
-  world,
-} from "./DisposableAttach.testkit.ts";
+import { attach, key, listed, reconcile, switchTo, world } from "./DisposableAttach.testkit.ts";
 import { makeDetach } from "./DisposableDetach.ts";
 import { makeHold } from "./DisposableEnroll.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
@@ -24,37 +16,15 @@ import { decodeEnroll, encodeEnroll } from "./enrollModel.ts";
 import { withPersonConsent } from "./disposableSwitch.ts";
 import * as Settings from "../../serverSettings.ts";
 
-const HOUR = 60 * 60 * 1000;
-const THREAD: Attach.AttachCaller = {
-  provisioner: { kind: "thread", threadId: "thread-provisioner" },
-};
-const PERSON: Attach.AttachCaller = { provisioner: { kind: "person", sessionId: "s-1" } };
-const detachPass = Effect.flatMap(Attach.DisposableAttach, (service) => service.detachPass);
-const detach = (caller: Attach.AttachCaller, attachId: string, request: string, force?: boolean) =>
-  Effect.flatMap(Attach.DisposableAttach, (service) =>
-    service.detach(caller, caller.provisioner.kind + ":x", {
-      attachId,
-      clientRequestId: request,
-      ...(force === undefined ? {} : { force }),
-    }),
-  );
-
-/** Machine n joined and linked as an exclusive lightweight Child. */
-const linked = (
-  pen: Parameters<Parameters<typeof world>[0]>[0],
-  home: Parameters<Parameters<typeof world>[0]>[1],
-  host: Parameters<Parameters<typeof world>[0]>[3],
-  n: number,
-) =>
-  Effect.gen(function* () {
-    withIdentity(home);
-    const joinedMachine = yield* joined(pen, host, n);
-    for (let pass = 0; pass < 4; pass += 1) yield* enroll;
-    const machine = yield* listed(joinedMachine.attachId);
-    expect(machine?.state).toBe("linked");
-    const row = (yield* rows).find((one) => one.attach_id === joinedMachine.attachId);
-    return { ...joinedMachine, linkId: String(row?.link_id) };
-  });
+import {
+  detach,
+  detachPass,
+  HOUR,
+  linked,
+  PERSON,
+  release,
+  THREAD,
+} from "./DisposableDetach.flow.testkit.ts";
 
 it.effect(
   "the provisioner detaches a linked machine: one journalled purge, the record ends purged and its key keeps its slot while in Pen",
@@ -308,11 +278,6 @@ it.effect(
     ),
 );
 
-const release = (caller: Attach.AttachCaller, attachId: string, request: string) =>
-  Effect.flatMap(Attach.DisposableAttach, (service) =>
-    service.release(caller, caller.provisioner.kind + ":x", { attachId, clientRequestId: request }),
-  );
-
 it.effect(
   "an invite used without a saved admit holds its slot until a person releases it, and the text names pen revoke",
   () =>
@@ -340,37 +305,6 @@ it.effect(
         expect(released.state).toBe("failed");
         expect(released.message).toContain("pen revoke");
         expect((yield* attach(3)).state).toBe("invited");
-      }),
-    ),
-);
-
-it.effect(
-  "a final record whose key left Pen is pruned with its request keys 30 days after it ended; one still in Pen stays",
-  () =>
-    world((pen, home, _grant, host) =>
-      Effect.gen(function* () {
-        fakeDetachHome(host);
-        const gone = yield* linked(pen, home, host, 1);
-        const kept = yield* linked(pen, home, host, 2);
-        yield* detach(THREAD, gone.attachId, "d-1");
-        yield* detach(THREAD, kept.attachId, "d-2");
-        yield* detachPass;
-        pen.members.delete(key(1));
-        yield* reconcile;
-        expect(yield* listed(gone.attachId)).toMatchObject({ state: "purged", penMember: false });
-        const requests = Effect.flatMap(
-          SqlClient.SqlClient,
-          (sql) =>
-            sql<{ readonly attach_id: string }>`SELECT attach_id FROM disposable_machine_requests`,
-        );
-        yield* TestClock.adjust(29 * 24 * HOUR);
-        yield* detachPass;
-        expect(yield* listed(gone.attachId)).toBeDefined();
-        yield* TestClock.adjust(2 * 24 * HOUR);
-        yield* detachPass;
-        expect(yield* listed(gone.attachId)).toBeUndefined();
-        expect((yield* requests).map((row) => row.attach_id)).not.toContain(gone.attachId);
-        expect((yield* listed(kept.attachId))?.state).toBe("purged");
       }),
     ),
 );
@@ -678,26 +612,6 @@ it.effect(
         expect((yield* attach(3).pipe(Effect.flip)).reason).toBe("cap_reached");
       }),
     ),
-);
-
-it.effect("a released record is kept past 30 days while Pen's list cannot show its key gone", () =>
-  world((pen, _home, _grant, _host) =>
-    Effect.gen(function* () {
-      const first = yield* attach(1);
-      pen.control.join(first.attachId + ".1", false);
-      yield* reconcile;
-      yield* TestClock.adjust(11 * 60 * 1000);
-      yield* release(PERSON, first.attachId, "r-1");
-      // The machine joins after all, and the record ages past the retention.
-      pen.members.add(key(1));
-      yield* TestClock.adjust(31 * 24 * HOUR);
-      yield* detachPass;
-      expect(yield* listed(first.attachId)).toBeDefined();
-      pen.members.delete(key(1));
-      yield* detachPass;
-      expect(yield* listed(first.attachId)).toBeUndefined();
-    }),
-  ),
 );
 
 it.effect(
