@@ -35,8 +35,8 @@ export const Health = Schema.Struct({
 export type Health = typeof Health.Type;
 
 export const CHECK_EVERY_MS = 30 * 60 * 1000;
-export const RETIRE_FAILURES = 48;
-export const RETIRE_SPAN_MS = 24 * 60 * 60 * 1000;
+const RETIRE_FAILURES = 48;
+const RETIRE_SPAN_MS = 24 * 60 * 60 * 1000;
 export const REVOKE_SENDS = 3;
 
 /** Whether 48 failed handshakes over at least 24 hours retire the machine. */
