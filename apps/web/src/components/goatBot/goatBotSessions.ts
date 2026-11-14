@@ -131,9 +131,9 @@ export function goatBotMainAvailability(input: MainAvailabilityInput): GoatBotAv
 
 /**
  * The computer whose bot Home governs Threads: its Home is openable, or will be once its chat
- * confirms the bot. An ensure not started or in flight counts as confirmed; what already keeps
- * the Home button disabled does not (a check before the ensure, an ensure that cannot start,
- * or one settled failed or legacy_active).
+ * confirms the bot. Everything before the ensure is checked in every state, including the Home
+ * read-back and a held not_home refusal; only then does an ensure not started, in flight or
+ * confirmed pass. Failed and legacy_active do not.
  */
 export function goatBotGoverningEnvironmentId(input: MainAvailabilityInput): EnvironmentId | null {
   const { port, environments, botRef, session } = input;
@@ -143,13 +143,13 @@ export function goatBotGoverningEnvironmentId(input: MainAvailabilityInput): Env
   const before = resolveGoatBotAvailabilityBeforeEnsure({ environments, botRef });
   if (before.kind !== "ensure") return null;
   const homeKey = goatBotHomeKey(home);
+  if (
+    !goatBotHomeReady(home) ||
+    goatBotNotHomeHolds(session, homeKey, environment?.settingsSnapshot ?? null)
+  )
+    return null;
   const ensure = recordedEnsure(input, homeKey, environment);
-  if (ensure.state === "pending") return before.environmentId;
-  if (ensure.state === "idle")
-    return goatBotHomeReady(home) &&
-      !goatBotNotHomeHolds(session, homeKey, environment?.settingsSnapshot ?? null)
-      ? before.environmentId
-      : null;
+  if (ensure.state === "idle" || ensure.state === "pending") return before.environmentId;
   return resolveGoatBotAvailability({ environments, botRef, ensure }).kind === "ready"
     ? before.environmentId
     : null;
