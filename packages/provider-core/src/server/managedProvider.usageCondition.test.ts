@@ -135,4 +135,52 @@ describe("makeManagedServerProvider usage conditions", () => {
         }),
       ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
+
+  it.effect("a report its condition rejects sets no plan and clears no probe failure", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failedLimits = {
+          checkedAt: "2026-04-10T00:00:01.000Z",
+          windows: [],
+          unavailable: { reason: "probeFailed", message: "Usage probe timed out." },
+        } as const;
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Effect.succeed({ ...refreshedSnapshot, usageLimits: failedLimits }),
+          refreshOnInterval: false,
+        });
+        const shown = yield* provider.refresh;
+        const session = {
+          id: "five_hour",
+          kind: "session",
+          label: "Session",
+          usedPercent: 40,
+        } as const;
+        yield* provider.applyUsageLimits(
+          {
+            checkedAt: "2026-04-10T00:00:02.000Z",
+            windows: [session],
+            complete: true,
+            authLabel: "tier-2",
+          },
+          { appliesTo: () => false },
+        );
+        assert.strictEqual(yield* provider.getSnapshot, shown);
+        // A later sparse report still meets the probe failure, and the next check names no plan.
+        yield* provider.applyUsageLimits({
+          checkedAt: "2026-04-10T00:00:03.000Z",
+          windows: [session],
+        });
+        assert.deepStrictEqual(
+          (yield* provider.getSnapshot).usageLimits?.unavailable,
+          failedLimits.unavailable,
+        );
+        assert.strictEqual((yield* provider.refresh).auth.label, undefined);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
 });
