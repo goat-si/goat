@@ -9,6 +9,7 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -140,6 +141,34 @@ const create = (config: Partial<PiSettings> = {}, enabled = true) =>
   });
 
 it.layer(layerTest)("PiDriver workspace discovery", (it) => {
+  it.effect("maintenance follows PATH changes and caches unchanged paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const oldDir = `${root}/old`;
+      const newDir = `${root}/new`;
+      for (const dir of [oldDir, newDir]) {
+        yield* fs.makeDirectory(dir);
+        yield* fs.writeFileString(`${dir}/custom-pi`, "#!/bin/sh\n");
+        yield* fs.chmod(`${dir}/custom-pi`, 0o755);
+      }
+      const host = { PATH: oldDir, HOME: root };
+      const instance = yield* create().pipe(Effect.provideService(HostProcess.Environment, host));
+      const first = yield* instance.snapshot.resolveMaintenance();
+      assert.strictEqual(first.update?.executable, `${oldDir}/custom-pi`);
+      yield* fs.remove(`${oldDir}/custom-pi`);
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        first.update?.executable,
+      );
+      host.PATH = newDir;
+      assert.strictEqual(
+        (yield* instance.snapshot.resolveMaintenance()).update?.executable,
+        `${newDir}/custom-pi`,
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "regression #3079: Pi and OmO probes use the current host PATH and respect instance PATH",
     () =>
