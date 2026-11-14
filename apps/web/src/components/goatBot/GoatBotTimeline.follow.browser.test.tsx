@@ -846,6 +846,20 @@ it("consumes replies exposed during synchronization and announces only the newes
   );
 });
 
+it("announces a synchronized reply even if filtering removes the last timeline row", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("sync-last");
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(<SpeechChat shown={[fresh]} source={[fresh]} />);
+  expect(status?.textContent).toBe("");
+  await screen.rerender(<SpeechChat shown={[]} source={[fresh]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={[]} source={[fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+});
+
 it("announces exposure while following and never revives its cue after scrolling up", async () => {
   projection.statuses = { speech: "live" };
   const fresh = reply("following-reply");
