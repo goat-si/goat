@@ -1,18 +1,18 @@
 import type { ServerProviderDraft } from "@goat/provider-core/server/snapshotProbe";
 
 /**
- * A check under another home than the published snapshot's must not carry that home's limits
- * forward: a failed read would keep them, and windows a session reported meanwhile would look newer
- * than this read. Same home: unchanged.
+ * The limits a check may publish. Same home as the published snapshot: unchanged. Another home: a
+ * failed read is dropped (it would keep that home's limits) and a successful one is dated now
+ * (windows that home's sessions reported would look newer). A home that moved during the check:
+ * nothing, since GOAT cannot tell which home the read came from.
  */
 export const withoutOtherHomeUsage = (
   status: ServerProviderDraft,
-  homeChanged: boolean,
+  home: "same" | "other" | "unknown",
   now: string,
 ): ServerProviderDraft => {
-  if (!homeChanged || status.usageLimits === undefined) return status;
+  if (home === "same" || status.usageLimits === undefined) return status;
   const { usageLimits, ...rest } = status;
-  return usageLimits.unavailable?.reason === "probeFailed"
-    ? rest
-    : { ...rest, usageLimits: { ...usageLimits, checkedAt: now } };
+  if (home === "unknown" || usageLimits.unavailable?.reason === "probeFailed") return rest;
+  return { ...rest, usageLimits: { ...usageLimits, checkedAt: now } };
 };

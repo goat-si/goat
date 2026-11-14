@@ -21,12 +21,15 @@ const publishedA = makeUsageLimits({
 });
 
 /** What the shared provider publishes after a check whose read was `probed`. */
-const committed = (probed: ReturnType<typeof makeUsageLimits>, homeChanged: boolean) =>
+const committed = (
+  probed: ReturnType<typeof makeUsageLimits>,
+  home: "same" | "other" | "unknown",
+) =>
   resolveUsageLimitsAfterProbe({
     published: publishedA,
     probed: withoutOtherHomeUsage(
       { usageLimits: probed } as ServerProviderDraft,
-      homeChanged,
+      home,
       "2033-01-01T00:00:06.000Z",
     ).usageLimits,
   });
@@ -37,13 +40,18 @@ describe("withoutOtherHomeUsage", () => {
       checkedAt: "2033-01-01T00:00:01.000Z",
       reason: "probeFailed",
     });
-    expect(committed(failed, true)).toBeUndefined();
-    expect(committed(failed, false)).toBe(publishedA);
+    expect(committed(failed, "other")).toBeUndefined();
+    expect(committed(failed, "same")).toBe(publishedA);
   });
 
   it("a read under a new home shows its windows even when the previous home's look newer", () => {
     const readB = makeUsageLimits({ checkedAt: "2033-01-01T00:00:01.000Z", windows: [window(20)] });
-    expect(committed(readB, true)?.windows.map((entry) => entry.usedPercent)).toEqual([20]);
-    expect(committed(readB, false)?.windows.map((entry) => entry.usedPercent)).toEqual([80]);
+    expect(committed(readB, "other")?.windows.map((entry) => entry.usedPercent)).toEqual([20]);
+    expect(committed(readB, "same")?.windows.map((entry) => entry.usedPercent)).toEqual([80]);
+  });
+
+  it("a read whose home moved while it ran publishes no limits of either home", () => {
+    const read = makeUsageLimits({ checkedAt: "2033-01-01T00:00:07.000Z", windows: [window(30)] });
+    expect(committed(read, "unknown")).toBeUndefined();
   });
 });

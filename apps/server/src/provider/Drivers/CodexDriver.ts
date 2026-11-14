@@ -395,7 +395,9 @@ export const CodexDriver: ProviderDriver<
     );
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
-    // manifest, so a slow or hung fetch never delays the provider check.
+    // manifest, so a slow or hung fetch never delays the provider check. Each check's checkedAt
+    // is moved past the previous one so it names that check's snapshot alone.
+    let lastCheckAt = 0;
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
@@ -411,10 +413,16 @@ export const CodexDriver: ProviderDriver<
                 ).pipe(provideHomeRoute);
                 const identity = before === (yield* homeIdentity(home)) ? before : UNESTABLISHED;
                 const shown = yield* publishedHome;
-                rememberCheckHome(status.checkedAt, identity);
+                lastCheckAt = Math.max(Date.parse(status.checkedAt), lastCheckAt + 1);
+                const checkedAt = DateTime.formatIso(DateTime.makeUnsafe(lastCheckAt));
+                rememberCheckHome(checkedAt, identity);
                 return withoutOtherHomeUsage(
-                  status,
-                  shown !== undefined && shown !== identity,
+                  { ...status, checkedAt },
+                  identity === UNESTABLISHED
+                    ? "unknown"
+                    : shown !== undefined && shown !== identity
+                      ? "other"
+                      : "same",
                   DateTime.formatIso(yield* DateTime.now),
                 );
               }),
@@ -422,7 +430,6 @@ export const CodexDriver: ProviderDriver<
           ),
           currentCatalog,
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
-          { concurrent: true },
         ),
       ),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
