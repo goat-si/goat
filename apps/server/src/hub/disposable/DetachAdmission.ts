@@ -79,8 +79,9 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
     principal: string,
     input: HubMachineDetachInput,
   ) {
-    // Keyed by operation: an attach's clientRequestId reused for its detach starts the detach.
-    const requestKey = digest(principal + "\ndetach\n" + input.clientRequestId);
+    // The operation comes first: no principal is a bare word, so no attach or reissue key, which is
+    // principal, newline, id, can equal it whatever its id holds.
+    const requestKey = digest("detach\n" + principal + "\n" + input.clientRequestId);
     const person = caller.provisioner.kind === "person";
     return yield* exclusive(
       Effect.gen(function* () {
@@ -209,7 +210,7 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
         "person_required",
         "Only a person releases an attach whose outcome Pen cannot tell.",
       );
-    const requestKey = digest(principal + "\nrelease\n" + input.clientRequestId);
+    const requestKey = digest("release\n" + principal + "\n" + input.clientRequestId);
     return yield* exclusive(
       Effect.gen(function* () {
         const row = yield* read(input.attachId).pipe(Effect.mapError(storageFailed));
