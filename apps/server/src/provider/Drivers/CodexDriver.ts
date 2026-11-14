@@ -5,8 +5,10 @@ import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@goat/co
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as FiberHandle from "effect/FiberHandle";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -309,8 +311,7 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        onUsageLimits: (update, scope) =>
-          snapshot.applyUsageLimits(update, pinnedHome === undefined ? scope : undefined),
+        onUsageLimits: (update) => snapshot.applyUsageLimits(update),
         // New sessions read the same environment the status check uses.
         currentEnvironment,
         // The snapshot is built after the adapter, from its own catalog probe.
@@ -339,18 +340,25 @@ export const CodexDriver: ProviderDriver<
 
     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
     // manifest, so a slow or hung fetch never delays the provider check.
-    const probeHomes = new WeakMap<ServerProvider, string>();
+    // The host home the last finished status check ran under; unused when the instance pins a home.
+    let checkedHome: string | undefined;
     const checkProvider = modelCatalog.refreshInBackground.pipe(
-      Effect.andThen(currentEnvironment),
-      Effect.flatMap((env) =>
+      Effect.andThen(
         Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(provideHomeRoute),
+          currentEnvironment.pipe(
+            Effect.flatMap((env) =>
+              checkCodexProviderStatus(effectiveConfig, undefined, env).pipe(
+                provideHomeRoute,
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    checkedHome = env.CODEX_HOME ?? "";
+                  }),
+                ),
+              ),
+            ),
+          ),
           currentCatalog,
-          (draft, catalog) => {
-            const result = stampIdentity(applyCodexModelCatalog(draft, catalog));
-            probeHomes.set(result, env.CODEX_HOME ?? "");
-            return result;
-          },
+          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
           { concurrent: true },
         ),
       ),
@@ -371,12 +379,6 @@ export const CodexDriver: ProviderDriver<
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
         ),
       checkProvider,
-      ...(pinnedHome === undefined
-        ? {
-            probeScope: (draft: ServerProvider) => probeHomes.get(draft),
-            currentScope: Effect.sync(() => baseEnvironment.CODEX_HOME ?? ""),
-          }
-        : {}),
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>
@@ -399,10 +401,35 @@ export const CodexDriver: ProviderDriver<
           }),
       ),
     );
+    const homeRefresh = yield* FiberHandle.make();
+    const reconcileHome = Effect.fn("CodexDriver.reconcileHome")(function* (value: ServerProvider) {
+      if (pinnedHome !== undefined) return value;
+      // Without a pinned home the merged CODEX_HOME is the host's, so one string read suffices.
+      const home = baseEnvironment.CODEX_HOME ?? "";
+      if (checkedHome === home || (checkedHome === undefined && value.auth.status === "unknown"))
+        return value;
+      yield* FiberHandle.run(homeRefresh, snapshot.refresh.pipe(Effect.asVoid), {
+        onlyIfMissing: true,
+        startImmediately: false,
+      });
+      return {
+        ...value,
+        auth: { status: "unknown" as const },
+        status: "warning" as const,
+        message: "Checking Codex authentication for the current home.",
+        usageLimits: undefined,
+      };
+    });
+    const guardedSnapshot = {
+      ...snapshot,
+      getSnapshot: snapshot.getSnapshot.pipe(Effect.flatMap(reconcileHome)),
+      refresh: snapshot.refresh.pipe(Effect.flatMap(reconcileHome)),
+      streamChanges: snapshot.streamChanges.pipe(Stream.mapEffect(reconcileHome)),
+    };
     const textGeneration = yield* makeCodexTextGeneration(
       effectiveConfig,
       undefined,
-      snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
+      guardedSnapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       undefined,
       {
         providerInstanceId: instanceId,
@@ -412,9 +439,9 @@ export const CodexDriver: ProviderDriver<
     );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
-        ? snapshot.getSnapshot
+        ? guardedSnapshot.getSnapshot
         : Effect.all([
-            snapshot.getSnapshot,
+            guardedSnapshot.getSnapshot,
             Effect.gen(function* () {
               const processEnv = yield* currentEnvironment;
               const route = yield* HomeRoute.resolveCodexRouteContext({
@@ -533,7 +560,7 @@ export const CodexDriver: ProviderDriver<
       displayName,
       accentColor,
       enabled,
-      snapshot,
+      snapshot: guardedSnapshot,
       snapshotForCwd,
       ...(config.modelRoute === "opencodex" ? {} : { consumeResetCredit }),
       orchestrationAdapter,
