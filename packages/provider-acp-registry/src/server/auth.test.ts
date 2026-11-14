@@ -252,6 +252,26 @@ it.effect("regression #3079: ACP authentication discovers and launches with the 
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("rediscovers sign-in methods when the environment changes without a version change", () =>
+  Effect.gen(function* () {
+    const host = { PATH: "/first", HOME: "/profile/one" };
+    const h = yield* makeHarness(
+      browserMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+    );
+    assert.strictEqual(h.runtimes(), 1);
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.runtimes(), 1);
+    host.HOME = "/profile/two";
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.runtimes(), 2);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("keeps local credentials separate from a matching registry agent ID", () =>
   Effect.gen(function* () {
     const registry = yield* makeHarness(browserMethod);

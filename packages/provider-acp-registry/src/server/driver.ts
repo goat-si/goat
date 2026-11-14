@@ -56,6 +56,7 @@ import {
   setAcpRegistryProvider,
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
+import { probeFingerprint } from "./probeFingerprint.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
@@ -592,24 +593,23 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap(withLiveRuntimeState),
     );
-    const enrichProvider = currentEnvironment.pipe(
-      Effect.flatMap((environment) =>
-        checkAcpRegistryProviderStatus(
-          {
-            ...readinessInput(environment),
-            cwd: host.paths.cwd,
-          },
-          probeAcpRegistryConfiguration,
-        ),
-      ),
-      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(Crypto.Crypto, crypto),
-    );
+    const enrichProvider = (environment: NodeJS.ProcessEnv) =>
+      checkAcpRegistryProviderStatus(
+        {
+          ...readinessInput(environment),
+          cwd: host.paths.cwd,
+        },
+        probeAcpRegistryConfiguration,
+      ).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(Crypto.Crypto, crypto),
+      );
     const enrichmentCache = yield* Ref.make<{
       readonly generation: number;
       readonly entry: {
         readonly provider: ServerProvider;
+        readonly key: string;
         readonly expiresAt: number;
       } | null;
     }>({ generation: 0, entry: null });
@@ -622,10 +622,23 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       baseSnapshot: ServerProvider,
     ) {
       const now = yield* Clock.currentTimeMillis;
+      const environment = yield* currentEnvironment;
+      const resolved = yield* Effect.result(
+        catalog.resolve(effectiveConfig, host.paths.cwd, providerProbeEnvironment(environment), {
+          allowInstall: false,
+        }),
+      );
+      const key = Result.isFailure(resolved)
+        ? null
+        : yield* probeFingerprint(environment, resolved.success.spawn).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+          );
       const cacheState = yield* Ref.get(enrichmentCache);
       const cached = cacheState.entry;
       if (
         cached !== null &&
+        key !== null &&
+        cached.key === key &&
         cached.expiresAt > now &&
         cached.provider.version === baseSnapshot.version
       ) {
@@ -634,14 +647,15 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           generation: cacheState.generation,
         };
       }
-      const enriched = yield* enrichProvider;
-      if (enriched.status === "ready") {
+      const enriched = yield* enrichProvider(environment);
+      if (enriched.status === "ready" && key !== null) {
         yield* Ref.update(enrichmentCache, (current) =>
           current.generation === cacheState.generation
             ? {
                 ...current,
                 entry: {
                   provider: enriched,
+                  key,
                   expiresAt: now + PROBE_SUCCESS_TTL_MS,
                 },
               }

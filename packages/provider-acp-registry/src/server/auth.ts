@@ -22,6 +22,7 @@ import * as ProviderAuthFlow from "@goat/provider-core/server/providerAuthFlow";
 import { runProviderLoginTerminal } from "@goat/provider-core/server/providerLoginTerminal";
 import { normalizeAcpRegistryAuthMethods, normalizeAcpRegistryWebUrl } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
+import { probeFingerprint } from "./probeFingerprint.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 
@@ -115,7 +116,11 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       ));
 
   let knownMethods:
-    | { readonly version: string | null; readonly methods: ReadonlyArray<ProviderAuthMethod> }
+    | {
+        readonly version: string;
+        readonly key: string;
+        readonly methods: ReadonlyArray<ProviderAuthMethod>;
+      }
     | undefined;
   const discoverMethods = Effect.scoped(
     Effect.gen(function* () {
@@ -129,10 +134,16 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
         );
       if (inspected.status !== "ready")
         return yield* failure("methods", "Prepare this ACP agent before signing in.");
-      // Path overrides can change in place; cache discovery only for registry versions.
-      if (inspected.version !== null && knownMethods?.version === inspected.version)
-        return knownMethods.methods;
       const resolved = yield* resolve(environment);
+      const key = yield* probeFingerprint(environment, resolved.spawn).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+      );
+      if (
+        inspected.version !== null &&
+        knownMethods?.version === inspected.version &&
+        knownMethods.key === key
+      )
+        return knownMethods.methods;
       const runtime = yield* makeRuntime(resolved.spawn);
       const initialized = yield* runtime
         .initialize()
@@ -152,7 +163,8 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
           description: method.description,
           type: method.type === "env_var" ? ("credentials" as const) : method.type,
         }));
-      knownMethods = { version: inspected.version, methods: advertised };
+      if (inspected.version !== null)
+        knownMethods = { version: inspected.version, key, methods: advertised };
       return advertised;
     }),
   ).pipe(
