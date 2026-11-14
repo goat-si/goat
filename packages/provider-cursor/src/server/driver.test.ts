@@ -304,6 +304,70 @@ it.layer(layerTest)("CursorDriver", (it) => {
   );
 
   it.effect(
+    "regression #3079: verifies browser credentials at their issuer when the backend changes during login",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const resume = Promise.withResolvers<void>();
+        const login = vi.spyOn(Cursor.auth, "login").mockImplementation(async (options) => {
+          options?.onLoginUrl?.("https://cursor.com/loginDeepControl?challenge=test-only");
+          Deferred.doneUnsafe(entered, Effect.void);
+          await resume.promise;
+          await options?.store?.save({
+            version: 1,
+            backendUrl: "https://api2.cursor.sh",
+            apiKey: "invalid-browser",
+            createdAtMs: 0,
+            apiKeyExpiresAtMs: 4_000_000_000_000,
+          });
+          return { apiKey: "invalid-browser", apiKeyExpiresAtMs: 4_000_000_000_000 };
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => login.mockRestore()));
+        const authorizations: Array<string | undefined> = [];
+        const verificationUrls: string[] = [];
+        const client = HttpClient.make((request) => {
+          authorizations.push(request.headers.authorization);
+          if (request.headers.authorization === "Bearer invalid-browser")
+            verificationUrls.push(request.url);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                request.url.endsWith("/v1/me")
+                  ? { apiKeyName: "test", createdAt: "2026-01-01" }
+                  : { items: [] },
+                { status: 200 },
+              ),
+            ),
+          );
+        });
+        const host: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+        const instance = yield* CursorDriver.create({
+          instanceId: ProviderInstanceId.make("cursor-browser-race"),
+          displayName: undefined,
+          enabled: true,
+          environment: [],
+          config: CursorDriver.defaultConfig(),
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+        yield* instance.auth!.start("client");
+        yield* Deferred.await(entered);
+        host.CURSOR_BACKEND_URL = "https://other.invalid";
+        resume.resolve();
+        const state = yield* instance.auth!.subscribe("client").pipe(
+          Stream.filter((state) => state.phase === "succeeded" || state.phase === "failed"),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(authorizations).toContain("Bearer invalid-browser");
+        expect(verificationUrls).toEqual(["https://api2.cursor.sh/v1/me"]);
+        expect(state.phase).toBe("failed");
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
     "persists browser credentials, uses them for chat, and closes the SDK session on logout",
     () =>
       Effect.gen(function* () {

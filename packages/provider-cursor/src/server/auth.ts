@@ -55,7 +55,7 @@ export interface CursorAuthOptions {
   readonly currentApiKey?: Effect.Effect<string | undefined>;
   readonly store: SdkCredentialStore;
   readonly credentialBinding?: NonNullable<ProviderAuthController["credentialBinding"]>;
-  readonly verifyKey: (key: string) => Effect.Effect<void, ProviderSetupError>;
+  readonly verifyKey: (key: string, backendUrl: string) => Effect.Effect<void, ProviderSetupError>;
   readonly onChanged: (signedIn: boolean) => Effect.Effect<void, ProviderSetupError>;
   readonly login?: (options: SdkLoginOptions) => Promise<SdkLoginResult>;
 }
@@ -264,7 +264,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 cause,
               }),
           });
-          yield* options.verifyKey(credentials.apiKey);
+          yield* options.verifyKey(credentials.apiKey, credentials.backendUrl);
           yield* Effect.tryPromise({
             try: () => options.store.save(credentials),
             catch: (cause) =>

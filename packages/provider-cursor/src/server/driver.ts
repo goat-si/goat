@@ -143,36 +143,48 @@ export const CursorDriver: ProviderDriver<
       ...(processEnv.CURSOR_API_KEY ? { apiKey: processEnv.CURSOR_API_KEY } : {}),
       currentApiKey: currentEnvironment.pipe(Effect.map((env) => env.CURSOR_API_KEY)),
       store: credentials.store,
-      verifyKey: (key) =>
-        currentEnvironment.pipe(
-          Effect.flatMap((env) =>
-            httpClient.execute(
-              HttpClientRequest.get(
-                `${(env.CURSOR_BACKEND_URL || "https://api.cursor.com").replace(/\/$/, "")}/v1/me`,
-              ).pipe(HttpClientRequest.bearerToken(key)),
+      verifyKey: (key, backendUrl) =>
+        httpClient
+          .execute(
+            HttpClientRequest.get(`${backendUrl.replace(/\/+$/, "")}/v1/me`).pipe(
+              HttpClientRequest.bearerToken(key),
+            ),
+          )
+          .pipe(
+            Effect.flatMap((response) =>
+              response.status >= 200 && response.status < 300
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "start",
+                      detail: "Could not verify the Cursor browser sign-in. Try again.",
+                    }),
+                  ),
+            ),
+            Effect.mapError(
+              (cause) =>
+                new ProviderSetupError({
+                  instanceId,
+                  operation: "start",
+                  detail: "Could not verify the Cursor browser sign-in. Try again.",
+                  cause,
+                }),
+            ),
+            Effect.andThen(currentEnvironment),
+            Effect.flatMap((env) =>
+              (env.CURSOR_BACKEND_URL || "https://api2.cursor.sh").replace(/\/+$/, "") ===
+              backendUrl.replace(/\/+$/, "")
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "start",
+                      detail: "Cursor backend changed during sign-in. Start sign-in again.",
+                    }),
+                  ),
             ),
           ),
-          Effect.flatMap((response) =>
-            response.status >= 200 && response.status < 300
-              ? Effect.void
-              : Effect.fail(
-                  new ProviderSetupError({
-                    instanceId,
-                    operation: "start",
-                    detail: "Could not verify the Cursor browser sign-in. Try again.",
-                  }),
-                ),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new ProviderSetupError({
-                instanceId,
-                operation: "start",
-                detail: "Could not verify the Cursor browser sign-in. Try again.",
-                cause,
-              }),
-          ),
-        ),
       credentialBinding: credentials.binding,
       onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
         snapshot.refresh.pipe(
