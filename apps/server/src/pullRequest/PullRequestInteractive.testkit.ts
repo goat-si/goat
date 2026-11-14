@@ -6,7 +6,7 @@ import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSource
 import * as Effect from "effect/Effect";
 import { project, hostedChangeRequest } from "./pullRequestTestFixtures.ts";
 
-export function registerInteractiveRateLimitTest(
+function registerInteractiveRateLimitTest(
   makeService: typeof import("./PullRequestService.test.ts").makeService,
 ) {
   it.effect(
@@ -75,7 +75,7 @@ export function registerInteractiveRateLimitTest(
   );
 }
 
-export function registerFinishedTurnListingTest(
+function registerFinishedTurnListingTest(
   makeService: typeof import("./PullRequestService.test.ts").makeService,
 ) {
   it.effect("a finished turn leaves another project's cached listing in place", () =>

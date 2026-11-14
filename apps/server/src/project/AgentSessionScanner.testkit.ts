@@ -17,7 +17,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
-export const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
+const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
   title: "Imported",
   workspaceRoot,
@@ -27,7 +27,7 @@ export const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShe
   updatedAt: "2026-01-01T00:00:00.000Z",
 });
 
-export const layerProjectStore = (importedWorkspaceRoots: ReadonlyArray<string>) =>
+const layerProjectStore = (importedWorkspaceRoots: ReadonlyArray<string>) =>
   Layer.mock(ProjectStore.ProjectStoreV2)({
     listShells: () =>
       Effect.succeed(
