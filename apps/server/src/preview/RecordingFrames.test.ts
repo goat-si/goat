@@ -94,3 +94,29 @@ it("finishes and cleans up when acknowledgements never settle", async () => {
   expect(stop).toHaveBeenCalledOnce();
   expect(cleanup).toHaveBeenCalledOnce();
 });
+
+it("gives up on a few acknowledgements that never settle a second after finishing starts", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const stop = vi.fn(async () => {});
+    const frames = makeRecordingFrames({
+      acknowledge: () => new Promise<never>(() => {}),
+      encode: async () => true,
+      stop,
+      isPrivate: () => false,
+    });
+    frames.offer({ data: "frame", width: 100, sessionId: 0 });
+    let outcome: unknown = null;
+    const finished = frames.finish().catch((cause: unknown) => {
+      outcome = cause;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outcome).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toMatchObject({ message: "Recording frame acknowledgements are stalled." });
+    await finished;
+    expect(stop).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});

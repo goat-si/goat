@@ -1,4 +1,9 @@
+// @effect-diagnostics globalTimers:off - Frames arrive as CDP events outside the Effect runtime.
 type Frame = { readonly data: string; readonly width: number; readonly sessionId: number };
+
+// Chromium answers an acknowledgement at once; one still pending this long after the stop never will.
+const ACKNOWLEDGE_MS = 1_000;
+const stalled = () => new Error("Recording frame acknowledgements are stalled.");
 
 export const makeRecordingFrames = (input: {
   readonly acknowledge: (sessionId: number) => Promise<unknown>;
@@ -54,8 +59,7 @@ export const makeRecordingFrames = (input: {
   };
   return {
     offer(frame: Frame) {
-      if (acknowledgements.size >= 32)
-        return fail(new Error("Recording frame acknowledgements are stalled."));
+      if (acknowledgements.size >= 32) return fail(stalled());
       try {
         const ack = input
           .acknowledge(frame.sessionId)
@@ -74,7 +78,10 @@ export const makeRecordingFrames = (input: {
     },
     async finish() {
       while (active) await active;
-      await Promise.race([Promise.all(acknowledgements), failureSignal.promise]);
+      const timer = setTimeout(() => fail(stalled()), ACKNOWLEDGE_MS);
+      await Promise.race([Promise.all(acknowledgements), failureSignal.promise]).finally(() =>
+        clearTimeout(timer),
+      );
       await stopping;
       if (failed) throw failure;
     },
