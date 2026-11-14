@@ -1,6 +1,12 @@
 import type { ScopedThreadRef } from "@goat/contracts";
+import {
+  HTML_RENDER_COLUMN_WIDTH,
+  htmlRenderFrameHeight,
+  type HtmlRenderReference,
+} from "@goat/shared/htmlRender";
 import { MinusIcon, PlusIcon, XIcon } from "~/components/solar";
 import { useRef, useState } from "react";
+import { observeResize } from "~/lib/observeResize";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
@@ -8,12 +14,21 @@ import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 
 export function HtmlRenderDialog(props: {
   readonly src: string;
-  readonly title: string;
+  readonly htmlRender: HtmlRenderReference;
   readonly threadRef?: ScopedThreadRef | undefined;
   readonly onClose: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
+  const [contentHeight, setContentHeight] = useState<number>();
+  const measureBox = (box: HTMLDivElement) => {
+    setWidth(box.clientWidth);
+    return observeResize(box, ([entry]) => {
+      if (entry) setWidth(Math.round(entry.contentRect.width));
+    });
+  };
+  const height = htmlRenderFrameHeight(props.htmlRender, width / zoom, contentHeight);
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogPopup
@@ -23,7 +38,7 @@ export function HtmlRenderDialog(props: {
         className="row-start-1"
         initialFocus={closeButtonRef}
       >
-        <DialogTitle className="sr-only">Expanded {props.title} preview</DialogTitle>
+        <DialogTitle className="sr-only">Expanded {props.htmlRender.title} preview</DialogTitle>
         <div className="relative w-[92vw]">
           <Button
             ref={closeButtonRef}
@@ -35,18 +50,21 @@ export function HtmlRenderDialog(props: {
           >
             <XIcon />
           </Button>
-          <div className="h-[min(86vh,calc(100vh-160px))] overflow-auto overscroll-contain rounded-lg bg-background p-4 shadow-2xl ring-1 ring-border/70 [container-type:size]">
-            <div className="h-[100cqh] w-[100cqw]" style={{ zoom }}>
-              <HtmlRenderDocument
-                src={props.src}
-                title={props.title}
-                threadRef={props.threadRef}
-                className="block size-full"
-              />
+          <div className="max-h-[min(86vh,calc(100vh-160px))] overflow-y-auto overscroll-contain rounded-lg bg-background p-4 shadow-2xl ring-1 ring-border/70">
+            <div ref={measureBox}>
+              <div style={{ zoom, height }}>
+                <HtmlRenderDocument
+                  src={props.src}
+                  title={props.htmlRender.title}
+                  threadRef={props.threadRef}
+                  className="block size-full"
+                  onContentHeight={setContentHeight}
+                />
+              </div>
             </div>
           </div>
           <div className="mt-2 flex min-w-0 items-center justify-center gap-3 text-xs text-white/80">
-            <span className="truncate">{props.title}</span>
+            <span className="truncate">{props.htmlRender.title}</span>
             <div className="flex shrink-0 items-center gap-1">
               <Button
                 aria-label="Zoom out"
