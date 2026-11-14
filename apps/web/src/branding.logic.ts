@@ -11,23 +11,21 @@ export function formatAppDisplayName(input: {
   return `${input.baseName} (${input.stageLabel})`;
 }
 
-function resolveHostedAppChannelLabel(channel: string | null | undefined): string | null {
+function resolveHostedAppChannelLabel(channel: string | undefined): string | null {
   const normalized = channel?.trim().toLowerCase();
-  return normalized === "nightly"
-    ? "Nightly"
-    : normalized === "latest" || normalized === "stable"
-      ? "Latest"
-      : null;
+  return normalized === "nightly" ? "Nightly" : normalized === "latest" ? "Latest" : null;
 }
 
-/** Stage label of a web build. vite.config.ts stamps it into index.html's title too. */
-export function resolveWebAppStageLabel(input: {
-  readonly hostedAppChannel: string | null | undefined;
-  readonly development: boolean;
+/** Stage label of a web build from its env. vite.config.ts stamps it into index.html's title too. */
+export function resolveWebAppStageLabel(env: {
+  readonly VITE_HOSTED_APP_CHANNEL?: string | undefined;
+  readonly VITE_RELEASE_CHANNEL?: string | undefined;
+  readonly DEV: boolean;
 }): string {
   return (
-    resolveHostedAppChannelLabel(input.hostedAppChannel) ??
-    (input.development || input.hostedAppChannel === "dev" ? "Dev" : "Beta")
+    resolveHostedAppChannelLabel(env.VITE_HOSTED_APP_CHANNEL) ??
+    // `vp run dev --built` serves a production bundle with the dev release channel.
+    (env.DEV || env.VITE_RELEASE_CHANNEL === "dev" ? "Dev" : "Beta")
   );
 }
 

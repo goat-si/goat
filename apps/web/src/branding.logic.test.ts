@@ -21,14 +21,13 @@ describe("window title", () => {
       "GOAT (Nightly)",
     );
   });
-  it("labels stable, nightly and development builds consistently", () => {
-    const name = (channel: string) =>
-      formatAppDisplayName({
-        baseName: "GOAT",
-        stageLabel: resolveWebAppStageLabel({ hostedAppChannel: channel, development: false }),
-      });
-    expect(name("stable")).toBe("GOAT");
-    expect(name("nightly")).toBe("GOAT (Nightly)");
-    expect(name("dev")).toBe("GOAT (Dev)");
+  it("names hosted builds by the channel the release workflow sets, and dev builds Dev", () => {
+    const name = (env: Parameters<typeof resolveWebAppStageLabel>[0]) =>
+      formatAppDisplayName({ baseName: "GOAT", stageLabel: resolveWebAppStageLabel(env) });
+    expect(name({ VITE_HOSTED_APP_CHANNEL: "latest", DEV: false })).toBe("GOAT");
+    expect(name({ VITE_HOSTED_APP_CHANNEL: "nightly", DEV: false })).toBe("GOAT (Nightly)");
+    expect(name({ VITE_RELEASE_CHANNEL: "dev", DEV: false })).toBe("GOAT (Dev)");
+    expect(name({ DEV: true })).toBe("GOAT (Dev)");
+    expect(name({ VITE_RELEASE_CHANNEL: "preview", DEV: false })).toBe("GOAT (Beta)");
   });
 });

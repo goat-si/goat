@@ -50,6 +50,8 @@ const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.tr
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredReleaseChannel =
   process.env.GOAT_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
+// The release workflow builds the hosted app with latest or nightly.
+const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const configuredDesktopUpdateRepository = process.env.GOAT_DESKTOP_UPDATE_REPOSITORY?.trim() || "";
 const configuredHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim() || undefined;
@@ -306,8 +308,9 @@ function bootstrapTitlePlugin(): Plugin {
     },
     transformIndexHtml(html) {
       const stageLabel = resolveWebAppStageLabel({
-        hostedAppChannel: configuredReleaseChannel,
-        development,
+        VITE_HOSTED_APP_CHANNEL: configuredHostedAppChannel,
+        VITE_RELEASE_CHANNEL: configuredReleaseChannel,
+        DEV: development,
       });
       const title = formatAppDisplayName({ baseName: "GOAT", stageLabel });
       return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
@@ -384,6 +387,7 @@ export default defineConfig(() => {
       ),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
+      "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
       "import.meta.env.GOAT_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
         configuredDesktopUpdateRepository,
       ),
