@@ -1,3 +1,4 @@
+import { systemdManager } from "./systemdManager.ts";
 import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
 import {
   escapeSystemdSpecifiers,
@@ -17,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -289,85 +291,6 @@ interface OwnedLegacyUnit {
   readonly contents: string;
 }
 
-function systemdManager(input: {
-  readonly path: Path.Path;
-  readonly unitDir: string;
-  readonly names: BootServiceNames;
-}): BootServiceManager {
-  const unitPath = input.path.join(input.unitDir, input.names.unitFile);
-  const resetFailed = {
-    step: "clearing the service's failed state",
-    optional: true,
-    command: "systemctl",
-    args: ["--user", "reset-failed", input.names.unitFile],
-  };
-  const prepareActivation = [
-    {
-      step: "reloading systemd user units",
-      command: "systemctl",
-      args: ["--user", "daemon-reload"],
-    },
-    {
-      step: "enabling the service",
-      command: "systemctl",
-      args: ["--user", "enable", input.names.unitFile],
-    },
-    resetFailed,
-  ];
-  return {
-    kind: "systemd",
-    unitPath,
-    render: (plan) => renderBootServiceUnit(plan, input.names),
-    stop: [
-      {
-        step: "stopping the installed service",
-        command: "systemctl",
-        args: ["--user", "stop", input.names.unitFile],
-        timeout: STOP_STEP_TIMEOUT,
-      },
-    ],
-    activate: [
-      ...prepareActivation,
-      {
-        step: "starting the service",
-        command: "systemctl",
-        args: ["--user", "restart", input.names.unitFile],
-      },
-    ],
-    restart: [
-      resetFailed,
-      {
-        step: "restarting the service after a failed update",
-        command: "systemctl",
-        args: ["--user", "restart", input.names.unitFile],
-      },
-    ],
-    handoff: [
-      ...prepareActivation,
-      {
-        step: "restarting the service",
-        command: "systemctl",
-        args: ["--user", "restart", "--no-block", input.names.unitFile],
-      },
-    ],
-    deactivate: [
-      {
-        step: "stopping the service",
-        command: "systemctl",
-        args: ["--user", "disable", "--now", input.names.unitFile],
-        timeout: STOP_STEP_TIMEOUT,
-      },
-    ],
-    finalize: [
-      {
-        step: "reloading systemd user units",
-        command: "systemctl",
-        args: ["--user", "daemon-reload"],
-      },
-    ],
-  };
-}
-
 function launchdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
@@ -458,6 +381,8 @@ function selectBootServiceManager(input: {
   }
   if (input.platform === "linux") {
     return systemdManager({
+      render: renderBootServiceUnit,
+      stopTimeout: STOP_STEP_TIMEOUT,
       path: input.path,
       names: input.names,
       unitDir:
@@ -679,6 +604,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const homeDir = yield* Config.String("HOME").pipe(Config.withDefault(""));
   const xdgConfigHome = yield* Config.String("XDG_CONFIG_HOME").pipe(Config.withDefault(""));
   const installerPath = yield* Config.String("PATH").pipe(Config.withDefault(""));
+  const xdgRuntimeDir = yield* Config.String("XDG_RUNTIME_DIR").pipe(Config.withDefault(""));
+  const rootUnderSudo =
+    uid === 0 && (yield* Config.String("SUDO_USER").pipe(Config.withDefault(""))) !== "";
   const inheritedServiceUnit = yield* Config.String(BOOT_SERVICE_UNIT_ENV).pipe(
     Config.withDefault(""),
   );
@@ -688,7 +616,18 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   ].includes(inheritedServiceUnit);
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const runner = yield* ProcessRunner.ProcessRunner;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const userManagerEnv =
+    platform === "linux" && xdgRuntimeDir === "" && uid !== undefined && !rootUnderSudo
+      ? { XDG_RUNTIME_DIR: `/run/user/${uid}` }
+      : undefined;
+  const runner: ProcessRunner.ProcessRunner["Service"] =
+    userManagerEnv === undefined
+      ? processRunner
+      : {
+          run: (request) =>
+            processRunner.run({ ...request, env: { ...userManagerEnv, ...request.env } }),
+        };
   const host = input.host ?? { execPath: hostExecPath };
   const runtimePaths = pinnedRuntimePaths(path, input.baseDir, input.cliVersion, platform);
   const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
@@ -719,8 +658,13 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     ),
   ).join(":");
 
-  const systemdUnitDir = platform === "linux" ? yield* readSystemdUnitDirectory() : undefined;
-  const detectedManager = selectBootServiceManager({
+  let systemdUnitDir =
+    platform === "linux"
+      ? yield* readSystemdUnitDirectory().pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        )
+      : undefined;
+  let detectedManager = selectBootServiceManager({
     platform,
     homeDir,
     xdgConfigHome,
@@ -730,7 +674,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     environmentPath,
     names: BOOT_SERVICE_NAMES,
   });
-  const legacyManager = selectBootServiceManager({
+  let legacyManager = selectBootServiceManager({
     platform,
     homeDir,
     xdgConfigHome,
@@ -740,7 +684,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     environmentPath,
     names: LEGACY_BOOT_SERVICE_NAMES,
   });
-  const unitPath = detectedManager?.unitPath ?? "";
+  let unitPath = detectedManager?.unitPath ?? "";
   const logPath = path.join(input.logsDir, BOOT_SERVICE_LOG_FILE);
   const statePath = path.join(input.baseDir, "runtime", SERVICE_STATE_FILE);
   const restartPendingPath = path.join(input.baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
@@ -763,7 +707,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         );
       }),
     ).pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-  const plan: BootServicePlan = {
+  let plan: BootServicePlan = {
     program: [runtimePaths.entryPath, "__service-launcher"],
     baseDir: input.baseDir,
     logPath,
@@ -866,19 +810,33 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const requireSystemdPrerequisites = Effect.gen(function* () {
     const problems = yield* readSystemdProblems(false);
-    const unavailable = problems.find((problem) => problem !== "linger-disabled");
-    if (unavailable) return yield* new BootServicePrerequisiteError({ problem: unavailable });
-    if (!problems.includes("linger-disabled")) return;
+    const firstProblem = problems[0];
+    if (firstProblem === undefined) return;
+    const withoutSession =
+      problems.includes("linger-unavailable") && problems.includes("user-manager-unavailable");
+    const lingerDisabled = problems.includes("linger-disabled");
+    if (rootUnderSudo || (!lingerDisabled && !withoutSession))
+      return yield* new BootServicePrerequisiteError({ problem: firstProblem });
     yield* runStep("enabling lingering for this user", "loginctl", [
       "enable-linger",
       "--no-ask-password",
       ...(uid === undefined ? [] : [String(uid)]),
     ]).pipe(
       Effect.mapError(
-        (cause) => new BootServicePrerequisiteError({ problem: "linger-disabled", cause }),
+        (cause) =>
+          new BootServicePrerequisiteError({
+            problem: lingerDisabled ? "linger-disabled" : firstProblem,
+            cause,
+          }),
       ),
     );
-    const remaining = yield* readSystemdProblems(false);
+    const remaining = yield* readSystemdProblems(false).pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("500 millis"),
+        times: 10,
+        while: (current) => current.includes("user-manager-unavailable"),
+      }),
+    );
     if (remaining[0]) return yield* new BootServicePrerequisiteError({ problem: remaining[0] });
   });
 
@@ -1010,22 +968,56 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     readonly allowDowngrade?: boolean;
     readonly start?: boolean;
   }) {
-    const manager = yield* requireManager;
+    let manager = yield* requireManager;
     if (manager.kind === "systemd" && systemdUnsafeValue(plan))
       return yield* new BootServiceBaseDirUnsupportedError({ baseDir: input.baseDir });
-    const current = yield* readCurrentUnit;
+    let current = yield* readCurrentUnit;
     if (current._tag === "Foreign") {
       return yield* new BootServiceCommandError({
         step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
       });
     }
-    const currentInstalled = current._tag === "Owned";
+    let currentInstalled = current._tag === "Owned";
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
     if (manager.kind === "systemd") {
       yield* requireSystemdPrerequisites.pipe(Effect.tapError(logFailure));
+      if (systemdUnitDir === undefined) {
+        systemdUnitDir = yield* readSystemdUnitDirectory().pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        );
+        detectedManager = selectBootServiceManager({
+          platform,
+          homeDir,
+          xdgConfigHome,
+          systemdUnitDir,
+          uid,
+          path,
+          environmentPath,
+          names: BOOT_SERVICE_NAMES,
+        });
+        legacyManager = selectBootServiceManager({
+          platform,
+          homeDir,
+          xdgConfigHome,
+          systemdUnitDir,
+          uid,
+          path,
+          environmentPath,
+          names: LEGACY_BOOT_SERVICE_NAMES,
+        });
+        manager = yield* requireManager;
+        unitPath = manager.unitPath;
+        plan = { ...plan, unitPath };
+        current = yield* readCurrentUnit;
+        if (current._tag === "Foreign")
+          return yield* new BootServiceCommandError({
+            step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
+          });
+        currentInstalled = current._tag === "Owned";
+      }
     }
 
     yield* ensurePinnedRuntimeInstalled({
