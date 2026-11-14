@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,23 +24,35 @@ it.layer(NodeServices.layer)("boot service user manager", (it) => {
 
   it.effect("starts the user manager after three probes", () =>
     Effect.gen(function* () {
-      const { makeService, control, onManagerProbe } = yield* makeHarness();
+      const { makeService, control } = yield* makeHarness();
       control.linger = "no";
       control.managerReachable = false;
       control.lingerStartsManager = false;
       const service = yield* makeService();
-      const firstProbe = yield* Deferred.make<void>();
-      let probes = 0;
-      onManagerProbe.push(() => {
-        probes++;
-        if (probes === 2) Deferred.doneUnsafe(firstProbe, Effect.void);
-        if (probes === 5) control.managerReachable = true;
-      });
-      const fiber = yield* service.install().pipe(Effect.forkChild);
-      yield* Deferred.await(firstProbe);
+      const clock = yield* Clock.Clock;
+      const firstPause = yield* Deferred.make<void>();
+      const waited: number[] = [];
+      const fiber = yield* service.install().pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          // Recorded when it ends, so a timeout that loses its race is not counted as a pause.
+          sleep: (duration) =>
+            Deferred.succeed(firstPause, undefined).pipe(
+              Effect.andThen(clock.sleep(duration)),
+              Effect.andThen(
+                Effect.sync(() => {
+                  if (waited.push(Duration.toMillis(duration)) === 3)
+                    control.managerReachable = true;
+                }),
+              ),
+            ),
+        }),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstPause);
       yield* TestClock.adjust(Duration.millis(1500));
       yield* Fiber.join(fiber);
-      expect(probes).toBeGreaterThanOrEqual(5);
+      expect(waited).toEqual([500, 500, 500]);
       expect((yield* service.status).current).toBe(true);
     }),
   );
