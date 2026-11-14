@@ -27,6 +27,7 @@ import { interruptibleTurns } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import { ocxMessage } from "../opencodex/ocxMessage.ts";
+import { type OcxRefusal, refusalOf } from "./ocxRefusal.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { type OcxLayout, resolveOcx } from "../opencodex/childPrepare.ts";
@@ -83,6 +84,8 @@ export interface OcxOutput {
   readonly message?: string;
   /** OpenCodex's management API answered 403, as `ocx link status` does on a Hub (opencodex#8184). */
   readonly forbidden?: true;
+  /** A link revoke's or recover's refusal, from the CLI's own line; see ocxRefusal. */
+  readonly refusal?: OcxRefusal;
   /** The role the device's own GOAT read after a connection change it ran. */
   readonly deviceRole?: "standalone" | "hub" | "client" | "unknown";
   /** Whether the device's GOAT found its OpenCodex executable and listener in agreement then. */
@@ -447,6 +450,7 @@ const make = Effect.gen(function* () {
     const forbidden = /\brequest failed \(403\)/u.test(output.stderr);
     const code = output.timedOut ? 124 : (output.code ?? 1);
     const message = code !== 0 && explained(args) ? ocxMessage(output.stderr) : undefined;
+    const refusal = code !== 0 ? refusalOf(output.stderr) : undefined;
     return {
       code,
       stdout: output.stdoutTruncated ? "" : output.stdout,
@@ -454,6 +458,7 @@ const make = Effect.gen(function* () {
       ...(cause === undefined ? {} : { cause }),
       ...(message === undefined ? {} : { message }),
       ...(forbidden ? { forbidden: true as const } : {}),
+      ...(refusal === undefined ? {} : { refusal }),
     } satisfies OcxOutput;
   });
 

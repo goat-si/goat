@@ -144,14 +144,18 @@ const state = vi.hoisted(() => ({
   upsert: vi.fn<() => Promise<unknown>>(),
   // The live routines list; a saved check-in arrives here.
   routineTasks: [] as object[],
+  // Home's shared current work, the value that also hides those threads from Threads.
+  current: null as null | { eligible: boolean; list: string; work: object; links: object[] },
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
     atom === "openable"
       ? state.remoteOpenable
-      : atom === "update-permission"
-        ? state.canUpdate
-        : true,
+      : atom === "home-current"
+        ? state.current
+        : atom === "update-permission"
+          ? state.canUpdate
+          : true,
 }));
 vi.mock("../../native/StackHeader", () => ({
   NativeStackScreenOptions: (props: {
@@ -167,6 +171,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; tests that need its links set state.current.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "task",
     listChildWork: (key: unknown) => {
       state.childKeys.push(key);
@@ -279,7 +285,8 @@ vi.mock("./MobileBotMemory", () => ({
     <button onClick={() => props.onDraft?.("Remember this")}>Draft a note</button>
   ),
 }));
-vi.mock("./goatBotHomeMode", () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
   pickMobileGoatBotEnvironment: () => ({
     environmentId: "env",
     connected: state.connected,
@@ -379,6 +386,7 @@ afterEach(async () => {
     hidden: [],
     machinesKey: undefined,
     routineTasks: [],
+    current: null,
   });
   state.draft.mockClear();
   state.openTask.mockClear();
@@ -825,4 +833,113 @@ it("marks a shown task read again when newer activity arrives, on its screen and
   ]);
   await open("t1");
   expect(reads()).toHaveLength(3);
+});
+
+const codingRow = (threadId: string, title: string) =>
+  decode({
+    kind: "coding",
+    taskId: "t1",
+    environmentId: "env",
+    threadId,
+    title,
+    state: "bound",
+    lastActivityAt: at,
+  });
+const governed = (links: object[], taskIds = ["t1"]) => ({
+  eligible: true,
+  list: "ready",
+  work: {
+    running: taskIds.map((id) => ({ row: { task: { taskId: id } } })),
+    waiting: [],
+    finished: [],
+  },
+  links,
+});
+
+it("a current task's work opens what Home's shared value links, and a child-only thread after it", async () => {
+  state.rows = [
+    task("t1", "Fix the build"),
+    codingRow("thread-a", "Patch web"),
+    codingRow("thread-b", "Patch mobile"),
+  ];
+  state.groups = [
+    {
+      taskId: "t1",
+      truncated: false,
+      children: [
+        {
+          childWorkId: "c1",
+          surface: "thread_launch",
+          state: "running",
+          destination: { threadId: "child-thread" },
+        },
+      ],
+    },
+  ];
+  // thread-b's machine cannot be reached, so the shared value has no link for it.
+  state.current = governed([
+    { taskId: "t1", environmentId: "env", threadId: "thread-a", kind: "coding" },
+  ]);
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).toContain("Patch web");
+  expect(home()?.textContent).not.toContain("Patch mobile");
+  // The child-only thread is listed after the linked one, and opens its own thread.
+  const labels = [...container.querySelectorAll("button")].map((item) =>
+    item.getAttribute("aria-label"),
+  );
+  expect(labels.indexOf("GOAT thread: Patch web")).toBeGreaterThanOrEqual(0);
+  expect(labels.indexOf("Work thread: Fix the build")).toBeGreaterThan(
+    labels.indexOf("GOAT thread: Patch web"),
+  );
+  await press("Work thread: Fix the build");
+  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "child-thread" });
+  // Opening a thread closes Home; reopened, the task's work is still shown.
+  await open();
+  await press("GOAT thread: Patch web");
+  expect(state.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "thread-a" });
+});
+
+it("an untitled coding thread reads Open work thread, as on web", async () => {
+  state.rows = [task("t1", "Fix the build"), codingRow("thread-a", "   ")];
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).toContain("Open work thread");
+  expect(home()?.textContent).not.toContain("GOAT thread");
+});
+
+it("a current task's remote work opens only when Home's shared value links it", async () => {
+  state.rows = [task("t1", "Fix the build")];
+  state.remoteWork = [
+    {
+      childWorkId: "r1",
+      taskId: "t1",
+      callerThreadId: "bot",
+      host: "studio",
+      environmentId: "remote",
+      threadId: "remote-thread",
+      workKind: "coding",
+      state: "running",
+    },
+  ];
+  state.current = governed([]);
+  await open();
+  await toggleWork("Fix the build");
+  expect(home()?.textContent).toContain("studio · Unavailable");
+  state.current = governed([
+    {
+      taskId: "t1",
+      environmentId: "remote",
+      threadId: "remote-thread",
+      kind: "remote",
+      remoteChildWorkId: "r1",
+      launchedFrom: { environmentId: "env", threadId: "bot" },
+    },
+  ]);
+  await open();
+  await press("Open work thread on studio");
+  expect(state.openThread).toHaveBeenLastCalledWith({
+    environmentId: "remote",
+    id: "remote-thread",
+  });
 });

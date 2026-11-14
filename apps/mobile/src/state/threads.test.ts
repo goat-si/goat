@@ -63,6 +63,8 @@ vi.mock("../connection/runtime", async () => {
 vi.mock("../connection/catalog", () => ({ environmentCatalog: {} }));
 vi.mock("./shell", () => ({ environmentShell: {} }));
 vi.mock("./presentation", () => ({ environmentPresentations: {} }));
+// Home's part of the hide set reads the saved bot; goatBotHomeThreadHiding.test.tsx covers it.
+vi.mock("./goatBotHomeWork", () => ({ mobileGoatBotHomeWorkByEnvironment: () => null }));
 
 const environmentId = EnvironmentId.make("environment-1");
 const threadId = v2Projection.thread.id;

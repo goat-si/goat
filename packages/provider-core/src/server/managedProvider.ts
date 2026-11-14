@@ -195,8 +195,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   // Providers call this on every token-usage tick, usually without changing the snapshot.
   const applyUsageLimits: ManagedServerProvider["applyUsageLimits"] = Effect.fnUntraced(
-    function* (update) {
+    function* (update, options) {
       const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+        if (options?.appliesTo?.(state.snapshot) === false) {
+          return [null, state] as const;
+        }
         const usageLimits = applyUsageLimitsUpdate({
           previous: state.snapshot.usageLimits,
           update,

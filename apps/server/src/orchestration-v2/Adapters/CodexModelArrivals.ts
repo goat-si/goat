@@ -53,10 +53,16 @@ export const codexProcessStart = Effect.fn("CodexModelArrivals.codexProcessStart
         offered,
         atStart: yield* offered,
         startedAtMs: yield* Clock.currentTimeMillis,
-        retained: false,
+        connection: { reattached: false },
       };
     const startedAtMs = detached === undefined ? undefined : yield* detached.keptStartedAt(kept);
-    return { offered, atStart: [], startedAtMs: startedAtMs ?? 0, retained: true };
+    // The client factory marks the connection once it knows whether the kept process still runs.
+    return {
+      offered,
+      atStart: [],
+      startedAtMs: startedAtMs ?? 0,
+      connection: { reattached: false },
+    };
   },
 );
 
@@ -100,8 +106,8 @@ export const makeCodexModelArrivals = <E>(input: {
   readonly listServed: Effect.Effect<ReadonlyArray<string>, E>;
   /** When the process started; with `catalog`, models whose catalog entry changed since are outdated. */
   readonly startedAtMs?: number;
-  /** A kept process may run under an older home than this session's, so `~` in its catalog path stays unresolved. */
-  readonly retained?: boolean;
+  /** A reattached process may run under an older home than this session's, so `~` in its catalog path stays unresolved. */
+  readonly connection?: { readonly reattached: boolean };
   readonly catalog?: Omit<Parameters<typeof makeCodexCatalogFreshness>[0], "startedAtMs">;
 }) => {
   const atStart = offeredFromCatalog(input.atStart);
@@ -110,7 +116,7 @@ export const makeCodexModelArrivals = <E>(input: {
     input.startedAtMs !== undefined &&
     makeCodexCatalogFreshness({
       ...input.catalog,
-      ...(input.retained === true ? { home: undefined } : {}),
+      ...(input.connection?.reattached === true ? { home: undefined } : {}),
       startedAtMs: input.startedAtMs,
     });
   let served: ReadonlySet<string> | undefined;

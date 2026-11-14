@@ -21,7 +21,8 @@ export const makeHubNodesHandlers = Effect.fn("HubNodes.rpcHandlers")(function* 
     : Effect.fail(
         new HubMachinesError({
           reason: "provisioner_refused",
-          detail: "Only a person in Settings attaches a machine from a client.",
+          detail:
+            "Only a person in Settings attaches, detaches or releases a machine from a client.",
         }),
       );
   const principal = "session:" + session.sessionId;
@@ -43,6 +44,10 @@ export const makeHubNodesHandlers = Effect.fn("HubNodes.rpcHandlers")(function* 
       Effect.flatMap(person, (caller) => machines.attach(caller, principal, input)),
     [WS_METHODS.hubMachinesReissue]: (input) =>
       Effect.flatMap(person, (caller) => machines.reissue(caller, principal, input)),
+    [WS_METHODS.hubMachinesDetach]: (input) =>
+      Effect.flatMap(person, (caller) => machines.detach(caller, principal, input)),
+    [WS_METHODS.hubMachinesRelease]: (input) =>
+      Effect.flatMap(person, (caller) => machines.release(caller, principal, input)),
     [WS_METHODS.hubMachinesList]: (input) => machines.list(input),
   });
 });

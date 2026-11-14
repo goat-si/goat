@@ -24,6 +24,7 @@ import {
   type LaunchSubagentRow,
 } from "../features/threads/threadListV2LaunchFold";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { mobileGoatBotHomeWorkByEnvironment } from "./goatBotHomeWork";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 import { appAtomRegistry } from "./atom-registry";
@@ -81,6 +82,8 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   goatBotListedWork: channelEnvironment.listedBotWork,
+  // Only on the computer whose bot Home this device opens, Threads leaves out what Home opens.
+  goatBotHomeWork: mobileGoatBotHomeWorkByEnvironment,
 });
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,

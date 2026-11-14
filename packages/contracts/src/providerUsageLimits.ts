@@ -75,12 +75,23 @@ export const quotaWindowToAvailability = (window: QuotaWindow) => {
     observedAt: window.observedAt,
   } satisfies ServerProviderUsageAvailability;
 };
+/** One kind of banked reset, such as Claude's weekly reset or its Fable-only reset. */
+export const ServerProviderResetCreditOption = Schema.Struct({
+  creditId: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  availableCount: NonNegativeInt,
+  expiresAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderResetCreditOption = typeof ServerProviderResetCreditOption.Type;
 
 export const ServerProviderResetCredits = Schema.Struct({
   availableCount: NonNegativeInt,
   nextExpiresAt: Schema.optional(IsoDateTime),
   /** Pins hub redemption to the displayed credit, including retries from another client. */
   nextCreditId: Schema.optional(TrimmedNonEmptyString),
+  /** Present when resets differ in what they refill; redeem one by its `creditId`. */
+  options: Schema.optional(ForwardCompatibleArray(ServerProviderResetCreditOption)),
 });
 export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 
@@ -119,6 +130,9 @@ export const ServerProviderUsageLimits = Schema.Struct({
       redeemable: Schema.Boolean,
     }),
   ),
+  /** A $0 monthly spend cap has no percentage, so it cannot be a window. */
+  zeroSpendCap: Schema.optional(Schema.Boolean),
+
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(
@@ -182,7 +196,10 @@ export type UsageLimitSourceConsumeResetCreditInput =
   typeof UsageLimitSourceConsumeResetCreditInput.Type;
 
 export const ProviderConsumeResetCreditInput = Schema.Union([
-  Schema.Struct({ instanceId: ProviderInstanceId }),
+  Schema.Struct({
+    instanceId: ProviderInstanceId,
+    creditId: Schema.optional(TrimmedNonEmptyString),
+  }),
   UsageLimitSourceConsumeResetCreditInput,
 ]);
 export type ProviderConsumeResetCreditInput = typeof ProviderConsumeResetCreditInput.Type;

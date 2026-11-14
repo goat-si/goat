@@ -64,6 +64,24 @@ describe("UsageLimitsPooled ChatGPT usage card", () => {
   });
 });
 
+it("shows the monthly zero cap even when there is no monthly window", async () => {
+  const claude = {
+    ...managedChatGpt("claude", "Claude"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    usageLimits: { checkedAt, windows: [], zeroSpendCap: true },
+  };
+  const presentations = new Map([
+    [
+      EnvironmentId.make("desk"),
+      { entry: { target: { label: "Desk" } }, serverConfig: { providers: [claude] } },
+    ],
+  ]);
+  await using screen = await render(
+    <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
+  );
+  await expect.element(screen.getByText("Monthly spend: $0 cap")).toBeVisible();
+});
+
 it("presents a duplicate Cursor total as general usage", async () => {
   const cursor: ServerProvider = {
     ...managedChatGpt("cursor", "Cursor"),

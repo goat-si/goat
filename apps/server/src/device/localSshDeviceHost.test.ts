@@ -27,6 +27,9 @@ const spawner = ChildProcessSpawner.make((command) =>
       remote: "hostname 192.0.2.1\nport 22\n",
       loopback: "hostname 127.0.1.1\nport 22\n",
       ipv6: "hostname ::1\nport 22\n",
+      mapped: "hostname ::ffff:127.0.0.1\nport 22\n",
+      mappedhex: "hostname ::ffff:7f00:1\nport 22\n",
+      mappedremote: "hostname ::ffff:192.0.2.1\nport 22\n",
       forwarded: "hostname 127.0.0.1\nport 2222\n",
       proxy: "hostname 127.0.0.1\nport 22\nproxyjump bastion\n",
       command: "hostname 127.0.0.1\nport 22\nproxycommand nc remote 22\n",
@@ -59,7 +62,7 @@ const provide = <A, E>(
 it.effect("skips SSH aliases resolving to this machine, including loopback", () =>
   provide(
     Effect.gen(function* () {
-      for (const target of ["mac-mini", "loopback", "ipv6"]) {
+      for (const target of ["mac-mini", "loopback", "ipv6", "mapped", "mappedhex"]) {
         expect(yield* isLocalSshDeviceHost(host(target))).toBe(true);
       }
     }),
@@ -69,7 +72,14 @@ it.effect("skips SSH aliases resolving to this machine, including loopback", () 
 it.effect("keeps remote, forwarded, proxied, and unresolved destinations", () =>
   provide(
     Effect.gen(function* () {
-      for (const target of ["remote", "forwarded", "proxy", "command", "unresolved"]) {
+      for (const target of [
+        "remote",
+        "mappedremote",
+        "forwarded",
+        "proxy",
+        "command",
+        "unresolved",
+      ]) {
         expect(yield* isLocalSshDeviceHost(host(target))).toBe(false);
       }
     }),

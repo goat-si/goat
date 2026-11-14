@@ -154,7 +154,7 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
     ),
   );
   const orchestrationAdapter = yield* createCodexAdapterV2(input, {
-    onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+    sessionUsage: () => Effect.succeed(() => Effect.succeed(snapshot.applyUsageLimits)),
     offeredModels: snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
     resolveRuntime,
   }).pipe(

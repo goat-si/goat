@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -12,7 +14,30 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 
+const caseInsensitiveTemp = (() => {
+  const probe = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-case-"));
+  NodeFS.mkdirSync(NodePath.join(probe, "Case"));
+  const insensitive = NodeFS.existsSync(NodePath.join(probe, "CASE"));
+  NodeFS.rmSync(probe, { recursive: true });
+  return insensitive;
+})();
+
 describe("ResetCreditCoordinator", () => {
+  // Only a case-insensitive volume lets two spellings name one directory.
+  it.effect.skipIf(!caseInsensitiveTemp)(
+    "differently cased names of one directory are one login directory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        yield* fs.makeDirectory(NodePath.join(root, "Home"));
+        const named = (name: string) =>
+          ResetCreditCoordinator.canonicalLoginDirectory(NodePath.join(root, name));
+        assert.strictEqual(yield* named("HOME"), yield* named("Home"));
+        assert.strictEqual(yield* named("home"), yield* named("Home"));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("re-sends the same idempotency key after a failed attempt, then clears it", () =>
     Effect.gen(function* () {
       const { redeem } = yield* ResetCreditCoordinator.ResetCreditCoordinator;

@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   save: vi.fn(),
   attach: vi.fn(),
   reissue: vi.fn(),
+  detach: vi.fn(),
+  release: vi.fn(),
   hub: undefined as unknown,
   // When set, the machine list answers with this atom instead of an empty list.
   list: undefined as unknown,
@@ -26,6 +28,8 @@ vi.mock("~/state/server", async () => {
       updateSettings: { label: "settings", run: state.save, permissionAtom },
       hubMachinesAttach: { label: "attach", run: state.attach, permissionAtom },
       hubMachinesReissue: { label: "reissue", run: state.reissue, permissionAtom },
+      hubMachinesDetach: { label: "detach", run: state.detach, permissionAtom },
+      hubMachinesRelease: { label: "release", run: state.release, permissionAtom },
       hubMachinesList: () => state.list ?? machines,
     },
   };
@@ -81,6 +85,8 @@ function setup(enabled: boolean, expiresAt: string | null = enabled ? OPEN_UNTIL
     value: { invite: { token: "secret-token", expiresAt: "2026-12-01T00:00:00.000Z" } },
   });
   state.reissue.mockReset();
+  state.detach.mockReset();
+  state.release.mockReset();
   const registry = AtomRegistry.make();
   return {
     registry,
@@ -192,4 +198,138 @@ it("an older hub without disposable machines shows Update GOAT instead of the se
     .element(screen.getByText("Update GOAT on this hub to attach disposable machines."))
     .toBeVisible();
   await expect.element(screen.getByRole("switch")).not.toBeInTheDocument();
+});
+
+const row = (overrides: Record<string, unknown>) => ({
+  attachId: "a-1",
+  name: "cc-1",
+  nodeId: "n1",
+  state: "linked",
+  step: "linked",
+  steps: [],
+  message: "cc-1 is linked to this hub's OpenCodex as a lightweight Child.",
+  nextAction: null,
+  class: "disposable",
+  penMember: true,
+  provisioner: { kind: "person" },
+  stateSince: "2026-11-14T00:00:00.000Z",
+  ...overrides,
+});
+
+it("detaches after a confirm, forces a detaching machine, and releases a slot Pen cannot account for", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(
+    AsyncResult.success({
+      machines: [
+        row({}),
+        row({ attachId: "a-2", name: "cc-2", state: "detaching", step: "detach" }),
+        row({ attachId: "a-3", name: "cc-3", state: "unknown", step: null, penMember: false }),
+      ],
+    }),
+  );
+  state.detach.mockResolvedValue({ _tag: "Success", value: row({ state: "detaching" }) });
+  state.release.mockResolvedValue({
+    _tag: "Success",
+    value: row({ attachId: "a-3", state: "failed" }),
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  expect(state.detach).not.toHaveBeenCalled();
+  // The confirmation says what a detach does and does not do.
+  await expect
+    .element(
+      screen.getByText(/removes its OpenCodex link and the lightweight Child; it stays in Pen/),
+    )
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
+  expect(state.detach).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ attachId: "a-1" }),
+  });
+  // A detaching row can be detached again, which clears a stop, or forced.
+  await expect.element(screen.getByRole("button", { name: "Detach cc-2" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Force detach cc-2" }));
+  await expect.element(screen.getByText(/removes the link without the machine/)).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm force detach cc-2" }));
+  expect(state.detach).toHaveBeenLastCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ attachId: "a-2", force: true }),
+  });
+  await expect.element(screen.getByRole("button", { name: "Detach cc-3" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Release cc-3" }));
+  await userEvent.click(screen.getByRole("button", { name: "Confirm release cc-3" }));
+  expect(state.release).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ attachId: "a-3" }),
+  });
+});
+
+it("a detaching machine that left Pen says when its slot is free, for a detach and a force", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(
+    AsyncResult.success({
+      machines: [row({ state: "detaching", step: "detach", penMember: false })],
+    }),
+  );
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  await expect
+    .element(screen.getByText(/has left Pen; its slot is free once the detach ends/))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Force detach cc-1" }));
+  await expect
+    .element(screen.getByText(/has left Pen, so its slot is free once the detach ends/))
+    .toBeVisible();
+  await expect.element(screen.getByText(/stays in Pen/)).not.toBeInTheDocument();
+});
+
+it("a retired machine that left Pen offers the Detach its pending removal names", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(
+    AsyncResult.success({
+      machines: [row({ state: "retired", step: "recover", penMember: false })],
+    }),
+  );
+  state.detach.mockResolvedValue({ _tag: "Success", value: row({ state: "detaching" }) });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  await expect
+    .element(screen.getByText(/has left Pen; its slot is free once the detach ends/))
+    .toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
+  expect(state.detach).toHaveBeenCalledWith(expect.anything(), {
+    environmentId,
+    input: expect.objectContaining({ attachId: "a-1" }),
+  });
+});
+
+it("a hub without detach says to update GOAT instead of a generic failure", async () => {
+  using fixture = setup(true);
+  state.list = Atom.make(AsyncResult.success({ machines: [row({})] }));
+  state.detach.mockResolvedValue({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Unknown request tag: hub.machines.detach")),
+  });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DisposableMachinesSettings environmentId={environmentId} />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Detach cc-1" }));
+  await userEvent.click(screen.getByRole("button", { name: "Confirm detach cc-1" }));
+  await expect
+    .element(screen.getByText("Update GOAT on this hub to detach or release machines."))
+    .toBeVisible();
 });

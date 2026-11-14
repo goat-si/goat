@@ -50,6 +50,8 @@ export interface CodexAppServerClientFactoryShape {
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
     readonly logThreadFor?: (nativeThreadId: string) => ThreadId | undefined;
+    /** Set to reattached when this open connects to a process kept from before instead of starting one. */
+    readonly connection?: { reattached: boolean } | undefined;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -337,6 +339,7 @@ export const layerAppServerClientFactory: Layer.Layer<
             .ensureReleasedClear(input.instanceId, input.providerSessionId, input.threadId)
             .pipe(Effect.mapError(openError));
         if (recordName !== undefined && kept === "connect") {
+          if (input.connection !== undefined) input.connection.reattached = true;
           const existing = yield* detached
             .connectExisting(input.instanceId, recordName, input.providerSessionId)
             .pipe(Effect.mapError(openError));
