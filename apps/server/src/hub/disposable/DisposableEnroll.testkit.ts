@@ -115,6 +115,10 @@ export const fakeEnrollHost = () => {
     knownHostsDir: "/srv/goat/disposable/known_hosts/",
     /** Answers the ocx calls it knows (detach's revoke and recover) before the enrollment fake. */
     extraOcx: undefined as ((args: ReadonlyArray<string>) => OcxOutput | undefined) | undefined,
+    /** Whether Pen's member list holds the node's key; out of Pen, it has no route and never answers. */
+    inPen: (_nodeId: string): boolean => true,
+    /** A machine that is off or gone; the detach fake sets it. */
+    silent: (_nodeId: string): boolean => false,
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
@@ -193,7 +197,11 @@ export const fakeEnrollHost = () => {
   const service = EnrollHost.of({
     route: (node) =>
       pass(control.holdRoute).pipe(
-        Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
+        Effect.andThen(
+          Effect.sync(() =>
+            control.inPen(node.nodeId) ? control.routes.get(node.nodeId) : undefined,
+          ),
+        ),
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
     keyPath: () => Effect.sync(() => control.keyPath),
@@ -221,6 +229,7 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.reached.push(route);
+            if (!control.inPen(route.nodeId) || control.silent(route.nodeId)) return "unreachable";
             // ssh finds no host key in a file under a home that moved away.
             if (!route.knownHostsFile.startsWith(control.knownHostsDir)) return "host_key_unknown";
             return (

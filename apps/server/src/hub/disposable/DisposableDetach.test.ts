@@ -230,7 +230,7 @@ it.effect(
         yield* TestClock.adjust(HOUR);
         yield* detachPass;
         expect((yield* listed(attachId))?.message).toContain(
-          "another link of this hub uses the machine's alias",
+          "another link of this hub uses its alias",
         );
         ocx.forget(linkId);
         yield* TestClock.adjust(HOUR);
@@ -319,7 +319,7 @@ it.effect(
         yield* TestClock.adjust(11 * 60 * 1000);
         const released = yield* release(PERSON, first.attachId, "r-2");
         expect(released.state).toBe("failed");
-        expect(released.message).toContain("pen revoke");
+        expect(released.message).toContain("did not hold its key");
         expect((yield* attach(3)).state).toBe("invited");
         // The pass that acknowledges its burned invite keeps the record released.
         yield* reconcile;
@@ -376,19 +376,28 @@ it.effect("a revoke whose id was stored but never answered is sent again under t
 );
 
 it.effect(
-  "a machine removed from Pen while detaching keeps its detach until the link is gone",
+  "a silent machine removed from Pen while detaching is forced 24 hours after its first failed purge, and ends once a person forgets its cleanup",
   () =>
     world((pen, home, _grant, host) =>
       Effect.gen(function* () {
         const ocx = fakeDetachHome(host);
-        const { attachId } = yield* linked(pen, home, host, 1);
+        const { attachId, linkId } = yield* linked(pen, home, host, 1);
         ocx.machineAnswers = false;
         yield* detach(THREAD, attachId, "d-1");
         yield* detachPass;
         pen.members.delete(key(1));
         yield* reconcile;
         expect(yield* listed(attachId)).toMatchObject({ state: "detaching", penMember: false });
-        ocx.machineAnswers = true;
+        for (let check = 0; check < 48; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        // Out of Pen it cannot answer again; the open record holds its slot until its cleanup ends.
+        expect(ocx.tombstones.has(linkId)).toBe(true);
+        const forced = yield* listed(attachId);
+        expect(forced?.message).toContain("ocx link recover --forget --link-id " + linkId);
+        expect(forced?.message).toContain("has left Pen");
+        ocx.forget(linkId);
         yield* TestClock.adjust(HOUR / 2);
         yield* detachPass;
         const done = yield* listed(attachId);
@@ -414,7 +423,7 @@ it.effect(
         yield* detachPass;
         expect(ocx.sent).toEqual([attachId + ".force.1"]);
         expect((yield* listed(attachId))?.message).toContain("too many links removed");
-        expect((yield* listed(attachId))?.message).toContain("force the detach again");
+        expect((yield* listed(attachId))?.message).toContain("forces the detach again");
         ocx.tombstoneLimit = false;
         yield* detach(PERSON, attachId, "d-2", true);
         yield* detachPass;
@@ -721,20 +730,28 @@ it.effect(
     ),
 );
 
-it.effect("checks that fail while Pen cannot be read do not count toward retirement", () =>
-  world((pen, home, _grant, host) =>
-    Effect.gen(function* () {
-      fakeDetachHome(host);
-      const { attachId, nodeId } = yield* linked(pen, home, host, 1);
-      host.control.reachAnswers.set(nodeId, "unreachable");
-      // The hub is up, but its Pen does not answer.
-      host.control.routes.delete(nodeId);
-      yield* detachPass;
-      for (let check = 0; check < 50; check += 1) {
-        yield* TestClock.adjust(HOUR / 2);
+it.effect(
+  "checks that fail while Pen's daemon does not answer do not count toward retirement; once it answers they do",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        fakeDetachHome(host);
+        const { attachId, nodeId } = yield* linked(pen, home, host, 1);
+        host.control.reachAnswers.set(nodeId, "unreachable");
+        // The hub is up and Pen's route file is still in place, but Pen's daemon does not answer.
+        pen.control.membersUnreadable = true;
         yield* detachPass;
-      }
-      expect((yield* listed(attachId))?.state).toBe("linked");
-    }),
-  ),
+        for (let check = 0; check < 50; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        expect((yield* listed(attachId))?.state).toBe("linked");
+        pen.control.membersUnreadable = false;
+        for (let check = 0; check < 49; check += 1) {
+          yield* TestClock.adjust(HOUR / 2);
+          yield* detachPass;
+        }
+        expect((yield* listed(attachId))?.state).toBe("retired");
+      }),
+    ),
 );

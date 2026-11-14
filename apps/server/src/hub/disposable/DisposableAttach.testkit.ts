@@ -8,7 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../../persistence/Migrations.ts";
 import * as Settings from "../../serverSettings.ts";
-import type { Delegation } from "./attachModel.ts";
+import { type Delegation, penNodeId } from "./attachModel.ts";
 import * as Attach from "./DisposableAttach.ts";
 import * as Store from "./DisposableMachineStore.ts";
 import { fakeEnrollHost } from "./DisposableEnroll.testkit.ts";
@@ -256,6 +256,9 @@ export const world = <A, E>(
 ) => {
   const pen = fakePen();
   const host = fakeEnrollHost();
+  // A key Pen dropped takes its route with it, and the machine can no longer answer through Pen.
+  host.control.inPen = (nodeId) =>
+    [...pen.members].some((signPub) => penNodeId(signPub) === nodeId);
   const home: Parameters<typeof body>[1] = {
     contracts: new Set<string>(HOME_ATTACH_CONTRACTS),
     settingsUnreadable: false,

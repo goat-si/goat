@@ -30,6 +30,12 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     childRefusal: undefined as string | undefined,
     /** The machine has no planted ocx-child (managed_child_missing). */
     childMissing: false,
+    /**
+     * The machine answers, but its purge kept or did not report removing the planted ocx-child
+     * (binary_in_use, purge_incomplete): unknown with remote_disconnect_failed, and the CLI line
+     * carries no hint for either.
+     */
+    purgeIncomplete: false,
     /** Recover answers this refusal while the machine answers. */
     recoverRefusal: undefined as string | undefined,
     /** A forced revoke is refused, as OpenCodex does at 256 waiting tombstones. */
@@ -47,7 +53,13 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
   };
   const refused = (code: number, refusal: OcxRefusal): OcxOutput => ({ code, stdout: "", refusal });
   const option = (args: ReadonlyArray<string>, name: string) => args[args.indexOf(name) + 1] ?? "";
-  const answer = (entry: RevokeEntry): OcxOutput => {
+  // Each link's alias, kept past its removal so recover knows which machine it reaches.
+  const aliases = new Map<string, string>();
+  const nodeOf = (linkId: string) => (aliases.get(linkId) ?? "").replace(/^pen-/u, "");
+  const answers = (linkId: string) => control.machineAnswers && host.control.inPen(nodeOf(linkId));
+  host.control.silent = () => !control.machineAnswers;
+  /** The CLI line prints a bound hint only on the answer that recorded it; a replay has none. */
+  const answer = (entry: RevokeEntry, hint?: string): OcxOutput => {
     if (entry.state === "committed")
       return {
         code: 0,
@@ -62,11 +74,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     return refused(code === "tombstone_limit" ? 5 : 1, {
       code,
       ...(entry.code === "tombstone_limit" ? {} : { outcome: entry.state }),
-      ...(entry.state === "failed_clean" &&
-      control.childRefusal !== undefined &&
-      code === "remote_disconnect_failed"
-        ? { hint: control.childRefusal }
-        : {}),
+      ...(hint === undefined ? {} : { hint }),
     });
   };
   const revoke = (args: ReadonlyArray<string>): OcxOutput => {
@@ -87,6 +95,8 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       return refused(5, { code: "link_operation_in_progress" });
     }
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
+    const alias = host.control.links.get(linkId)?.alias;
+    if (typeof alias === "string") aliases.set(linkId, alias);
     const entry: RevokeEntry = known ?? { operationId, linkId, force, state: "open" };
     revokes.set(operationId, entry);
     if (force) {
@@ -101,15 +111,20 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       delete entry.code;
       return answer(entry);
     }
-    if (!control.machineAnswers) {
+    if (!answers(linkId) || control.purgeIncomplete) {
       entry.state = "unknown";
       entry.code = "remote_disconnect_failed";
       return answer(entry);
     }
+    if (control.childRefusal === "child_disconnect_pending") {
+      entry.state = "unknown";
+      entry.code = "remote_disconnect_failed";
+      return answer(entry, control.childRefusal);
+    }
     if (control.childRefusal !== undefined || control.childMissing) {
       entry.state = "failed_clean";
       entry.code = "remote_disconnect_failed";
-      return answer(entry);
+      return answer(entry, control.childRefusal);
     }
     host.control.links.delete(linkId);
     entry.state = "committed";
@@ -120,8 +135,7 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     const linkId = option(args, "--link-id");
     if (host.control.links.has(linkId)) return refused(5, { code: "link_present" });
     if (!tombstones.has(linkId)) return refused(4, { code: "tombstone_not_found" });
-    if (!control.machineAnswers)
-      return refused(1, { code: "remote_recover_failed", hint: "ssh_failed" });
+    if (!answers(linkId)) return refused(1, { code: "remote_recover_failed", hint: "ssh_failed" });
     if (control.childMissing)
       return refused(1, { code: "remote_recover_failed", hint: "managed_child_missing" });
     if (control.recoverRefusal !== undefined) return refused(5, { code: control.recoverRefusal });
