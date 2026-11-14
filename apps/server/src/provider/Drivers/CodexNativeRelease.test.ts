@@ -4,6 +4,7 @@ import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
