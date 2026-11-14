@@ -75,6 +75,9 @@ Separate account directories stay isolated, including their local conversation
 state. Claude does not have Codex’s shared-home and shadow-home arrangement.</p>
 <p>For presets that differ only in API keys or endpoints, use the instance’s
 <strong>Environment variables</strong>. Variable assignments do not belong in <strong>Launch arguments</strong>.</p>
+<p>File paths in the <code>--settings</code> and <code>--append-system-prompt-file</code> launch arguments
+can start with <code>~</code> for the home directory of the machine running GOAT. Any
+other relative path is read from the thread’s project folder, or its worktree.</p>
 <p>Claude Code’s verbose mode can stay enabled when you use Claude for text generation, including
 thread titles, branch names, commit messages, and pull request descriptions. On a remote connection,
 GOAT uses the Claude configuration on the connected server.</p>
@@ -112,11 +115,12 @@ timestamp shows when the displayed wait started.</p>
 <p>Claude skills come from the config directory’s <code>skills</code> folder and the project’s
 <code>.claude/skills</code> folder. If both define the same name, the config-directory copy
 wins. Skills disabled in Claude’s settings do not appear in the composer.</p>
-<p>Use <code>$</code> in the composer to select a skill. Enabled installed Claude plugins also
-contribute skills under names such as <code>plugin:review</code>. Skills marked <code>disable-model-invocation</code>
-can still be started by you. Invoke those one per message: Claude directly runs
-only the last named skill and may try to start earlier ones through its Skill
-tool, which refuses skills reserved for manual invocation.</p>
+<p>Use <code>$</code> in the composer to select a skill. Enabled installed Claude plugins,
+and plugins synced from your claude.ai account, also contribute skills under
+names such as <code>plugin:review</code>. Skills marked <code>disable-model-invocation</code> can
+still be started by you. Invoke those one per message: Claude directly runs only
+the last named skill and may try to start earlier ones through its Skill tool,
+which refuses skills reserved for manual invocation.</p>
 <h2 id="task-lists">Task lists</h2>
 <p>To show Claude task lists in the web and desktop apps, add
 <code>CLAUDE_CODE_ENABLE_TODO_TOOLS=1</code> under <strong>Variables</strong> in the Claude instance’s
