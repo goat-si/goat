@@ -150,12 +150,16 @@ function selectOpenCodeRuntimeAdapter(input: {
   const pick = <PE>(probed: Effect.Effect<ProbedOpenCode | undefined, PE>) =>
     byOpenCodeRuntime(probed, { v1: Effect.succeed(input.v1), v2: Effect.succeed(input.v2) });
   const hot = pick(Effect.map(input.probe.lastSuccess, Option.getOrUndefined));
+  // A new session launches what the current identity names. A server reports its own version, which
+  // a shim's probe can miss, but it counts only for the identity it was launched under.
+  let connected: { readonly identity: string; readonly supportsNativeGoals: boolean } | undefined;
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
     getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
-      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
+      const identity = yield* input.probe.identity;
+      const probed = Option.getOrUndefined(yield* input.probe.lastSuccessAt(identity));
       const adapter = yield* pick(Effect.succeed(probed));
       const capabilities = yield* adapter.getCapabilities();
       return {
@@ -163,8 +167,9 @@ function selectOpenCodeRuntimeAdapter(input: {
         turns: {
           ...capabilities.turns,
           supportsNativeGoals:
-            capabilities.turns.supportsNativeGoals ??
-            (probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0),
+            connected?.identity === identity
+              ? connected.supportsNativeGoals
+              : probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0,
         },
       };
     }),
@@ -173,7 +178,7 @@ function selectOpenCodeRuntimeAdapter(input: {
     openSession: (session) =>
       input.currentEnvironment.pipe(
         Effect.flatMap((environment) =>
-          input.resolve.pipe(
+          Effect.all([input.probe.identity, input.resolve]).pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -182,8 +187,18 @@ function selectOpenCodeRuntimeAdapter(input: {
                   cause,
                 }),
             ),
-            Effect.flatMap((result) =>
-              (result.generation === "v2" ? input.v2 : input.v1).openSession(session),
+            Effect.flatMap(([identity, result]) =>
+              (result.generation === "v2" ? input.v2 : input.v1).openSession(session).pipe(
+                Effect.tap((opened) =>
+                  Effect.sync(() => {
+                    connected = {
+                      identity,
+                      supportsNativeGoals:
+                        opened.providerSession.capabilities.turns.supportsNativeGoals === true,
+                    };
+                  }),
+                ),
+              ),
             ),
             Effect.provideService(LaunchEnvironment, environment),
           ),
