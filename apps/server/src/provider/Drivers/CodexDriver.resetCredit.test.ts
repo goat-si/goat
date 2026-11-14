@@ -62,17 +62,31 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  // Codex resolves the value as written from its working directory, the server's: no trim, no ~.
+  // Codex resolves CODEX_HOME as written from its working directory, the server's: no trim, no ~;
+  // without one it uses .codex under the HOME it receives.
+  const spaced = (root: string) => `${root}/user `;
   it.effect.each([
-    { name: "ends in a space", host: (root: string) => `${root}/user ` },
-    { name: "is only whitespace", host: () => " " },
-    { name: "starts with ~/", host: () => "~/account" },
-  ])("a host home that $name shares a lock with an instance pinned to it", ({ host: hostHome }) =>
+    {
+      name: "a host home ending in a space",
+      host: (root: string) => ({ CODEX_HOME: spaced(root) }),
+      at: (root: string) => spaced(root),
+    },
+    { name: "a whitespace-only host home", host: () => ({ CODEX_HOME: " " }), at: () => " " },
+    {
+      name: "a host home starting with ~/",
+      host: () => ({ CODEX_HOME: "~/account" }),
+      at: () => "~/account",
+    },
+    {
+      name: "a HOME override without CODEX_HOME",
+      host: (root: string) => ({ HOME: `${root}/b`, USERPROFILE: `${root}/b` }),
+      at: (root: string) => `${root}/b/.codex`,
+    },
+  ])("$name shares a lock with an instance pinned to the same directory", ({ host: hostEnv, at }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
-      const home = hostHome(root);
       const { service, keys } = yield* scriptedCoordinator(["uncertain", "settled"]);
       const create = (id: string, homePath: string, host: NodeJS.ProcessEnv) =>
         CodexDriver.create({
@@ -86,8 +100,8 @@ it.layer(layerTest)("CodexDriver reset credits", (it) => {
           Effect.provideService(HostProcess.HomeDirectory, root),
           Effect.provideService(ResetCreditCoordinator.ResetCreditCoordinator, service),
         );
-      const following = yield* create("reset-credit-host", "", { PATH: "", CODEX_HOME: home });
-      const pinned = yield* create("reset-credit-pinned", path.resolve(home), { PATH: "" });
+      const following = yield* create("reset-credit-host", "", { PATH: "", ...hostEnv(root) });
+      const pinned = yield* create("reset-credit-pinned", path.resolve(at(root)), { PATH: "" });
       yield* following.consumeResetCredit!().pipe(Effect.exit);
       yield* pinned.consumeResetCredit!().pipe(Effect.exit);
       const [first, second] = keys;

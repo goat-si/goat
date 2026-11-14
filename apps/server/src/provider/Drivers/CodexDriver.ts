@@ -183,6 +183,7 @@ export const CodexDriver: ProviderDriver<
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const baseEnvironment = yield* HostProcess.Environment;
     const homeDirectory = yield* HostProcess.HomeDirectory;
+    const platform = yield* HostProcess.Platform;
     const mergedEnvironment = Effect.suspend(() =>
       mergeProviderInstanceEnvironment(environment, baseEnvironment),
     ).pipe(
@@ -447,11 +448,17 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
-    // Keyed on CODEX_HOME exactly as the redemption gets it, resolved from the server's cwd.
+    // Keyed on the redemption's own home: CODEX_HOME as written, else .codex under its HOME.
     const accountKeyFor = (env: NodeJS.ProcessEnv) =>
       Effect.succeed(
         pinnedHome ??
-          pathService.resolve(env.CODEX_HOME || pathService.join(homeDirectory, ".codex")),
+          pathService.resolve(
+            env.CODEX_HOME ||
+              pathService.join(
+                (platform === "win32" ? env.USERPROFILE : env.HOME) || homeDirectory,
+                ".codex",
+              ),
+          ),
       );
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
       currentEnvironment.pipe(
