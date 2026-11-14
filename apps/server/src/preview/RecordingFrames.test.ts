@@ -75,3 +75,22 @@ it("bounds stalled acknowledgements and reports the failure", async () => {
   await expect(frames.finish()).rejects.toThrow("acknowledgements are stalled");
   expect(stop).toHaveBeenCalledOnce();
 });
+
+it("finishes and cleans up when acknowledgements never settle", async () => {
+  const ack = Promise.withResolvers<void>();
+  const stop = vi.fn(async () => {});
+  const cleanup = vi.fn();
+  const frames = makeRecordingFrames({
+    acknowledge: () => ack.promise,
+    encode: async () => true,
+    stop,
+    isPrivate: () => true,
+  });
+  frames.offer({ data: "frame", width: 100, sessionId: 0 });
+  const finished = frames.finish().finally(cleanup);
+  for (let sessionId = 1; sessionId < 33; sessionId++)
+    frames.offer({ data: "frame", width: 100, sessionId });
+  await expect(finished).rejects.toThrow("acknowledgements are stalled");
+  expect(stop).toHaveBeenCalledOnce();
+  expect(cleanup).toHaveBeenCalledOnce();
+});

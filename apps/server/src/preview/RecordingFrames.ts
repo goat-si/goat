@@ -13,9 +13,11 @@ export const makeRecordingFrames = (input: {
   let failure: unknown;
   let stopping: Promise<void> = Promise.resolve();
   const acknowledgements = new Set<Promise<void>>();
+  const failureSignal = Promise.withResolvers<void>();
   const fail = (cause: unknown) => {
     if (failed) return;
     failed = true;
+    failureSignal.resolve();
     failure = cause;
     pending = null;
     try {
@@ -72,7 +74,7 @@ export const makeRecordingFrames = (input: {
     },
     async finish() {
       while (active) await active;
-      await Promise.all(acknowledgements);
+      await Promise.race([Promise.all(acknowledgements), failureSignal.promise]);
       await stopping;
       if (failed) throw failure;
     },
