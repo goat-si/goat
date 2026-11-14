@@ -1,3 +1,4 @@
+import { assertSlowStatus } from "./SlowStatusAssertions.testkit.ts";
 import { assertUnclaimedClose } from "./UnclaimedTabAssertions.testkit.ts";
 import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.testkit.ts";
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
@@ -86,7 +87,10 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
   },
 }));
 
-function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "about:blank") {
+export function makeContext(
+  onClose?: (context: BrowserContext) => void,
+  initialUrl = "about:blank",
+) {
   const events = new NodeEvents.EventEmitter();
   const nativeFileChooser = vi.fn();
   const setChooserFiles = vi.fn(async (_files: unknown) => {});
@@ -965,18 +969,6 @@ it.live("enforces provider ownership and explicit targets when a session has mul
         input: {},
       });
       expect(diagnostics.console.entries[0]?.text).toBe("another agent's evidence");
-      const foreignEvaluate = yield* broker
-        .invoke<void>({
-          scope: asSession("agent-b"),
-          tabId,
-          operation: "evaluate",
-          input: { expression: "read()" },
-        })
-        .pipe(Effect.flip);
-      expect(foreignEvaluate).toMatchObject({
-        _tag: "PreviewAutomationControlInterruptedError",
-        reason: "agentMismatch",
-      });
       yield* broker.invoke({
         scope,
         operation: "open",
@@ -1011,6 +1003,7 @@ it.live("enforces provider ownership and explicit targets when a session has mul
       });
       expect(result).toBe("evaluated");
       expect(contexts).toHaveLength(2);
+      yield* assertSlowStatus(broker, scope, tabId, contexts[0]!.page);
       yield* assertUnclaimedClose(broker, scope, tabId);
     }),
   ).pipe(Effect.provide(layer)),

@@ -13,6 +13,18 @@ export const assertUnclaimedClose = (
   Effect.gen(function* () {
     const manager = yield* Manager.PreviewManager;
     const foreignScope = { ...scope, thread: { ...scope.thread, providerSessionId: "agent-b" } };
+    const foreignEvaluate = yield* broker
+      .invoke<void>({
+        scope: foreignScope,
+        tabId: ownedTabId,
+        operation: "evaluate",
+        input: { expression: "read()" },
+      })
+      .pipe(Effect.flip);
+    expect(foreignEvaluate).toMatchObject({
+      _tag: "PreviewAutomationControlInterruptedError",
+      reason: "agentMismatch",
+    });
     const foreign = yield* broker
       .invoke<void>({ scope: foreignScope, tabId: ownedTabId, operation: "close", input: {} })
       .pipe(Effect.flip);

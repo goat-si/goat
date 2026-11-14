@@ -1,3 +1,4 @@
+import { withinStatusDeadline } from "./statusDeadline.ts";
 import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
 import { desktopReattachment } from "./DesktopReattachment.ts";
@@ -1353,13 +1354,23 @@ const make = Effect.gen(function* () {
       };
     }
     const url = ServerBrowserPage.withoutDataPayload(tab.page.url());
-    const viewport = tab.desktop ? await layoutSize(tab) : tab.page.viewportSize();
+    const [viewport, title] = await Promise.all([
+      tab.desktop
+        ? withinStatusDeadline(layoutSize(tab), () => tab.desktopViewport)
+        : tab.page.viewportSize(),
+      url === "about:blank" || tab.dialog
+        ? null
+        : withinStatusDeadline(
+            tab.page.title().catch(() => ""),
+            () => "",
+          ).then((value) => value || null),
+    ]);
     const status = {
       available: true,
       visible: capacity.visible(tab),
       tabId: tab.tabId,
       url: url === "about:blank" ? null : url,
-      title: null,
+      title,
       loading: tab.loading,
       documentGeneration: tab.documentGeneration,
       control: {
@@ -1399,8 +1410,7 @@ const make = Effect.gen(function* () {
         completedAt,
       })),
     };
-    if (status.url === null || tab.dialog) return status;
-    return { ...status, title: (await tab.page.title().catch(() => "")) || null };
+    return status;
   };
   const startRecording = (
     tab: ServerTab,

@@ -12,37 +12,43 @@ export const guardedNavigate = async (
   timeout: number,
   channel: ActionChannel,
 ) => {
+  const startedAt = performance.now();
   const navigation = channel.call(() =>
     tab.page.goto(url, {
       timeout,
-      waitUntil:
-        readiness === "domContentLoaded"
-          ? "domcontentloaded"
-          : readiness === "none"
-            ? "commit"
-            : "load",
+      waitUntil: "commit",
     }),
   );
   if (readiness === "none") {
     tab.control.track(navigation);
     return;
   }
-  await navigation.catch((cause: unknown) => {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    if (message.includes("Download is starting")) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `${url} is a file this browser cannot show, so it was downloaded instead. goat_call {path:"preview.status"} lists it under downloads.`,
-      );
-    }
-    if (/ERR_[A-Z_]+/.test(message)) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `Navigation to ${url} failed: ${ServerBrowserPage.parseNetError(message).description}`,
-      );
-    }
-    throw ServerBrowserPage.toOperationError(cause, timeout);
-  });
+  await navigation
+    .then(() =>
+      tab.page
+        .waitForLoadState(readiness === "domContentLoaded" ? "domcontentloaded" : "load", {
+          timeout: Math.max(1, timeout - (performance.now() - startedAt)),
+        })
+        .catch((cause: unknown) => {
+          if (!(cause instanceof Error && cause.name === "TimeoutError")) throw cause;
+        }),
+    )
+    .catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (message.includes("Download is starting")) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `${url} is a file this browser cannot show, so it was downloaded instead. goat_call {path:"preview.status"} lists it under downloads.`,
+        );
+      }
+      if (/ERR_[A-Z_]+/.test(message)) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `Navigation to ${url} failed: ${ServerBrowserPage.parseNetError(message).description}`,
+        );
+      }
+      throw ServerBrowserPage.toOperationError(cause, timeout);
+    });
 };
 
 export const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {
