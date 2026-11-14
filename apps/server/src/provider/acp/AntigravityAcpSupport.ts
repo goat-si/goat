@@ -40,6 +40,8 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   | "transformStdout"
 > {
   readonly processEnvironment?: NodeJS.ProcessEnv;
+  readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
+  readonly sessionLaunch?: unknown;
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;

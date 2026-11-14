@@ -336,7 +336,7 @@ export interface AcpAdapterV2Flavor {
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly resolveSessionLaunch?: (
     environment: NodeJS.ProcessEnv,
-  ) => Effect.Effect<unknown, EffectAcpErrors.AcpError>;
+  ) => Effect.Effect<unknown, EffectAcpErrors.AcpError, Scope.Scope>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<

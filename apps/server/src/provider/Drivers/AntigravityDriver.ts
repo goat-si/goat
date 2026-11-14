@@ -150,17 +150,12 @@ export const AntigravityDriver: ProviderDriver<
     const authConfigIssue = antigravityAuthConfigIssue(auth);
     const baseEnvironment = yield* HostProcess.Environment;
     const homeDirectory = yield* HostProcess.HomeDirectory;
+    const platform = yield* HostProcess.Platform;
     const currentEnvironment = Effect.suspend(() =>
       mergeProviderInstanceEnvironment(environment, baseEnvironment),
     ).pipe(
       Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
       Effect.map((env) => ({ ...env })),
-    );
-    const processEnvironment = { ...(yield* currentEnvironment) };
-    const userHome = resolveAntigravityUserHome(
-      yield* HostProcess.Platform,
-      processEnvironment,
-      yield* HostProcess.HomeDirectory,
     );
     const directories = yield* resolveAntigravityInstanceDirectories(
       host.paths.stateDir,
@@ -205,13 +200,9 @@ export const AntigravityDriver: ProviderDriver<
         Effect.map((catalog) => stampIdentity(ModelCatalog.applyModelCatalog(draft, catalog))),
       );
 
-    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
-      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
-    ): Effect.fn.Return<
-      AcpSessionRuntime.AcpSessionRuntime["Service"],
-      AcpErrors.AcpError | ProviderSetupError,
-      Scope.Scope
-    > {
+    const resolveLaunch = Effect.fn("AntigravityDriver.resolveLaunch")(function* (
+      processEnvironment: NodeJS.ProcessEnv,
+    ) {
       if (authConfigIssue !== null) {
         return yield* new ProviderSetupError({
           instanceId,
@@ -219,8 +210,7 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
-      const processEnvironment = yield* currentEnvironment;
-      const executable = yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
+      return yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderSetupError({
@@ -231,11 +221,24 @@ export const AntigravityDriver: ProviderDriver<
             }),
         ),
       );
+    });
+    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
+    ): Effect.fn.Return<
+      AcpSessionRuntime.AcpSessionRuntime["Service"],
+      AcpErrors.AcpError | ProviderSetupError,
+      Scope.Scope
+    > {
+      const processEnvironment = input.sessionEnvironment ?? (yield* currentEnvironment);
+      const executable =
+        input.sessionLaunch === undefined
+          ? yield* resolveLaunch(processEnvironment)
+          : (input.sessionLaunch as AntigravityInstallation.AntigravityExecutable);
       const profile = yield* prepareAntigravityProfile({
         profileDirectory,
         baseEnv: processEnvironment,
         auth,
-        userHome,
+        userHome: resolveAntigravityUserHome(platform, processEnvironment, homeDirectory),
         tempDirectory: directories.runtimeTemp,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -473,6 +476,13 @@ export const AntigravityDriver: ProviderDriver<
       instanceId,
       selfInvocation,
       makeRuntime,
+      currentEnvironment,
+      resolveSessionLaunch: (env) =>
+        resolveLaunch(env).pipe(
+          Effect.mapError(
+            (cause) => new AcpErrors.AcpTransportError({ detail: cause.detail, cause }),
+          ),
+        ),
       withProcess: authFlow.withProcess,
       defaultModel,
       profileDirectory,
@@ -566,7 +576,13 @@ export const AntigravityDriver: ProviderDriver<
       snapshotForCwd: (cwd) =>
         !enabled
           ? provider.snapshot.getSnapshot
-          : discoverAntigravitySkills({ cwd, userHome }).pipe(
+          : currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                discoverAntigravitySkills({
+                  cwd,
+                  userHome: resolveAntigravityUserHome(platform, environment, homeDirectory),
+                }),
+              ),
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
               Effect.flatMap((skills) => provider.snapshotForCwd(cwd, skills)),

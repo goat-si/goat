@@ -11,6 +11,8 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -34,6 +36,7 @@ import { AntigravityDriver } from "./AntigravityDriver.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import { makeTurnInput } from "../../orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
 
 const hostPlatform = HostProcess.Platform.defaultValue();
 const windowsHost = hostPlatform === "win32";
@@ -308,6 +311,104 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)("reads user skills from the current host home", () =>
+    Effect.gen(function* () {
+      const original = yield* HostProcess.Environment;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const oldHome = path.join(root, "old");
+      const newHome = path.join(root, "new");
+      for (const [home, name] of [
+        [oldHome, "old-skill"],
+        [newHome, "new-skill"],
+      ] as const) {
+        const directory = path.join(home, ".gemini", "config", "skills", name);
+        yield* fs.makeDirectory(directory, { recursive: true });
+        yield* fs.writeFileString(path.join(directory, "SKILL.md"), `---\nname: ${name}\n---\n`);
+      }
+      const host = { ...original, HOME: oldHome };
+      const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+      host.HOME = newHome;
+      const snapshotForCwd = h.instance.snapshotForCwd;
+      if (snapshotForCwd === undefined) return yield* Effect.die("Missing workspace snapshot");
+      const snapshot = yield* snapshotForCwd(root);
+      expect(snapshot.skills.map((skill) => skill.name)).toEqual(["new-skill"]);
+    }).pipe(Effect.scoped),
+  );
+  it.effect.skipIf(windowsHost)(
+    "keeps the session executable and environment when MCP credentials change",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, PATH: original.PATH ?? "/usr/bin:/bin" };
+        const h = yield* makeHarness({ inheritPath: true }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        const oldPath = host.PATH;
+        const threadId = ThreadId.make("thread-antigravity-session-environment");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = (token: string) => ({
+          environmentId: EnvironmentId.make("environment"),
+          threadId,
+          providerSessionId: "mcp-session",
+          providerInstanceId: h.instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer ${token}`,
+          browserToolsAvailable: false,
+        });
+        yield* sessions.set(config("old"));
+        const first = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("antigravity-first"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* first.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        h.controls.selected = h.second;
+        host.PATH = `/new/bin:${oldPath}`;
+        yield* sessions.set(config("new"));
+        yield* first.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* first.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const second = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("antigravity-second"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const launches = h.launches.filter((launch) => launch.harnessPath !== undefined);
+        expect(launches.map((launch) => [launch.command, launch.path])).toEqual([
+          [h.first.executablePath, oldPath],
+          [h.first.executablePath, oldPath],
+          [h.second.executablePath, host.PATH],
+        ]);
+        expect(h.acquisitions).toHaveLength(2);
+      }).pipe(Effect.scoped),
+  );
   it.effect.skipIf(windowsHost)(
     "regression #3079: status and new runtimes read the current host PATH while instance PATH wins",
     () =>
