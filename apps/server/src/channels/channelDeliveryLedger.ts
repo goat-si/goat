@@ -1,6 +1,7 @@
 import { ChannelOutboundMessage, type ChannelDeliveryId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import type { SqlError } from "effect/sql/SqlError";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -19,6 +20,7 @@ import {
   editOvertaken,
   type ProgressClaimRow,
 } from "./channelProgressMessages.ts";
+import { raiseMessageMark } from "./channelTaskMessageMarks.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const isLedgerError = Schema.is(ChannelLedgerError);
@@ -191,6 +193,7 @@ export const deliveryLedger = (
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
   changed: Effect.Effect<void>,
   expired: Effect.Effect<void>,
+  announce: (ownerIds: Iterable<string>) => Effect.Effect<void>,
 ): ChannelDeliveryLedgerOps => {
   const expireRows = Effect.fn("channelDeliveryLedger.expireRows")(function* (now: string) {
     // Only a send that reached a transport may have been seen; one never handed over failed.
@@ -439,9 +442,20 @@ export const deliveryLedger = (
               ) {
                 yield* copyUndeliveredReply(sql, recorded, outcome.type, input.now);
               }
+              if (recorded === undefined || outcome.type !== "delivered") return undefined;
+              // The person can read a delivered post now; its unread commits with the settle.
+              const message = yield* Effect.option(
+                Effect.try(() => decodeOutbound(recorded.message_json)),
+              );
+              return Option.isNone(message)
+                ? undefined
+                : yield* raiseMessageMark(sql, message.value, recorded.operation, input.now);
             }),
           )
-          .pipe(Effect.mapError(mapError("recordDelivery"))),
+          .pipe(
+            Effect.flatMap((owner) => (owner === undefined ? Effect.void : announce([owner]))),
+            Effect.mapError(mapError("recordDelivery")),
+          ),
       ),
   };
   return {

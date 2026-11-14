@@ -44,7 +44,13 @@ import {
   readHistoryPage,
 } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
-import { messageMarkKey, readMessageMark, taskRowUnread } from "./channelTaskMessageMarks.ts";
+import {
+  makeMarkWarnings,
+  MessageMarkLookup,
+  messageMarkKey,
+  readMessageMark,
+  taskRowUnread,
+} from "./channelTaskMessageMarks.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
@@ -100,6 +106,7 @@ const make = Effect.gen(function* () {
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
+  const warnMark = makeMarkWarnings();
   /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
     owner: ChannelConnectionOwner,
@@ -138,11 +145,16 @@ const make = Effect.gen(function* () {
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
     const markKeys = encodeJson(tasks.map((task) => messageMarkKey(owner.ownerId, task.taskId)));
-    const markRows = yield* sql<{
-      readonly key: string;
-      readonly value_json: string;
-    }>`SELECT s.key, s.value_json FROM json_each(${markKeys}) ids
-      JOIN channel_runtime_state s ON s.key = ids.value`.pipe(Effect.mapError(failed));
+    // Without marks every row keeps the earlier rule: unread from the task's last update.
+    const markRows = yield* (yield* MessageMarkLookup)(markKeys).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catch((error) =>
+        warnMark("lookup:" + owner.ownerId, "channel task message marks unreadable", {
+          ownerId: owner.ownerId,
+          error,
+        }).pipe(Effect.as([])),
+      ),
+    );
     const marks = new Map(markRows.map((row) => [row.key, row.value_json]));
     const launchLimit = options.launchLimit;
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
@@ -222,9 +234,13 @@ const make = Effect.gen(function* () {
         const storedMark = marks.get(messageMarkKey(owner.ownerId, task.taskId));
         const mark = storedMark === undefined ? undefined : readMessageMark(storedMark);
         if (storedMark !== undefined && mark === undefined)
-          yield* Effect.logWarning("channel task message mark unreadable; using the last update", {
-            taskId: task.taskId,
-          });
+          yield* warnMark(
+            task.taskId,
+            "channel task message mark unreadable; using the last update",
+            {
+              taskId: task.taskId,
+            },
+          );
         rows.push({
           kind: "task",
           task: {

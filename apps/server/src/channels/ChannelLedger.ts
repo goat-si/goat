@@ -1671,6 +1671,7 @@ const make = Effect.gen(function* () {
         onNone: () => Effect.void,
         onSome: (channel) => channel.wake,
       }),
+      changes.announce,
     ),
 
     getDeliveryState: (deliveryId) =>

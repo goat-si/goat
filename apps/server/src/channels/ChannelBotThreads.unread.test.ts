@@ -14,27 +14,36 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
+import { classifySqliteError, SqlError } from "effect/sql/SqlError";
 import * as TestClock from "effect/testing/TestClock";
 import * as BotThreads from "./ChannelBotThreads.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as Ledger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import * as Transport from "./ChannelTransport.ts";
 import * as Views from "./channelTaskViews.ts";
+import { timelineIdsFor } from "./channelIds.ts";
 import { TASK_CHANGES_COALESCE } from "./channelTaskChanges.ts";
-import { messageMarkKey } from "./channelTaskMessageMarks.ts";
+import {
+  makeMarkWarnings,
+  MARK_WARNINGS_REMEMBERED,
+  MessageMarkLookup,
+  messageMarkKey,
+} from "./channelTaskMessageMarks.ts";
 import { chipDelivery, commitTransition } from "./channelTaskWrites.ts";
 import { LedgerCallHolds } from "./testkit/dispatchRace.ts";
 import { watchTaskChanges } from "./testkit/taskChanges.ts";
 import {
   botThreadId,
   environmentId,
+  goatInput,
   linkSlackUser,
   makeHarness,
   owner,
   ownerId,
+  rpcContext,
   setupBot,
   slackContext,
   slackInput,
@@ -52,6 +61,16 @@ const message = (id: string, forTask = taskId): ChannelOutboundMessage => ({
   taskId: forTask,
 });
 const now = Effect.map(DateTime.now, DateTime.formatIso);
+/** A task as reception leaves it: its input's receipt already went out, so its messages may follow. */
+const task = (id: string) =>
+  Effect.gen(function* () {
+    yield* insertTask(id, { status: "running", createdAt: at(1) });
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT OR IGNORE INTO channel_outbox (delivery_id, cause_key, input_id, kind,
+      destination_kind, message_json, state, next_attempt_at, created_at, updated_at)
+      VALUES ('receipt:input:1', 'reply:input:1', 'input:1', 'receipt', 'goat', '{}', 'delivered',
+      ${at(1)}, ${at(1)}, ${at(1)})`;
+  });
 /** Queues messages the way every producer does: through the ledger's outbox insert. */
 const queue = (...items: ReadonlyArray<ChannelOutboundMessage>) =>
   Effect.gen(function* () {
@@ -65,6 +84,21 @@ const queue = (...items: ReadonlyArray<ChannelOutboundMessage>) =>
       yield* now,
     );
   });
+const ownerToken = Effect.gen(function* () {
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  assert.isTrue(yield* runtime.claimForWork);
+  return runtime.ownerToken;
+});
+/** The real delivery worker hands GOAT rows to the real GOAT transport; receipts settle first. */
+const deliverDue = Effect.gen(function* () {
+  const token = yield* ownerToken;
+  const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  yield* worker.deliverDue(token);
+  yield* worker.settleReceipts;
+  yield* worker.deliverDue(token);
+});
+const deliver = (...items: ReadonlyArray<ChannelOutboundMessage>) =>
+  Effect.andThen(queue(...items), deliverDue);
 /** A task write one second later, as a status change, a follow-up or a bot step would make. */
 const statusUpdate = (id = taskId) =>
   Effect.gen(function* () {
@@ -103,17 +137,42 @@ const acknowledge = (readThrough: string) =>
 /** A task whose first message the person has read. */
 const ready = Effect.gen(function* () {
   yield* setup;
-  yield* insertTask(taskId, { status: "running", createdAt: at(1) });
+  yield* task(taskId);
   yield* statusUpdate();
-  yield* queue(message("initial"));
+  yield* deliver(message("initial"));
   yield* acknowledge((yield* row()).lastActivityAt);
   assert.isFalse((yield* row()).unread);
 });
-const marks = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  return yield* sql<{ readonly key: string }>`SELECT key FROM channel_runtime_state
-    WHERE key LIKE 'task-message-mark:%' ORDER BY key`;
-});
+const sqlRows = <A extends object>(
+  run: (sql: SqlClient.SqlClient) => Effect.Effect<ReadonlyArray<A>, SqlError>,
+) => Effect.flatMap(SqlClient.SqlClient, run);
+const markOf = sqlRows(
+  (sql) =>
+    sql<{ readonly value_json: string }>`SELECT value_json FROM channel_runtime_state
+    WHERE key = ${messageMarkKey(ownerId, taskId)}`,
+);
+const outboxState = (id: string) =>
+  Effect.map(
+    sqlRows(
+      (sql) =>
+        sql<{ readonly state: string }>`SELECT state FROM channel_outbox WHERE delivery_id = ${id}`,
+    ),
+    (found) => found[0]?.state,
+  );
+/** Commands the GOAT transport committed for a delivery: one per message it ever recorded. */
+const recordsOf = (id: string) =>
+  Effect.map(
+    sqlRows(
+      (sql) =>
+        sql<{ readonly n: number }>`SELECT count(*) AS n FROM orchestration_command_receipts
+        WHERE command_id = ${timelineIdsFor(botThreadId, "delivery:" + id, "send").commandId}`,
+    ),
+    (found) => found[0]?.n ?? 0,
+  );
+const updatedAt = (id = taskId) =>
+  Effect.gen(function* () {
+    return (yield* (yield* Ledger.ChannelLedger).getTask(id))!.task.updatedAt;
+  });
 const warnings = () => {
   const logs: string[] = [];
   const layer = Logger.layer(
@@ -126,8 +185,17 @@ const warnings = () => {
   );
   return { logs, layer };
 };
+const withHolds = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provide(
+      BotThreads.layer.pipe(
+        Layer.provideMerge(Views.layer),
+        Layer.provideMerge(Layer.provideMerge(LedgerCallHolds.layer, makeHarness().layer)),
+      ),
+    ),
+  );
 
-describe("task unread follows messages", () => {
+describe("task unread follows delivered messages", () => {
   it.effect(
     "regression #2550: a status update or the person's follow-up does not turn a read task row unread",
     () =>
@@ -143,53 +211,175 @@ describe("task unread follows messages", () => {
   );
 
   it.effect(
-    "regression #2550: a bot message turns a read task row unread, and acknowledging its lastActivityAt clears it",
+    "regression #2550: a queued message changes nothing until it is delivered; delivery turns the row unread and announces once",
     () =>
       provide(
         Effect.gen(function* () {
           yield* ready;
-          yield* statusUpdate();
-          yield* queue(message("progress"));
-          const current = yield* row();
-          assert.isTrue(current.unread);
-          yield* acknowledge(current.lastActivityAt);
+          const before = yield* row();
+          const seen = yield* watchTaskChanges(owner);
+          yield* TestClock.adjust("1 second");
+          yield* queue(message("pending"));
+          const pending = yield* row();
+          assert.isFalse(pending.unread);
+          assert.strictEqual(pending.lastActivityAt, before.lastActivityAt);
+          yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+          assert.isTrue(Option.isNone(yield* Queue.poll(seen)));
+          yield* deliverDue;
+          assert.strictEqual(yield* outboxState("pending"), "delivered");
+          const delivered = yield* row();
+          assert.isTrue(delivered.unread);
+          assert.isAbove(Date.parse(delivered.lastActivityAt), Date.parse(before.lastActivityAt));
+          yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+          assert.isTrue(Option.isSome(yield* Queue.poll(seen)));
+          yield* TestClock.adjust(TASK_CHANGES_COALESCE);
+          assert.isTrue(Option.isNone(yield* Queue.poll(seen)));
+          yield* acknowledge(delivered.lastActivityAt);
           assert.isFalse((yield* row()).unread);
         }),
       ),
   );
 
   it.effect(
-    "regression #2550: a bot message committed by narration turns the row unread in the narration's own transaction",
+    "regression #2550: a message that never reaches the bot thread leaves the row read, unmoved and without a mark",
     () =>
       provide(
         Effect.gen(function* () {
           yield* ready;
-          const runtime = yield* ChannelRuntime.ChannelRuntime;
-          assert.isTrue(yield* runtime.claimForWork);
+          const before = yield* row();
+          const mark = yield* markOf;
+          const sql = yield* SqlClient.SqlClient;
+          const doomed = timelineIdsFor(botThreadId, "delivery:doomed-message", "send").commandId;
+          // Trigger bodies take no bound parameters; the command id is a plain generated id.
+          yield* sql.unsafe(
+            `CREATE TRIGGER refuse_doomed BEFORE INSERT ON orchestration_command_receipts
+            WHEN NEW.command_id = '${doomed}' BEGIN SELECT RAISE(ABORT, 'timeline refused'); END`,
+          );
+          yield* queue(message("doomed-message"));
+          for (let attempt = 0; attempt < 10; attempt++) {
+            yield* deliverDue;
+            yield* TestClock.adjust("5 minutes");
+          }
+          assert.strictEqual(yield* outboxState("doomed-message"), "failed");
+          assert.strictEqual(yield* recordsOf("doomed-message"), 0);
+          const after = yield* row();
+          assert.isFalse(after.unread);
+          assert.strictEqual(after.lastActivityAt, before.lastActivityAt);
+          assert.deepStrictEqual(yield* markOf, mark);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a crash between the bot-thread record and the settle is recovered with one record, one settle and one mark",
+    () =>
+      withHolds(
+        Effect.gen(function* () {
+          yield* ready;
           const ledger = yield* Ledger.ChannelLedger;
+          yield* (yield* LedgerCallHolds).failNext(
+            "recordDelivery",
+            new Ledger.ChannelLedgerError({ reason: "ownership_lost", detail: "process stopped" }),
+            (input) => input.deliveryId === "crashed",
+          );
+          yield* TestClock.adjust("1 second");
+          yield* queue(message("crashed"));
+          assert.isTrue(Exit.isFailure(yield* Effect.exit(deliverDue)));
+          assert.strictEqual(yield* recordsOf("crashed"), 1);
+          assert.strictEqual(yield* outboxState("crashed"), "delivering");
+          assert.isFalse((yield* row()).unread);
+          yield* ledger.settleInterruptedDeliveries({ owner: yield* ownerToken, now: yield* now });
+          yield* deliverDue;
+          assert.strictEqual(yield* recordsOf("crashed"), 1);
+          assert.strictEqual(yield* outboxState("crashed"), "delivered");
+          const current = yield* row();
+          assert.isTrue(current.unread);
+          assert.deepStrictEqual(yield* markOf, [
+            { value_json: JSON.stringify({ at: current.lastActivityAt }) },
+          ]);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a mark write that fails rolls its settle back, and the row is sent again and settles once",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          const before = yield* row();
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TRIGGER refuse_mark_insert BEFORE INSERT ON channel_runtime_state
+            WHEN NEW.key LIKE 'task-message-mark:%'
+            BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
+          yield* sql`CREATE TRIGGER refuse_mark_update BEFORE UPDATE ON channel_runtime_state
+            WHEN NEW.key LIKE 'task-message-mark:%'
+            BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
+          yield* TestClock.adjust("1 second");
+          yield* deliver(message("refused"));
+          assert.strictEqual(yield* recordsOf("refused"), 1);
+          assert.strictEqual(yield* outboxState("refused"), "pending");
+          const unsettled = yield* row();
+          assert.isFalse(unsettled.unread);
+          assert.strictEqual(unsettled.lastActivityAt, before.lastActivityAt);
+          yield* sql`DROP TRIGGER refuse_mark_insert`;
+          yield* sql`DROP TRIGGER refuse_mark_update`;
+          yield* TestClock.adjust("5 seconds");
+          yield* deliverDue;
+          assert.strictEqual(yield* recordsOf("refused"), 1);
+          assert.strictEqual(yield* outboxState("refused"), "delivered");
+          assert.isTrue((yield* row()).unread);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a message queued, then acknowledged over, then delivered is unread",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          yield* TestClock.adjust("1 second");
+          yield* queue(message("late"));
+          yield* acknowledge((yield* row()).lastActivityAt);
+          yield* deliverDue;
+          assert.isTrue((yield* row()).unread);
+        }),
+      ),
+  );
+
+  it.effect(
+    "regression #2550: a bot message committed by narration turns the row unread once it is delivered",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          const ledger = yield* Ledger.ChannelLedger;
+          const token = yield* ownerToken;
           yield* TestClock.adjust("1 second");
           const changed = yield* commitTransition(
             ledger,
             (yield* ledger.getTask(taskId))!,
             { type: "task.progress", payload: { generation: 1, summary: "Halfway there" } },
-            { owner: runtime.ownerToken, narrate: true },
+            { owner: token, narrate: true },
           );
           assert.isDefined(changed);
           const pending = (yield* ledger.listPendingNarrations(10)).find(
             (item) => item.event.taskId === taskId,
           );
           assert.isDefined(pending);
-          // Before narration commits there is no message, so the progress write alone stays read.
           assert.isFalse((yield* row()).unread);
           const item = message("narrated");
           yield* ledger.completeNarration({
-            owner: runtime.ownerToken,
+            owner: token,
             sequence: pending!.sequence,
             deliveries: [
               { deliveryId: item.deliveryId, causeKey: "narrated", taskId, message: item },
             ],
             now: yield* now,
           });
+          assert.isFalse((yield* row()).unread);
+          yield* deliverDue;
           assert.isTrue((yield* row()).unread);
         }),
       ),
@@ -201,7 +391,7 @@ describe("task unread follows messages", () => {
       provide(
         Effect.gen(function* () {
           yield* setup;
-          yield* insertTask(taskId, { status: "running", createdAt: at(1) });
+          yield* task(taskId);
           yield* acknowledge(at(1));
           yield* statusUpdate();
           // Written by the previous server: the outbox row is there, the mark is not.
@@ -211,195 +401,21 @@ describe("task unread follows messages", () => {
             message_json, state, next_attempt_at, created_at, updated_at)
             VALUES ('before-upgrade', 'before-upgrade', ${taskId}, 'result', 'goat',
             ${JSON.stringify(old)}, 'delivered', ${at(0)}, ${at(0)}, ${at(0)})`;
-          assert.lengthOf(yield* marks, 0);
+          assert.lengthOf(yield* markOf, 0);
           assert.isTrue((yield* row()).unread);
         }),
       ),
   );
 
   it.effect(
-    "contract #2550: when the mark write fails the message is not queued, so it is never shown while its row reads read",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          const sql = yield* SqlClient.SqlClient;
-          yield* sql`CREATE TRIGGER refuse_marks BEFORE INSERT ON channel_runtime_state
-            WHEN NEW.key LIKE 'task-message-mark:%'
-            BEGIN SELECT RAISE(ABORT, 'mark refused'); END`;
-          yield* statusUpdate();
-          const refused = yield* Effect.exit(queue(message("refused")));
-          assert.isTrue(Exit.isFailure(refused));
-          const stored = yield* sql<{ readonly state: string }>`SELECT state FROM channel_outbox
-            WHERE delivery_id = 'refused'`;
-          assert.lengthOf(stored, 0);
-          assert.isFalse((yield* row()).unread);
-          yield* sql`DROP TRIGGER refuse_marks`;
-          yield* queue(message("refused"));
-          assert.isTrue((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "contract #2550: after a message, a status update moves lastActivityAt and row order exactly as before",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          yield* insertTask(otherId, { status: "running", createdAt: at(1) });
-          yield* statusUpdate(otherId);
-          yield* queue(message("progress"));
-          yield* statusUpdate();
-          const ledger = yield* Ledger.ChannelLedger;
-          const updatedAt = (yield* ledger.getTask(taskId))!.task.updatedAt;
-          const current = yield* row();
-          assert.strictEqual(current.lastActivityAt, updatedAt);
-          assert.deepStrictEqual(
-            (yield* rows).map((item) => item.task.taskId),
-            [taskId, otherId],
-          );
-        }),
-      ),
-  );
-
-  it.effect(
-    "regression #2550: an acknowledgement in flight from before a message does not clear it, and acknowledgements out of order keep the newest",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* ready;
-          const older = (yield* row()).lastActivityAt;
-          yield* statusUpdate();
-          yield* queue(message("new"));
-          const newer = (yield* row()).lastActivityAt;
-          yield* acknowledge(older);
-          assert.isTrue((yield* row()).unread);
-          yield* acknowledge(newer);
-          yield* acknowledge(older);
-          assert.isFalse((yield* row()).unread);
-          yield* statusUpdate();
-          yield* queue(message("newest"));
-          yield* acknowledge(newer);
-          assert.isTrue((yield* row()).unread);
-        }),
-      ),
-  );
-
-  it.effect(
-    "contract #2550: an unreadable mark is reported with its task and the row falls back to the task's last update",
-    () => {
-      const log = warnings();
-      return Effect.gen(function* () {
-        yield* ready;
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`UPDATE channel_runtime_state SET value_json = 'not json'
-          WHERE key = ${messageMarkKey(ownerId, taskId)}`;
-        assert.isFalse((yield* row()).unread);
-        yield* statusUpdate();
-        assert.isTrue((yield* row()).unread);
-        assert.isTrue(
-          log.logs.some((entry) => entry.includes("mark unreadable") && entry.includes(taskId)),
-        );
-        yield* queue(message("repairs"));
-        const repaired = yield* row();
-        assert.isTrue(repaired.unread);
-        yield* acknowledge(repaired.lastActivityAt);
-        yield* statusUpdate();
-        assert.isFalse((yield* row()).unread);
-      }).pipe(
-        Effect.provide(
-          Layer.merge(
-            BotThreads.layer.pipe(
-              Layer.provideMerge(Views.layer),
-              Layer.provideMerge(makeHarness().layer),
-            ),
-            log.layer,
-          ),
-        ),
-      );
-    },
-  );
-
-  it.effect(
-    "contract #2550: a task chip, an answer decision, a message without a task, another channel and a progress end raise no mark",
-    () =>
-      provide(
-        Effect.gen(function* () {
-          yield* setup;
-          yield* insertTask(taskId, { status: "running", createdAt: at(1) });
-          const ledger = yield* Ledger.ChannelLedger;
-          const task = (yield* ledger.getTask(taskId))!;
-          const bot = (yield* ledger.getBotById(ownerId, task.botId))!.bot;
-          const chip = chipDelivery(task.task, {
-            environmentId,
-            projectId: bot.projectId,
-            threadId: botThreadId,
-          });
-          const { taskId: _omit, ...withoutTask } = message("no-task");
-          yield* queue(
-            chip.message,
-            { ...message("answer"), personAnswer: { answersQuestionId: null } },
-            withoutTask,
-            {
-              ...message("slack"),
-              destination: {
-                kind: "slack",
-                connectionId: "slack",
-                teamId: "team",
-                channelId: "channel",
-                rootTs: "1",
-              },
-            },
-          );
-          const end = { ...message("end"), text: "" };
-          yield* ledger.enqueueDeliveries(
-            [
-              {
-                deliveryId: end.deliveryId,
-                causeKey: "end",
-                taskId,
-                message: end,
-                operation: "end",
-                targetDeliveryId: ChannelDeliveryId.make("initial"),
-              },
-            ],
-            yield* now,
-          );
-          assert.lengthOf(yield* marks, 0);
-        }),
-      ),
-  );
-
-  it.effect("contract #2550: list and history agree on unread and lastActivityAt", () =>
-    provide(
-      Effect.gen(function* () {
-        yield* ready;
-        yield* statusUpdate();
-        yield* queue(message("new"));
-        const current = yield* row();
-        const fromHistory = (yield* history()).rows.find(
-          (item) => item.kind === "task" && item.task.taskId === taskId,
-        );
-        assert.isTrue(current.unread);
-        assert.strictEqual(fromHistory?.kind === "task" && fromHistory.unread, true);
-        assert.strictEqual(
-          fromHistory?.kind === "task" && fromHistory.lastActivityAt,
-          current.lastActivityAt,
-        );
-      }),
-    ),
-  );
-
-  it.effect(
-    "regression #2550: a message with no task write since the read turns the row unread and moves lastActivityAt",
+    "regression #2550: a delivered message with no task write since the read turns the row unread and moves lastActivityAt",
     () =>
       provide(
         Effect.gen(function* () {
           yield* ready;
           const before = (yield* row()).lastActivityAt;
           yield* TestClock.adjust("1 second");
-          yield* queue(message("notice"));
+          yield* deliver(message("notice"));
           const current = yield* row();
           assert.isTrue(current.unread);
           assert.isAbove(Date.parse(current.lastActivityAt), Date.parse(before));
@@ -412,23 +428,23 @@ describe("task unread follows messages", () => {
   );
 
   it.effect(
-    "regression #2550: messages in the same millisecond as the read, or after a task clock went backwards, still turn the row unread",
+    "regression #2550: messages delivered in the same millisecond as the read, or after a task clock went backwards, still turn the row unread",
     () =>
       provide(
         Effect.gen(function* () {
           yield* ready;
-          yield* queue(message("same-instant"));
+          yield* deliver(message("same-instant"));
           const first = yield* row();
           assert.isTrue(first.unread);
           yield* acknowledge(first.lastActivityAt);
-          yield* queue(message("same-instant-again"));
+          yield* deliver(message("same-instant-again"));
           const second = yield* row();
           assert.isTrue(second.unread);
           yield* acknowledge(second.lastActivityAt);
           const sql = yield* SqlClient.SqlClient;
           yield* sql`UPDATE channel_tasks SET updated_at = ${at(30)},
             task_json = json_set(task_json, '$.updatedAt', ${at(30)}) WHERE task_id = ${taskId}`;
-          yield* queue(message("after-regression"));
+          yield* deliver(message("after-regression"));
           assert.isTrue((yield* row()).unread);
         }),
       ),
@@ -442,7 +458,7 @@ describe("task unread follows messages", () => {
           yield* ready;
           const ledger = yield* Ledger.ChannelLedger;
           const prepared = (yield* ledger.getTask(taskId))!;
-          yield* queue(message("lands-first"));
+          yield* deliver(message("lands-first"));
           const after = yield* row();
           assert.isTrue(after.unread);
           // Same version, so the write commits; its clock is behind the message's activity.
@@ -454,50 +470,59 @@ describe("task unread follows messages", () => {
           const current = yield* row();
           assert.isTrue(current.unread);
           assert.isAtLeast(Date.parse(current.lastActivityAt), Date.parse(after.lastActivityAt));
-          assert.strictEqual(
-            (yield* ledger.getTask(taskId))!.task.updatedAt,
-            current.lastActivityAt,
-          );
+          assert.strictEqual(yield* updatedAt(), current.lastActivityAt);
         }),
       ),
   );
 
-  it.effect("contract #2550: a task with a new message moves to the top of the list", () =>
-    provide(
-      Effect.gen(function* () {
-        yield* ready;
-        yield* insertTask(otherId, { status: "running", createdAt: at(1) });
-        yield* statusUpdate(otherId);
-        assert.deepStrictEqual(
-          (yield* rows).map((item) => item.task.taskId),
-          [otherId, taskId],
-        );
-        yield* queue(message("news"));
-        assert.deepStrictEqual(
-          (yield* rows).map((item) => item.task.taskId),
-          [taskId, otherId],
-        );
-      }),
-    ),
-  );
-
-  it.effect("contract #2550: delivering a task message tells open lists to read again", () =>
-    provide(
-      Effect.gen(function* () {
-        yield* ready;
-        const seen = yield* watchTaskChanges(owner);
-        const transport = Option.getOrThrow(
-          yield* (yield* Transport.ChannelTransportRegistry).resolve("goat"),
-        );
-        yield* transport.send(message("delivered"));
-        yield* TestClock.adjust(TASK_CHANGES_COALESCE);
-        assert.isTrue(Option.isSome(yield* Queue.poll(seen)));
-      }),
-    ),
+  it.effect(
+    "regression #2550: an acknowledgement in flight from before a message does not clear it, and acknowledgements out of order keep the newest",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          const older = (yield* row()).lastActivityAt;
+          yield* statusUpdate();
+          yield* deliver(message("new"));
+          const newer = (yield* row()).lastActivityAt;
+          yield* acknowledge(older);
+          assert.isTrue((yield* row()).unread);
+          yield* acknowledge(newer);
+          yield* acknowledge(older);
+          assert.isFalse((yield* row()).unread);
+          yield* statusUpdate();
+          yield* deliver(message("newest"));
+          yield* acknowledge(newer);
+          assert.isTrue((yield* row()).unread);
+        }),
+      ),
   );
 
   it.effect(
-    "contract #2550: a dispatch step that read the task before a message landed still commits its claim",
+    "contract #2550: a task with a delivered message moves to the top of the list, and a later status update moves lastActivityAt as before",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* ready;
+          yield* task(otherId);
+          yield* statusUpdate(otherId);
+          assert.deepStrictEqual(
+            (yield* rows).map((item) => item.task.taskId),
+            [otherId, taskId],
+          );
+          yield* deliver(message("news"));
+          assert.deepStrictEqual(
+            (yield* rows).map((item) => item.task.taskId),
+            [taskId, otherId],
+          );
+          yield* statusUpdate();
+          assert.strictEqual((yield* row()).lastActivityAt, yield* updatedAt());
+        }),
+      ),
+  );
+
+  it.effect(
+    "contract #2550: a dispatch step that read the task before a message was delivered still commits its claim",
     () => {
       const harness = makeHarness({
         projects: 1,
@@ -531,7 +556,8 @@ describe("task unread follows messages", () => {
         );
         yield* hold.reached;
         yield* TestClock.adjust("1 second");
-        yield* queue(message("while-dispatching", id));
+        yield* deliver(message("while-dispatching", id));
+        assert.strictEqual(yield* outboxState("while-dispatching"), "delivered");
         const bumped = (yield* ledger.getTask(id))!.task;
         assert.strictEqual(bumped.version, received!.task.version);
         assert.isAbove(Date.parse(bumped.updatedAt), Date.parse(received!.task.updatedAt));
@@ -542,7 +568,194 @@ describe("task unread follows messages", () => {
           WHERE task_id = ${id} AND type = 'task.dispatch.claimed'`;
         assert.lengthOf(claims, 1);
         assert.lengthOf(harness.world.launches, 1);
+        assert.isAtLeast(Date.parse(yield* updatedAt(id)), Date.parse(bumped.updatedAt));
       }).pipe(Effect.provide(Layer.provideMerge(LedgerCallHolds.layer, harness.layer)));
     },
+  );
+
+  it.effect(
+    "contract #2550: a task chip, an answer decision, a message without a task and another channel raise no mark",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          yield* setup;
+          yield* task(taskId);
+          const before = yield* updatedAt();
+          const ledger = yield* Ledger.ChannelLedger;
+          const stored = (yield* ledger.getTask(taskId))!;
+          const bot = (yield* ledger.getBotById(ownerId, stored.botId))!.bot;
+          const chip = chipDelivery(stored.task, {
+            environmentId,
+            projectId: bot.projectId,
+            threadId: botThreadId,
+          });
+          yield* (yield* ChannelGateway.ChannelGateway).ingest(
+            goatInput("hello", "main-input"),
+            rpcContext,
+          );
+          const input = (yield* ledger.listPendingInputs(10))[0];
+          assert.isDefined(input);
+          const { taskId: _omit, ...withoutTask } = message("no-task");
+          yield* deliver(
+            chip.message,
+            {
+              ...message("answer"),
+              inReplyToInputId: input!,
+              personAnswer: { answersQuestionId: null },
+            },
+            { ...withoutTask, inReplyToInputId: input! },
+            {
+              ...message("slack"),
+              destination: {
+                kind: "slack",
+                connectionId: "slack",
+                teamId: "team",
+                channelId: "channel",
+                rootTs: "1",
+              },
+            },
+          );
+          assert.strictEqual(yield* outboxState("no-task"), "delivered");
+          assert.lengthOf(yield* markOf, 0);
+          assert.strictEqual(yield* updatedAt(), before);
+        }),
+      ),
+  );
+
+  it.effect(
+    "contract #2550: an unreadable mark is reported once with its task, and the row falls back to the task's last update",
+    () => {
+      const log = warnings();
+      return Effect.gen(function* () {
+        yield* ready;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_runtime_state SET value_json = 'not json'
+          WHERE key = ${messageMarkKey(ownerId, taskId)}`;
+        assert.isFalse((yield* row()).unread);
+        yield* statusUpdate();
+        assert.isTrue((yield* row()).unread);
+        const reported = log.logs.filter(
+          (entry) => entry.includes("mark unreadable") && entry.includes(taskId),
+        );
+        assert.lengthOf(reported, 1);
+        yield* deliver(message("repairs"));
+        const repaired = yield* row();
+        assert.isTrue(repaired.unread);
+        yield* acknowledge(repaired.lastActivityAt);
+        yield* statusUpdate();
+        assert.isFalse((yield* row()).unread);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            BotThreads.layer.pipe(
+              Layer.provideMerge(Views.layer),
+              Layer.provideMerge(makeHarness().layer),
+            ),
+            log.layer,
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "contract #2550: when the mark lookup fails, list and history still return rows by the task's last update, warning once",
+    () => {
+      const log = warnings();
+      return Effect.gen(function* () {
+        yield* ready;
+        yield* statusUpdate();
+        assert.isTrue((yield* row()).unread);
+        const fromHistory = (yield* history()).rows.find(
+          (item) => item.kind === "task" && item.task.taskId === taskId,
+        );
+        assert.strictEqual(fromHistory?.kind === "task" && fromHistory.unread, true);
+        const reported = log.logs.filter((entry) => entry.includes("marks unreadable"));
+        assert.lengthOf(reported, 1);
+      }).pipe(
+        Effect.provideService(MessageMarkLookup, () =>
+          Effect.fail(
+            new SqlError({
+              reason: classifySqliteError(new Error("database disk image is malformed")),
+            }),
+          ),
+        ),
+        Effect.provide(
+          Layer.merge(
+            BotThreads.layer.pipe(
+              Layer.provideMerge(Views.layer),
+              Layer.provideMerge(makeHarness().layer),
+            ),
+            log.layer,
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "contract #2550: mark warnings remember a bounded number of keys, then say so once and stop",
+    () => {
+      const log = warnings();
+      return Effect.gen(function* () {
+        const warn = makeMarkWarnings();
+        for (let index = 0; index <= MARK_WARNINGS_REMEMBERED; index++)
+          yield* warn("task-" + index, "channel task message mark unreadable", { index });
+        yield* warn("task-0", "channel task message mark unreadable", { index: 0 });
+        yield* warn("task-new", "channel task message mark unreadable", { index: -1 });
+        assert.lengthOf(log.logs, MARK_WARNINGS_REMEMBERED + 1);
+        assert.include(log.logs.at(-1), "stop here");
+      }).pipe(Effect.provide(log.layer));
+    },
+  );
+
+  it.effect(
+    "contract #2550: keeping the later updated_at orders ISO times 1 ms apart, and every task time the ledger writes has one format",
+    () =>
+      provide(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const earlier = "2026-11-14T00:00:00.000Z";
+          const later = "2026-11-14T00:00:00.001Z";
+          for (const [stored, written] of [
+            [earlier, later],
+            [later, earlier],
+          ]) {
+            const [kept] = yield* sql<{ readonly kept: string }>`SELECT CASE
+              WHEN julianday(${stored}) > julianday(${written}) THEN ${stored} ELSE ${written} END AS kept`;
+            assert.strictEqual(kept?.kept, later);
+          }
+          yield* ready;
+          yield* deliver(message("formatted"));
+          yield* statusUpdate();
+          const times = yield* sql<{ readonly column: string; readonly snapshot: string }>`SELECT
+            updated_at AS column, json_extract(task_json, '$.updatedAt') AS snapshot FROM channel_tasks`;
+          assert.isNotEmpty(times);
+          for (const time of times) {
+            assert.match(time.column, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+            assert.strictEqual(time.snapshot, time.column);
+          }
+        }),
+      ),
+  );
+
+  it.effect("contract #2550: list and history agree on unread and lastActivityAt", () =>
+    provide(
+      Effect.gen(function* () {
+        yield* ready;
+        yield* statusUpdate();
+        yield* deliver(message("new"));
+        const current = yield* row();
+        const fromHistory = (yield* history()).rows.find(
+          (item) => item.kind === "task" && item.task.taskId === taskId,
+        );
+        assert.isTrue(current.unread);
+        assert.strictEqual(fromHistory?.kind === "task" && fromHistory.unread, true);
+        assert.strictEqual(
+          fromHistory?.kind === "task" && fromHistory.lastActivityAt,
+          current.lastActivityAt,
+        );
+      }),
+    ),
   );
 });

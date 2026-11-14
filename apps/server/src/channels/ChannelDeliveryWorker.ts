@@ -410,31 +410,54 @@ const make = Effect.gen(function* () {
     if (!(yield* handOver(delivery, owner))) return;
     const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
     const finishedAt = yield* DateTime.now;
-    yield* ledger.recordDelivery({
+    const settled = yield* ledger
+      .recordDelivery({
+        owner,
+        deliveryId: delivery.deliveryId,
+        attempt: delivery.attempts,
+        outcome:
+          sent._tag === "Success"
+            ? {
+                type: "delivered",
+                ...(sent.success.externalMessageId === undefined
+                  ? {}
+                  : { externalMessageId: sent.success.externalMessageId }),
+              }
+            : deliveryOutcomeFor(
+                sent.failure,
+                delivery.attempts,
+                finishedAt,
+                delivery.message.personAnswer === undefined
+                  ? undefined
+                  : {
+                      maxAttempts: ANSWER_DECISION_ATTEMPTS,
+                      maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
+                    },
+              ),
+        now: DateTime.formatIso(finishedAt),
+      })
+      .pipe(Effect.result);
+    if (settled._tag === "Success") return;
+    const kind = delivery.message.destination.kind;
+    // A local destination records idempotently, so a send whose settle failed simply goes again.
+    if (
+      sent._tag === "Failure" ||
+      (kind !== "goat" && kind !== "mcp") ||
+      settled.failure.reason === "ownership_lost" ||
+      delivery.attempts >= MAX_ATTEMPTS
+    )
+      return yield* settled.failure;
+    yield* Effect.logWarning("channel delivery sent but not settled; sending it again", {
+      deliveryId: delivery.deliveryId,
+      error: settled.failure,
+    });
+    const entry: PendingRelease = {
       owner,
       deliveryId: delivery.deliveryId,
       attempt: delivery.attempts,
-      outcome:
-        sent._tag === "Success"
-          ? {
-              type: "delivered",
-              ...(sent.success.externalMessageId === undefined
-                ? {}
-                : { externalMessageId: sent.success.externalMessageId }),
-            }
-          : deliveryOutcomeFor(
-              sent.failure,
-              delivery.attempts,
-              finishedAt,
-              delivery.message.personAnswer === undefined
-                ? undefined
-                : {
-                    maxAttempts: ANSWER_DECISION_ATTEMPTS,
-                    maxWaitSeconds: ANSWER_DECISION_MAX_WAIT_SECONDS,
-                  },
-            ),
-      now: DateTime.formatIso(finishedAt),
-    });
+      tries: 0,
+    };
+    if (!(yield* tryRelease(entry))) yield* holdForRelease(entry);
   });
 
   const deliverDue = Effect.fn("ChannelDeliveryWorker.deliverDue")(function* (owner: string) {

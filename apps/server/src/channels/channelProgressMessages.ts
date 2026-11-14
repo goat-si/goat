@@ -16,7 +16,6 @@ import type * as SqlClient from "effect/sql/SqlClient";
 
 import type { ChannelOutboxInsert, ChannelStoredDelivery } from "./ChannelLedger.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
-import { raiseMessageMark } from "./channelTaskMessageMarks.ts";
 import { formatSlackOutboundMessages } from "./slack/slackMessageFormatting.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
@@ -375,8 +374,7 @@ export const progressEndRows = Effect.fn("channelProgressMessages.endRows")(func
 
 /**
  * Commits outbox rows; a cause key already stored is a no-op. A row really added for a task makes
- * any waiting edit of that task's progress message stale, and raises its task's message mark in
- * the same transaction.
+ * any waiting edit of that task's progress message stale.
  */
 export const insertOutboxRows = (
   sql: SqlClient.SqlClient,
@@ -386,9 +384,8 @@ export const insertOutboxRows = (
   Effect.forEach(
     deliveries,
     (delivery) =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          const inserted = yield* sql<{ readonly delivery_id: string }>`
+      Effect.gen(function* () {
+        const inserted = yield* sql<{ readonly delivery_id: string }>`
           INSERT INTO channel_outbox (
             delivery_id, cause_key, input_id, task_id, kind, destination_kind, message_json,
             state, attempts, next_attempt_at, created_at, updated_at, operation, target_delivery_id
@@ -401,16 +398,13 @@ export const insertOutboxRows = (
           )
           ON CONFLICT DO NOTHING
           RETURNING delivery_id`;
-          if (inserted.length === 0) return;
-          yield* raiseMessageMark(sql, delivery, now);
-          if (delivery.taskId === undefined) return;
-          yield* progressStatements(sql).supersedeTaskEdits({
-            taskId: delivery.taskId,
-            destinationKind: delivery.message.destination.kind,
-            except: delivery.deliveryId,
-            now,
-          });
-        }),
-      ),
+        if (inserted.length === 0 || delivery.taskId === undefined) return;
+        yield* progressStatements(sql).supersedeTaskEdits({
+          taskId: delivery.taskId,
+          destinationKind: delivery.message.destination.kind,
+          except: delivery.deliveryId,
+          now,
+        });
+      }),
     { discard: true },
   );
