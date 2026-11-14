@@ -26,12 +26,26 @@ function Status({
   readonly rows: ReadonlyArray<GoatBotRow>;
 }) {
   const { onExposure, announcement } = useGoatBotReplyAnnouncement("thread", source);
+  return (
+    <>
+      <Exposure onExposure={onExposure} rows={rows} />
+      <GoatBotActivityStatus replyingSince={null} announcement={announcement} />
+    </>
+  );
+}
+function Exposure({
+  onExposure,
+  rows,
+}: {
+  readonly onExposure: (rows: ReadonlyArray<GoatBotRow>) => void;
+  readonly rows: ReadonlyArray<GoatBotRow>;
+}) {
   useLayoutEffect(() => onExposure(rows), [onExposure, rows]);
-  return <GoatBotActivityStatus replyingSince={null} announcement={announcement} />;
+  return null;
 }
 it("announces the newest source reply when an older row is exposed later during sync", async () => {
   const baseline = new Set<string>();
-  const ids = new Set(["older", "newer"]);
+  const ids = new Set(["earliest", "older", "newer"]);
   const syncing = {
     identity: "thread",
     baselineIds: null,
@@ -43,6 +57,6 @@ it("announces the newest source reply when an older row is exposed later during 
   const newer = row("newer", true);
   await using screen = await render(<Status source={syncing} rows={[newer]} />);
   await screen.rerender(<Status source={syncing} rows={[older, newer]} />);
-  await screen.rerender(<Status source={live} rows={[]} />);
+  await screen.rerender(<Status source={live} rows={[row("earliest")]} />);
   await expect.element(screen.getByRole("status")).toHaveTextContent("GOAT Bot asked a question.");
 });
