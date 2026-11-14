@@ -397,6 +397,7 @@ describe("goat pair", () => {
           assert.isTrue(Exit.isFailure(exit));
           if (Exit.isFailure(exit)) {
             assert.include(String(Cause.squash(exit.cause)), "GOAT_VERSION=0.0.45 sh");
+            assert.include(String(Cause.squash(exit.cause)), `goat pair --base-dir ${baseDir}`);
           }
         }),
       "127.0.0.1",
