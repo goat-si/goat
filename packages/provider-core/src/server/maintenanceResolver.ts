@@ -50,7 +50,10 @@ export {
   npmGlobalPrefixFromCommandPath,
   parseChocolateyLatestVersion,
 } from "./maintenanceCommandPaths.ts";
-export { makeCachedProviderMaintenanceResolution } from "./maintenanceCache.ts";
+export {
+  makeCachedProviderMaintenanceResolution,
+  type ProviderMaintenanceLookup,
+} from "./maintenanceCache.ts";
 
 const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const MISE_WRAPPER_MAX_BYTES = 16 * 1_024;
