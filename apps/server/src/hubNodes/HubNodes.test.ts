@@ -386,6 +386,53 @@ describe("HubNodes", () => {
       ),
   );
 
+  it.effect(
+    "an import skips a desktop profile that names a disposable machine, and disposableRoute names one an alias reaches",
+    () =>
+      run(({ service, state, repository }) =>
+        Effect.gen(function* () {
+          const nodeId = "b".repeat(26);
+          state.disposable = [disposableRecord(nodeId, remote)];
+          expect(
+            yield* service.importProfiles({
+              source: "desktop-catalog",
+              catalog: {
+                state: "readable",
+                profiles: [
+                  profile,
+                  {
+                    ...profile,
+                    environmentId: null,
+                    ssh: { ...profile.ssh, alias: "pen-" + nodeId },
+                  },
+                ],
+              },
+            }),
+          ).toEqual({ outcome: "imported", imported: 0 });
+          expect(yield* repository.listRegistrations).toEqual([]);
+          expect(yield* service.disposableRoute({ alias: "pen-" + nodeId })).toContain(
+            "disposable machine",
+          );
+          expect(yield* service.disposableRoute({ alias: "box" })).toContain("disposable machine");
+          state.identity = EnvironmentId.make("env-kept");
+          expect(yield* service.disposableRoute({ alias: "cc-01" })).toBeUndefined();
+          // A machine GOAT cannot identify is judged by its alias alone.
+          state.identifyEffect = Effect.fail(
+            new SshRemoteDispatch.SshRemoteDispatchError({
+              reason: "host_unavailable",
+              message: "unreachable",
+            }),
+          );
+          expect(yield* service.disposableRoute({ alias: "cc-02" })).toBeUndefined();
+          // A new host's offered key that is a disposable machine's sshd pin names it too.
+          state.disposable = [{ ...disposableRecord(nodeId, remote), sshdPin: "SHA256:pinned" }];
+          expect(yield* service.disposableRoute({ hostKeyFingerprint: "SHA256:pinned" })).toContain(
+            "disposable machine",
+          );
+        }),
+      ),
+  );
+
   it.effect("refuses a linked self replacement before changing the catalog or route state", () =>
     run(({ service, state, repository }) =>
       Effect.gen(function* () {

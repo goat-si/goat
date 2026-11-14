@@ -76,6 +76,15 @@ export class HubNodes extends Context.Service<
     readonly dismissNotice: (
       id: HubNodeNotice["id"],
     ) => Effect.Effect<{ readonly dismissed: boolean }, HubNodesError>;
+    /**
+     * Why a kept-machine path may not add a route through this SSH alias or host key: it is a
+     * disposable machine's Pen alias or sshd key, or the GOAT the alias reaches is one. Undefined
+     * when it is kept or unknown.
+     */
+    readonly disposableRoute: (target: {
+      readonly alias?: string;
+      readonly hostKeyFingerprint?: string;
+    }) => Effect.Effect<string | undefined>;
   }
 >()("goat/hubNodes/HubNodes") {}
 
@@ -524,6 +533,7 @@ export const make = Effect.gen(function* () {
   const importProfiles: HubNodes["Service"]["importProfiles"] = Effect.fn(
     "HubNodes.importProfiles",
   )(function* (input) {
+    const disposable = yield* disposableMachines.recordsOrKept;
     const result = yield* repository.transaction(
       Effect.gen(function* () {
         const previous = yield* repository.getImport;
@@ -547,6 +557,9 @@ export const make = Effect.gen(function* () {
           const alias = profile.ssh.alias;
           const routeId = `ssh:${alias}`;
           if (hasCloudMachineAliasPrefix(alias) || existing.has(routeId)) continue;
+          // A disposable machine is reached only through its own Pen route (design section 6).
+          if (claimedBy(disposable, { alias, environmentId: profile.environmentId }) !== undefined)
+            continue;
           yield* repository.upsertRegistration({
             routeId,
             environmentId: profile.environmentId,
@@ -587,7 +600,36 @@ export const make = Effect.gen(function* () {
       return { dismissed };
     },
   );
-  return HubNodes.of({ snapshot, changes, get, add, remove, check, importProfiles, dismissNotice });
+  const disposableRoute: HubNodes["Service"]["disposableRoute"] = Effect.fn(
+    "HubNodes.disposableRoute",
+  )(function* ({ alias, hostKeyFingerprint }) {
+    const records = yield* disposableMachines.recordsOrKept;
+    const target = alias ?? "This host";
+    const offered = claimedBy(records, {
+      ...(alias === undefined ? {} : { alias }),
+      ...(hostKeyFingerprint === undefined ? {} : { hostKeyFingerprint }),
+    });
+    if (offered !== undefined) return refusalText(offered, target);
+    if (alias === undefined || records.every((record) => record.final)) return undefined;
+    // An alias GOAT cannot identify is judged by its name alone; hub.nodes.add identifies again.
+    const identity = yield* ssh
+      .identifyTarget({ alias, hostname: alias, username: null, port: null })
+      .pipe(Effect.orElseSucceed(() => null));
+    const byEnvironment = claimedBy(records, { environmentId: identity });
+    return byEnvironment === undefined ? undefined : refusalText(byEnvironment, alias);
+  });
+
+  return HubNodes.of({
+    snapshot,
+    changes,
+    get,
+    add,
+    remove,
+    check,
+    importProfiles,
+    dismissNotice,
+    disposableRoute,
+  });
 });
 
 export const layer = Layer.effect(HubNodes, make);
