@@ -22,9 +22,13 @@ const resolve = (operationId: string) =>
   "ocx link operations resolve --operation-id " + operationId + " --yes";
 
 interface Stop {
-  readonly text: (operationId: string, outcome: string | undefined) => string;
-  readonly next: string;
+  readonly text: (operationId: string, outcome: string | undefined, detach: Detach) => string;
+  readonly next: string | ((outcome: string | undefined) => string);
 }
+/** A revoke OpenCodex left open, or never recorded, goes again under its id after a detach. */
+const REPEATS = new Set(["open", "not_found", "unreadable"]);
+const REPEAT_NEXT =
+  "A person fixes what stopped the revoke on the hub, then detaches again" + WHERE + ".";
 const FORCE_NEXT = "A person forces the detach" + WHERE + ".";
 const CHECK_NEXT =
   "A person checks the machine, then detaches again or forces the detach" + WHERE + ".";
@@ -77,21 +81,30 @@ const STOPS: Record<string, Stop> = {
     next: FORCE_NEXT,
   },
   revoke_unsettled: {
-    text: (operationId, outcome) =>
+    text: (operationId, outcome, detach) =>
       outcome === "open"
         ? "OpenCodex still lists the revoke " +
           operationId +
           " as running. A person fixes what stopped it on this hub (ocx link operations --operation-id " +
           operationId +
-          "), then forces the detach" +
+          " shows it), then detaches again" +
           WHERE +
-          "."
-        : "OpenCodex could not tell what the revoke did to the Child. A person checks the machine, runs " +
-          resolve(operationId) +
-          " on this hub, then forces the detach" +
-          WHERE +
-          ".",
-    next: RESOLVE_NEXT,
+          ": GOAT repeats the revoke under that id."
+        : outcome === "not_found" || outcome === "unreadable"
+          ? "OpenCodex " +
+            (outcome === "not_found" ? "never recorded" : "gave no readable answer for") +
+            " the revoke " +
+            operationId +
+            (detach.refusal === undefined ? "" : " (it answered " + detach.refusal + ")") +
+            ". A person fixes what stopped it on this hub, then detaches again" +
+            WHERE +
+            ": GOAT sends it again."
+          : "OpenCodex could not tell what the revoke did to the Child. A person checks the machine, runs " +
+            resolve(operationId) +
+            " on this hub, then forces the detach" +
+            WHERE +
+            ".",
+    next: (outcome) => (outcome !== undefined && REPEATS.has(outcome) ? REPEAT_NEXT : RESOLVE_NEXT),
   },
   link_unsettled: {
     text: (operationId) =>
@@ -124,9 +137,13 @@ const STOPS: Record<string, Stop> = {
     next: FORCE_NEXT,
   },
   link_foreign: {
-    text: () =>
-      "OpenCodex lists a link under this machine's alias that GOAT cannot tie to this attach, so GOAT leaves it. A person checks it with ocx link status on this hub, removes it there if it is this machine's, then detaches again.",
-    next: "A person checks the link on the hub, removes it there if it is this machine's, then detaches again.",
+    text: (_operationId, _outcome, detach) =>
+      "OpenCodex lists link " +
+      (detach.foreignLinkId ?? "") +
+      " under this machine's alias, which GOAT cannot tie to this attach, so GOAT leaves it. A person can force the detach" +
+      WHERE +
+      ", which ends this record and leaves that link as it is.",
+    next: FORCE_NEXT,
   },
   tombstone_limit: {
     text: () =>
@@ -142,13 +159,14 @@ const STOPS: Record<string, Stop> = {
 const stopOf = (detach: Detach, stop: string) => {
   const known = STOPS[stop] ?? STOPS.revoke_refused;
   const operationId = detach.operationId ?? "";
-  const text = known?.text(operationId, detach.outcome) ?? "";
+  const text = known?.text(operationId, detach.outcome, detach) ?? "";
+  const next = known?.next ?? FORCE_NEXT;
   return {
     text:
       operationId === "" || text.includes(operationId)
         ? text
         : text + " Operation " + operationId + ".",
-    next: known?.next ?? FORCE_NEXT,
+    next: typeof next === "string" ? next : next(detach.outcome),
   };
 };
 /** What recover's refusal means while GOAT keeps trying it every 30 minutes. */
@@ -163,6 +181,8 @@ const RECOVER_WAITS: Record<string, string> = {
     "it presents another SSH host key than its link pinned, so GOAT sends it nothing.",
   managed_child_missing:
     "the machine has no planted ocx-child, so only a person can confirm its cleanup.",
+  link_retirement_pending:
+    "OpenCodex still holds an unfinished removal of its link and asked for it once more, which GOAT did.",
 };
 const waits = (detach: Detach | undefined) =>
   detach?.outcome !== undefined && RECOVER_WAITS[detach.outcome] !== undefined
@@ -182,6 +202,67 @@ export interface DetachView {
   readonly stop: string | undefined;
 }
 
+/**
+ * A linked record whose retirement force stopped: a linked row offers Detach, which goes on with
+ * that removal. Once the machine answers, only a removal OpenCodex left open or unsettled stays.
+ */
+const retirementStopped = (name: string, detach: Detach, failing: boolean) => {
+  const operationId = detach.operationId ?? "";
+  const detachIt = " detaches it" + WHERE;
+  const repeats = detach.outcome !== undefined && REPEATS.has(detach.outcome);
+  const unsettled =
+    detach.stop === "revoke_unsettled" && !repeats
+      ? "A person checks the machine, runs " +
+        resolve(operationId) +
+        " on this hub, then" +
+        detachIt +
+        "."
+      : undefined;
+  if (!failing)
+    return {
+      message:
+        name +
+        " answers again, but GOAT's earlier removal of its link without it " +
+        (unsettled === undefined
+          ? "is still open in OpenCodex (operation " +
+            operationId +
+            "). A person fixes what stopped it on this hub, then" +
+            detachIt +
+            ", which repeats it first."
+          : "left operation " + operationId + " unsettled in OpenCodex. " + unsettled),
+      nextAction:
+        unsettled === undefined
+          ? "A person fixes what stopped that removal on the hub, then" + detachIt + "."
+          : "A person checks the machine, resolves the operation on the hub, then" + detachIt + ".",
+    };
+  const why =
+    detach.stop === "tombstone_limit"
+      ? "too many links removed without their machines wait for cleanup on this hub (operation " +
+        operationId +
+        "). A person recovers or forgets some (ocx link recover --list), then" +
+        detachIt +
+        ", which repeats that removal."
+      : unsettled === undefined
+        ? "OpenCodex refused, never recorded or never finished operation " +
+          operationId +
+          ". A person fixes what stopped it on this hub, then" +
+          detachIt +
+          ", which repeats that removal."
+        : "OpenCodex could not tell what operation " + operationId + " did. " + unsettled;
+  return {
+    message:
+      name +
+      " did not answer for 24 hours, but GOAT's removal of its link without it stopped: " +
+      why,
+    nextAction:
+      detach.stop === "tombstone_limit"
+        ? "A person recovers or forgets waiting cleanups on the hub, then" + detachIt + "."
+        : unsettled === undefined
+          ? "A person fixes what stopped that removal on the hub, then" + detachIt + "."
+          : "A person checks the machine, resolves the operation on the hub, then" + detachIt + ".",
+  };
+};
+
 /** The message for a record GOAT is detaching, retired, returned or purged, or a linked one it checks. */
 export const detachMessage = (
   view: DetachView,
@@ -198,27 +279,19 @@ export const detachMessage = (
     return {
       message:
         name +
-        " presented another SSH host key than its link pinned, so GOAT stopped every step for it and sent it nothing. A person can force the detach" +
+        " presented another SSH host key than its link pinned, so GOAT stopped every step for it and sent it nothing. A person first forces the detach" +
         WHERE +
-        ", which removes the link without contacting the machine, and remove the machine from Pen with pen revoke." +
+        ", which removes the link without contacting the machine, then removes the machine from Pen with pen revoke." +
         held(view.inPen, false),
       nextAction:
-        "A person forces the detach" +
+        "A person first forces the detach" +
         WHERE +
-        ", and removes the machine from Pen with pen revoke.",
+        ", then removes the machine from Pen with pen revoke.",
     };
   switch (view.state) {
     case "linked":
-      if (detach?.force === true && detach.stop !== undefined) {
-        const stop = stopOf(detach, detach.stop);
-        return {
-          message:
-            name +
-            " did not answer for 24 hours, but GOAT's removal of its link without it stopped: " +
-            stop.text,
-          nextAction: stop.next,
-        };
-      }
+      if (detach?.force === true && detach.stop !== undefined)
+        return retirementStopped(name, detach, (view.health?.failures ?? 0) > 0);
       if (view.linkKeyMoved)
         return {
           message:
@@ -320,7 +393,12 @@ export const detachMessage = (
             : detach?.outcome === "unproven"
               ? " is detached: OpenCodex lists no link for it, but link operation " +
                 (detach.operationId ?? "") +
-                " never settled, so the machine may still hold the planted Child; check it there with ~/.cache/opencodex/bin/ocx-child connect status --json."
+                " never settled, so the machine may still hold the planted Child; check it there with ~/.cache/opencodex/bin/ocx-child connect status --json." +
+                (detach.foreignLinkId === undefined
+                  ? ""
+                  : " Link " +
+                    detach.foreignLinkId +
+                    " under its alias is not GOAT's and was left as it is.")
               : detach?.outcome === "elsewhere"
                 ? " is detached: its OpenCodex link was removed outside GOAT, so GOAT cannot tell whether the machine still holds the lightweight Child."
                 : " is detached: its OpenCodex link and lightweight Child are gone.") +
