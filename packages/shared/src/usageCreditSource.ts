@@ -7,17 +7,17 @@ type CreditReport = {
 
 export function creditReportWins(next: CreditReport, previous: CreditReport | null): boolean {
   if (!previous) return true;
-  const rank = ({ limits, input }: CreditReport) =>
-    !input
-      ? 0
-      : "instanceId" in input && limits.resetCredits?.options
-        ? 3
-        : "sourceId" in input
-          ? 2
-          : 1;
-  return rank(next) !== rank(previous)
-    ? rank(next) > rank(previous)
-    : Date.parse(next.limits.checkedAt) > Date.parse(previous.limits.checkedAt);
+  const kind = ({ input }: CreditReport) => (!input ? 0 : "sourceId" in input ? 2 : 1);
+  const choosesGrant = ({ input, limits }: CreditReport) =>
+    input !== null && "instanceId" in input && limits.resetCredits?.options !== undefined;
+  const nextKind = kind(next);
+  const previousKind = kind(previous);
+  if (nextKind !== previousKind) {
+    if (nextKind === 1 && previousKind === 2 && choosesGrant(next)) return true;
+    if (nextKind === 2 && previousKind === 1 && choosesGrant(previous)) return false;
+    return nextKind > previousKind;
+  }
+  return Date.parse(next.limits.checkedAt) > Date.parse(previous.limits.checkedAt);
 }
 
 export function shownCreditReport(selected: CreditReport | null, freshest: CreditReport | null) {

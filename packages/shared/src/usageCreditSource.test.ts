@@ -268,3 +268,77 @@ it("does not offer redemption when the chosen hub credit has no id", () => {
   expect(report?.accounts[0]?.redeemable).toBe(false);
   expect(report?.accounts[0]?.resetCreditInput).toBeUndefined();
 });
+
+it("a fresher direct report at zero beats an older direct report with options in Usage", () => {
+  const older = provider({
+    instanceId: ProviderInstanceId.make("old"),
+    driver: claude,
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt,
+      windows: [window],
+      resetCredits: {
+        availableCount: 1,
+        options: [
+          { creditId: "weekly", label: "Weekly", description: "Weekly", availableCount: 1 },
+        ],
+      },
+    },
+  });
+  const newer = provider({
+    instanceId: ProviderInstanceId.make("new"),
+    driver: claude,
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt: "2026-09-03T11:30:00.000Z",
+      windows: [window],
+      resetCredits: { availableCount: 0 },
+    },
+  });
+  for (const providers of [
+    [older, newer],
+    [newer, older],
+  ]) {
+    const [account] = collectLimitAccounts(
+      new Map([[EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers } }]]),
+    );
+    expect(account?.limits.resetCredits).toEqual({ availableCount: 0 });
+    expect(account?.redeem?.input).toEqual({ instanceId: "new" });
+  }
+});
+
+it("a fresher direct report at zero beats an older direct report with options in the composer", () => {
+  const older = provider({
+    instanceId: ProviderInstanceId.make("old"),
+    driver: claude,
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt,
+      windows: [window],
+      resetCredits: {
+        availableCount: 1,
+        options: [
+          { creditId: "weekly", label: "Weekly", description: "Weekly", availableCount: 1 },
+        ],
+      },
+    },
+  });
+  const newer = provider({
+    instanceId: ProviderInstanceId.make("new"),
+    driver: claude,
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt: "2026-09-03T11:30:00.000Z",
+      windows: [window],
+      resetCredits: { availableCount: 0 },
+    },
+  });
+  for (const providers of [
+    [older, newer],
+    [newer, older],
+  ]) {
+    const report = collectProviderUsageLimits(newer.instanceId, providers, [], now);
+    expect(report?.accounts[0]?.limits.resetCredits).toEqual({ availableCount: 0 });
+    expect(report?.accounts[0]?.resetCreditInput).toEqual({ instanceId: "new" });
+  }
+});
