@@ -12,8 +12,8 @@ import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   detailFromCause,
+  failedProbeHint,
   firstNonEmptyLine,
-  unavailableInstallHint,
 } from "@goat/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
@@ -120,7 +120,7 @@ export const make = Effect.gen(function* () {
         ),
         Effect.catch((cause) =>
           Effect.gen(function* () {
-            const installHint = yield* unavailableInstallHint(executable, input.installHint, cause);
+            const installHint = yield* failedProbeHint(input, cause);
             return {
               kind: input.kind,
               label: input.label,
