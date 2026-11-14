@@ -15,6 +15,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -223,6 +224,154 @@ it.layer(layerTest)("PiDriver workspace discovery", (it) => {
           );
         assert.strictEqual(yield* advisory, "1.0.0");
         host.NPM_CONFIG_REGISTRY = "https://b.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
+  // The npm fixtures are POSIX shell scripts, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host registry change an instance override masks reaches the next native advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const dirs = [`${root}/first`, `${root}/second`];
+        for (const dir of dirs) {
+          yield* fs.makeDirectory(dir);
+          yield* fs.writeFileString(`${dir}/custom-pi`, "#!/bin/sh\n");
+          // npm answers with the latest version the registry it is given offers.
+          yield* fs.writeFileString(
+            `${dir}/npm`,
+            `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *instance*) echo '"9.0.0"';; *) echo '"1.0.0"';; esac\n`,
+          );
+          for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${dir}/${name}`, 0o755);
+        }
+        const host = { PATH: dirs[0]!, HOME: root, NPM_CONFIG_REGISTRY: "https://x.example" };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-masked-registry"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(Effect.provideService(HostProcess.Environment, host));
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // A native install's advisory reads the host registry; the instance's own one masks it.
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("50 minutes");
+        host.PATH = dirs[1]!;
+        assert.strictEqual(yield* advisory, "1.0.0");
+        yield* TestClock.adjust("5 minutes");
+        host.NPM_CONFIG_REGISTRY = "https://y.example";
+        assert.strictEqual(yield* advisory, "2.0.0");
+      }).pipe(Effect.scoped),
+  );
+
+  // The fixtures are POSIX shell scripts behind symlinks, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host PATH change while a check resolves the executable keeps that check on one environment",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        const prefixes = [`${root}/first`, `${root}/second`];
+        for (const prefix of prefixes) {
+          const packageDir = `${prefix}/lib/node_modules/@earendil-works/pi-coding-agent`;
+          yield* fs.makeDirectory(packageDir, { recursive: true });
+          yield* fs.makeDirectory(`${prefix}/bin`);
+          yield* fs.writeFileString(`${packageDir}/cli.js`, "#!/bin/sh\n");
+          yield* fs.chmod(`${packageDir}/cli.js`, 0o755);
+          yield* fs.symlink(`${packageDir}/cli.js`, `${prefix}/bin/custom-pi`);
+        }
+        // No instance variables, so the merged environment is the live host object.
+        const host = { PATH: `${prefixes[0]}/bin`, HOME: root };
+        const first = `${prefixes[0]}/bin/custom-pi`;
+        let moved = false;
+        // The host moves to the second install while the check is looking at the first.
+        const movingFs: FileSystem.FileSystem = {
+          ...fs,
+          stat: (target) => {
+            if (target === first && !moved) {
+              moved = true;
+              host.PATH = `${prefixes[1]}/bin`;
+            }
+            return fs.stat(target);
+          },
+        };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-path-race"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(FileSystem.FileSystem, movingFs),
+        );
+        const maintenance = yield* instance.snapshot.resolveMaintenance();
+        assert.isTrue(moved);
+        // The npm update runs with the environment of the check that found the first install.
+        assert.strictEqual(maintenance.update?.env?.PATH, `${prefixes[0]}/bin`);
+      }).pipe(Effect.scoped),
+  );
+
+  // The fixtures are POSIX shell scripts, which Windows cannot run.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a host registry change while a check resolves the executable stays out of that check's advisory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+        yield* fs.writeFileString(`${root}/custom-pi`, "#!/bin/sh\n");
+        yield* fs.writeFileString(
+          `${root}/npm`,
+          `#!/bin/sh\ncase "$NPM_CONFIG_REGISTRY" in *y.example*) echo '"2.0.0"';; *) echo '"1.0.0"';; esac\n`,
+        );
+        for (const name of ["custom-pi", "npm"]) yield* fs.chmod(`${root}/${name}`, 0o755);
+        const host = { PATH: root, HOME: root, NPM_CONFIG_REGISTRY: "https://x.example" };
+        let moved = false;
+        const movingFs: FileSystem.FileSystem = {
+          ...fs,
+          stat: (target) => {
+            if (target === `${root}/custom-pi` && !moved) {
+              moved = true;
+              host.NPM_CONFIG_REGISTRY = "https://y.example";
+            }
+            return fs.stat(target);
+          },
+        };
+        const instance = yield* PiDriver.create({
+          instanceId: ProviderInstanceId.make("pi-registry-race"),
+          displayName: "Pi",
+          accentColor: "#abcdef",
+          environment: [
+            { name: "NPM_CONFIG_REGISTRY", value: "https://instance.example", sensitive: false },
+          ],
+          enabled: true,
+          config: { ...PiDriver.defaultConfig(), binaryPath: "custom-pi" },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(FileSystem.FileSystem, movingFs),
+        );
+        const advisory = instance.snapshot
+          .resolveMaintenance()
+          .pipe(
+            Effect.flatMap(
+              (maintenance) => maintenance.lookupLatestVersion ?? Effect.succeed(null),
+            ),
+          );
+        // The check hashed registry x, so its cached advisory must ask x, not the later y.
+        assert.strictEqual(yield* advisory, "1.0.0");
+        assert.isTrue(moved);
         assert.strictEqual(yield* advisory, "2.0.0");
       }).pipe(Effect.scoped),
   );

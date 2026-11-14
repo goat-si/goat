@@ -3,6 +3,7 @@ import { ProviderDriverKind, type ServerProvider } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
 import { OmoSettings } from "../omoSettings.ts";
 import { OMO_PROFILE, PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
@@ -136,17 +137,28 @@ const makePiFamilyDriver = (
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, pathService),
         );
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
         currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
         {
-          lookup: currentEnvironment.pipe(
-            Effect.flatMap((env) =>
+          // Everything derives from the host snapshot resolveMaintenance provides: a merged copy made
+          // before resolving, and the host's hash, because native and manual installs' npm advisory
+          // reads the host environment, where an instance override can mask a change.
+          lookup: Effect.flatMap(HostProcess.Environment, (snapshot) =>
+            mergeProviderInstanceEnvironment(environment, snapshot).pipe(
+              Effect.provideService(HostProcess.HomeDirectory, home),
+              Effect.map((merged) => ({
+                env: { ...merged },
+                host: hostEnvironmentHash(snapshot),
+              })),
+            ),
+          ).pipe(
+            Effect.flatMap(({ env, host }) =>
               Effect.suspend(() =>
                 resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
                   Effect.provideService(CommandResolutionCache, new Map()),
                 ),
               ).pipe(
-                Effect.map((resolvedCommandPath) => ({ env, resolvedCommandPath })),
+                Effect.map((resolvedCommandPath) => ({ env, resolvedCommandPath, install: host })),
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, pathService),
               ),
@@ -156,6 +168,12 @@ const makePiFamilyDriver = (
             maintenanceForEnvironment(env, resolvedCommandPath ?? "", resolvedCommandPath),
         },
       );
+      const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
+        Effect.suspend(() =>
+          cachedMaintenance(options).pipe(
+            Effect.provideService(HostProcess.Environment, { ...hostEnvironment }),
+          ),
+        );
 
       const orchestrationAdapter = yield* adapterDriver
         .create({
