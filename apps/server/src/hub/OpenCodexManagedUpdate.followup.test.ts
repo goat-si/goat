@@ -256,7 +256,18 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
         expect(fleet.holds).toBe(1);
         const reads = fleet.planReads;
         const applies = fleet.applyCalls;
+        // The guard reads persisted state before it releases, so the release can land after the clock step.
+        const released = yield* Deferred.make<void>();
+        let holds = fleet.holds;
+        Object.defineProperty(fleet, "holds", {
+          get: () => holds,
+          set: (value: number) => {
+            holds = value;
+            if (value === 0) Deferred.doneUnsafe(released, Effect.void);
+          },
+        });
         yield* TestClock.adjust(5_000);
+        yield* Deferred.await(released);
         expect(fleet.holds).toBe(0);
         expect(fleet.planReads).toBe(reads);
         expect(fleet.applyCalls).toBe(applies);
