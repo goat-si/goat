@@ -134,8 +134,10 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
                 ? "settle"
                 : "done";
         const { stop: _stop, ...kept } = known ?? { step: stepFor, attempt: 0 };
-        // A person's force starts its sends afresh and reads the stored id again before any stop.
-        const { sends: _sends, outcome: _outcome, ...fresh } = kept;
+        // A person's force starts its sends afresh and reads the stored id again before any stop;
+        // a silent machine's outcome stays, so the purge the force replaces is resolved after it.
+        const { sends: _sends, outcome, ...rest } = kept;
+        const fresh = outcome === "unreachable" ? { ...rest, outcome } : rest;
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true

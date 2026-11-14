@@ -27,6 +27,8 @@ export const Detach = Schema.Struct({
   idleSinceMs: Schema.optionalKey(Schema.Number),
   /** Why the detach waits for a person (a Child's refusal or an unsettled revoke). */
   stop: Schema.optionalKey(Schema.String),
+  /** A silent machine's purge the forced revoke replaced, resolved once the force committed. */
+  supersedes: Schema.optionalKey(Schema.String),
 });
 export type Detach = typeof Detach.Type;
 
