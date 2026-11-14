@@ -11,6 +11,8 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
@@ -329,11 +331,31 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       }
       const host = { ...original, HOME: oldHome };
       const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+      yield* h.refresh();
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+      expect((yield* h.instance.snapshot.refresh).auth.status).toBe("authenticated");
       host.HOME = newHome;
+      expect((yield* h.instance.snapshot.refresh).auth.status).not.toBe("authenticated");
       const snapshotForCwd = h.instance.snapshotForCwd;
       if (snapshotForCwd === undefined) return yield* Effect.die("Missing workspace snapshot");
       const snapshot = yield* snapshotForCwd(root);
       expect(snapshot.skills.map((skill) => skill.name)).toEqual(["new-skill"]);
+      yield* h.refresh();
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+      expect(yield* fs.readLink(path.join(h.profileDirectory, "config", "skills"))).toBe(
+        path.join(newHome, ".gemini", "config", "skills"),
+      );
+      const acquired = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      h.controls.beforeAcquire = Deferred.succeed(acquired, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const oldLaunch = yield* Effect.forkChild(h.refresh());
+      yield* Deferred.await(acquired);
+      host.HOME = oldHome;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(oldLaunch);
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("authenticated");
     }).pipe(Effect.scoped),
   );
   it.effect.skipIf(windowsHost)(

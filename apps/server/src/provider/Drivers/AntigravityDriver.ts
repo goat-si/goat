@@ -157,6 +157,10 @@ export const AntigravityDriver: ProviderDriver<
       Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
       Effect.map((env) => ({ ...env })),
     );
+    const currentProfile = currentEnvironment.pipe(
+      Effect.map((env) => resolveAntigravityUserHome(platform, env, homeDirectory)),
+    );
+    const startedProfiles = new WeakMap<AcpSessionRuntime.AcpSessionRuntimeStartResult, string>();
     const directories = yield* resolveAntigravityInstanceDirectories(
       host.paths.stateDir,
       instanceId,
@@ -230,6 +234,7 @@ export const AntigravityDriver: ProviderDriver<
       Scope.Scope
     > {
       const processEnvironment = input.sessionEnvironment ?? (yield* currentEnvironment);
+      const userHome = resolveAntigravityUserHome(platform, processEnvironment, homeDirectory);
       const executable =
         input.sessionLaunch === undefined
           ? yield* resolveLaunch(processEnvironment)
@@ -238,7 +243,7 @@ export const AntigravityDriver: ProviderDriver<
         profileDirectory,
         baseEnv: processEnvironment,
         auth,
-        userHome: resolveAntigravityUserHome(platform, processEnvironment, homeDirectory),
+        userHome,
         tempDirectory: directories.runtimeTemp,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -302,15 +307,14 @@ export const AntigravityDriver: ProviderDriver<
           ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
           : {}),
         start: () =>
-          runtime
-            .start()
-            .pipe(
-              Effect.tapError((cause): Effect.Effect<void> =>
-                input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
-                  ? provider.onAuthRequired
-                  : Effect.void,
-              ),
+          runtime.start().pipe(
+            Effect.tap((started) => Effect.sync(() => startedProfiles.set(started, userHome))),
+            Effect.tapError((cause): Effect.Effect<void> =>
+              input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
+                ? provider.onAuthRequired
+                : Effect.void,
             ),
+          ),
       };
     });
 
@@ -365,7 +369,7 @@ export const AntigravityDriver: ProviderDriver<
         "getEvents" | "drainEvents" | "setModel"
       >,
     ) {
-      yield* provider.onSessionStarted(started);
+      yield* provider.onSessionStarted(started, undefined, startedProfiles.get(started));
       yield* Stream.runForEach(runtime.getEvents(), (event) => {
         if (event._tag === "EventStreamBarrier") {
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
@@ -455,6 +459,7 @@ export const AntigravityDriver: ProviderDriver<
       probeUsage: usage.probe,
       clearUsage: usage.clear,
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
+      currentProfile,
       supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -486,7 +491,8 @@ export const AntigravityDriver: ProviderDriver<
       withProcess: authFlow.withProcess,
       defaultModel,
       profileDirectory,
-      onSessionStarted: provider.onSessionStarted,
+      onSessionStarted: (started, cwd) =>
+        provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
       onSessionEvent: (event) => {
         if (event._tag === "ConfigOptionsUpdated") {
           return provider.onConfigOptionsUpdated(event.configOptions);
