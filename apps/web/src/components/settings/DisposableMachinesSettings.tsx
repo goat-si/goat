@@ -445,8 +445,7 @@ const actionsOf = (machine: HubMachineStatus): ReadonlyArray<MachineAction> => {
   if (machine.class !== "disposable") return [];
   if (machine.state === "detaching") return ["force"];
   if (machine.penMember && DETACHABLE.has(machine.state)) return ["detach"];
-  if (!machine.penMember && (machine.state === "unknown" || machine.state === "paused"))
-    return ["release"];
+  if (!machine.penMember && machine.state === "unknown") return ["release"];
   return [];
 };
 
