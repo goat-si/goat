@@ -1,7 +1,10 @@
 import type { EnvironmentId } from "@goat/contracts";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 
-import { pickMobileGoatBotEnvironment } from "../features/goat-bot/goatBotHomeMode";
+import {
+  loadedMobileGoatBotRef,
+  pickMobileGoatBotEnvironment,
+} from "../features/goat-bot/goatBotHomeMode";
 import { mobileGoatBotEnvironmentInput } from "../features/goat-bot/mobileGoatBotEnvironments";
 import { channelEnvironment } from "./channels";
 import { mobilePreferencesAtom } from "./preferences";
@@ -9,8 +12,9 @@ import { environmentPresentations } from "./presentation";
 
 /** The computer whose bot Home this device opens: the same pick the roster and Home make. */
 const mobileGoatBotHomeEnvironmentIdAtom = Atom.make((get) => {
-  const preferences = get(mobilePreferencesAtom);
-  const botRef = AsyncResult.isSuccess(preferences) ? (preferences.value.goatBotRef ?? null) : null;
+  const botRef = loadedMobileGoatBotRef(get(mobilePreferencesAtom));
+  // Until preferences load the Bots switch cannot open Home, so Home governs no computer.
+  if (botRef === undefined) return null;
   const environments = [...get(environmentPresentations.presentationsAtom)].map(
     ([environmentId, presentation]) =>
       mobileGoatBotEnvironmentInput({

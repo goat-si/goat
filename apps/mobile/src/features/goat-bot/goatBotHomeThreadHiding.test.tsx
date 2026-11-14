@@ -533,6 +533,7 @@ function setup() {
   // The second computer's list waits unless a test answers it.
   setList(AsyncResult.initial(true), "far");
   fx.openThread.mockClear();
+  fx.reads.length = 0;
 }
 
 function Home() {
@@ -704,6 +705,23 @@ it("moves Home's rule to the computer Home opens, and each thread it hides opens
   expect(sorted(opened)).toEqual(sorted(farLinks));
 });
 
+it("governs no computer until preferences have loaded, then hides what the loaded Home opens", async () => {
+  setup();
+  // Before preferences load the Bots switch does nothing, so Threads keeps dev's rule.
+  for (const pending of [
+    AsyncResult.initial(true),
+    AsyncResult.failure(Cause.fail("storage unavailable")),
+  ]) {
+    fx.registry.set(fx.atoms.preferences as never, pending as never);
+    expect(hiddenSet()).toEqual(sorted(envLegacy));
+  }
+  saveBot(null);
+  expect(hiddenSet()).toEqual(sorted(envLinks));
+  await using screen = await renderHome();
+  await screen.openLink("Ship the release", "GOAT thread: Patch web");
+  expect(fx.openThread).toHaveBeenLastCalledWith({ environmentId: "env", id: "c1" });
+});
+
 it("governs no computer while no bot computer is selected", () => {
   setup();
   setList(listed(farRows), "far");
@@ -754,16 +772,24 @@ function setupScout(input: { unread: ReadonlyArray<boolean>; waiting: number }) 
   setScout(input);
 }
 function setScout(input: { unread: ReadonlyArray<boolean>; waiting: number }) {
+  answerScoutList(input.unread);
+  answerScoutStatus(input.waiting);
+}
+// The server's answer to Scout's task list: one task per entry, unread or read.
+function answerScoutList(unread: ReadonlyArray<boolean>) {
   setList(
     listed(
-      input.unread.map((unread, n) => ({ ...task("s" + n, "Scout task " + n, "sw" + n), unread })),
+      unread.map((value, n) => ({ ...task("s" + n, "Scout task " + n, "sw" + n), unread: value })),
     ),
     "env",
     "scout",
   );
+}
+// The server's answer to Scout's status read: how many of its tasks wait on the person.
+function answerScoutStatus(waitingCount: number) {
   fx.registry.set(
     fx.answer("channel.getBotStatus", "env", "scout"),
-    AsyncResult.success({ waitingCount: input.waiting }) as never,
+    AsyncResult.success({ waitingCount }) as never,
   );
 }
 async function renderRoster() {
@@ -810,15 +836,19 @@ it("a governed member row counts the unread tasks of its bot's real current list
   expect(roster.label()).toContain("2 unread tasks; recent work only; older work may be missing");
 });
 
-it("marking a member's tasks read and visiting it clear the unread and waiting counts independently", async () => {
+// Simulated server answers: the list after a Mark read, the status after a visit.
+it("a member row's unread and waiting counts each follow only their own read", async () => {
   setupScout({ unread: [true], waiting: 2 });
   await using roster = await renderRoster();
   expect([roster.unread(), roster.waiting()]).toEqual([["1"], ["2"]]);
-  // Mark read: the list answers the task read; the waiting count stays.
-  await act(async () => setScout({ unread: [false], waiting: 2 }));
+  // The list answers the task read, as after Mark read; the status read is unchanged.
+  await act(async () => answerScoutList([false]));
   expect([roster.unread(), roster.waiting()]).toEqual([[], ["2"]]);
   expect(roster.label()).not.toContain("unread task");
-  // A new unread task, then a visit: the waiting count clears; the unread count stays.
-  await act(async () => setScout({ unread: [true], waiting: 0 }));
+  // A new unread task arrives in the list; the status read is still unchanged.
+  await act(async () => answerScoutList([false, true]));
+  expect([roster.unread(), roster.waiting()]).toEqual([["1"], ["2"]]);
+  // The status answers no waiting task, as after a visit; the list is unchanged.
+  await act(async () => answerScoutStatus(0));
   expect([roster.unread(), roster.waiting()]).toEqual([["1"], []]);
 });
