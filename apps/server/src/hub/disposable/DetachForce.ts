@@ -188,7 +188,8 @@ export const makeForceStep = (ops: DetachOps) =>
             : known.kind === "unsettled"
               ? !known.resolved
               : true;
-      storedOwnsNothing = known.kind === "not_found" || (known.kind === "failed_clean" && !reuse);
+      // A never-recorded id is resent with its owner (reuse), so only a settled refusal owns nothing.
+      storedOwnsNothing = known.kind === "failed_clean" && !reuse;
       if (reuse && !pending && (before.sends ?? 0) >= REVOKE_SENDS)
         return yield* halt(row, enroll, before, "revoke_unsettled");
     }
