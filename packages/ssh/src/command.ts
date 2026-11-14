@@ -236,8 +236,8 @@ const SSH_STDERR_MAX_BYTES = 64 * 1024;
 
 const collectProcessOutput = Effect.fn("ssh/command.collectProcessOutput")(function* <E>(
   stream: Stream.Stream<Uint8Array, E>,
+  chunks: Uint8Array[],
 ) {
-  const chunks: Uint8Array[] = [];
   let bytes = 0;
   let truncated = false;
   yield* stream.pipe(
@@ -334,7 +334,7 @@ export const sshDiagnosticChunks = <E>(
 
 function redactSshErrorOutput(output: string, keepTail = false): string {
   const redacted = output.replace(
-    /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
+    /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+("|$)/giu,
     "$1[redacted]$2",
   );
   if (redacted.length <= MAX_SSH_ERROR_OUTPUT_LENGTH) return redacted;
@@ -454,6 +454,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     proxyPending: boolean;
     spawned: boolean;
     stderr: string;
+    stdoutChunks: Uint8Array[];
   },
 ): Effect.fn.Return<
   SshCommandResult,
@@ -546,7 +547,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   }
   const [stdout, stderr, exitCode] = yield* Effect.all(
     [
-      collectProcessOutput(child.stdout),
+      collectProcessOutput(child.stdout, progress.stdoutChunks),
       sshDiagnosticChunks(child.stderr, (line) => {
         // A VERBOSE jump can report success without DEBUG1 forwarding details.
         // Ignore its auth milestones until the final target starts its own login.
@@ -659,6 +660,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
     proxyPending: false,
     spawned: false,
     stderr: "",
+    stdoutChunks: [] as Uint8Array[],
   };
   return yield* Effect.scopedWith((commandScope) =>
     runSshCommandInScope(target, input, commandScope, progress),
@@ -695,6 +697,10 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               command: ["ssh"],
               exitCode: null,
               stderr: progress.stderr,
+              stdout: redactSshErrorOutput(
+                NodeBuffer.Buffer.concat(progress.stdoutChunks).toString("utf8"),
+                input.keepErrorOutputTail,
+              ),
               message: progress.stderr.trim() ? `${message}\n${progress.stderr.trim()}` : message,
               ...remoteScriptSettle(input, progress.spawned),
             });
