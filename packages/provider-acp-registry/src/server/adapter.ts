@@ -132,10 +132,7 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
   });
 }
 
-function makeAcpRegistryRuntime(
-  options: AcpRegistryAdapterV2Options,
-  catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
-) {
+function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
   return (
     input: AcpAdapterV2RuntimeInput,
   ): Effect.Effect<
@@ -144,29 +141,23 @@ function makeAcpRegistryRuntime(
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const { processEnvironment, sessionEnvironment, ...runtimeInput } = input;
-      const environment = sessionEnvironment ?? options.environment;
-      const resolved = yield* catalog.resolve(options.settings, input.cwd, environment).pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpSpawnError({
-              command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
-              cause,
-            }),
-        ),
-      );
+      const {
+        processEnvironment,
+        sessionEnvironment: _sessionEnvironment,
+        sessionLaunch,
+        ...runtimeInput
+      } = input;
+      const resolved = sessionLaunch as AcpRegistrySupport.ResolvedAcpRegistryAgent;
+      const spawn = { ...resolved.spawn, cwd: input.cwd };
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
           spawn:
             processEnvironment === undefined
-              ? resolved.spawn
+              ? spawn
               : {
-                  ...resolved.spawn,
-                  env: McpProviderSession.mergeThreadEnvironment(
-                    resolved.spawn.env,
-                    processEnvironment,
-                  ),
+                  ...spawn,
+                  env: McpProviderSession.mergeThreadEnvironment(spawn.env, processEnvironment),
                 },
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(
@@ -213,7 +204,6 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: environment.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 ?? "1",
         }
       : environment;
-  const runtimeOptions = { ...options, environment: withClaudeEnvironment(options.environment) };
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
@@ -262,7 +252,21 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           extractSubagentUpdate: extractCopilotSubagentUpdate,
           restartRuntimeAfterPromptError: isCopilotLostSessionError,
         }),
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(runtimeOptions, catalog),
+    ...(options.makeRuntime === undefined
+      ? {
+          resolveSessionLaunch: (environment: NodeJS.ProcessEnv) =>
+            catalog.resolve(options.settings, process.cwd(), environment).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new EffectAcpErrors.AcpSpawnError({
+                    command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
+                    cause,
+                  }),
+              ),
+            ),
+        }
+      : {}),
+    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
     ...(runtimeCoordinator === undefined
       ? {}
       : {
@@ -296,9 +300,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     instanceId: options.instanceId,
     flavor,
     selfInvocation: options.selfInvocation,
-    ...(options.currentEnvironment === undefined
-      ? {}
-      : { currentEnvironment: options.currentEnvironment.pipe(Effect.map(withClaudeEnvironment)) }),
+    currentEnvironment: (options.currentEnvironment ?? Effect.succeed(options.environment)).pipe(
+      Effect.map(withClaudeEnvironment),
+    ),
     ...(options.continuationRequests === undefined
       ? {}
       : { continuationRequests: options.continuationRequests }),
