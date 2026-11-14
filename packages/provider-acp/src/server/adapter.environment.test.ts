@@ -18,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { AgentScope, type AgentScopeShape } from "@goat/shared/AgentScope";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import * as TestProviderHost from "../../../provider-testing/src/TestProviderHost.ts";
 import * as DocumentText from "../../../../apps/server/src/provider/DocumentText.ts";
@@ -48,32 +47,32 @@ it.live("runtime launches retain the environment captured at session open", () =
     const first = { ...process.env };
     process.env[key] = "new-host-value";
     const second = { ...process.env };
-    const observed: Array<string | undefined> = [];
-    const scope: AgentScopeShape = {
-      wrap: ({ command, args, env }) =>
-        Effect.sync(() => {
-          observed.push(env?.[key]);
-          return { command, args };
-        }),
-      watch: () => Effect.void,
-      stop: () => Effect.void,
-      clear: () => Effect.void,
-      kill: () => Effect.succeed(false),
-      oomKilled: () => Effect.succeed(false),
-    };
+    const observed: Array<string | null> = [];
     const path = yield* Path.Path;
     const agent = yield* path.fromFileUrl(
       new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
     );
     for (const environment of [first, first, second]) {
+      const received = yield* Deferred.make<string>();
       yield* AcpSessionRuntime.make({
-        spawn: { command: process.execPath, args: [agent], env: environment, shell: false },
+        spawn: {
+          command: process.execPath,
+          args: [
+            "-e",
+            `console.error(JSON.stringify(process.env.${key} ?? null)); import(process.argv[1])`,
+            agent,
+          ],
+          env: environment,
+          shell: false,
+        },
         sessionEnvironment: environment,
         cwd: process.cwd(),
         clientInfo: { name: "test", version: "1" },
-      }).pipe(Effect.provideService(AgentScope, scope));
+        onStderr: (text) => Deferred.succeed(received, text).pipe(Effect.asVoid),
+      });
+      observed.push(JSON.parse((yield* Deferred.await(received)).trim()));
     }
-    assert.deepEqual(observed, [undefined, undefined, "new-host-value"]);
+    assert.deepEqual(observed, [null, null, "new-host-value"]);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
