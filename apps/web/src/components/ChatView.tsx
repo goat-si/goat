@@ -3018,8 +3018,6 @@ export default function ChatView(props: ChatViewProps) {
       !appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(primaryEnvironmentId))
     )
       return;
-    // A draft on another machine moves to this device's copy in the same
-    // update, and any machine switch still in flight is dropped.
     cancelEnvironmentChange();
     setDraftThreadContext(draftId, {
       ...(current.environmentId !== primaryEnvironmentId
@@ -3035,13 +3033,14 @@ export default function ChatView(props: ChatViewProps) {
     });
     scheduleComposerFocus();
   };
-  const { onResume, isResuming } = useComposerResume({
+  const { onResume, isResuming, canResume } = useComposerResume({
     environmentId,
     routeThreadKey,
     currentRouteThreadKeyRef,
     activeThread,
     resumableRunId,
     hasHeldQueuedRuns,
+    projection: serverProjection,
     isSendBusy,
     isConnecting,
     isRevertingCheckpoint,
@@ -3840,7 +3839,7 @@ export default function ChatView(props: ChatViewProps) {
                                   queuedRunEdit.isSaving ||
                                   isResuming
                                 }
-                                canResume={resumableRunId !== null || hasHeldQueuedRuns}
+                                canResume={canResume}
                                 isRevertingCheckpoint={isRevertingCheckpoint}
                                 sshWorktreeSelected={sshDestination !== null}
                                 sideChatAvailable={sideChatAvailable}
