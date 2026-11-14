@@ -226,6 +226,8 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
   readonly supportsCompaction?: boolean;
+  /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
+  readonly compactViaAdvertisedCommand?: boolean;
   readonly runtimeHarness?: string;
   readonly registerExtensions?: (
     context: AcpAdapterV2ExtensionContext,
