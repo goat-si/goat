@@ -683,7 +683,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
 
   // A handed-off service install rewrites the unit later, while the old launcher may be stopped.
   if (servicePlan?.handedOff !== true) {
-    const references = yield* bootServiceRuntimeReferences();
+    const references = yield* bootServiceRuntimeReferences({ noSystemd: "skip" });
     if (references !== undefined) {
       yield* prunePinnedRuntimes({
         baseDir: input.baseDir,

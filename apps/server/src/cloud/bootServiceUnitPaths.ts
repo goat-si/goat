@@ -22,7 +22,7 @@ export const bootServiceUnitPaths = Effect.fn("cloud.boot_service.unit_paths")(f
     Effect.as(true),
     Effect.catch((error) => Effect.succeed(error.reason._tag === "NotFound" ? false : undefined)),
   );
-  if (systemd === false) return [];
+  if (systemd === false) return "no-systemd" as const;
   if (systemd === undefined) return undefined;
   const uid = yield* HostProcess.UserId;
   const runtimeDir = yield* Config.String("XDG_RUNTIME_DIR").pipe(Config.withDefault(""));

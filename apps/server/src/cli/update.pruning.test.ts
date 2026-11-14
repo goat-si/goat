@@ -18,6 +18,12 @@ import { updateCommand } from "./update.ts";
 it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
   it.effect.each([
     { scenario: "unconfirmed manager", lookupFails: true, unit: "goat.service", keep: true },
+    {
+      scenario: "systemd absent in a container sharing a host service home",
+      lookupFails: false,
+      unit: "goat.service",
+      keep: true,
+    },
     { scenario: "current service", lookupFails: false, unit: "goat.service", keep: true },
     { scenario: "legacy service", lookupFails: false, unit: "t3code.service", keep: true },
     {
@@ -28,7 +34,7 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
     },
     { scenario: "unreadable legacy unit", lookupFails: false, unit: "unreadable", keep: true },
     { scenario: "no unit reference", lookupFails: false, unit: "none", keep: false },
-  ])("preserves only safe candidates for $scenario", ({ lookupFails, unit, keep }) =>
+  ])("preserves only safe candidates for $scenario", ({ scenario, lookupFails, unit, keep }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -68,7 +74,17 @@ it.layer(NodeServices.layer)("goat update runtime pruning", (it) => {
           Effect.provide(NetService.layer),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
-            stat: (file) => fs.stat(file === "/run/systemd/system" ? config : file),
+            stat: (file) =>
+              file === "/run/systemd/system" && scenario.startsWith("systemd absent")
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "NotFound",
+                      module: "FileSystem",
+                      method: "stat",
+                      pathOrDescriptor: file,
+                    }),
+                  )
+                : fs.stat(file === "/run/systemd/system" ? config : file),
             readDirectory: (file, options) =>
               file === "/proc" ? Effect.succeed(["42"]) : fs.readDirectory(file, options),
             readLink: (file) =>

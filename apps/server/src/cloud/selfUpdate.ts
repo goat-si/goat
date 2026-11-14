@@ -209,7 +209,7 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
     if (!input.managed && executablePath !== entryPath && executablePath !== realEntryPath) {
       return [];
     }
-    const references = yield* bootServiceRuntimeReferences();
+    const references = yield* bootServiceRuntimeReferences({ noSystemd: "allow" });
     if (references === undefined) return [];
     const removed = yield* prunePinnedRuntimes({
       baseDir: input.baseDir,
