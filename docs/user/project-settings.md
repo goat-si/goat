@@ -294,7 +294,8 @@ By default, cleanup considers worktrees unused for seven days, those beyond the 
 used, and those whose threads were archived or deleted. These rules are alternatives: meeting
 any one can make a worktree eligible. You can turn them off or change them. Worktrees can also
 be removed after a chosen number of inactive days, after a thread settles, after
-merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
+merging, or when they have no commits beyond the default branch and their thread is settled or
+archived. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.

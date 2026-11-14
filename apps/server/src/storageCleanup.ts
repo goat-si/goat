@@ -737,6 +737,8 @@ const make = Effect.gen(function* () {
           settledFor !== null &&
           settings.worktreeSettledAfterDays !== null &&
           settledFor >= settings.worktreeSettledAfterDays * DAY_MS;
+        const unchangedApplies =
+          settings.worktreeUnchanged && (thread.settledAt !== null || thread.archivedAt !== null);
         let eligible = deleted || old || settled;
         let removalReason = deleted
           ? "thread was deleted"
@@ -752,7 +754,7 @@ const make = Effect.gen(function* () {
         });
         if (!eligible && retention !== null) [eligible, removalReason] = [true, retention];
         // Only proof that the commits shipped lets any rule remove a worktree that has them.
-        if (!deleted && (eligible || settings.worktreeUnchanged || settings.worktreeOnMerge)) {
+        if (!deleted && (eligible || unchangedApplies || settings.worktreeOnMerge)) {
           const shipping = yield* shipped({
             repositoryCwd: path.resolve(project.workspaceRoot),
             worktreePath,
@@ -760,20 +762,24 @@ const make = Effect.gen(function* () {
             headSha: head.commitSha,
             pullRequest:
               eligible || settings.worktreeOnMerge
-                ? !eligible && !settings.worktreeUnchanged
+                ? !eligible && !unchangedApplies
                   ? "integrated"
                   : "unshipped"
                 : "never",
           });
           if (shipping._tag === "unshipped" || shipping._tag === "unknown")
             return keep(shipping.reason);
-          if (!eligible && shipping._tag === "integrated" && settings.worktreeUnchanged) {
+          if (!eligible && shipping._tag === "integrated" && unchangedApplies) {
             eligible = true;
             removalReason = shipping.remote
               ? "no commits beyond the default branch"
               : "no commits beyond the project branch";
           } else if (!eligible && shipping._tag === "integrated" && !shipping.remote)
-            return keep("no remote is configured for merged-worktree cleanup");
+            return keep(
+              settings.worktreeUnchanged && !unchangedApplies
+                ? "not settled"
+                : "no remote is configured for merged-worktree cleanup",
+            );
           if (
             !eligible &&
             settings.worktreeOnMerge &&
@@ -789,9 +795,11 @@ const make = Effect.gen(function* () {
                 ? settledFor === null
                   ? "not settled"
                   : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
-                : settings.worktreeOnMerge
-                  ? "not merged"
-                  : "has commits beyond the default branch",
+                : settings.worktreeUnchanged && !unchangedApplies
+                  ? "not settled"
+                  : settings.worktreeOnMerge
+                    ? "not merged"
+                    : "has commits beyond the default branch",
           );
         // Re-read this path's threads and sessions so new activity cancels removal; full per-worktree snapshots take seconds.
         const blockedSinceCheck = Effect.fnUntraced(function* () {
