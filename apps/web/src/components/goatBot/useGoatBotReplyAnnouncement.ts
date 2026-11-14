@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -19,6 +19,13 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
     setSpeech({ identity, eligible: new Set(), consumed: new Set(), pending: new Map() });
     setAnnouncement(null);
   }
+  const announce = useStableCallback((row: Extract<GoatBotRow, { kind: "bot" }>) => {
+    setAnnouncement((previous) => ({
+      identity,
+      sequence: previous?.identity === identity ? previous.sequence + 1 : 1,
+      row,
+    }));
+  });
   const onExposure = useStableCallback((exposed: ReadonlyArray<GoatBotRow>) => {
     const baseline = source.baselineIds ?? source.speechBaselineIds;
     if (baseline == null || source.sourceIds === undefined) return;
@@ -36,13 +43,15 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
     }
     const row = newest ?? speech.pending.get("reply") ?? null;
     speech.pending.clear();
-    if (row !== null) {
-      setAnnouncement((previous) => ({
-        identity,
-        sequence: previous?.identity === identity ? previous.sequence + 1 : 1,
-        row,
-      }));
-    }
+    if (row !== null) announce(row);
   });
+  // oxlint-disable-next-line goat/react-effect-budget -- Flush the live-region update after synchronization even when the transcript has no rows.
+  useLayoutEffect(() => {
+    if (source.baselineIds == null) return;
+    const row = speech.pending.get("reply");
+    if (row === undefined) return;
+    speech.pending.clear();
+    announce(row);
+  }, [source.baselineIds, speech, announce]);
   return { announcement: announcement?.identity === identity ? announcement : null, onExposure };
 }
