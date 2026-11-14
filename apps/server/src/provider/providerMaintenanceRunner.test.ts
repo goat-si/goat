@@ -1,4 +1,4 @@
-import { openCodeUpdateCases } from "./providerMaintenanceOpenCodeCases.ts";
+import { openCodeUpdateCases } from "./providerMaintenanceOpenCodeCases.testkit.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "@goat/provider-core/server/maintenanceResolver";
 import { describe, it, assert } from "@effect/vitest";
 import {
