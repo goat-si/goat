@@ -726,6 +726,7 @@ export function GoatBotScreen(props: {
             }
             notesRefreshKey={goatBotNotesRefreshKey(session.rows)}
             workRevision={session.workRevision}
+            taskChips={session.taskChips}
             chatTasks={chatTasks}
             taskCardInfo={taskCard?.card ?? null}
             taskTitle={props.taskTitle}
