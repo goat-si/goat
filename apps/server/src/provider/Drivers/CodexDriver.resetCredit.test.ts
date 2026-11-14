@@ -1,12 +1,21 @@
 import { expect, it } from "@effect/vitest";
-import { ProviderInstanceId, type ProviderInstanceEnvironment } from "@goat/contracts";
+import {
+  ProviderInstanceId,
+  ProviderSessionId,
+  ThreadId,
+  type ProviderInstanceEnvironment,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { ChildProcess } from "effect/process";
 
+import * as CodexAdapter from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { CODEX_TEST_RUNTIME_POLICY } from "../../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
+import * as CodexInstallation from "../CodexInstallation.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
@@ -52,6 +61,7 @@ const createInstance = (
     readonly root: string;
     readonly coordinator: ResetCreditCoordinator.ResetCreditCoordinator["Service"];
     readonly spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
+    readonly clientFactory?: CodexAdapter.CodexAppServerClientFactoryShape;
     readonly enabled?: boolean;
   },
 ) =>
@@ -73,6 +83,20 @@ const createInstance = (
       input.spawner === undefined
         ? effect
         : Effect.provideService(effect, ChildProcessSpawner.ChildProcessSpawner, input.spawner),
+    (effect) =>
+      input.clientFactory === undefined
+        ? effect
+        : Effect.provide(
+            Effect.provideService(
+              effect,
+              CodexAdapter.CodexAppServerClientFactory,
+              input.clientFactory,
+            ),
+            Layer.mock(CodexInstallation.CodexInstallation)({
+              managedDirectory: "unused",
+              compatibility: () => Effect.sync(() => undefined),
+            }),
+          ),
   );
 
 /** Two signed-in homes, and `alias` -> vault/team, so `alias/../acct` is vault/acct to the OS. */
@@ -98,12 +122,17 @@ const fixtureCodex = (root: string, body = "") =>
     return `${root}/bin`;
   });
 
-/** The CODEX_HOME each status-check launch got, and the one the redemption got. */
+/**
+ * The CODEX_HOME each status-check launch got, the one a new session opened from another workspace
+ * was started with, and the one the redemption got.
+ */
 const launchedHomes = (root: string, form: InstanceForm) =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const bin = yield* fixtureCodex(root);
     const homes: Array<string | undefined> = [];
+    const session: Array<string | undefined> = [];
     const observed = ChildProcessSpawner.make((command) => {
       if (ChildProcess.isStandardCommand(command)) homes.push(command.options.env?.CODEX_HOME);
       return spawner.spawn(command);
@@ -115,21 +144,41 @@ const launchedHomes = (root: string, form: InstanceForm) =>
       host: { ...form.host, PATH: bin },
       coordinator: yield* freshCoordinator,
       spawner: observed,
+      // The environment a session's app-server process is started with.
+      clientFactory: {
+        open: (open) =>
+          Effect.sync(() => session.push(open.environment?.CODEX_HOME)).pipe(
+            Effect.andThen(Effect.die("recorded")),
+          ),
+      },
     });
     const before = homes.length;
     yield* instance.snapshot.refresh;
     const status = homes.slice(before);
+    const workspace = `${root}/work/project`;
+    yield* fs.makeDirectory(workspace, { recursive: true });
+    const runtimePolicy = { ...CODEX_TEST_RUNTIME_POLICY, cwd: workspace };
+    yield* instance.orchestrationAdapter
+      .openSession({
+        threadId: ThreadId.make("launch-homes-thread"),
+        providerSessionId: ProviderSessionId.make("launch-homes-session"),
+        modelSelection: { instanceId: ProviderInstanceId.make("launch-homes"), model: "gpt-test" },
+        runtimePolicy,
+      })
+      .pipe(Effect.exit);
     const atRedeem = homes.length;
     yield* instance.consumeResetCredit!(undefined).pipe(Effect.exit);
-    return { status, redemption: homes.slice(atRedeem) };
+    return { status, session, redemption: homes.slice(atRedeem) };
   }).pipe(Effect.provideService(HostProcess.HomeDirectory, root));
 
 const expectSameHome = (homes: {
   readonly status: ReadonlyArray<string | undefined>;
+  readonly session: ReadonlyArray<string | undefined>;
   readonly redemption: ReadonlyArray<string | undefined>;
 }) => {
   expect(homes.status.length).toBeGreaterThan(0);
   expect(new Set(homes.status).size).toBe(1);
+  expect(homes.session).toEqual([homes.status[0]]);
   expect(homes.redemption).toEqual([homes.status[0]]);
 };
 

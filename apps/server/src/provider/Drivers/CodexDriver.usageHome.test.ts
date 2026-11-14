@@ -207,16 +207,14 @@ it.layer(layerTest)("Codex usage and the session's home", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect(
-    "a relative CODEX_HOME in another workspace is another account than the one checks use",
-    () =>
-      Effect.gen(function* () {
-        const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "account" };
-        const { open, percents, check } = yield* usageHarness({ host, usage: { elsewhere: 10 } });
-        yield* check;
-        yield* yield* open("elsewhere", "/fixture/workspace");
-        expect(yield* percents).not.toContain(10);
-      }).pipe(Effect.scoped),
+  it.effect("a relative CODEX_HOME names the checked home for a session in another workspace", () =>
+    Effect.gen(function* () {
+      const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "account" };
+      const { open, percents, check } = yield* usageHarness({ host, usage: { elsewhere: 10 } });
+      yield* check;
+      yield* yield* open("elsewhere", "/fixture/workspace");
+      expect(yield* percents).toContain(10);
+    }).pipe(Effect.scoped),
   );
 
   // The fixture uses a symlink.

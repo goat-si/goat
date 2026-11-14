@@ -212,12 +212,22 @@ export const CodexDriver: ProviderDriver<
     const pinnedHome = homeConfigured
       ? (homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath)
       : undefined;
-    const currentEnvironment =
-      pinnedHome === undefined
-        ? mergedEnvironment
-        : mergedEnvironment.pipe(
-            Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
-          );
+    // A host CODEX_HOME names one folder for every launch, relative to the server's working directory.
+    const currentEnvironment = mergedEnvironment.pipe(
+      Effect.map((env): NodeJS.ProcessEnv =>
+        pinnedHome !== undefined
+          ? { ...env, CODEX_HOME: pinnedHome }
+          : env.CODEX_HOME
+            ? {
+                ...env,
+                CODEX_HOME: HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+                  cwd: process.cwd(),
+                  environment: env,
+                }),
+              }
+            : env,
+      ),
+    );
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     // The home a check or session process runs under, and its filesystem identity, found once per
     // check and once per session; a failed lookup keeps the path, so both sides fall back alike.
