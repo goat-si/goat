@@ -1,3 +1,6 @@
+import { isTerminalCopyShortcut, isTerminalPasteShortcut } from "./surfaceShortcuts";
+export { isTerminalCopyShortcut } from "./surfaceShortcuts";
+import { resolveEventKeys } from "@goat/shared/keybindings";
 import { shouldBlinkTerminalCursor, terminalContentOriginY } from "./surfaceGeometry";
 export { terminalContentOriginY } from "./surfaceGeometry";
 import {
@@ -101,18 +104,6 @@ function terminalGridCellAt(options: {
   };
 }
 
-export function isTerminalCopyShortcut(
-  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
-  platform = navigator.platform,
-) {
-  const key = event.key.toLowerCase();
-  if (key === "insert" && !isMacPlatform(platform)) {
-    return event.ctrlKey && !event.shiftKey && !event.metaKey;
-  }
-  if (key !== "c") return false;
-  return isMacPlatform(platform) ? event.metaKey : event.ctrlKey;
-}
-
 /** Primes native and Electron menu copy from the focused textarea; canvas has no DOM selection. */
 export function primeTerminalCopyInput(
   input: Pick<HTMLTextAreaElement, "value" | "select">,
@@ -141,18 +132,6 @@ export function applyTerminalCopyEvent(
   }
   clipboardData.setData("text/plain", selection);
   return { preventDefault: true, claimWriteFallback: true };
-}
-
-function isTerminalPasteShortcut(
-  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
-  platform = navigator.platform,
-) {
-  const key = event.key.toLowerCase();
-  if (key === "insert" && !isMacPlatform(platform)) {
-    return event.shiftKey && !event.ctrlKey && !event.metaKey;
-  }
-  if (key !== "v") return false;
-  return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
 // X11/Wayland expects middle-click paste; macOS and Windows use it for autoscroll.
@@ -902,7 +881,7 @@ export class GhosttyTerminalSurface {
     const mac = isMacPlatform(navigator.platform);
     const primaryModifier = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
     const selectAllShortcut =
-      event.key.toLowerCase() === "a" &&
+      resolveEventKeys(event).has("a") &&
       primaryModifier &&
       !event.altKey &&
       (mac ? !event.shiftKey : event.shiftKey);

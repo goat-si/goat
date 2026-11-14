@@ -285,6 +285,21 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(surface.hasSelection()).toBe(false);
   });
 
+  it("copies on Ctrl+Shift+C when a non-Latin layout reports another letter on KeyC", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    Object.assign(surface.input, { select() {} });
+    const execCommand = vi.fn(() => true);
+    Object.assign(document, { execCommand });
+    surface.write("SELECTED_OUTPUT");
+    surface.selectAll();
+    // Russian layout: Cyrillic Es (U+0421) on the physical C key.
+    key(surface, "С", "KeyC", { ctrlKey: true, shiftKey: true });
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
   it("leaves modified history keys with alternate-screen applications", async () => {
     vi.stubGlobal("navigator", { platform: "Linux x86_64" });
     const harness = createHarness();
@@ -729,6 +744,8 @@ describe("GhosttyTerminalSurface visibility", () => {
 
 describe("isTerminalCopyShortcut", () => {
   const event = (overrides: Partial<Parameters<typeof isTerminalCopyShortcut>[0]> = {}) => ({
+    altKey: false,
+    code: "KeyC",
     ctrlKey: false,
     key: "c",
     metaKey: false,
