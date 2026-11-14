@@ -1,4 +1,5 @@
-import { withoutHistoryArchive } from "./goat/HistoryArchive.ts";
+import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
+import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { usageLimitHoldsQueue } from "./usageLimitQueue.ts";
@@ -542,20 +543,6 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
 ) {}
 
 /** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
-/** A metadata update that only records where the tool history lives. */
-function isHistoryArchiveOnlyUpdate(
-  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
-): boolean {
-  const {
-    type: _type,
-    commandId: _commandId,
-    threadId: _threadId,
-    historyArchive,
-    ...rest
-  } = command;
-  return historyArchive !== undefined && Object.values(rest).every((value) => value === undefined);
-}
-
 function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
   return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
 }
@@ -3042,6 +3029,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is already archived.`,
       });
     }
+    yield* guardArchiveDelegates({
+      command,
+      projections: projectionStore,
+      DispatchError: OrchestratorDispatchError,
+    });
     if (command.type === "thread.unarchive" && thread.archivedAt === null) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
