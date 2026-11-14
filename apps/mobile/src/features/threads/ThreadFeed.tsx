@@ -1166,7 +1166,13 @@ function renderFeedEntry(
   }
 
   if (entry.type === "thinking") {
-    return <ThreadThinkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
+    return (
+      <ThreadThinkingRow
+        rowSizing={props.workRowSizing}
+        iconSubtleColor={iconSubtleColor}
+        providerStartingLabel={entry.providerStartingLabel}
+      />
+    );
   }
 
   if (entry.type === "html-render") {
