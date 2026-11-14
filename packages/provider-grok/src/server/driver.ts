@@ -1,3 +1,4 @@
+import { CommandResolutionCache, resolveCommandPath } from "@goat/shared/shell";
 import { ProviderDriverKind, ProviderSetupError, type ServerProvider } from "@goat/contracts";
 import { GrokSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -222,6 +223,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
         env,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(CommandResolutionCache, new Map()),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
@@ -229,16 +231,31 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       currentEnvironment.pipe(Effect.flatMap(maintenanceForEnvironment)),
       {
         key: currentEnvironment.pipe(
-          Effect.map((env) =>
-            JSON.stringify({
-              binaryPath: effectiveConfig.binaryPath,
-              PATH: env.PATH,
-              Path: env.Path,
-              path: env.path,
-              PATHEXT: env.PATHEXT,
-              Pathext: env.Pathext,
+          Effect.flatMap((env) =>
+            Effect.gen(function* () {
+              const resolved = effectiveConfig.binaryPath
+                ? yield* resolveCommandPath(effectiveConfig.binaryPath, { env }).pipe(
+                    Effect.provideService(CommandResolutionCache, new Map()),
+                  )
+                : undefined;
+              const real = resolved
+                ? yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => null))
+                : null;
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              return JSON.stringify({
+                resolved,
+                real,
+                binaryPath: effectiveConfig.binaryPath,
+                PATH: env.PATH,
+                Path: env.Path,
+                path: env.path,
+                PATHEXT: env.PATHEXT,
+                Pathext: env.Pathext,
+              });
             }),
           ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
         ),
         resolve: (key) => {
           const lookupEnv: NodeJS.ProcessEnv = JSON.parse(key);
