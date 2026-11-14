@@ -38,7 +38,15 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
       newest = row;
     }
     if (source.baselineIds === null) {
-      if (newest !== null) speech.pending.set("reply", newest);
+      if (newest !== null) {
+        const previous = speech.pending.get("reply");
+        let latest = previous ?? newest;
+        for (const id of source.sourceIds) {
+          if (previous && id === previous.id) latest = previous;
+          if (id === newest.id) latest = newest;
+        }
+        speech.pending.set("reply", latest);
+      }
       return;
     }
     const row = newest ?? speech.pending.get("reply") ?? null;
