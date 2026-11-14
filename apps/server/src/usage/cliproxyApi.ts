@@ -33,12 +33,6 @@ import {
   makeUsageLimits,
 } from "@goat/provider-core/server/usageLimits";
 
-/** A hub with its management key already read from wherever the setting keeps it. */
-export interface CliproxyHub {
-  readonly url: UsageLimitSourceConfig["url"];
-  readonly managementKey: string;
-}
-
 const AuthFile = Schema.Struct({
   id: Schema.String,
   auth_index: Schema.String,
