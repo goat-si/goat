@@ -37,10 +37,10 @@ export interface CodexAdapterV2Options {
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly sessionConfigKey?: string;
   readonly clientFactory: CodexAppServerClientFactoryShape;
-  /** `sessionEnvironment` is what the reporting session opened with; absent for a reattached process. */
+  /** `sessionHome` is the home the reporting session runs under; absent for a reattached process. */
   readonly onUsageLimits?: (
     update: Parameters<ManagedServerProvider["applyUsageLimits"]>[0],
-    sessionEnvironment?: NodeJS.ProcessEnv,
+    sessionHome?: string,
   ) => ReturnType<ManagedServerProvider["applyUsageLimits"]>;
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly compatibility?: (

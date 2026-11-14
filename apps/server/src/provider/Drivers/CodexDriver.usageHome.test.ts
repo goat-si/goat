@@ -47,77 +47,95 @@ const usageTranscript = (name: string, usedPercent: number) => {
   });
 };
 
+/** An instance with an unrelated variable whose sessions replay `usage` by session name. */
+const usageHarness = (host: NodeJS.ProcessEnv, usage: Readonly<Record<string, number>>) =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("usage-home");
+    const threadId = ThreadId.make("usage-home-thread");
+    const modelSelection = { instanceId, model: "gpt-test" };
+    const instance = yield* CodexDriver.create({
+      instanceId,
+      displayName: "Usage home test",
+      enabled: true,
+      environment: [{ name: "TEST_VAR", value: "1", sensitive: false }],
+      config: CodexDriver.defaultConfig(),
+    }).pipe(
+      Effect.provide(
+        Layer.mock(CodexInstallation.CodexInstallation)({
+          managedDirectory: "unused",
+          compatibility: () => Effect.sync(() => undefined),
+        }),
+      ),
+      Effect.provideService(HostProcess.Environment, host),
+      Effect.provideService(HostProcess.HomeDirectory, "/fixture"),
+      Effect.provideService(CodexAdapter.CodexAppServerClientFactory, {
+        open: (input) =>
+          Effect.gen(function* () {
+            const usedPercent = usage[input.providerSessionId];
+            if (usedPercent === undefined) return yield* Effect.die("unknown session");
+            const transcript = usageTranscript(input.providerSessionId, usedPercent);
+            const driver = yield* CodexReplay.makeReplayDriver(transcript);
+            const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
+            return Context.get(context, CodexClient.CodexAppServerClient);
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CodexAdapter.CODEX_DRIVER_KIND,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          ),
+      }),
+    );
+    const open = (name: string, cwd?: string) => {
+      const runtimePolicy =
+        cwd === undefined ? CODEX_TEST_RUNTIME_POLICY : { ...CODEX_TEST_RUNTIME_POLICY, cwd };
+      return instance.orchestrationAdapter
+        .openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(name),
+          modelSelection,
+          runtimePolicy,
+        })
+        .pipe(
+          Effect.map((session) =>
+            session.ensureThread({ threadId, modelSelection, runtimePolicy }),
+          ),
+        );
+    };
+    const percents = Effect.map(instance.snapshot.getSnapshot, (snapshot) =>
+      (snapshot.usageLimits?.windows ?? []).map((window) => window.usedPercent),
+    );
+    return { open, percents };
+  });
+
 it.layer(layerTest)("Codex usage and the session's home", (it) => {
   it.effect(
     "usage from a session opened under an earlier home does not replace the current home's usage",
     () =>
       Effect.gen(function* () {
         const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "/fixture/a" };
-        const instanceId = ProviderInstanceId.make("usage-home");
-        const threadId = ThreadId.make("usage-home-thread");
-        const modelSelection = { instanceId, model: "gpt-test" };
-        const transcripts: Record<string, ReturnType<typeof usageTranscript>> = {
-          a: usageTranscript("a", 10),
-          b: usageTranscript("b", 50),
-        };
-        const instance = yield* CodexDriver.create({
-          instanceId,
-          displayName: "Usage home test",
-          enabled: true,
-          environment: [{ name: "TEST_VAR", value: "1", sensitive: false }],
-          config: CodexDriver.defaultConfig(),
-        }).pipe(
-          Effect.provide(
-            Layer.mock(CodexInstallation.CodexInstallation)({
-              managedDirectory: "unused",
-              compatibility: () => Effect.sync(() => undefined),
-            }),
-          ),
-          Effect.provideService(HostProcess.Environment, host),
-          Effect.provideService(HostProcess.HomeDirectory, "/fixture"),
-          Effect.provideService(CodexAdapter.CodexAppServerClientFactory, {
-            open: (input) =>
-              Effect.gen(function* () {
-                const transcript = transcripts[input.providerSessionId];
-                if (transcript === undefined) return yield* Effect.die("unknown session");
-                const driver = yield* CodexReplay.makeReplayDriver(transcript);
-                const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
-                return Context.get(context, CodexClient.CodexAppServerClient);
-              }).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterOpenSessionError({
-                      driver: CodexAdapter.CODEX_DRIVER_KIND,
-                      providerSessionId: input.providerSessionId,
-                      cause,
-                    }),
-                ),
-              ),
-          }),
-        );
-        const open = (name: string) =>
-          instance.orchestrationAdapter.openSession({
-            threadId,
-            providerSessionId: ProviderSessionId.make(name),
-            modelSelection,
-            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-          });
-        const ensure = (session: ProviderAdapter.ProviderAdapterV2SessionRuntime) =>
-          session.ensureThread({
-            threadId,
-            modelSelection,
-            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-          });
-        const percents = Effect.map(instance.snapshot.getSnapshot, (snapshot) =>
-          (snapshot.usageLimits?.windows ?? []).map((window) => window.usedPercent),
-        );
-        const underA = yield* open("a");
+        const { open, percents } = yield* usageHarness(host, { a: 10, b: 50 });
+        const ensureA = yield* open("a");
         host.CODEX_HOME = "/fixture/b";
-        const underB = yield* open("b");
-        yield* ensure(underA);
+        const ensureB = yield* open("b");
+        yield* ensureA;
         expect(yield* percents).not.toContain(10);
-        yield* ensure(underB);
+        yield* ensureB;
         expect(yield* percents).toContain(50);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a relative CODEX_HOME in another workspace is another account than the one checks use",
+    () =>
+      Effect.gen(function* () {
+        const host: NodeJS.ProcessEnv = { HOME: "/fixture", CODEX_HOME: "account" };
+        const { open, percents } = yield* usageHarness(host, { elsewhere: 10 });
+        yield* yield* open("elsewhere", "/fixture/workspace");
+        expect(yield* percents).not.toContain(10);
       }).pipe(Effect.scoped),
   );
 });

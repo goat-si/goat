@@ -313,13 +313,17 @@ export const CodexDriver: ProviderDriver<
         config,
       },
       {
-        // Usage from a session opened under another home is not the current home's usage.
-        onUsageLimits: (update, sessionEnvironment) =>
-          sessionEnvironment === undefined
+        // Usage from a session running under another home than a check would use is not this home's.
+        onUsageLimits: (update, sessionHome) =>
+          sessionHome === undefined
             ? snapshot.applyUsageLimits(update)
             : currentEnvironment.pipe(
                 Effect.flatMap((env) =>
-                  homeOf(env) === homeOf(sessionEnvironment)
+                  HomeRoute.codexExecutionHome(pathService, homeDirectory, {
+                    home: effectiveConfig.homePath,
+                    cwd: process.cwd(),
+                    environment: env,
+                  }) === sessionHome
                     ? snapshot.applyUsageLimits(update)
                     : Effect.void,
                 ),

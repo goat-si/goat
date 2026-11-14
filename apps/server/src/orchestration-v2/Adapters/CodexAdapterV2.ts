@@ -4560,8 +4560,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
-              const sessionEnv = processStart?.retained ? undefined : sessionEnvironment;
-              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, sessionEnv);
+              const sessionHome = processStart?.retained ? undefined : routeInput.execution.home;
+              yield* adapterOptions.onUsageLimits({ ...update, checkedAt }, sessionHome);
             }
           }).pipe(Effect.orDie),
         );
