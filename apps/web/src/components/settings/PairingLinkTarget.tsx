@@ -25,7 +25,7 @@ export function PairingLinkTarget({
     others.length > 3 ? [...others.slice(0, 3), `${others.length - 3} more`] : others,
   );
   return (
-    <span className="block max-h-32 overflow-y-auto wrap-anywhere">
+    <span className="block max-h-[25dvh] overflow-y-auto wrap-anywhere">
       Generate a one-time link that another device can use to pair with {label} as an authorized
       client.
       {others.length > 0
