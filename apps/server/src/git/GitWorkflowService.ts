@@ -64,9 +64,7 @@ export class GitWorkflowService extends Context.Service<
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
-    readonly upstreamDivergence: (
-      cwd: string,
-    ) => Effect.Effect<
+    readonly upstreamDivergence: (cwd: string) => Effect.Effect<
       {
         readonly refName: string;
         readonly aheadCount: number;
