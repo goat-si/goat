@@ -12,6 +12,7 @@ import { AudioPreviewUnmountContext } from "../files/AudioPreview";
 import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
 import { TimelineHistoryControl } from "./TimelineHistoryControl";
 import { timelineHeadingPins } from "./timelineHeadingPins";
+import { useSelectedTimelineRowIndices } from "./timelineSelection";
 import { useSentCallReveal } from "./useSentCallReveal";
 import { TurnThreadCardsRow } from "./TurnThreadCards";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
@@ -70,7 +71,7 @@ import {
 } from "~/components/solar";
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
-import { Skeleton } from "../ui/skeleton";
+import { WorkHistorySkeleton } from "./WorkHistorySkeleton";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
@@ -769,7 +770,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const onAppFullscreenChange = (rowId: string, fullscreen: boolean) => {
     setFullscreenAppRowId((current) => (fullscreen ? rowId : current === rowId ? null : current));
   };
-  const alwaysRenderIndices = restoringAlwaysRender?.indices ?? [];
+  const alwaysRenderIndices = useSelectedTimelineRowIndices(
+    timelineViewportElement,
+    rows,
+    restoringAlwaysRender?.indices,
+  );
   const alwaysRenderKeys = [
     ...timelineHeadingPins(rows),
     ...(citationAlwaysRender?.keys ?? []),
@@ -1595,22 +1600,6 @@ function useDeferredWorkLoading(
   };
 
   return { loading, error, toggle };
-}
-
-function WorkHistorySkeleton() {
-  return (
-    <div role="status" aria-label="Loading work history" className="space-y-2 px-1 pb-1 pt-3">
-      {[0, 1, 2].map((index) => (
-        <div key={index} className="flex items-center gap-2" aria-hidden="true">
-          <Skeleton className="size-3 shrink-0" />
-          <Skeleton
-            shape="pill"
-            className={index === 0 ? "h-2.5 w-2/5" : index === 1 ? "h-2.5 w-3/5" : "h-2.5 w-1/3"}
-          />
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
