@@ -5,6 +5,8 @@ import {
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
 import type {
+  PreviewAnnotationContextRecord,
+  PreviewAnnotationPayload,
   ReviewCommentContextRecord,
   ThreadContextRecord,
   UserInputQuestion as ProviderUserInputQuestion,
@@ -24,20 +26,49 @@ export {
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 
 import { collectInlineContextIds } from "./lib/composerContextReferences";
+import {
+  previewAnnotationContextRecord,
+  reviewCommentContextRecord,
+} from "./lib/composerContextRecords";
+import type { ReviewCommentContext } from "./reviewCommentContext";
 
 type UserInputQuestion = ProviderUserInputQuestion & { readonly required?: boolean | undefined };
+
+type AnswerContextRecord =
+  | ThreadContextRecord
+  | ReviewCommentContextRecord
+  | PreviewAnnotationContextRecord;
+
+export function answerContextRecords(
+  questionDraft: { threadContexts: ReadonlyArray<ThreadContextRecord> } | null | undefined,
+  threadDraft:
+    | {
+        reviewComments: ReadonlyArray<ReviewCommentContext>;
+        previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
+      }
+    | null
+    | undefined,
+): AnswerContextRecord[] {
+  return [
+    ...(questionDraft?.threadContexts ?? []),
+    ...(threadDraft?.reviewComments ?? []).map(reviewCommentContextRecord),
+    ...(threadDraft?.previewAnnotations ?? []).map((annotation) =>
+      previewAnnotationContextRecord(annotation),
+    ),
+  ];
+}
 
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
   answer: unknown,
-  records: ReadonlyArray<ThreadContextRecord | ReviewCommentContextRecord>,
+  records: ReadonlyArray<AnswerContextRecord>,
 ) {
   if (typeof answer !== "string" || records.length === 0) return answer;
   const recordsById = new Map(records.map((record) => [record.contextId, record]));
   return replaceComposerContextReferences(answer, (reference) => {
     const record = recordsById.get(reference.contextId);
     if (record?.kind !== reference.kind) return reference.source;
-    if (record.kind === "review-comment")
+    if (record.kind !== "thread")
       return projectComposerContextForProvider({ text: reference.source, records: [record] });
     // Remote thread tools need the SSH alias as well as the ID; a local-only link loses it.
     return record.host === undefined

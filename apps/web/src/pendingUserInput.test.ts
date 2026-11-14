@@ -2,12 +2,14 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { formatInlineContextReference } from "./lib/composerContextReferences";
 import {
+  previewAnnotationContextRecord,
   reviewCommentContextRecord,
   threadContextRecord,
   threadContextReference,
 } from "./lib/composerContextRecords";
 
 import {
+  answerContextRecords,
   buildPendingUserInputAnswers,
   carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
@@ -58,6 +60,60 @@ describe("projectPendingUserInputAnswer", () => {
     const projected = projectPendingUserInputAnswer(answer, [comment]);
     expect(projected).toContain("Rename this to line two updated");
     expect(projected).toContain("+line two changed");
+  });
+
+  // regression: #28022, #36293 review comment and preview annotation chips in an answer reached the agent as bare links
+  it("sends thread draft chips with their full content", () => {
+    const reviewComment = {
+      id: "file-comment-1",
+      sectionId: "branch",
+      sectionTitle: "Changes",
+      filePath: "notes.md",
+      startIndex: 2,
+      endIndex: 2,
+      rangeLabel: "+2",
+      text: "Rename this to line two updated",
+      diff: "@@ -0,0 +2,1 @@\n+line two changed",
+      fenceLanguage: "diff",
+    };
+    const annotation = {
+      id: "annotation-1",
+      pageUrl: "http://localhost:3000/",
+      pageTitle: "Home",
+      comment: "FIRST NOTE: this features section looks too bare; add three feature cards",
+      elements: [],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const annotationRecord = previewAnnotationContextRecord(annotation);
+    const annotationAnswer = formatInlineContextReference({
+      kind: annotationRecord.kind,
+      contextId: annotationRecord.contextId,
+      label: annotationRecord.label,
+    });
+    expect(projectPendingUserInputAnswer(annotationAnswer, [annotationRecord])).toContain(
+      `comment: ${annotation.comment}`,
+    );
+    const records = answerContextRecords(undefined, {
+      reviewComments: [reviewComment],
+      previewAnnotations: [annotation],
+    });
+    const answer = `See my notes: ${records
+      .map((record) =>
+        formatInlineContextReference({
+          kind: record.kind,
+          contextId: record.contextId,
+          label: record.label,
+        }),
+      )
+      .join(" ")}`;
+    const projected = projectPendingUserInputAnswer(answer, records);
+    expect(projected).toContain("Rename this to line two updated");
+    expect(projected).toContain("+line two changed");
+    expect(projected).toContain(`comment: ${annotation.comment}`);
   });
 
   // regression: #18789 answers to pending questions lost exact text and option values

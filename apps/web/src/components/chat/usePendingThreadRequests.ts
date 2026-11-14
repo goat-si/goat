@@ -1,4 +1,3 @@
-import { reviewCommentContextRecord } from "../../lib/composerContextRecords";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import {
   AuthOrchestrationOperateScope,
@@ -35,6 +34,7 @@ import {
   carryDisplacedCustomAnswerIntoPrompt,
   withdrawDisplacedCustomAnswerFromPrompt,
   derivePendingUserInputProgress,
+  answerContextRecords,
   projectPendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
   threadContextsReferencedByAnswer,
@@ -325,9 +325,7 @@ export function usePendingThreadRequests(input: {
     const attachmentsByQuestionId = new Map<string, UserInputAttachments[string]>();
     const providerAnswers = { ...answers };
     const entries = appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries;
-    const reviewCommentRecords = (
-      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments ?? []
-    ).map(reviewCommentContextRecord);
+    const threadDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
     for (const question of pendingInput.questions) {
       const target = questionAttachmentDraftId(
         environmentId,
@@ -364,10 +362,10 @@ export function usePendingThreadRequests(input: {
           );
           return;
         }
-        providerAnswers[question.id] = projectPendingUserInputAnswer(answer, [
-          ...threadContexts,
-          ...reviewCommentRecords,
-        ]);
+        providerAnswers[question.id] = projectPendingUserInputAnswer(
+          answer,
+          answerContextRecords({ threadContexts }, threadDraft),
+        );
       }
       const attachments = draft ? [...draft.images, ...draft.files] : [];
       if (attachments.length === 0) continue;
