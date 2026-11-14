@@ -44,6 +44,8 @@ export class OpenCodeServerOwner extends Context.Service<
   OpenCodeServerOwner,
   {
     readonly captureLaunch: Effect.Effect<OpenCodeServerLaunch>;
+    /** The version of the server already running for the current launch, without starting one. */
+    readonly runningVersion?: Effect.Effect<string | undefined>;
     readonly withServer: <A, E, R>(
       use: (server: OpenCodeRuntime.OpenCodeServerProcess) => Effect.Effect<A, E, R>,
       launch?: OpenCodeServerLaunch,
@@ -217,6 +219,13 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   );
   return OpenCodeServerOwner.of({
     captureLaunch,
+    runningVersion: Effect.gen(function* () {
+      const launch = yield* captureLaunch;
+      const entry = entries.find((candidate) => sameOpenCodeServerLaunch(candidate.launch, launch));
+      return entry !== undefined && (yield* entry.server.isRunning)
+        ? entry.server.version
+        : undefined;
+    }),
     withServer: Effect.fn("OpenCodeServerOwner.withServer")(function (use, launch) {
       return Effect.uninterruptibleMask((restore) =>
         restore(launch === undefined ? captureLaunch : Effect.succeed(launch)).pipe(

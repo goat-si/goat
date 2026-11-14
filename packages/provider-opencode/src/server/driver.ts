@@ -146,30 +146,30 @@ function selectOpenCodeRuntimeAdapter(input: {
   readonly v1: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly v2: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly sessionConfigKey: string;
+  /** The version of the server already running for the current launch, if one is. */
+  readonly runningVersion: Effect.Effect<string | undefined>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
   const pick = <PE>(probed: Effect.Effect<ProbedOpenCode | undefined, PE>) =>
     byOpenCodeRuntime(probed, { v1: Effect.succeed(input.v1), v2: Effect.succeed(input.v2) });
   const hot = pick(Effect.map(input.probe.lastSuccess, Option.getOrUndefined));
-  // A new session launches what the current identity names. A server reports its own version, which
-  // a shim's probe can miss, but it counts only for the identity it was launched under.
-  let connected: { readonly identity: string; readonly supportsNativeGoals: boolean } | undefined;
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
     getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
-      const identity = yield* input.probe.identity;
-      const probed = Option.getOrUndefined(yield* input.probe.lastSuccessAt(identity));
+      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
       const adapter = yield* pick(Effect.succeed(probed));
       const capabilities = yield* adapter.getCapabilities();
+      // What a new session would launch: the server already running for the current launch
+      // reports its own version, which a shim's probe can miss; otherwise the probe decides.
+      const version =
+        probed?.generation === "v2" ? ((yield* input.runningVersion) ?? probed.version) : undefined;
       return {
         ...capabilities,
         turns: {
           ...capabilities.turns,
           supportsNativeGoals:
-            connected?.identity === identity
-              ? connected.supportsNativeGoals
-              : probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0,
+            version !== undefined && compareSemverVersions(version, "2.2.5") >= 0,
         },
       };
     }),
@@ -178,7 +178,7 @@ function selectOpenCodeRuntimeAdapter(input: {
     openSession: (session) =>
       input.currentEnvironment.pipe(
         Effect.flatMap((environment) =>
-          Effect.all([input.probe.identity, input.resolve]).pipe(
+          input.resolve.pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -187,18 +187,8 @@ function selectOpenCodeRuntimeAdapter(input: {
                   cause,
                 }),
             ),
-            Effect.flatMap(([identity, result]) =>
-              (result.generation === "v2" ? input.v2 : input.v1).openSession(session).pipe(
-                Effect.tap((opened) =>
-                  Effect.sync(() => {
-                    connected = {
-                      identity,
-                      supportsNativeGoals:
-                        opened.providerSession.capabilities.turns.supportsNativeGoals === true,
-                    };
-                  }),
-                ),
-              ),
+            Effect.flatMap((result) =>
+              (result.generation === "v2" ? input.v2 : input.v1).openSession(session),
             ),
             Effect.provideService(LaunchEnvironment, environment),
           ),
@@ -572,6 +562,7 @@ export const OpenCodeDriver: ProviderDriver<
       // Sessions belong to the build that opened them: a rebuild closes this build's server
       // owner, so ProviderSessionRetirement retires them even when the settings came back unchanged.
       sessionConfigKey: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+      runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
       (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined) =>

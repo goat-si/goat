@@ -38,6 +38,7 @@ export class OpenCode2Server extends Context.Service<
       use: (connection: OpenCode2Connection) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | TextGenerationError | OpenCodeRuntime.OpenCodeRuntimeError, R>;
     readonly captureLaunch?: Effect.Effect<OpenCodeServerOwner.OpenCodeServerLaunch>;
+    readonly runningVersion?: Effect.Effect<string | undefined>;
     readonly withConnection: <A, E, R>(
       use: (connection: OpenCode2Connection) => Effect.Effect<A, E, R>,
       launch?: OpenCodeServerOwner.OpenCodeServerLaunch,
@@ -224,6 +225,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
         Effect.provideService(HostProcess.HomeDirectory, home),
       ),
     captureLaunch: owner.captureLaunch,
+    ...(owner.runningVersion === undefined ? {} : { runningVersion: owner.runningVersion }),
     withConnection: Effect.fn("OpenCode2Server.withConnection")(function (use, launch) {
       return owner.withServer((server) => {
         const connection = connections.get(server.url);
