@@ -2574,7 +2574,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
   );
 
-  it.live.each([
+  it.effect.each([
     { name: "parent instance", parentEnabled: true, model: "gpt-5.4" },
     { name: "alternate instance", parentEnabled: false, model: "gpt-5.5" },
   ])(

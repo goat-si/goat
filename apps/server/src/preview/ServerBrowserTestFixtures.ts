@@ -143,3 +143,6 @@ export const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
   while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
   return Effect.promise(() => acked.promise);
 };
+
+export const viewportSizes = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
+  items.flatMap((item) => (item._tag === "viewport" ? [`${item.width}x${item.height}`] : []));
