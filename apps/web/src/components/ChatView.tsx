@@ -1,3 +1,4 @@
+import { deriveThreadPendingBackgroundTasks } from "./chat/threadPendingBackgroundTasks";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
@@ -7,7 +8,6 @@ import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpe
 import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
 import {
   deriveAvailableRevertTurnCounts,
-  deriveThreadPendingBackgroundTasks,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
 import { usePullRequestDraftThread } from "./chat/usePullRequestDraftThread";
@@ -2603,6 +2603,8 @@ export default function ChatView(props: ChatViewProps) {
     serverConfig,
     runtimeMode,
     isWorking,
+    // A waiting run is checkpoint drain; Stop there reaches its background work.
+    runIsLive: (isWorking && activeRuntime?.status !== "waiting") || phase === "connecting",
     pendingBackgroundTasks,
     activePendingApproval,
     activePendingUserInput,
