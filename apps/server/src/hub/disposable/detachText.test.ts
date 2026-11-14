@@ -17,6 +17,11 @@ const OUTCOMES = [
   "child_conflict",
   "host_key_changed",
   "managed_child_missing",
+  "link_retirement_pending",
+  "open",
+  "not_found",
+  "unreadable",
+  "unsettled",
 ];
 const STOPS = [
   undefined,
@@ -44,28 +49,33 @@ it("every detach text fits the wire's 500 characters with the longest name and o
         for (const stop of STOPS)
           for (const inPen of [true, false])
             for (const recordStop of [undefined, "host_key_changed"])
-              for (const elsewhere of [true, false]) {
-                const shown = detachMessage({
-                  state,
-                  name,
-                  linkId: "lnk_0123456789abcdef",
-                  detach: {
-                    step,
-                    attempt: 99,
-                    operationId,
-                    ...(outcome === undefined ? {} : { outcome }),
-                    ...(stop === undefined ? {} : { stop }),
-                    ...(elsewhere ? { elsewhere: true as const } : {}),
-                  },
-                  health: { failures: 47, checkedAtMs: 0 },
-                  linkKeyMoved: false,
-                  inPen,
-                  stop: recordStop,
-                });
-                if (shown === undefined) continue;
-                seen += 1;
-                expect(shown.message.length).toBeLessThanOrEqual(500);
-                expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
-              }
+              for (const elsewhere of [true, false])
+                for (const failures of [47, 0])
+                  for (const forced of [true, false]) {
+                    const shown = detachMessage({
+                      state,
+                      name,
+                      linkId: "lnk_0123456789abcdef",
+                      detach: {
+                        step,
+                        attempt: 99,
+                        operationId,
+                        ...(forced ? { force: true as const } : {}),
+                        refusal: "o".repeat(40),
+                        foreignLinkId: "lnk_fedcba9876543210",
+                        ...(outcome === undefined ? {} : { outcome }),
+                        ...(stop === undefined ? {} : { stop }),
+                        ...(elsewhere ? { elsewhere: true as const } : {}),
+                      },
+                      health: { failures, checkedAtMs: 0 },
+                      linkKeyMoved: false,
+                      inPen,
+                      stop: recordStop,
+                    });
+                    if (shown === undefined) continue;
+                    seen += 1;
+                    expect(shown.message.length).toBeLessThanOrEqual(500);
+                    expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
+                  }
   expect(seen).toBeGreaterThan(100);
 });
