@@ -16,6 +16,10 @@ import * as NodePath from "node:path";
 import { cli } from "../binCli.ts";
 import { signOut } from "./login.ts";
 import {
+  makePersistedServerRuntimeState,
+  persistServerRuntimeState,
+} from "../serverRuntimeState.ts";
+import {
   type CliLogin,
   type StoredLogin,
   resolveCliCredential,
@@ -211,6 +215,39 @@ describe("goat thread", () => {
     }).pipe(Effect.scoped),
   );
 });
+
+it.effect("stored login never sends its token to a dead server's former port", () =>
+  Effect.gen(function* () {
+    const baseDir = yield* tempBaseDir;
+    const stateDir = NodePath.join(baseDir, "userdata");
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(stateDir, "cli-login.json"),
+      JSON.stringify(login("2030-01-01T00:00:00.000Z")),
+    );
+    const state = yield* makePersistedServerRuntimeState({
+      config: { host: "127.0.0.1", devUrl: undefined },
+      port: 3773,
+    });
+    yield* persistServerRuntimeState({
+      path: NodePath.join(stateDir, "server-runtime.json"),
+      state: { ...state, pid: 4_194_305 },
+    });
+    using fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(null, { status: 401 }));
+    const error = yield* runCli([
+      "thread",
+      "list",
+      "--base-dir",
+      baseDir,
+      "--project",
+      "proj-1",
+    ]).pipe(Effect.flip);
+    expect(error).toMatchObject({ reason: "server_not_running" });
+    expect(fetch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 describe("goat login", () => {
   it.effect(
