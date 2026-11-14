@@ -57,37 +57,35 @@ it("every detach text fits the wire's 500 characters with the longest name and o
               for (const recordStop of [undefined, "host_key_changed"])
                 for (const elsewhere of [true, false])
                   for (const failures of [47, 0])
-                    for (const forced of [true, false]) {
-                      const shown = detachMessage({
-                        state,
-                        name,
-                        linkId: "lnk_0123456789abcdef",
-                        detach: {
-                          step,
-                          attempt: 99,
-                          operationId,
-                          ...(forced ? { force: true as const } : {}),
-                          refusal:
-                            stop === "link_retirement_owned"
-                              ? "link_operation_open"
-                              : "o".repeat(40),
-                          foreignLinkId: "lnk_fedcba9876543210",
-                          owner: "a".repeat(64) + ".purge.98",
-                          supersedes: "a".repeat(64) + ".purge.98",
-                          ...(outcome === undefined ? {} : { outcome }),
-                          ...(stop === undefined ? {} : { stop }),
-                          ...(elsewhere ? { elsewhere: true as const } : {}),
-                        },
-                        health: { failures, checkedAtMs: 0 },
-                        linkKeyMoved: false,
-                        inPen,
-                        stop: recordStop,
-                      });
-                      if (shown === undefined) continue;
-                      seen += 1;
-                      expect(shown.message.length).toBeLessThanOrEqual(500);
-                      expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
-                    }
+                    for (const forced of [true, false])
+                      for (const refusal of ["o".repeat(40), "link_operation_open"]) {
+                        const shown = detachMessage({
+                          state,
+                          name,
+                          linkId: "lnk_0123456789abcdef",
+                          detach: {
+                            step,
+                            attempt: 99,
+                            operationId,
+                            ...(forced ? { force: true as const } : {}),
+                            refusal,
+                            foreignLinkId: "lnk_fedcba9876543210",
+                            owner: "a".repeat(64) + ".purge.98",
+                            supersedes: "a".repeat(64) + ".purge.98",
+                            ...(outcome === undefined ? {} : { outcome }),
+                            ...(stop === undefined ? {} : { stop }),
+                            ...(elsewhere ? { elsewhere: true as const } : {}),
+                          },
+                          health: { failures, checkedAtMs: 0 },
+                          linkKeyMoved: false,
+                          inPen,
+                          stop: recordStop,
+                        });
+                        if (shown === undefined) continue;
+                        seen += 1;
+                        expect(shown.message.length).toBeLessThanOrEqual(500);
+                        expect((shown.nextAction ?? "").length).toBeLessThanOrEqual(300);
+                      }
   expect(seen).toBeGreaterThan(100);
 });
 
@@ -242,4 +240,73 @@ it("a linked machine that answers again after its retirement met link_operation_
   });
   expect(shown?.message).toContain("link_operation_open");
   expect(shown?.message).not.toContain("--force --yes");
+});
+
+it("another revoke left open does not claim a plain force is refused too, which OpenCodex lets the receipt's owner pass", () => {
+  const shown = detachMessage({
+    state: "detaching",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 2,
+      operationId: "a.force.2",
+      force: true,
+      stop: "link_retirement_owned",
+      outcome: "retirement_owned",
+      refusal: "link_operation_open",
+    },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("link_operation_open");
+  expect(shown?.message).not.toContain("plain force");
+});
+
+it("a linked machine's retirement stopped on GOAT's own open earlier revoke names that revoke", () => {
+  const shown = detachMessage({
+    state: "linked",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 2,
+      operationId: "a.force.2",
+      force: true,
+      stop: "link_retirement_owned",
+      outcome: "owner_open",
+      refusal: "link_operation_open",
+      owner: "a.force.1",
+    },
+    health: { failures: 3, checkedAtMs: 0 },
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("a.force.1");
+});
+
+it("a new id that met link_not_found while GOAT could not read its earlier revoke blames that read, not the new id", () => {
+  const shown = detachMessage({
+    state: "detaching",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 2,
+      operationId: "a.purge.2",
+      stop: "revoke_unsettled",
+      outcome: "unreadable",
+      refusal: "link_not_found",
+      owner: "a.purge.1",
+    },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("a.purge.1");
+  expect(shown?.message).not.toContain("no readable answer for the revoke a.purge.2");
 });
