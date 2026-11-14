@@ -231,7 +231,7 @@ const make = Effect.gen(function* () {
   const homeLinks = () => readHomeLinks().pipe(Effect.map(({ status }) => status));
   const { leaveDevice, revokeOnHome } = makeLeaveSteps({ ocx, homeLinks });
 
-  const { probe, disposableRoute } = yield* makeHubProbe(ocx);
+  const { probe, disposableRoute, ownLink } = yield* makeHubProbe(ocx);
   const ladder = makeLadder({
     ocx,
     parity,
@@ -652,6 +652,8 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* readHomeLinks();
       const record = status?.links.find((entry) => entry.alias === alias);
+      const own = yield* ownLink(alias, record?.id, "leave");
+      if (own !== undefined) return result("leave", alias, "failed", own, steps);
       let member: Member;
       if (record !== undefined)
         member = { kind: "remote-link", id: record.id, tunnelPort: record.tunnelPort };
@@ -758,6 +760,8 @@ const make = Effect.gen(function* () {
       if (status === undefined && (!forbidden || (yield* hubClientKey(alias)) === undefined))
         return homeUnavailable("repair", alias, steps, forbidden);
       const record = status?.links.find((entry) => entry.alias === alias);
+      const own = yield* ownLink(alias, record?.id, "repair");
+      if (own !== undefined) return result("repair", alias, "failed", own, steps);
       if (input.decisionId !== undefined) {
         // Step 4, re-link, only after a person approved it for the same host key.
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);

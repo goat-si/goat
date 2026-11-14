@@ -8,12 +8,14 @@ export interface RouteClaim {
   readonly alias?: string;
   readonly environmentId?: string | null;
   readonly hostKeyFingerprint?: string;
+  /** An OpenCodex link id on this hub's Home. */
+  readonly linkId?: string;
 }
 
 export interface DisposableClaim {
   readonly attachId: string;
   readonly nodeId: string;
-  readonly by: "alias" | "environment" | "host_key";
+  readonly by: "alias" | "environment" | "host_key" | "link";
   /** Pen's pen-<name> names several members, and this disposable machine is one of them. */
   readonly shared?: true;
 }
@@ -95,6 +97,7 @@ export const claimedBy = (
       return found("environment");
     if (claim.hostKeyFingerprint !== undefined && claim.hostKeyFingerprint === record.sshdPin)
       return found("host_key");
+    if (claim.linkId !== undefined && claim.linkId === record.linkId) return found("link");
   }
   return undefined;
 };
@@ -103,6 +106,7 @@ const BY: Record<DisposableClaim["by"], string> = {
   alias: "its Pen alias",
   environment: "the GOAT environment it reached",
   host_key: "the SSH host key it offered",
+  link: "its OpenCodex link",
 };
 
 /** The refusal every guarded path gives, naming the record and the way out. */
@@ -122,3 +126,26 @@ export const refusalText = (claim: DisposableClaim | undefined, target: string) 
         ", matched by " +
         BY[claim.by] +
         "): GOAT reaches it only through its own Pen route, so no other route or link may name it. Detach it in Settings → Hub on web or desktop first; once its record has ended, it can be added as a kept machine.";
+
+const OWN_LINK = {
+  leave:
+    "GOAT ends its link only through Detach, which cleans the machine and settles OpenCodex's record of the removal; leaving the hub would skip both.",
+  // OpenCodex v2.100.3 retries a Home tunnel itself (HOME_TUNNEL_RETRY_POLICY, src/link/tunnel-state.ts).
+  repair:
+    "OpenCodex retries its link's tunnel by itself every minute (every 5 minutes after a refused key), and GOAT checks the machine every 30 minutes, so repair leaves its link alone. A changed host key or a machine that stays silent shows on its row.",
+} as const;
+
+/** Design sections 1 and 3: a disposable machine's own link changes only through detach. */
+export const ownLinkRefusal = (
+  claim: DisposableClaim,
+  target: string,
+  action: keyof typeof OWN_LINK,
+) =>
+  target +
+  " is a disposable machine (attach " +
+  claim.attachId +
+  ", matched by " +
+  BY[claim.by] +
+  "): " +
+  OWN_LINK[action] +
+  " Detach it in Settings → Hub on web or desktop to remove it.";
