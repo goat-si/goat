@@ -170,10 +170,11 @@ export const make = Effect.gen(function* () {
   const save = Effect.fn("DisposableAttach.save")(
     function* (row: Row, effects: ReadonlyArray<AttachEffect>, extra: Columns = {}) {
       const now = yield* nowIso;
+      // A final record keeps its state: acknowledging its invite later must not reopen it.
       const state =
         typeof extra.state === "string"
           ? extra.state
-          : row.pen_admitted_at === null
+          : row.pen_admitted_at === null && row.final_at === null
             ? stateFromEffects(effects)
             : row.state;
       const saved = yield* sql`UPDATE disposable_machines SET ${sql.update({

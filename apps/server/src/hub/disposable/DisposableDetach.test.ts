@@ -321,6 +321,9 @@ it.effect(
         expect(released.state).toBe("failed");
         expect(released.message).toContain("pen revoke");
         expect((yield* attach(3)).state).toBe("invited");
+        // The pass that acknowledges its burned invite keeps the record released.
+        yield* reconcile;
+        expect(yield* listed(first.attachId)).toMatchObject({ state: "failed", step: "released" });
       }),
     ),
 );
