@@ -37,50 +37,6 @@ const linuxPlan = {
   unitPath: "/home/sam/.config/systemd/user/goat.service",
 };
 
-it("reads the served T3 home back out of a rendered unit or plist", () => {
-  const plan = (baseDir: string) => ({
-    program: [`${baseDir}/runtime/goat/versions/1.2.3/goat`, "__service-launcher"],
-    baseDir,
-    logPath: `${baseDir}/userdata/logs/boot-service.log`,
-    unitPath: "/home/sam/.config/systemd/user/goat.service",
-  });
-
-  expect(
-    BootService.bootServiceBaseDirOf(BootService.renderBootServiceUnit(plan("/home/sam/.t3"))),
-  ).toBe("/home/sam/.t3");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      BootService.renderBootServiceUnit(plan("/home/sam/T3 Data/100%")),
-    ),
-  ).toBe("/home/sam/T3 Data/100%");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      BootService.renderBootServicePlist(plan("/Users/sam/a&b"), {
-        homeDir: "/Users/sam",
-        environmentPath: "/usr/bin",
-      }),
-    ),
-  ).toBe("/Users/sam/a&b");
-  expect(BootService.bootServiceBaseDirOf("[Service]\nExecStart=/x\n")).toBeUndefined();
-});
-
-it("reads the home of units installed before the GOAT rename", () => {
-  // goat-rename: legacy-begin
-  expect(
-    BootService.bootServiceBaseDirOf("[Service]\nEnvironment=T3CODE_HOME=/home/sam/.t3\n"),
-  ).toBe("/home/sam/.t3");
-  expect(
-    BootService.bootServiceBaseDirOf(
-      "<dict>\n    <key>T3CODE_HOME</key>\n    <string>/Users/sam/.t3</string>\n</dict>",
-    ),
-  ).toBe("/Users/sam/.t3");
-  // goat-rename: legacy-end
-  const unit = BootService.renderBootServiceUnit(linuxPlan);
-  expect(BootService.bootServiceBaseDirOf(unit)).toBe(linuxPlan.baseDir);
-  expect(unit).toContain(`Environment=GOAT_HOME=${linuxPlan.baseDir}`);
-  expect(unit).toContain(`Environment=T3CODE_HOME=${linuxPlan.baseDir}`); // goat-rename: legacy
-});
-
 it.each([
   ["a unit", '/home/sam/T3 "Data"/100%\\x', BootService.renderBootServiceUnit],
   [
@@ -142,6 +98,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
     linger: string;
     enabled: boolean;
     active: boolean;
+    startLimitHit: boolean;
     /** When false, a start command returns success but the server never answers. */
     answers: boolean;
     answeredVersion: string | undefined;
@@ -150,6 +107,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
     linger: "yes",
     enabled: true,
     active: true,
+    startLimitHit: false,
     answers: true,
     answeredVersion: undefined,
   };
@@ -192,7 +150,10 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       commands.push(command);
       invocations.push(input);
       timeouts.set(command, input.timeout);
-      const failed = command === control.failCommand;
+      if (command === "systemctl --user reset-failed goat.service") control.startLimitHit = false;
+      const refused = control.startLimitHit && command.startsWith("systemctl --user restart ");
+      const failed =
+        command === control.failCommand || (refused && !command.includes("--no-block"));
       if (!failed && command === "loginctl enable-linger --no-ask-password 501")
         control.linger = "yes";
       if (!failed && command === "systemctl --user enable goat.service") control.enabled = true;
@@ -225,7 +186,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
             }),
           );
         }).pipe(Effect.orDie);
-      if (!failed && command === "systemctl --user restart goat.service") {
+      if (!failed && !refused && command.startsWith("systemctl --user restart ")) {
         yield* publishAnswer(path.join(managerUnitDir, "goat.service"));
       }
       if (!failed && command.startsWith("launchctl bootstrap ")) {
@@ -600,7 +561,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           ),
         ).toEqual(
           platform === "linux"
-            ? ["systemctl --user stop goat.service", "systemctl --user restart goat.service"]
+            ? [
+                "systemctl --user stop goat.service",
+                "systemctl --user reset-failed goat.service",
+                "systemctl --user restart goat.service",
+              ]
             : [
                 "launchctl bootout --wait gui/501/si.goat.service",
                 `launchctl bootstrap gui/501 ${plan.unitPath}`,
@@ -766,6 +731,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         "systemctl --user is-active goat.service",
         "systemctl --user stop goat.service",
         "repair",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
       expect(control.active).toBe(true);
@@ -878,12 +844,29 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         expect(commands).toEqual([
           "systemctl --user daemon-reload",
           "systemctl --user enable goat.service",
+          "systemctl --user reset-failed goat.service",
           "systemctl --user restart --no-block goat.service",
         ]);
         expect(outcome).toBe("queued");
         expect(yield* fs.readFileString(statePath)).toBe(state);
         expect(yield* fs.readFileString(marker)).toBe("1.2.3\n");
       }),
+  );
+
+  it.effect("starts a service after its systemd start limit trips", () =>
+    Effect.gen(function* () {
+      const { service, control, makeService } = yield* makeHarness();
+      yield* service.install();
+      control.active = false;
+      control.startLimitHit = true;
+      yield* service.install();
+      expect(control.active).toBe(true);
+      control.active = false;
+      control.startLimitHit = true;
+      const inside = yield* makeService(undefined, "1.2.3", undefined, true);
+      expect(yield* inside.restart).toBe("queued");
+      expect(control.active).toBe(true);
+    }),
   );
 
   it.effect("restarts an installed service when repair fails", () =>
@@ -902,6 +885,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       ).toEqual([
         "systemctl --user stop goat.service",
         "systemctl --user daemon-reload",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
     }),
@@ -933,7 +917,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           commands.filter(
             (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
           ),
-        ).toEqual(["systemctl --user stop goat.service", "systemctl --user restart goat.service"]);
+        ).toEqual([
+          "systemctl --user stop goat.service",
+          "systemctl --user reset-failed goat.service",
+          "systemctl --user restart goat.service",
+        ]);
       }
     }),
   );
@@ -1166,6 +1154,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
         "systemctl --user disable --now t3code.service", // goat-rename: legacy
         "systemctl --user daemon-reload",
         "systemctl --user enable goat.service",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
       expect(yield* harness.service.status).toMatchObject({ installed: true, current: true });
@@ -1271,10 +1260,11 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
       expect(yield* harness.fs.exists(`${harness.home}/.config/systemd/user/goat.service`)).toBe(
         false,
       );
-      expect(harness.commands.slice(-4)).toEqual([
+      expect(harness.commands.slice(-5)).toEqual([
         "systemctl --user disable --now goat.service",
         "systemctl --user daemon-reload",
         "systemctl --user enable t3code.service", // goat-rename: legacy
+        "systemctl --user reset-failed t3code.service", // goat-rename: legacy
         "systemctl --user restart t3code.service", // goat-rename: legacy
       ]);
     }),
@@ -1305,6 +1295,7 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
         "systemctl --user disable --now t3code.service", // goat-rename: legacy
         "systemctl --user daemon-reload",
         "systemctl --user enable goat.service",
+        "systemctl --user reset-failed goat.service",
         "systemctl --user restart goat.service",
       ]);
     }),

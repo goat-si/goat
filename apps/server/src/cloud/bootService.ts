@@ -1,3 +1,8 @@
+import {
+  escapeSystemdSpecifiers,
+  quoteSystemdValue,
+  unquoteSystemdValue,
+} from "./systemdValues.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -75,24 +80,6 @@ const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
  */
 const bootServiceEnvNames = (name: string) => [name, legacyEnvName(name) ?? name] as const;
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
-
-/** systemd expands `%` specifiers, including in unquoted append-log paths. */
-function escapeSystemdSpecifiers(value: string): string {
-  return value.replaceAll("%", "%%");
-}
-
-function quoteSystemdValue(value: string): string {
-  const escaped = escapeSystemdSpecifiers(value);
-  return /[\s"'\\]/.test(escaped)
-    ? `"${escaped.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
-    : escaped;
-}
-
-const unquoteSystemdValue = (raw: string) =>
-  (raw.startsWith('"') && raw.endsWith('"')
-    ? raw.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
-    : raw
-  ).replaceAll("%%", "%");
 
 const unescapeXmlText = (value: string) =>
   value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
@@ -315,6 +302,12 @@ function systemdManager(input: {
   readonly names: BootServiceNames;
 }): BootServiceManager {
   const unitPath = input.path.join(input.unitDir, input.names.unitFile);
+  const resetFailed = {
+    step: "clearing the service's failed state",
+    optional: true,
+    command: "systemctl",
+    args: ["--user", "reset-failed", input.names.unitFile],
+  };
   const prepareActivation = [
     {
       step: "reloading systemd user units",
@@ -326,6 +319,7 @@ function systemdManager(input: {
       command: "systemctl",
       args: ["--user", "enable", input.names.unitFile],
     },
+    resetFailed,
   ];
   return {
     kind: "systemd",
@@ -348,6 +342,7 @@ function systemdManager(input: {
       },
     ],
     restart: [
+      resetFailed,
       {
         step: "restarting the service after a failed update",
         command: "systemctl",
