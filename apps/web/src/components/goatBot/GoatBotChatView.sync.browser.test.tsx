@@ -233,6 +233,7 @@ import { randomUUID } from "~/lib/utils";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { verifySidebarReopen } from "./GoatBotChatView.reopen.test-support";
 import { completedTask, taskOutcome, turnItem } from "./GoatBotChatView.sync.fixtures";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { AsyncResult } from "effect/reactivity";
@@ -609,6 +610,9 @@ it("baselines persisted cached history when the mounted chat becomes live", asyn
   );
   expect(status?.textContent).toMatch(/Research replied\.|New reply from Research\./);
 });
+
+it("reopens live history silently and announces one reply arriving afterward", () =>
+  verifySidebarReopen({ setup, synchronized, deliver, MemberChat }));
 
 it.each(["above", "following"] as const)(
   "the first reply after an empty synchronized member snapshot is new while %s",
