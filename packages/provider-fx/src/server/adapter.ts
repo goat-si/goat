@@ -196,12 +196,15 @@ function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor
     driver: FX_DRIVER_KIND,
     runtimeHarness: "fx",
     capabilities: FxProviderCapabilitiesV2,
-    resolveSessionLaunch: Effect.fn("FxAdapter.resolveSessionLaunch")(function* (environment) {
+    resolveSessionLaunch: Effect.fn("FxAdapter.resolveSessionLaunch")(function* (
+      environment,
+      sessionEnvironment = environment,
+    ) {
       const command = options.settings.binaryPath || "fx";
       const executable = yield* resolveCommandPath(command, { env: environment }).pipe(
         Effect.provide(NodeServices.layer),
       );
-      return { environment, executable: executable ?? command };
+      return { environment: sessionEnvironment, executable: executable ?? command };
     }),
     makeRuntime: (input) => makeRuntime(input).pipe(Effect.map(withFxSessionMode)),
     applyModelSelection: ({ runtime, modelSelection }) =>

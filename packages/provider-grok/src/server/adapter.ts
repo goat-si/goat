@@ -309,15 +309,22 @@ export function makeGrokAcpAdapterFlavor(
         mapError: (cause) => cause,
       });
     }),
-    resolveSessionLaunch: Effect.fn("GrokAdapter.resolveSessionLaunch")(function* (environment) {
+    resolveSessionLaunch: Effect.fn("GrokAdapter.resolveSessionLaunch")(function* (
+      environment,
+      sessionEnvironment = environment,
+    ) {
       const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
-      const effectiveEnvironment = applyStoredGrokApiKey(environment, stored);
       const command = options.settings.binaryPath || "grok";
-      const executable = yield* resolveCommandPath(command, { env: effectiveEnvironment }).pipe(
+      const executable = yield* resolveCommandPath(command, {
+        env: applyStoredGrokApiKey(environment, stored),
+      }).pipe(
         Effect.provide(NodeServices.layer),
         Effect.provideService(HostProcess.Platform, options.hostPlatform),
       );
-      return { environment: effectiveEnvironment, executable: executable ?? command };
+      return {
+        environment: applyStoredGrokApiKey(sessionEnvironment, stored),
+        executable: executable ?? command,
+      };
     }),
     makeRuntime:
       options.makeRuntime ??

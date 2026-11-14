@@ -154,3 +154,46 @@ it.live(
       assert.notStrictEqual(launches[0]?.env, host);
     }).pipe(Effect.provide(layer), Effect.scoped),
 );
+
+it.live("finds a workspace-relative fx and launches it with the session's own PATH", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspace = yield* fs.makeTempDirectoryScoped({ prefix: "fx-relative-" });
+    const executable = path.join(workspace, "bin", "fx");
+    yield* fs.makeDirectory(path.join(workspace, "bin"));
+    yield* fs.writeFileString(executable, "#!/bin/sh\n");
+    yield* fs.chmod(executable, 0o755);
+    const launches: Array<unknown> = [];
+    const instanceId = ProviderInstanceId.make("fx-relative-path");
+    const makeRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* path.fromFileUrl(
+        new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+      ),
+      wrapRuntime: (runtime) => ({ ...runtime, request: () => Effect.succeed({}) }),
+    });
+    const adapter = yield* makeFxAdapterV2({
+      instanceId,
+      settings: yield* decodeFxSettings({}),
+      environment: { PATH: "bin" },
+      currentEnvironment: Effect.succeed({ PATH: "bin" }),
+      selfInvocation: yield* resolveSelfInvocation(),
+      makeRuntime: (input) => {
+        launches.push(input.sessionLaunch);
+        return makeRuntime(input);
+      },
+    });
+    yield* adapter.openSession({
+      threadId: ThreadId.make("fx-relative-thread"),
+      providerSessionId: ProviderSessionId.make("fx-relative"),
+      modelSelection: { instanceId, model: "default" },
+      runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: workspace,
+      }),
+    });
+    assert.deepEqual(launches, [{ environment: { PATH: "bin" }, executable }]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
