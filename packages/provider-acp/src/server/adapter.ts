@@ -1,12 +1,11 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
 import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -1119,11 +1118,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
-        const environment =
-          options.currentEnvironment === undefined ? undefined : yield* options.currentEnvironment;
-        const sessionEnvironment = environment === undefined ? undefined : { ...environment };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
         const sessionLaunch = yield* (
-          flavor.resolveSessionLaunch?.(sessionEnvironment ?? {}) ?? Effect.void
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+          ) ?? Effect.void
         );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined

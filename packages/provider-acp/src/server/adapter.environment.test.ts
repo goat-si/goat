@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -8,6 +12,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
+import { resolveCommandPath } from "@goat/shared/shell";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -353,5 +358,58 @@ it.live("plan extraction receives the environment and launch captured by its ses
       | { environment?: NodeJS.ProcessEnv; launch?: unknown }
       | undefined;
     assert.deepEqual([context?.environment?.GOAT_PLAN_TEST_VALUE, context?.launch], ["old", "old"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("session launch resolution uses the workspace for relative PATH entries", () =>
+  Effect.gen(function* () {
+    const workspace = yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-acp-path-"))),
+      (directory) => Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+    );
+    const bin = NodePath.join(workspace, "bin");
+    const executable = NodePath.join(bin, "goat-acp-test-command");
+    NodeFS.mkdirSync(bin);
+    NodeFS.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const instanceId = ProviderInstanceId.make("acp-relative-path");
+    const path = yield* Path.Path;
+    const makeRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* path.fromFileUrl(
+        new URL("../../../../apps/server/scripts/acp-mock-agent.ts", import.meta.url),
+      ),
+    });
+    const resolved: Array<unknown> = [];
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      currentEnvironment: Effect.succeed({ ...process.env, PATH: "bin" }),
+      selfInvocation: yield* resolveSelfInvocation(),
+      flavor: {
+        driver: ProviderDriverKind.make("acp-relative-path"),
+        capabilities: AcpProviderCapabilitiesV2,
+        resolveSessionLaunch: (environment) =>
+          resolveCommandPath("goat-acp-test-command", { env: environment }).pipe(
+            Effect.provide(NodeServices.layer),
+          ),
+        makeRuntime: (input) => {
+          resolved.push(input.sessionLaunch);
+          return makeRuntime(input);
+        },
+      },
+    });
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: workspace,
+    });
+    const modelSelection = { instanceId, model: "default" } as const;
+    const threadId = ThreadId.make("thread-relative-path");
+    yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make("relative-path"),
+      modelSelection,
+      runtimePolicy,
+    });
+    assert.deepEqual(resolved, [executable]);
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
