@@ -24,15 +24,13 @@ export function trackingCheckoutTarget(input: {
       : null;
   const args = localInputExists
     ? ["checkout", refName]
-    : remoteExists && !localTrackingBranch && localTrackedBranchTargetExists
-      ? ["checkout", refName]
-      : branch
-        ? ["checkout", branch]
-        : remoteExists && !localTrackingBranch
-          ? ["checkout", "--track", refName]
-          : remoteExists && localTrackingBranch
-            ? ["checkout", localTrackingBranch]
-            : ["checkout", refName];
+    : branch
+      ? ["checkout", branch]
+      : remoteExists && !localTrackingBranch
+        ? ["checkout", "--track", refName]
+        : remoteExists && localTrackingBranch
+          ? ["checkout", localTrackingBranch]
+          : ["checkout", refName];
   return { branch, args };
 }
 
