@@ -52,7 +52,7 @@ import {
   supersededPreparation,
   type PreparationAdmission,
 } from "./ensureFlight.ts";
-import { REMOTE_ARCHIVE_EXTRACT, REMOTE_ARCHIVE_FETCH } from "./remoteArchiveExtract.ts";
+import { REMOTE_ARCHIVE_EXTRACT } from "./remoteArchiveExtract.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
@@ -739,7 +739,12 @@ if ! goat_runtime_ready; then
   GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
   case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
-${REMOTE_ARCHIVE_FETCH}
+  goat_fetch() {
+    if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then wget -q --timeout=30 --tries=1 "$1" -O "$2"
+    else printf 'Remote host needs curl or wget to download %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
+    fi
+  }
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS" "$GOAT_STAGING/SHA256SUMS" @@GOAT_ARCHIVE_CHECKSUMS_SECONDS@@
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/$GOAT_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE" @@GOAT_ARCHIVE_DOWNLOAD_SECONDS@@
   GOAT_EXPECTED="$(grep " \\*\\{0,1\\}$GOAT_ARCHIVE$" "$GOAT_STAGING/SHA256SUMS" | cut -d' ' -f1)"
