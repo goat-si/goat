@@ -49,6 +49,8 @@ it("keeps the title when dragging a search result", async () => {
     // AppRoot brings its own router.
     router: false,
   });
+  // Opening a thread focuses its composer a frame later, even over the search (goat-si/goat#3353).
+  await expect.element(page.getByRole("textbox", { name: /^Message/ })).toHaveFocus();
   await userEvent.fill(page.getByRole("combobox", { name: "Search threads" }), "search-target");
   const result = page.getByRole("option", { name: /Thread search-target/ });
   await expect.element(result).toBeVisible();
