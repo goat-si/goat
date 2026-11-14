@@ -210,11 +210,11 @@ export const CodexDriver: ProviderDriver<
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const environmentHome = processEnv.CODEX_HOME;
-    const homeLayout = yield* resolveCodexHomeLayout(
-      !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
+    const homeConfig =
+      !config.homePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
-        : config,
-    );
+        : config;
+    const homeLayout = yield* resolveCodexHomeLayout(homeConfig);
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     const stampIdentity = withInstanceIdentity({
       instanceId,
@@ -268,7 +268,7 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        config: homeConfig,
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
