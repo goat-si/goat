@@ -60,6 +60,37 @@ const log = (step: string, detail: Record<string, unknown>) => {
   process.stdout.write(step + " " + JSON.stringify(detail) + "\n");
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const STARTUP_WAIT_MS = 30_000;
+const captureOutput = (child: NodeChildProcess.ChildProcess) => {
+  let output = "";
+  for (const stream of [child.stdout, child.stderr])
+    stream?.on("data", (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-16_384);
+    });
+  return () => output || "(no output)";
+};
+const boundedWait = async <T>(
+  wait: Promise<T>,
+  what: string,
+  output: () => string,
+  ms = STARTUP_WAIT_MS,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      wait,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(what + " timed out after " + ms + "ms.")), ms);
+      }),
+    ]);
+  } catch (error) {
+    throw new Error((error instanceof Error ? error.message : String(error)) + "\n" + output(), {
+      cause: error,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+};
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -220,35 +251,59 @@ try {
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     GTK_A11Y: "atspi",
   };
-  const launcher = start("/usr/libexec/at-spi-bus-launcher", ["--launch-immediately"], env);
+  const launcher = start("/usr/libexec/at-spi-bus-launcher", ["--launch-immediately"], env, [
+    "ignore",
+    "pipe",
+    "pipe",
+  ]);
+  const launcherOutput = captureOutput(launcher);
   // The fixture's GTK bridge asks this bus for its address before its window maps.
   const busWaiter = start("python3", ["-c", ACCESSIBILITY_BUS_WAIT], env, [
     "ignore",
-    "ignore",
-    "inherit",
+    "pipe",
+    "pipe",
   ]);
-  await Promise.race([
-    new Promise<void>((resolve, reject) => {
-      busWaiter.once("close", (code) =>
-        code === 0
-          ? resolve()
-          : reject(new Error("The accessibility bus wait exited with " + code + ".")),
-      );
-      busWaiter.once("error", reject);
-    }),
-    new Promise<never>((_, reject) => {
-      launcher.once("exit", (code) =>
-        reject(new Error("at-spi-bus-launcher exited with " + code + ".")),
-      );
-      launcher.once("error", reject);
-    }),
-  ]);
+  const busWaiterOutput = captureOutput(busWaiter);
+  busWaiter.stderr?.pipe(process.stderr, { end: false });
+  await boundedWait(
+    Promise.race([
+      new Promise<void>((resolve, reject) => {
+        busWaiter.once("close", (code) =>
+          code === 0
+            ? resolve()
+            : reject(new Error("The accessibility bus wait exited with " + code + ".")),
+        );
+        busWaiter.once("error", reject);
+      }),
+      new Promise<never>((_, reject) => {
+        launcher.once("exit", (code) =>
+          reject(new Error("at-spi-bus-launcher exited with " + code + ".")),
+        );
+        launcher.once("error", reject);
+      }),
+    ]),
+    "The accessibility bus wait",
+    () =>
+      "at-spi-bus-launcher output: " +
+      launcherOutput() +
+      "\nbus waiter output: " +
+      busWaiterOutput(),
+  );
   // The fixture's errors go to this run's log; its first line says its window is mapped.
-  const app = start("python3", [fixture], env, ["ignore", "pipe", "inherit"]);
+  const app = start("python3", [fixture], env, ["ignore", "pipe", "pipe"]);
+  const appOutput = captureOutput(app);
+  app.stderr?.pipe(process.stderr, { end: false });
   const fixtureOutput = app.stdout;
   if (!fixtureOutput) throw new Error("The fixture has no stdout.");
-  const mapped = await firstLine(app, fixtureOutput, "The fixture");
-  if (mapped !== "ready") throw new Error("The fixture said " + JSON.stringify(mapped) + ".");
+  const mapped = await boundedWait(
+    firstLine(app, fixtureOutput, "The fixture"),
+    "The fixture first-line wait",
+    () => "fixture output: " + appOutput(),
+  );
+  if (mapped !== "ready")
+    throw new Error(
+      "The fixture said " + JSON.stringify(mapped) + ".\nfixture output: " + appOutput(),
+    );
   log("environment", { xvfb: xvfb.pid, dbus: dbus.pid, fixture: app.pid, display });
 
   const helper = NodeChildProcess.spawn(values.helper, [], {
