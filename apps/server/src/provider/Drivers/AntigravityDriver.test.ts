@@ -6,6 +6,7 @@ import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderInstanceId,
   ProviderSessionId,
+  type RuntimeRequestId,
   ThreadId,
   type AntigravitySettings,
 } from "@goat/contracts";
@@ -369,7 +370,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         });
         const runtimeHome = h.launches.at(-1)?.profileDirectory;
         if (!runtimeHome) return yield* Effect.die("Missing runtime home");
-        const pendingRequest = yield* Deferred.make<string>();
+        const pendingRequest = yield* Deferred.make<RuntimeRequestId>();
         const turnEvents = yield* session.events.pipe(
           Stream.tap((event) =>
             event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
