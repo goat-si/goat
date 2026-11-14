@@ -128,6 +128,37 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         }),
       ).toBe("sudo /opt/goat/goat browser setup");
 
+      // A standalone executable started directly (systemd, no launcher) is still this install.
+      expect(
+        yield* rootCommand({
+          node: "/opt/goat/goat",
+          entry: "/opt/goat/goat",
+          executable: true,
+          path: yield* pathWithGoat,
+        }),
+      ).toBe("sudo /opt/goat/goat browser setup");
+
+      // A global npm launcher runs the downloaded executable; PATH's `goat` is that launcher.
+      const prefix = path.join(home, "npm");
+      const npmLauncher = path.join(prefix, "lib/node_modules/goat/bin/goat.mjs");
+      yield* fs.makeDirectory(path.dirname(npmLauncher), { recursive: true });
+      yield* fs.makeDirectory(path.join(prefix, "bin"));
+      yield* fs.writeFileString(npmLauncher, "", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(prefix, "lib/node_modules/goat/package.json"),
+        `{"name":"goat","version":"${packageJson.version}","bin":{"goat":"bin/goat.mjs"}}`,
+      );
+      yield* fs.symlink(npmLauncher, path.join(prefix, "bin/goat"));
+      expect(
+        yield* rootCommand({
+          node: "/home/theo/.goat/runtime/goat/versions/1.0.0/goat",
+          entry: "/home/theo/.goat/runtime/goat/versions/1.0.0/goat",
+          executable: true,
+          path: path.join(prefix, "bin"),
+          env: { GOAT_NPM_LAUNCHER_PATH: npmLauncher },
+        }),
+      ).toBe('sudo env "PATH=$PATH" goat browser setup');
+
       expect(
         yield* rootCommand({ ...desktop, env: { GOAT_CLI_PATH: path.join(home, "gone") } }),
       ).toBe('sudo env "PATH=$PATH" goat browser setup');

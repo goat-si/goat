@@ -26,7 +26,11 @@ import {
   uploadTarget,
   nativeScripts,
 } from "./tunnel.fixture.ts";
-import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import {
+  protocolExecutable,
+  makeProtocolFixture,
+  assertPickedFromReservedPort,
+} from "./tunnel.protocol.fixture.ts";
 
 /** Answers identity reads through a recorded forward from the owner server behind it. */
 const forwardingHttpClient = (forwards: ReadonlyMap<number, number>) =>
@@ -568,11 +572,23 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
             { concurrency: "unbounded" },
           );
           assert.equal(Number(output.code), 0, output.stderr);
-          if (entry === "launch")
-            assert.equal(
-              (yield* f.fs.readFileString(`${f.state}/port`)).trim(),
-              String(f.pickPort),
+          if (entry === "launch") {
+            const picks = (yield* f.fs.readFileString(`${f.test}/pick-port-results`))
+              .trim()
+              .split("\n");
+            const picked = picks[picks.length - 1] ?? "";
+            assertPickedFromReservedPort(f.pickPort, picked);
+            assert.equal((yield* f.fs.readFileString(`${f.state}/port`)).trim(), picked);
+            const identity = `${cli} serve --host 127.0.0.1 --port ${picked} --base-dir ${f.home}/.goat`;
+            assert.equal(yield* f.fs.readFileString(`${f.state}/identity`), identity + "\n");
+            const pid = (yield* f.fs.readFileString(`${f.state}/pid`)).trim();
+            const ps = yield* f.realSpawner.spawn(
+              ChildProcess.make("/bin/ps", ["-o", "command=", "-p", pid]),
             );
+            const command = (yield* ps.stdout.pipe(Stream.decodeText(), Stream.mkString)).trim();
+            assert.equal(Number(yield* ps.exitCode), 0);
+            assert.equal(command, `node ${identity}`);
+          }
           assert.equal(yield* f.fs.readFileString(`${upstream}/sentinel`), "upstream bytes");
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
           const events = (yield* f.fs.readFileString(`${f.test}/events`))

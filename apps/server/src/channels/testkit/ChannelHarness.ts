@@ -757,7 +757,9 @@ export function makeHarness(
     WorktreeSetupTracker.layer,
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
     Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
-    Layer.mock(GitWorkflow.GitWorkflowService)({}),
+    Layer.mock(GitWorkflow.GitWorkflowService)({
+      currentBranch: () => Effect.succeed(null),
+    }),
     Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
       runForThread: () => Effect.succeed({ status: "no-script" }),
     }),

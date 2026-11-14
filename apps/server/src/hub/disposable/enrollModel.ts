@@ -2,6 +2,9 @@ import { type HubMachineStep } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { conflictCount } from "./attachModel.ts";
+import { Detach, Health, onlyHostKeyConflict } from "./detachModel.ts";
+
 /**
  * An attach's progress after Pen admits the machine (design section 2, steps 3 to 5): the route GOAT
  * recorded, whether it reached the machine with the hub's key, and the OpenCodex link operation.
@@ -30,6 +33,12 @@ const Enroll = Schema.Struct({
   keyDir: Schema.optionalKey(Schema.String),
   /** Why the attach stopped and only a person can move it on. */
   stop: Schema.optionalKey(Schema.String),
+  /** Removing the link: detach, retirement, recover (detachModel.ts). */
+  detach: Schema.optionalKey(Detach),
+  /** The handshake of a linked or detaching machine, every 30 minutes. */
+  health: Schema.optionalKey(Health),
+  /** The link names a machine key path that no longer holds the key: GOAT's home moved. */
+  linkKeyMoved: Schema.optionalKey(Schema.Literal(true)),
 });
 export type Enroll = typeof Enroll.Type;
 const EnrollJson = Schema.fromJsonString(Enroll);
@@ -38,6 +47,14 @@ const decodeEnrollJson = Schema.decodeOption(EnrollJson);
 export const decodeEnroll = (json: string): Enroll =>
   Option.getOrElse(decodeEnrollJson(json), () => ({ stop: "unreadable" }));
 export const encodeEnroll = Schema.encodeSync(EnrollJson);
+
+/** Whether a record's detach may run: no conflict, or a person's force past a changed host key only. */
+export const detachRuns = (row: {
+  readonly conflicts_json: string;
+  readonly enroll_json: string;
+}) =>
+  conflictCount(row.conflicts_json) === 0 ||
+  (decodeEnroll(row.enroll_json).detach?.force === true && onlyHostKeyConflict(row.conflicts_json));
 
 /** The route recorded at step 3, which every later SSH command and the link use unchanged. */
 const Route = Schema.Struct({
@@ -116,14 +133,22 @@ const Operation = Schema.Struct({
   error: Schema.optionalKey(Schema.Struct({ code: Schema.String })),
   /** The Child may still hold an enrollment or a plant, whatever the outcome says of the Home. */
   childResidual: Schema.optionalKey(Schema.Boolean),
+  /** A person or O5 resolved this residual or unknown entry. */
+  resolvedAt: Schema.optionalKey(Schema.String),
 });
 const decodeOperation = Schema.decodeUnknownOption(Schema.fromJsonString(Operation));
 
 export type LinkOutcome =
   | { readonly kind: "committed"; readonly linkId: string }
   | { readonly kind: "failed_clean"; readonly code: string }
-  | { readonly kind: "unsettled"; readonly state: "residual" | "unknown" }
-  | { readonly kind: "open" }
+  | {
+      readonly kind: "unsettled";
+      readonly state: "residual" | "unknown";
+      readonly resolved?: true;
+      /** The link id the operation reserved: the only link a later removal may take as this attach's. */
+      readonly reservedLinkId?: string;
+    }
+  | { readonly kind: "open"; readonly reservedLinkId?: string }
   | { readonly kind: "not_found" }
   | { readonly kind: "unreadable" };
 
@@ -145,6 +170,9 @@ export const readOperation = (
     operation.alias.toLowerCase() !== expected.alias.toLowerCase()
   )
     return { kind: "unreadable" };
+  const reserved = operation.reserved?.linkId;
+  const reservedLinkId =
+    reserved !== undefined && LINK_ID.test(reserved) ? { reservedLinkId: reserved } : {};
   switch (operation.state) {
     case "committed": {
       const linkId = operation.reserved?.linkId;
@@ -153,7 +181,8 @@ export const readOperation = (
         : { kind: "unreadable" };
     }
     case "failed_clean": {
-      if (operation.childResidual === true) return { kind: "unsettled", state: "residual" };
+      if (operation.childResidual === true)
+        return { kind: "unsettled", state: "residual", ...reservedLinkId };
       const code = operation.error?.code;
       return {
         kind: "failed_clean",
@@ -162,9 +191,14 @@ export const readOperation = (
     }
     case "residual":
     case "unknown":
-      return { kind: "unsettled", state: operation.state };
+      return {
+        kind: "unsettled",
+        state: operation.state,
+        ...(operation.resolvedAt === undefined ? {} : { resolved: true as const }),
+        ...reservedLinkId,
+      };
     case "open":
-      return { kind: "open" };
+      return { kind: "open", ...reservedLinkId };
     default:
       return { kind: "unreadable" };
   }
@@ -182,7 +216,9 @@ const LinkRow = Schema.Struct({
   childKind: Schema.optionalKey(Schema.String),
   exclusive: Schema.optionalKey(Schema.Boolean),
   explicitRoute: Schema.optionalKey(
-    Schema.Struct({ proxyCommand: Schema.String, user: Schema.String, port: Schema.Number }),
+    Schema.NullOr(
+      Schema.Struct({ proxyCommand: Schema.String, user: Schema.String, port: Schema.Number }),
+    ),
   ),
 });
 const decodeStatus = Schema.decodeUnknownOption(
@@ -210,6 +246,51 @@ export const verifyLink = (
     route.port === SSH_PORT
     ? "verified"
     : "mismatch";
+};
+
+export type ListedLink =
+  | { readonly kind: "unreadable" }
+  | { readonly kind: "none"; readonly aliasLinkId?: string }
+  | { readonly kind: "ours"; readonly linkId: string }
+  | { readonly kind: "foreign"; readonly linkId: string };
+/**
+ * The link OpenCodex lists for a machine whose last link operation it cannot settle: the id that
+ * operation reserved (none listed means this attach has no link), or without one an exclusive
+ * ephemeral Child on the record's route. A link that only shares the alias is foreign, and no
+ * removal takes it.
+ */
+export const listedLink = (
+  output: { readonly code: number; readonly stdout: string } | undefined,
+  expected: {
+    readonly alias: string;
+    readonly reservedLinkId: string | undefined;
+    readonly route: StoredRoute | undefined;
+  },
+): ListedLink => {
+  if (output === undefined || output.code !== 0) return { kind: "unreadable" };
+  const status = Option.getOrUndefined(decodeStatus(output.stdout));
+  if (status === undefined) return { kind: "unreadable" };
+  const named = status.links.filter(
+    (link) => link.alias.toLowerCase() === expected.alias.toLowerCase(),
+  );
+  if (expected.reservedLinkId !== undefined) {
+    const reserved = named.find((link) => link.id === expected.reservedLinkId);
+    if (reserved !== undefined && LINK_ID.test(reserved.id))
+      return { kind: "ours", linkId: reserved.id };
+    // Not this attach's link; it is named so a person sees what GOAT left.
+    const other = named.find((link) => LINK_ID.test(link.id));
+    return other === undefined ? { kind: "none" } : { kind: "none", aliasLinkId: other.id };
+  }
+  const ours = named.find(
+    (link) =>
+      expected.route !== undefined &&
+      link.childKind === "ephemeral" &&
+      link.exclusive === true &&
+      link.explicitRoute?.proxyCommand === expected.route.proxyCommand,
+  );
+  if (ours !== undefined && LINK_ID.test(ours.id)) return { kind: "ours", linkId: ours.id };
+  const other = named.find((link) => LINK_ID.test(link.id));
+  return other !== undefined ? { kind: "foreign", linkId: other.id } : { kind: "none" };
 };
 
 /** The steps after admission, for the status a caller sees. */
@@ -261,6 +342,8 @@ const STOPS: Record<string, string> = {
   link_mismatch:
     "The Home's link for this machine is not the exclusive lightweight Child on the recorded route.",
   link_gone: "The Home no longer lists the link this attach made.",
+  joined_without_admit:
+    "Pen admitted it without an admit GOAT saved; its key is among Pen's members, so it holds its slot.",
   unreadable: "GOAT cannot read this attach's progress.",
 };
 const stopText = (stop: string) => STOPS[stop] ?? "The attach stopped and needs a person.";
@@ -363,8 +446,10 @@ export const leftPenMessage = (
         linkId +
         " for it; the link and the Child on the machine stay. Remove the link on the hub with ocx link revoke --link-id " +
         linkId +
-        " (add --force --yes if the machine is gone).",
-      nextAction: "Detaching comes in a later GOAT.",
+        "; if the machine is gone, add --force --yes, then run ocx link recover --forget --link-id " +
+        linkId +
+        " --yes for the cleanup it leaves.",
+      nextAction: "A person runs the ocx link revoke command above on the hub.",
     };
   return {
     message:
@@ -399,6 +484,8 @@ export const enrollMessage = (
   pausedAfterJoin = false,
   /** The record's link operation, named in a stop about it. */
   operationId: string | null = null,
+  /** A conflict stopped the record, which detach refuses. */
+  conflicted = false,
 ): { readonly message: string; readonly nextAction: string | null } | undefined => {
   // Both clients show the message, so what a person must do is in it.
   const keyStep =
@@ -414,7 +501,9 @@ export const enrollMessage = (
           ? " Link operation " + operationId + "."
           : "") +
         leave,
-      nextAction: "Resuming or detaching an attach is not available yet.",
+      nextAction: conflicted
+        ? "A person removes the machine from Pen with pen revoke; a record a conflict stopped cannot be detached."
+        : "Detach it to remove what it left; resuming an attach is not available yet.",
     };
   if (state === "paused" && pausedAfterJoin)
     return {

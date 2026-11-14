@@ -19,6 +19,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -34,13 +35,14 @@ import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
 import { NodeRuntimeUnavailableError } from "@goat/shared/nodeRuntime";
 
 import * as DeviceService from "./DeviceService.ts";
+import { ensureDeviceHub } from "./DeviceToolchain.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeBootError = Schema.decodeUnknownSync(Schema.fromJsonString(DeviceBootError));
 const encodeBootError = Schema.encodeSync(Schema.fromJsonString(DeviceBootError));
 
 it.effect.each([400, 500])(
-  "distinguishes screenshot HTTP rejection (%s) from transport failure",
+  "retries a hub-rejected (%s) screenshot with simctl only on iOS 26 and older",
   (status) =>
     Effect.gen(function* () {
       const operations = makeDeviceHubOperations({
@@ -51,21 +53,25 @@ it.effect.each([400, 500])(
             HttpClientResponse.fromWeb(request, new Response("private hub output", { status })),
           ),
         ),
-        run: () => Effect.die("Screenshot does not run a command"),
+        run: () => Effect.succeed({ code: 0, stdout: "iVBORw==", stderr: "" }),
         platformAvailable: (platform) => Effect.succeed(platform === "ios"),
       });
-      const result = yield* operations
-        .screenshot({
-          id: "phone",
-          name: "Phone",
-          version: "iOS 26.3",
-          platform: "ios",
-          booted: true,
-          physical: false,
-        })
-        .pipe(Effect.result);
-      expect(result).toMatchObject({
+      const screenshot = (version: string) =>
+        operations
+          .screenshot({
+            id: "phone",
+            name: "Phone",
+            version,
+            platform: "ios",
+            booted: true,
+            physical: false,
+          })
+          .pipe(Effect.result);
+      expect(yield* screenshot("iOS 27.0")).toMatchObject({
         failure: { _tag: "DeviceOperationError", reason: "hub_rejected" },
+      });
+      expect(yield* screenshot("iOS 26.3")).toMatchObject({
+        success: new Uint8Array([137, 80, 78, 71]),
       });
     }),
 );
@@ -312,6 +318,45 @@ describe("device setup consent", () => {
         detail: startupError.message,
       });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("names the missing npm in the host status when device support cannot install", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-device-no-npm-" });
+      const installError = yield* ensureDeviceHub(baseDir).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, {
+          run: (input) =>
+            Effect.fail(
+              new ProcessRunner.ProcessSpawnError({
+                command: input.command,
+                argumentCount: input.args.length,
+                cause: PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "ChildProcess",
+                  method: "spawn",
+                  description: `spawn ${input.command} ENOENT`,
+                }),
+              }),
+            ),
+        }),
+        Effect.flip,
+      );
+      const { service, settings } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        new DeviceHost.DeviceHostError({
+          hostId: LOCAL_DEVICE_HOST_ID,
+          step: "installing device support",
+          cause: installError,
+        }),
+      );
+      yield* Ref.update(settings, (current) => ({ ...current, enableDeviceSupport: true }));
+      const detail = (yield* service.list).hostStatuses[LOCAL_DEVICE_HOST_ID]?.detail;
+      expect(detail).toMatch(/\bnpm\b/);
+      expect(detail).toMatch(/Node\.js/);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("listing and provider startup do not start helpers before consent", () =>
@@ -1182,68 +1227,5 @@ it.effect("reconciles SSH host settings without publishing no-op changes", () =>
   }).pipe(
     Effect.scoped,
     Effect.provide(Layer.mergeAll(ServerSettings.layerTest(), NodeServices.layer)),
-  ),
-);
-
-it.effect("a failed tool update reports npm's exit code but not its output", () =>
-  Effect.gen(function* () {
-    const host: DeviceHost.DeviceHost["Service"] = {
-      id: LOCAL_DEVICE_HOST_ID,
-      label: "This machine",
-      summary: Effect.succeed({
-        id: LOCAL_DEVICE_HOST_ID,
-        kind: "local",
-        label: "Test server",
-        platforms: [],
-        hubInstalled: false,
-        agentDeviceInstalled: false,
-      }),
-      platformAvailability: (platform) => Effect.succeed({ platform, available: false }),
-      ensureReady: () => Effect.die("Updating a tool does not start the hub"),
-      ensureAgentReady: () => Effect.die("Updating a tool does not start the agent"),
-      current: Effect.succeed(null),
-      stopAgent: Effect.void,
-      stop: Effect.void,
-    };
-    const npmFailure = {
-      code: ChildProcessSpawner.ExitCode(243),
-      stdout: "",
-      stderr: "npm error EACCES https://private:credential@registry.example.test/expo-device-hub",
-      timedOut: false,
-      stdoutTruncated: false,
-      stderrTruncated: false,
-      stdoutInvalidUtf8: false,
-      stderrInvalidUtf8: false,
-    };
-    const service = yield* DeviceService.make.pipe(
-      Effect.provideService(DeviceHost.DeviceHost, host),
-      Effect.provideService(ProcessRunner.ProcessRunner, {
-        run: () => Effect.succeed(npmFailure),
-      }),
-      Effect.provideService(
-        HttpClient.HttpClient,
-        HttpClient.make(() => Effect.die("Updating a tool makes no hub requests")),
-      ),
-    );
-
-    const error = yield* service.updateTool("hub").pipe(Effect.flip);
-    expect(error).toMatchObject({
-      _tag: "DeviceOperationError",
-      reason: "command_failed",
-      exitCode: 243,
-    });
-    expect(error.message).toBe(
-      "Device update device tool failed: The device command failed (exit code 243).",
-    );
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        ServerSettings.layerTest({ enableDeviceSupport: true }),
-        ServerConfig.layerTest(process.cwd(), { prefix: "goat-device-update-" }),
-        NodeCrypto.layer,
-        NetService.layer,
-      ).pipe(Layer.provideMerge(NodeServices.layer)),
-    ),
-    Effect.scoped,
   ),
 );

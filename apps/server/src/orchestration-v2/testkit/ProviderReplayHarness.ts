@@ -326,6 +326,9 @@ export function layerWithRegistry<Error>(
     readonly projects?: Layer.Layer<ProjectService.ProjectService>;
     readonly continuationRequests?: Layer.Layer<never>;
     readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
+    readonly wrapProjectionStore?: (
+      store: ProjectionStore.ProjectionStoreV2Shape,
+    ) => ProjectionStore.ProjectionStoreV2Shape;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -373,9 +376,19 @@ export function layerWithRegistry<Error>(
       ? {}
       : { codexAppServerIsolation: options.codexAppServerIsolation }),
   }).pipe(Layer.orDie);
+  const wrapProjectionStore = options.wrapProjectionStore;
+  const layerProjectionStore =
+    wrapProjectionStore === undefined
+      ? ProjectionStore.layer
+      : Layer.effect(
+          ProjectionStore.ProjectionStoreV2,
+          Effect.gen(function* () {
+            return wrapProjectionStore(yield* ProjectionStore.ProjectionStoreV2);
+          }),
+        ).pipe(Layer.provide(ProjectionStore.layer));
   const layerStores = Layer.mergeAll(
     EventStore.layer,
-    ProjectionStore.layer,
+    layerProjectionStore,
     ProjectStore.layer,
     CommandReceiptStore.layer,
     EffectOutbox.layer,

@@ -161,27 +161,66 @@ home to a path whose folders pass. Never change a shared or system folder or
 another user's folder or symlink, even as root.
 
 GOAT does not move its home for you, so when the list names a folder of yours,
-the `chmod go-w` it shows is the simpler fix. To move the home anyway, stop GOAT,
-move the folder, and start GOAT with `GOAT_HOME=<new>` or `--base-dir <new>`;
-the database, secrets and hub records move with it. Some things keep the old
-path: threads whose worktrees are in its `worktrees` folder still point there,
-so finish them first; a background service keeps serving the old home until you
-run `goat service uninstall --base-dir <old>` and then
-`goat service install --base-dir <new>`; and the desktop app's `goat` command
-needs **Remove** and **Install** again in **Settings → General → About**.
+the `chmod go-w` it shows is the simpler fix. To move the home anyway, first
+finish the threads whose worktrees are in its `worktrees` folder, since they
+keep pointing there. Before you move it, run `goat service uninstall` if GOAT
+runs as a background service, and choose **Remove** next to **goat command** in
+**Settings → General → About**; do both while the old home is in place.
+Then stop GOAT, move the folder, and start GOAT with `GOAT_HOME=<new>` or
+`--base-dir <new>`; the database, secrets and hub records move with it. Once it
+runs from the new home, run `goat service install --base-dir <new>` and choose
+**Install** again.
 A linked disposable machine's OpenCodex link also keeps the machine key's old
 path and stops working, so do not move the home while a disposable machine is
-linked.
+linked. If you moved it anyway, move it back to bring the link back.
 
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
 
 Each machine is a full Pen member and can reach services on your machines'
-loopback. GOAT does not detach it yet, and it stays a Pen member until you remove
-it with [`pen revoke`](pen.md#remove-a-machine). Removing a linked machine from Pen leaves its
-link on the hub; the machine list names the link and the `ocx link revoke`
-command that removes it. An older GOAT on the
-hub shows **Update GOAT on this hub** instead of these settings.
+loopback, and it stays a Pen member until you remove it with
+[`pen revoke`](pen.md#remove-a-machine).
+
+**Detach** on a machine's row in Settings → Hub on web and desktop, or
+`goat_hub_machine_detach` from the thread that attached it, removes its OpenCodex
+link and the lightweight Child on the machine. The machine stays a Pen member
+until you remove it with `pen revoke`, and its slot in the cap stays taken until
+both the detach has ended and the machine has left Pen. A machine that
+does not answer keeps its link: GOAT tries again every 30 minutes, and after 24
+hours without an answer it removes the link without the machine and cleans the
+machine once it answers. GOAT does the same for a linked machine that stops
+answering for 24 hours; if it answers again later, detach it to end its record.
+A failed try counts only while this hub's Pen answers its member list, so a
+stopped Pen does not remove its machines' links; a hub whose network is cut while
+Pen keeps running still counts them. A machine that answers but whose cleanup
+OpenCodex cannot confirm waits for you instead, once GOAT has repeated the revoke:
+the machine list says what to check before you force it. A force repeats an
+unfinished removal first, as OpenCodex asks; the list names
+`ocx link operations resolve --operation-id <id> --yes` only for an entry that
+stays unknown after that. If an unfinished removal by another revoke holds the
+link, the list says how to find it and names the
+`ocx link revoke --link-id <id> --force --yes` that finishes it on the hub; then
+detach it again. A revoke OpenCodex left running, or never recorded, goes again
+under its own id when you fix what stopped it and detach again. GOAT marks each
+purge it gives up on for a silent machine as resolved itself, so OpenCodex's
+journal does not fill up. If GOAT's removal of a silent machine's link stops,
+the machine list says why; once that is fixed, detach it.
+**Force detach** removes the link now, without the machine; only a person can
+force, and it is also the way out for a machine that presents another SSH host
+key: force it first, then remove it from Pen. If a forced or retired machine is
+gone for good, run
+`ocx link recover --forget --link-id <id> --yes` on the hub yourself, as the
+machine list says; OpenCodex refuses it from an agent. A detaching machine you
+remove from Pen keeps its record, and with it its slot, until that cleanup ends.
+**Release** frees the slot
+of an attach whose invite Pen lost or used without recording who joined, once that
+invite has expired and Pen's member list shows the machine did not join. The
+phone app shows each machine's state but cannot detach or release yet
+([#3221](https://github.com/goat-si/goat/issues/3221)). Ended records are deleted
+30 days after they ended and left Pen. Removing a linked machine from Pen without
+detaching it leaves its link on the hub; the machine list names the link and the
+`ocx link revoke` command that removes it. An older GOAT on the hub shows
+**Update GOAT on this hub** instead of these settings.
 
 ## Sync OpenCodex models
 

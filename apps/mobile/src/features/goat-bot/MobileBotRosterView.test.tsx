@@ -115,6 +115,7 @@ const members = vi.hoisted(() => ({
       waitingCount: number;
       latest?: { text: string; at: string; author: "bot" | "person" };
       unread: boolean;
+      waitingState?: "ready" | "pending" | "unavailable";
     }
   >,
 }));
@@ -127,6 +128,13 @@ vi.mock("./useMobileMemberStatus", () => ({
     };
     return { ...shown, status: { waitingCount: shown.waitingCount, latest: shown.latest } };
   },
+}));
+// Each bot's work signals as Home's shared value gives them; none where Home does not govern.
+const signals = vi.hoisted(() => ({
+  byBot: {} as Record<string, { unread: number | null; missing: string | null; spoken: string[] }>,
+}));
+vi.mock("./useMobileBotRowSignals", () => ({
+  useMobileBotRowSignals: (input: { botId: string }) => signals.byBot[input.botId] ?? null,
 }));
 vi.mock("../../state/use-thread-detail", () => ({
   useThreadVisibleTurnItems: () => face.items,
@@ -552,6 +560,66 @@ it("gives each member row its latest message, unread mark and state in one spoke
     expect(row("Fresh")?.textContent).toContain("Watches the disks");
     expect(row("Fresh")?.getAttribute("aria-label")).toBe("Fresh, Watches the disks");
   } finally {
+    members.status = {};
+  }
+});
+
+it("where Home governs, a row shows and says its unread recent tasks and what it cannot read", async () => {
+  signals.byBot = {
+    main: {
+      unread: 3,
+      missing: null,
+      spoken: ["3 unread tasks; recent work only; older work may be missing"],
+    },
+    scout: {
+      unread: null,
+      missing: "Unread and waiting unavailable",
+      spoken: ["Unread and waiting unavailable"],
+    },
+  };
+  // Scout's last status read failed; the count it answered before is no longer known.
+  members.status = { scout: { waitingCount: 1, unread: false, waitingState: "unavailable" } };
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[
+            { kind: "main", profile: null },
+            {
+              kind: "member",
+              profile: decodeProfile({
+                botId: "scout",
+                role: "member",
+                name: "Scout",
+                avatar: null,
+                purpose: "",
+                defaultModelSelection: null,
+                defaultProjectId: null,
+                environmentId: "env",
+                sessionThreadId: "thread-scout",
+                createdAt: at,
+                updatedAt: at,
+              }),
+            },
+          ]}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    const row = (name: string) =>
+      [...container.querySelectorAll("button")].find((element) =>
+        element.getAttribute("aria-label")?.split(", ").includes(name),
+      );
+    expect(row("GOAT Bot")?.getAttribute("aria-label")).toContain(
+      "3 unread tasks; recent work only; older work may be missing",
+    );
+    expect(row("GOAT Bot")?.textContent).toContain("3");
+    expect(row("Scout")?.getAttribute("aria-label")).toBe("Scout, Unread and waiting unavailable");
+    expect(row("Scout")?.textContent).toBe("Scout–");
+  } finally {
+    signals.byBot = {};
     members.status = {};
   }
 });

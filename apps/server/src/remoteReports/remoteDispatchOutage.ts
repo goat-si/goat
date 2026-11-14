@@ -107,6 +107,48 @@ const endTask = Effect.fnUntraced(function* (
   return true;
 });
 
+// A gap restarts the clock, unless the outage had already run its course before the gap.
+const outageBegan = (
+  current: { readonly since: string | null; readonly last: string | null },
+  at: string,
+) =>
+  current.since === null ||
+  (current.last !== null &&
+    Date.parse(at) - Date.parse(current.last) > CONTACT_GAP_MS &&
+    Date.parse(current.last) - Date.parse(current.since) < OUTAGE_LOST_AFTER_MS)
+    ? at
+    : current.since;
+
+export const recordLostLaunchUnreachable = Effect.fn("remoteReports.recordLostLaunchUnreachable")(
+  function* (record: RemoteDispatchRecord) {
+    const sql = yield* SqlClient.SqlClient;
+    const at = DateTime.formatIso(yield* DateTime.now);
+    const [current] = yield* sql<{ readonly since: string | null; readonly last: string | null }>`
+    SELECT host_unavailable_since AS since, host_last_failed_at AS last FROM remote_dispatches
+    WHERE correlation_id = ${record.correlationId} AND state = 'lost'
+      AND remote_thread_id IS NULL AND end_reason IS NULL`.pipe(Effect.mapError(storage));
+    if (current === undefined) return;
+    const began = outageBegan(current, at);
+    const marked = yield* sql`UPDATE remote_dispatches SET host_unavailable_since = ${began},
+    host_last_failed_at = ${at}, last_error = ${`Host unavailable since ${began}.`}
+    WHERE correlation_id = ${record.correlationId} AND state = 'lost'
+      AND remote_thread_id IS NULL AND end_reason IS NULL RETURNING correlation_id`.pipe(
+      Effect.mapError(storage),
+    );
+    if (marked.length === 0 || Date.parse(at) - Date.parse(began) < OUTAGE_LOST_AFTER_MS) return;
+    yield* monitorMessage({
+      key: `remote-launch-lost:${record.correlationId}:${began}`,
+      record,
+      text: `${notAnswering(record.host, began)} GOAT stopped waiting for the launch it could not confirm and released what it held for it; the launch may still start there. If ${record.host} answers, GOAT checks it again.`,
+      summary: `${record.host}: not answering`,
+    });
+    yield* sql`UPDATE remote_dispatches SET end_reason = 'host_unreachable', ended_at = ${at},
+    updated_at = ${at}, last_error = ${notAnswering(record.host, began)}
+    WHERE correlation_id = ${record.correlationId} AND state = 'lost'
+      AND remote_thread_id IS NULL AND end_reason IS NULL`.pipe(Effect.mapError(storage));
+  },
+);
+
 /**
  * Records one unreachable outcome for a running dispatch. True when the drain should stop: the
  * row is no longer running, or this outage reached OUTAGE_LOST_AFTER_MS and tracking ended.
@@ -116,22 +158,13 @@ export const recordUnreachable = Effect.fn("remoteReports.recordUnreachable")(fu
 ) {
   const sql = yield* SqlClient.SqlClient;
   const at = DateTime.formatIso(yield* DateTime.now);
-  const atMs = Date.parse(at);
   const [current] = yield* sql<{ readonly since: string | null; readonly last: string | null }>`
     SELECT host_unavailable_since AS since, host_last_failed_at AS last FROM remote_dispatches
     WHERE correlation_id = ${record.correlationId} AND state = 'running'`.pipe(
     Effect.mapError(storage),
   );
   if (current === undefined) return true;
-  // A gap restarts the clock, unless the outage had already run its course before the gap:
-  // then tracking should have ended, and only a crash kept the row running.
-  const began =
-    current.since === null ||
-    (current.last !== null &&
-      atMs - Date.parse(current.last) > CONTACT_GAP_MS &&
-      Date.parse(current.last) - Date.parse(current.since) < OUTAGE_LOST_AFTER_MS)
-      ? at
-      : current.since;
+  const began = outageBegan(current, at);
   const marked = yield* sql`UPDATE remote_dispatches SET host_unavailable_since = ${began},
     host_last_failed_at = ${at}, last_error = ${`Host unavailable since ${began}.`}
     WHERE correlation_id = ${record.correlationId} AND state = 'running'

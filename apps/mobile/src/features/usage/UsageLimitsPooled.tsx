@@ -27,6 +27,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
 import { ResetCredits } from "./UsageLimitsSection";
+import { ZeroSpendCap } from "./UsageLimitDetails";
 import { usageProviderKind, useProviderColors } from "./usageProviders";
 
 const DRIVER_LABEL: Partial<Record<string, string>> = {
@@ -106,7 +107,7 @@ function LimitRow({
         return (
           <View key={`${pool.kind}:${pool.id}`} className="flex-row items-center gap-2">
             <Text numberOfLines={1} className="w-20 text-xs text-foreground-muted">
-              {cursorUsageWindowDetails(pool.id)?.label ?? pool.label}
+              {cursorUsageWindowDetails(pool.id, group.pool)?.label ?? pool.label}
             </Text>
             <View className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle">
               <View
@@ -415,6 +416,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
+            {account.limits.zeroSpendCap ? <ZeroSpendCap /> : null}
             {window ? (
               <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
                 <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>

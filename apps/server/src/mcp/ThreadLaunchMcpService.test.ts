@@ -499,6 +499,8 @@ it.effect(
       expect(provider.code).toBe("invalid_request");
       expect(provider.message).toContain("no provider instance gone; it has fakeCloud");
       expect(f.launched).toHaveLength(0);
+      expect(f.attempted).toHaveLength(0);
+      expect(f.routes()).toBe(0);
     }).pipe(Effect.provide(f.layer));
   },
 );

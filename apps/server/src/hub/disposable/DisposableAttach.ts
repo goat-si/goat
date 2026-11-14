@@ -3,8 +3,10 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   type HubMachineAttachInput,
+  type HubMachineDetachInput,
   type HubMachineList,
   type HubMachineListInput,
+  type HubMachineReleaseInput,
   type HubMachineReissueInput,
   HubMachinesError,
   type HubMachineStatus,
@@ -41,6 +43,9 @@ import { PEN_ATTACH_FEATURES, type PenInviteState, PenInvites } from "./PenInvit
 import { makeSharedPasses } from "./sharedPasses.ts";
 import { makeAuthority, Provisioners } from "./attachAuthority.ts";
 import { makeEnroll } from "./DisposableEnroll.ts";
+import { makeDetachAdmission } from "./DetachAdmission.ts";
+import { makeDetach } from "./DisposableDetach.ts";
+import { detachRuns } from "./enrollModel.ts";
 import { MachineKey } from "./machineKey.ts";
 import {
   afterCancel,
@@ -75,6 +80,8 @@ export interface AttachCaller {
 }
 
 const INVITE_LIFETIME_MS = 10 * 60 * 1000;
+// States whose link removal DisposableDetach owns; leaving Pen does not end them.
+const REMOVING = new Set(["detaching", "retired", "returned"]);
 /** How long a list waits for Pen's answers before it reads what GOAT has stored. */
 export const LIST_WAIT = "3 seconds";
 // HubMachineStatus.steps carries at most 32 entries, one per invite, and the record keeps them all.
@@ -95,6 +102,18 @@ export class DisposableAttach extends Context.Service<
       principal: string,
       input: HubMachineReissueInput,
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
+    /** Fences the record and removes its link and Child in later passes (DisposableDetach). */
+    readonly detach: (
+      caller: AttachCaller,
+      principal: string,
+      input: HubMachineDetachInput,
+    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
+    /** A person frees the slot of an attach Pen cannot account for (DisposableDetach). */
+    readonly release: (
+      caller: AttachCaller,
+      principal: string,
+      input: HubMachineReleaseInput,
+    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly list: (input: HubMachineListInput) => Effect.Effect<HubMachineList, HubMachinesError>;
     /** The stored record's Pen node id, read without asking Pen; for a caller's host check. */
     readonly nodeOf: (attachId: string) => Effect.Effect<string | undefined, HubMachinesError>;
@@ -110,6 +129,8 @@ export class DisposableAttach extends Context.Service<
      * starts it without waiting, so a slow link never holds back invites and withdrawals.
      */
     readonly enroll: Effect.Effect<void>;
+    /** One pass over linked, detaching and retired records; joined if running. */
+    readonly detachPass: Effect.Effect<void>;
   }
 >()("goat/hub/disposable/DisposableAttach") {}
 
@@ -149,10 +170,11 @@ export const make = Effect.gen(function* () {
   const save = Effect.fn("DisposableAttach.save")(
     function* (row: Row, effects: ReadonlyArray<AttachEffect>, extra: Columns = {}) {
       const now = yield* nowIso;
+      // A final record keeps its state: acknowledging its invite later must not reopen it.
       const state =
         typeof extra.state === "string"
           ? extra.state
-          : row.pen_admitted_at === null
+          : row.pen_admitted_at === null && row.final_at === null
             ? stateFromEffects(effects)
             : row.state;
       const saved = yield* sql`UPDATE disposable_machines SET ${sql.update({
@@ -189,6 +211,8 @@ export const make = Effect.gen(function* () {
 
   const { unnamed, authorityEnded, settingsNow, lockedEnded, finalCheck } = yield* makeAuthority;
   const enrollment = yield* makeEnroll(exclusive);
+  const detacher = yield* makeDetach(exclusive, enrollment.busy);
+  const admission = yield* makeDetachAdmission(exclusive);
   /** The public line a machine must trust; attach makes the key, a read never does. */
   const knownKey = Effect.map(machineKey.known, (identity) => identity?.publicLine);
 
@@ -510,12 +534,18 @@ export const make = Effect.gen(function* () {
         view !== undefined && !view.has(row.expected_sign_pub);
       if (missing(yield* members) && missing(yield* pen.members)) {
         // The fence moves with the removal, so an enrollment step in flight commits nothing after it.
-        // A record that holds or started a link stays open until enrollment reads what it left.
+        // A record that holds or started a link stays open until enrollment reads what it left; one
+        // being detached keeps its detach, which still owes the link's or tombstone's cleanup.
         const linking = row.link_id !== null || row.link_operation_id !== null;
+        // A record a conflict stopped owes nothing GOAT can run and ends naming its link; one a
+        // person forced past a changed host key keeps its detach, as the detach pass runs it.
+        const detaching = REMOVING.has(row.state) && detachRuns(row);
         row = yield* save(row, effects, {
-          fence: row.fence + 1,
+          ...(detaching ? {} : { fence: row.fence + 1 }),
           pen_removed_at: yield* nowIso,
-          ...(row.final_at === null ? { state: linking ? "left_pen" : "failed" } : {}),
+          ...(row.final_at === null && !detaching
+            ? { state: linking ? "left_pen" : "failed" }
+            : {}),
         });
         yield* audit(row.attach_id, "hub.machine_left_pen", "removed");
       }
@@ -599,8 +629,11 @@ export const make = Effect.gen(function* () {
     );
   const enrollPass = enrollment.pass.pipe(Effect.mapError(storageFailed));
   const enroll = Effect.flatMap(shared("enroll", enrollPass), Deferred.await);
+  const detachRun = detacher.pass.pipe(Effect.mapError(storageFailed));
+  const detachPass = Effect.flatMap(shared("detach", detachRun), Deferred.await);
   const reconcile = Effect.flatMap(shared("all", fullPass), Deferred.await).pipe(
     Effect.andThen(shared("enroll", enrollPass)),
+    Effect.andThen(shared("detach", detachRun)),
     Effect.asVoid,
   );
 
@@ -763,7 +796,17 @@ export const make = Effect.gen(function* () {
 
   const nodeOf = (attachId: string) => Effect.map(read(attachId), (row) => row?.node_id);
 
-  return DisposableAttach.of({ attach, reissue, list, nodeOf, reconcile, enroll });
+  return DisposableAttach.of({
+    attach,
+    reissue,
+    detach: admission.detach,
+    release: admission.release,
+    list,
+    nodeOf,
+    reconcile,
+    enroll,
+    detachPass,
+  });
 });
 
 // Settles invites and withdraws ones whose authority ended, also when no client is reading.

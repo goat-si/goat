@@ -331,6 +331,59 @@ it.effect("rejects unavailable agent access before booting or opening a device",
   );
 });
 
+it.effect("device_open reports a failed host's setup error instead of no devices", () => {
+  const failure = "Device support failed: npm was not found. Install Node.js, which includes npm.";
+  const failedState = {
+    ...state,
+    hostStatus: "failed" as const,
+    hostStatusDetail: failure,
+    hostStatuses: { local: { status: "failed" as const, detail: failure } },
+    devices: [],
+  };
+  const layerFailed = Layer.mock(DeviceService.DeviceService)({
+    state: Effect.succeed(failedState),
+    list: Effect.succeed(failedState),
+    agentReadinessIfSupported: () => Effect.succeed(readiness),
+    open: () => Effect.die("Must not open a device on a host whose setup failed"),
+  });
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    for (const args of [
+      { platform: "android" },
+      { deviceId: "Pixel_API_35", hostId: "local" },
+      { deviceId: "Pixel_API_35" },
+    ]) {
+      const result = yield* server
+        .callTool({ name: "goat_device_open", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["device"])),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const text = result.content
+        .flatMap((entry) => (entry.type === "text" ? [entry.text] : []))
+        .join("\n");
+      expect(result.isError).toBe(true);
+      expect(text).not.toContain("No android devices were found");
+      expect(text).toContain(failure);
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      McpHttpServer.layerDeviceToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(layerFailed),
+        Layer.provide(layerProjectAccess),
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" }),
+        ),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  );
+});
+
 it.effect("opens one device on a keyed retry and rechecks device access before replay", () => {
   const opened: Array<unknown> = [];
   const open = (

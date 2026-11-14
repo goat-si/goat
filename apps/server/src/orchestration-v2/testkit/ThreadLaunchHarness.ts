@@ -187,6 +187,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       listShells: () => Effect.die("unused"),
     }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
+      currentBranch: () => Effect.succeed(null),
       createWorktree,
       renameBranch,
       resolveWorktreeBaseRemote: () => Effect.succeed({ remoteName: "origin", branchName: "main" }),

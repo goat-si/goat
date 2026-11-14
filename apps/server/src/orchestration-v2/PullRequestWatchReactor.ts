@@ -322,7 +322,7 @@ export const make = Effect.gen(function* () {
 
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
-      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
+      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} only if it is still open.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",

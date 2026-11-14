@@ -2,7 +2,10 @@
 
 import type { OrchestrationV2ThreadOpens } from "@goat/contracts";
 
-import { WORKTREE_BRANCH_PREFIX } from "./git.ts";
+import {
+  WORKTREE_BRANCH_PREFIX_PATTERN,
+  FLAT_BRANCH_QUERY_PREFIX_PATTERN,
+} from "./paletteSearchBranches.ts";
 
 const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const LOWERCASE = /\p{Ll}/u;
@@ -891,11 +894,6 @@ export interface SearchMatchHint {
   readonly ranges: ReadonlyArray<SearchRange>;
 }
 
-// Most threads' branches start with the app's own worktree prefix ("goat/", and
-// "t3code/" before it), so "goat connect" would match nearly every thread.
-// Only before more text, so typing "goat/" does not empty the list for a keystroke.
-const WORKTREE_BRANCH_PREFIX_PATTERN = new RegExp(`^(?:${WORKTREE_BRANCH_PREFIX}|t3code)/(?=\\S)`);
-
 function searchableBranch(branch: string | null | undefined): string | null {
   return branch ? branch.replace(WORKTREE_BRANCH_PREFIX_PATTERN, "") : null;
 }
@@ -974,7 +972,8 @@ function threadFieldQuery(normalizedQuery: string): string {
       fieldQuery: normalizedQuery
         .replace(/^(?:pr|pull request|pull)\s*(?=#?\d)/, "")
         .replace(/^#\s*/, "")
-        .replace(WORKTREE_BRANCH_PREFIX_PATTERN, ""),
+        .replace(WORKTREE_BRANCH_PREFIX_PATTERN, "")
+        .replace(FLAT_BRANCH_QUERY_PREFIX_PATTERN, "$1"),
     };
   }
   return lastFieldQuery.fieldQuery;

@@ -24,7 +24,7 @@ const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
 export const makeWakeHarnessWithOptions = (options?: {
   readonly offer?: (message: SDKUserMessage) => Effect.Effect<void>;
   readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
-  readonly interrupt?: Effect.Effect<void>;
+  readonly interrupt?: Effect.Effect<void, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
   readonly applyFlagSettings?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["applyFlagSettings"];
   readonly stopTask?: (
     taskId: string,
