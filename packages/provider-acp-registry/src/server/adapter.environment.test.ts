@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { makeTurnInput } from "../../../../apps/server/src/orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
@@ -21,8 +22,28 @@ const decodeSettings = Schema.decodeEffect(AcpRegistrySettings);
 
 it.live("keeps the resolved executable across MCP replacement and resolves a new session", () =>
   Effect.gen(function* () {
-    const host = { PATH: "/old", GOAT_ACP_SESSION_LIFECYCLE: "1" };
+    const host: NodeJS.ProcessEnv = { PATH: "/old", GOAT_ACP_SESSION_LIFECYCLE: "1" };
     const resolutions: string[] = [];
+    const spawnedEnvironments: Array<string | undefined> = [];
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const capturingSpawner = ChildProcessSpawner.make((command) => {
+      if (command._tag === "StandardCommand") {
+        spawnedEnvironments.push(
+          command.options.env?.GOAT_ISSUE_3079_LATE_HOST ??
+            (command.options.extendEnv ? process.env.GOAT_ISSUE_3079_LATE_HOST : undefined),
+        );
+      }
+      return spawner.spawn(command);
+    });
+    const original = process.env.GOAT_ISSUE_3079_LATE_HOST;
+    yield* Effect.acquireRelease(
+      Effect.sync(() => delete process.env.GOAT_ISSUE_3079_LATE_HOST),
+      () =>
+        Effect.sync(() => {
+          if (original === undefined) delete process.env.GOAT_ISSUE_3079_LATE_HOST;
+          else process.env.GOAT_ISSUE_3079_LATE_HOST = original;
+        }),
+    );
     const catalog = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
       cacheDir: process.cwd(),
       toolsDir: process.cwd(),
@@ -35,6 +56,7 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
       currentEnvironment: Effect.sync(() => host),
       selfInvocation: yield* resolveSelfInvocation(),
     }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, capturingSpawner),
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
         ...catalog,
         resolve: (_settings, cwd, env) =>
@@ -86,6 +108,8 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
     for (const ordinal of [1, 2]) {
       if (ordinal === 2) {
         host.PATH = "/new";
+        host.GOAT_ISSUE_3079_LATE_HOST = "new";
+        process.env.GOAT_ISSUE_3079_LATE_HOST = "new";
         yield* sessions.set(config("new"));
       }
       yield* first.startTurn(
@@ -106,6 +130,7 @@ it.live("keeps the resolved executable across MCP replacement and resolves a new
     const second = yield* open("second");
     yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
     assert.deepEqual(resolutions, ["/old", "/new"]);
+    assert.deepEqual(spawnedEnvironments, [undefined, undefined, "new"]);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(

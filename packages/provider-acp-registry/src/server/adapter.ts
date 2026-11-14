@@ -141,17 +141,13 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const {
-        processEnvironment,
-        sessionEnvironment: _sessionEnvironment,
-        sessionLaunch,
-        ...runtimeInput
-      } = input;
+      const { processEnvironment, sessionEnvironment, sessionLaunch, ...runtimeInput } = input;
       const resolved = sessionLaunch as AcpRegistrySupport.ResolvedAcpRegistryAgent;
       const spawn = { ...resolved.spawn, cwd: input.cwd };
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          sessionEnvironment,
           spawn:
             processEnvironment === undefined
               ? spawn
