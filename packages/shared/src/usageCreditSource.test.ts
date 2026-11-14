@@ -6,7 +6,11 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
-import { collectLimitAccounts, resetCreditChoices } from "./usageLimits.ts";
+import {
+  collectLimitAccounts,
+  collectProviderUsageLimits,
+  resetCreditChoices,
+} from "./usageLimits.ts";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
 const checkedAt = "2026-09-03T11:00:00.000Z";
@@ -200,4 +204,42 @@ it("redeems through the hub when it holds a credit, even with a fresher native r
     input: { sourceId: "hub", accountId: "claude-same@example.com.json", creditId: "hub-credit" },
   });
   expect(account?.limits.resetCredits?.availableCount).toBe(2);
+});
+
+it("keeps direct grant choices in the composer when a newer hub has a credit", () => {
+  const native = provider({
+    driver: claude,
+    instanceId: ProviderInstanceId.make("claude"),
+    auth: { status: "authenticated", email: "same@example.com" },
+    usageLimits: {
+      checkedAt,
+      windows: [window],
+      resetCredits: {
+        availableCount: 1,
+        options: [
+          { creditId: "weekly", label: "Weekly", description: "Weekly window", availableCount: 1 },
+        ],
+      },
+    },
+  });
+  const hub = [
+    {
+      ...source,
+      accounts: [
+        {
+          id: "same.json",
+          driver: claude,
+          email: "same@example.com",
+          usageLimits: {
+            checkedAt: "2026-09-03T11:30:00.000Z",
+            windows: [window],
+            resetCredits: { availableCount: 2, nextCreditId: "hub-credit" },
+          },
+        },
+      ],
+    },
+  ];
+  const report = collectProviderUsageLimits(native.instanceId, [native], hub, now);
+  expect(report?.accounts[0]?.limits.resetCredits).toEqual(native.usageLimits?.resetCredits);
+  expect(report?.accounts[0]?.resetCreditInput).toEqual({ instanceId: "claude" });
 });
