@@ -196,10 +196,22 @@ export const CodexDriver: ProviderDriver<
         ? { ...config, homePath: environmentHome }
         : config,
     );
-    const pinnedHome = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
-    const currentEnvironment = mergedEnvironment.pipe(
-      Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
-    );
+    // A home the instance sets itself is fixed; otherwise each check and launch uses the host's current CODEX_HOME.
+    const homeConfigured =
+      config.homePath.trim() !== "" ||
+      config.shadowHomePath.trim() !== "" ||
+      environment?.some(
+        (variable) => variable.name === "CODEX_HOME" && variable.value.trim() !== "",
+      ) === true;
+    const pinnedHome = homeConfigured
+      ? (homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath)
+      : undefined;
+    const currentEnvironment =
+      pinnedHome === undefined
+        ? mergedEnvironment
+        : mergedEnvironment.pipe(
+            Effect.map((env): NodeJS.ProcessEnv => ({ ...env, CODEX_HOME: pinnedHome })),
+          );
     const continuationIdentity = codexContinuationIdentity(homeLayout);
     const stampIdentity = withInstanceIdentity({
       instanceId,
@@ -223,7 +235,7 @@ export const CodexDriver: ProviderDriver<
       ...config,
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
-      homePath: pinnedHome,
+      homePath: pinnedHome ?? "",
     } satisfies CodexSettings;
     const maintenanceForEnvironment = (
       env: NodeJS.ProcessEnv,
@@ -294,7 +306,7 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config: { ...config, homePath: homeLayout.sharedHomePath },
+        config,
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
@@ -433,61 +445,72 @@ export const CodexDriver: ProviderDriver<
     // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
     // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
     // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
-    const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+    const accountKeyFor = (env: NodeJS.ProcessEnv) =>
+      pinnedHome !== undefined
+        ? Effect.succeed(pinnedHome)
+        : resolveCodexHomeLayout({ ...config, homePath: env.CODEX_HOME?.trim() ?? "" }).pipe(
+            Effect.map((layout) => layout.sharedHomePath),
+            Effect.provideService(Path.Path, pathService),
+            Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+          );
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
-      resetCreditCoordinator
-        .redeem(accountKey, (idempotencyKey) =>
+      currentEnvironment.pipe(
+        Effect.flatMap((processEnv) =>
+          accountKeyFor(processEnv).pipe(
+            Effect.flatMap((accountKey) =>
+              resetCreditCoordinator.redeem(accountKey, (idempotencyKey) =>
+                Effect.gen(function* () {
+                  const { client } = yield* withCodexAppServerClient({
+                    binaryPath: effectiveConfig.binaryPath,
+                    homePath: effectiveConfig.homePath,
+                    launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+                    cwd: process.cwd(),
+                    environment: processEnv,
+                  });
+                  const response = yield* client.request("account/rateLimitResetCredit/consume", {
+                    idempotencyKey,
+                  });
+                  return response.outcome;
+                }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+              ),
+            ),
+          ),
+        ),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Codex could not redeem the reset credit.",
+              cause,
+            }),
+        ),
+        // The windows just changed; re-probe so the snapshot says so. A
+        // failed probe republishes the pre-redemption limits rather than
+        // marking them failed, so "confirmed" means `checkedAt` moved past
+        // what was published before the redemption started.
+        Effect.tap((outcome) =>
           Effect.gen(function* () {
-            const processEnv = yield* currentEnvironment;
-            const { client } = yield* withCodexAppServerClient({
-              binaryPath: effectiveConfig.binaryPath,
-              homePath: effectiveConfig.homePath,
-              launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-              cwd: process.cwd(),
-              environment: processEnv,
-            });
-            const response = yield* client.request("account/rateLimitResetCredit/consume", {
-              idempotencyKey,
-            });
-            return response.outcome;
-          }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
-        )
-        .pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.mapError(
-            (cause) =>
-              new ProviderDriverError({
+            const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
+            const refreshed = yield* snapshot.refresh;
+            const after = refreshed.usageLimits?.checkedAt;
+            if (
+              outcome === "reset" &&
+              (after === undefined ||
+                after === before ||
+                refreshed.usageLimits?.unavailable?.reason === "probeFailed")
+            ) {
+              return yield* new ProviderDriverError({
                 driver: DRIVER_KIND,
                 instanceId,
-                detail: "Codex could not redeem the reset credit.",
-                cause,
-              }),
-          ),
-          // The windows just changed; re-probe so the snapshot says so. A
-          // failed probe republishes the pre-redemption limits rather than
-          // marking them failed, so "confirmed" means `checkedAt` moved past
-          // what was published before the redemption started.
-          Effect.tap((outcome) =>
-            Effect.gen(function* () {
-              const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
-              const refreshed = yield* snapshot.refresh;
-              const after = refreshed.usageLimits?.checkedAt;
-              if (
-                outcome === "reset" &&
-                (after === undefined ||
-                  after === before ||
-                  refreshed.usageLimits?.unavailable?.reason === "probeFailed")
-              ) {
-                return yield* new ProviderDriverError({
-                  driver: DRIVER_KIND,
-                  instanceId,
-                  detail:
-                    "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
-                });
-              }
-            }),
-          ),
-        );
+                detail:
+                  "The reset was applied, but Codex could not confirm the new limits. Refresh to check.",
+              });
+            }
+          }),
+        ),
+      );
 
     return {
       instanceId,
