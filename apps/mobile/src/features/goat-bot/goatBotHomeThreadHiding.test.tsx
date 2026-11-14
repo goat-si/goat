@@ -478,21 +478,22 @@ async function renderHome() {
 it("hides exactly the threads Home's current list opens, and each one opens from Home", async () => {
   setup();
   // Home closed: Threads already leaves out the current list's worker, coding and remote work.
-  expect(hiddenWork()).toEqual(workKeys.filter((item) => item !== key("env", "k1")));
+  // No bot conversation is loaded here, so the whole hide set is work.
+  const hidden = [...fx.registry.get(hiddenGoatBotThreadKeysAtom)].sort();
+  expect(hidden).toEqual(workKeys.filter((item) => item !== key("env", "k1")).sort());
   await using screen = await renderHome();
   await screen.openLink("Ship the release", "Work thread: Ship the release");
   await screen.openLink("Ship the release", "GOAT thread: Patch web");
   await screen.openLink("Ship the release", "Open work thread on studio");
+  for (const n of [1, 2, 3, 4, 5])
+    await screen.openLink("Finished " + n, "Work thread: Finished " + n);
   // The sixth finished task sits behind Show more until it is revealed.
   await screen.press("Open Home");
   expect(screen.button("Actions for Finished 6")).toBeUndefined();
   await screen.openLink("Finished 6", "Work thread: Finished 6", true);
-  expect(fx.openThread.mock.calls.map(([thread]) => key(thread.environmentId, thread.id))).toEqual([
-    key("env", "w1"),
-    key("env", "c1"),
-    key("far", "r1"),
-    key("env", "fw6"),
-  ]);
+  // Every hidden key, and nothing else, opened from Home.
+  const opened = fx.openThread.mock.calls.map(([thread]) => key(thread.environmentId, thread.id));
+  expect(opened.sort()).toEqual(hidden);
   // The chore Home does not link stays in Threads; Home lists it among other threads.
   await screen.press("Open Home");
   expect(screen.button("GOAT thread: Tidy logs")).toBeDefined();
