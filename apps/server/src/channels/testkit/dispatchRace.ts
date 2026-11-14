@@ -24,6 +24,11 @@ export class LedgerCallHolds extends Context.Service<
       error: ChannelLedger.ChannelLedgerError,
       forInput?: (input: Input<M>) => boolean,
     ) => Effect.Effect<void>;
+    readonly failEvery: <M extends HeldMethod>(
+      method: M,
+      error: ChannelLedger.ChannelLedgerError,
+      forInput?: (input: Input<M>) => boolean,
+    ) => Effect.Effect<{ readonly calls: Effect.Effect<number> }>;
   }
 >()("goat/channels/testkit/dispatchRace/LedgerCallHolds") {
   static readonly layer = Layer.effect(
@@ -47,6 +52,7 @@ export class LedgerCallHolds extends Context.Service<
         Array<{
           matches: (input: never) => boolean;
           run: (input: never) => Effect.Effect<unknown, ChannelLedger.ChannelLedgerError>;
+          persistent: boolean;
         }>
       >();
       yield* Effect.acquireRelease(
@@ -57,7 +63,8 @@ export class LedgerCallHolds extends Context.Service<
                 const queue = pending.get(method) ?? [];
                 const index = queue.findIndex((entry) => entry.matches(input));
                 if (index < 0) return originals[method](input);
-                const [entry] = queue.splice(index, 1);
+                const entry = queue[index];
+                if (entry !== undefined && !entry.persistent) queue.splice(index, 1);
                 return entry === undefined ? originals[method](input) : entry.run(input);
               });
           }
@@ -74,9 +81,14 @@ export class LedgerCallHolds extends Context.Service<
         method: M,
         forInput: ((input: Input<M>) => boolean) | undefined,
         run: (input: never) => Effect.Effect<unknown, ChannelLedger.ChannelLedgerError>,
+        persistent = false,
       ) => {
         const queue = pending.get(method) ?? [];
-        queue.push({ matches: (input) => forInput === undefined || forInput(input), run });
+        queue.push({
+          matches: (input) => forInput === undefined || forInput(input),
+          run,
+          persistent,
+        });
         pending.set(method, queue);
       };
       return LedgerCallHolds.of({
@@ -106,6 +118,27 @@ export class LedgerCallHolds extends Context.Service<
           ) =>
             Effect.sync(() => {
               enqueue(method, forInput, () => Effect.fail(error));
+            }),
+        ),
+        failEvery: Effect.fn("LedgerCallHolds.failEvery")(
+          <M extends HeldMethod>(
+            method: M,
+            error: ChannelLedger.ChannelLedgerError,
+            forInput?: (input: Input<M>) => boolean,
+          ) =>
+            Effect.sync(() => {
+              let count = 0;
+              enqueue(
+                method,
+                forInput,
+                () =>
+                  Effect.suspend(() => {
+                    count += 1;
+                    return Effect.fail(error);
+                  }),
+                true,
+              );
+              return { calls: Effect.sync(() => count) };
             }),
         ),
       });

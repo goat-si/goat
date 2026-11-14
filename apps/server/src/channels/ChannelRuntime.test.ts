@@ -41,6 +41,116 @@ const receiveTwo = Effect.gen(function* () {
   return { runtime, ledger, first: tasks[0]!.task, second: tasks[1]!.task };
 });
 
+const addForwards = Effect.fn("test.addForwards")(function* (
+  ledger: ChannelLedger.ChannelLedger["Service"],
+  owner: string,
+  taskId: ChannelLedger.ChannelStoredTask["task"]["taskId"],
+  prefix: string,
+  count: number,
+) {
+  for (let index = 0; index < count; index += 1) {
+    const stored = yield* ledger.getTask(taskId);
+    assert.isDefined(stored);
+    const inputId = ChannelInputId.make(`input:${prefix}-${index}`);
+    const next = yield* commitTransition(
+      ledger,
+      stored!,
+      {
+        type: "task.followup.received",
+        payload: { inputId, text: "follow-up", from: "Owner", generation: stored!.task.generation },
+      },
+      {
+        owner,
+        forward: true,
+        pendingAnswerMessageId: turnSteerIdsFor(inputId, "first").messageId,
+      },
+    );
+    assert.isDefined(next);
+  }
+});
+
+const forwardSetup = Effect.gen(function* () {
+  const { runtime, ledger } = yield* receiveTwo;
+  yield* runtime.runPass;
+  const tasks = yield* ledger.listTasksByStatus(["running"]);
+  assert.lengthOf(tasks, 2);
+  const first = tasks[0]!.task.taskId;
+  const second = tasks[1]!.task.taskId;
+  yield* addForwards(ledger, runtime.ownerToken, first, "starved-a", 50);
+  return { runtime, ledger, first, second };
+});
+
+const forwardHarness = () => {
+  const harness = makeHarness({
+    providerInstances: [{ instanceId: "codex", displayName: "Local Codex", weeklyUsedPercent: 80 }],
+  });
+  return Layer.provideMerge(LedgerCallHolds.layer, harness.layer);
+};
+
+const failForwards = Effect.fn("test.failForwards")(function* (
+  firstSequence: number,
+  except?: number,
+) {
+  const holds = yield* LedgerCallHolds;
+  const error = new ChannelLedger.ChannelLedgerError({ reason: "persistence", detail: "injected" });
+  const first = yield* holds.failEvery(
+    "isForwardPending",
+    error,
+    (sequence) => sequence === firstSequence,
+  );
+  yield* holds.failEvery(
+    "isForwardPending",
+    error,
+    (sequence) => sequence !== firstSequence && sequence !== except,
+  );
+  return first;
+});
+
+it.effect("regression #3148: fifty forwards that keep failing no longer hide a later forward", () =>
+  Effect.gen(function* () {
+    const { runtime, ledger, second } = yield* forwardSetup;
+    yield* addForwards(ledger, runtime.ownerToken, second, "starved-b", 1);
+    const forwards = yield* ledger.listPendingForwards(51);
+    assert.lengthOf(forwards, 51);
+    const last = forwards[50]!.sequence;
+    yield* failForwards(forwards[0]!.sequence, last);
+    yield* runtime.drain;
+    assert.isFalse(yield* ledger.isForwardPending(last));
+  }).pipe(Effect.provide(forwardHarness())),
+);
+
+it.effect(
+  "regression #3148: forwards arriving during a cycle do not keep an older forward from being read again",
+  () =>
+    Effect.gen(function* () {
+      const { runtime, ledger, first, second } = yield* forwardSetup;
+      yield* addForwards(ledger, runtime.ownerToken, second, "starved-b", 1);
+      const forwards = yield* ledger.listPendingForwards(51);
+      assert.lengthOf(forwards, 51);
+      const last = forwards[50]!.sequence;
+      const intercepted = yield* failForwards(forwards[0]!.sequence, last);
+      yield* runtime.runPass;
+      assert.strictEqual(yield* intercepted.calls, 1);
+      yield* addForwards(ledger, runtime.ownerToken, first, "arriving-a", 50);
+      yield* runtime.runPass;
+      assert.isFalse(yield* ledger.isForwardPending(last));
+      yield* runtime.runPass;
+      assert.strictEqual(yield* intercepted.calls, 2);
+    }).pipe(Effect.provide(forwardHarness())),
+);
+
+it.effect("contract #3148: exactly fifty pending forwards wrap in one pass", () =>
+  Effect.gen(function* () {
+    const { runtime, ledger } = yield* forwardSetup;
+    const forwards = yield* ledger.listPendingForwards(50);
+    assert.lengthOf(forwards, 50);
+    const intercepted = yield* failForwards(forwards[0]!.sequence);
+    yield* runtime.runPass;
+    yield* runtime.runPass;
+    assert.strictEqual(yield* intercepted.calls, 2);
+  }).pipe(Effect.provide(forwardHarness())),
+);
+
 const logging = () => {
   const logs: string[] = [];
   return {

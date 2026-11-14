@@ -106,6 +106,7 @@ const make = Effect.gen(function* () {
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
+  const forwardCycle = yield* Ref.make({ cursor: 0, end: 0 });
   const scope = yield* Effect.scope;
 
   const claim = Effect.gen(function* () {
@@ -320,8 +321,19 @@ const make = Effect.gen(function* () {
       started += yield* perTask(stored.task.taskId, dispatcher.dispatch(stored.task.taskId, owner));
     }
     yield* sessionFirst.observe(owner);
-    for (const pending of yield* ledger.listPendingForwards(50)) {
+    const cycle = yield* Ref.get(forwardCycle);
+    const end = cycle.cursor === 0 ? yield* ledger.lastPendingForwardSequence() : cycle.end;
+    const forwards = yield* ledger.listPendingForwards(50, cycle.cursor, end);
+    // Every forward pending when a cycle starts is read during that cycle.
+    for (const pending of forwards) {
       started += yield* perTask(pending.event.taskId, dispatcher.forward(pending, owner));
+    }
+    const last = forwards.at(-1)?.sequence ?? 0;
+    if (forwards.length < 50 || last >= end) {
+      yield* Ref.set(forwardCycle, { cursor: 0, end: 0 });
+    } else {
+      yield* Ref.set(forwardCycle, { cursor: last, end });
+      started += 1;
     }
     for (const pending of yield* ledger.listPendingNarrations(50)) {
       started += yield* perTask(pending.event.taskId, reception.narrate(pending, owner));
