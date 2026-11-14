@@ -310,14 +310,14 @@ updated.</p>
 from a handoff of the conversation, as described in
 <a href="/goat/docs/user/portable-handoffs/">Context in portable handoffs</a>.</p>
 <h2 id="goals">Goals</h2>
-<p>With Codex and Claude, send <code>/goal</code> followed by what “done” means, for example
+<p>With Codex, Claude, and OpenCode 2.2.5 or later, send <code>/goal</code> followed by what “done” means, for example
 <code>/goal all tests in packages/api pass</code>. The agent keeps working across turns
 until it judges the goal met. The thread shows <strong>Goal</strong> while it works, and a
 row above the composer shows the goal and its progress.</p>
 <ul>
 <li><code>/goal</code> alone shows the current goal. <code>/goal clear</code> removes it.</li>
-<li>Codex also supports <code>/goal pause</code> and <code>/goal resume</code>. Stopping a Codex goal
-pauses it, and so does Codex ending its work without meeting the goal.</li>
+<li>Codex and OpenCode also support <code>/goal pause</code> and <code>/goal resume</code>. Stopping
+their goal pauses it. Codex also pauses when its work ends without meeting the goal.</li>
 <li>Stopping Claude ends the current turn, but the goal stays set. Claude checks it
 again at the end of your next message.</li>
 <li>Sending a new goal, or <code>/goal resume</code>, while the agent works stops the current
