@@ -18,6 +18,7 @@ vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 
 import { GoatBotTimeline } from "./GoatBotTimeline";
+import { TooltipProvider } from "../ui/tooltip";
 
 const rows = ["First", "Second"].map((text) => ({
   kind: "bot" as const,
@@ -34,9 +35,14 @@ const rows = ["First", "Second"].map((text) => ({
 
 it("shows copied only on the latest copied reply", async () => {
   state.toasts = [];
-  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
-    router: false,
-  }); // No navigation links.
+  await using screen = await render(
+    <TooltipProvider delay={0}>
+      <GoatBotTimeline rows={rows} onRetry={() => {}} />
+    </TooltipProvider>,
+    {
+      router: false,
+    },
+  ); // No navigation links.
   using _write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   const messages = screen.container.querySelectorAll("[data-follow-row]");
   const button = (index: number) =>
@@ -69,15 +75,26 @@ it("reports clipboard failure", async () => {
 });
 
 it("shows Copied in the active row tooltip and resets both labels after 1200ms", async () => {
-  await using screen = await render(<GoatBotTimeline rows={rows} onRetry={() => {}} />, {
-    router: false, // No navigation links.
-  });
+  await using screen = await render(
+    <TooltipProvider delay={0}>
+      <GoatBotTimeline rows={rows} onRetry={() => {}} />
+    </TooltipProvider>,
+    {
+      router: false, // No navigation links.
+    },
+  );
   using _write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
-  using _clock = fakeTimers();
   const buttons = screen.container.querySelectorAll<HTMLButtonElement>('button[aria-label="Copy"]');
   const first = buttons[0];
   const second = buttons[1];
   if (!first || !second) throw new Error("missing copy buttons");
+  await userEvent.hover(first);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent).toBe(
+      "Copy",
+    ),
+  );
+  using _clock = fakeTimers();
   await act(async () => {
     first.focus();
     first.click();
@@ -85,11 +102,22 @@ it("shows Copied in the active row tooltip and resets both labels after 1200ms",
   });
   expect(first.getAttribute("aria-label")).toBe("Copied");
   expect(second.getAttribute("aria-label")).toBe("Copy");
+  await userEvent.unhover(first);
+  await userEvent.hover(second);
+  expect(document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent).toBe(
+    "Copy",
+  );
+  await userEvent.unhover(second);
+  await userEvent.hover(first);
   await act(() => vi.advanceTimersByTimeAsync(500));
-  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Copied");
+  expect(document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent).toBe(
+    "Copied",
+  );
   await act(() => vi.advanceTimersByTimeAsync(699));
   expect(first.getAttribute("aria-label")).toBe("Copied");
   await act(() => vi.advanceTimersByTimeAsync(1));
   expect(first.getAttribute("aria-label")).toBe("Copy");
-  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe("Copy");
+  expect(document.querySelector('[data-slot="tooltip-popup"][data-open]')?.textContent).toBe(
+    "Copy",
+  );
 });

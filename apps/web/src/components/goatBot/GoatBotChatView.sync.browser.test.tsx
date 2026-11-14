@@ -3,10 +3,7 @@ import {
   BotProfile,
   EnvironmentId,
   EventId,
-  MessageId,
-  OrchestrationV2TurnItemJson,
   ThreadId,
-  TurnItemId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
   type OrchestrationV2TurnItem,
@@ -235,6 +232,7 @@ import { randomUUID } from "~/lib/utils";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { completedTask, taskOutcome, turnItem } from "./GoatBotChatView.sync.fixtures";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { AsyncResult } from "effect/reactivity";
 import * as Effect from "effect/Effect";
@@ -298,47 +296,6 @@ function TaskChat({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   );
 }
 
-const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
-function completedTask(threadId: ThreadId, id: string, taskId: string, ordinal: number) {
-  return decodeItem({
-    ...turnItem(threadId, id, "assistant", "", ordinal),
-    type: "notification",
-    startedAt: "2026-10-12T09:40:00.000Z",
-    completedAt: "2026-10-12T09:40:00.000Z",
-    updatedAt: "2026-10-12T09:40:00.000Z",
-    source: { kind: "background_task" },
-    outcome: "updated",
-    summary: "Work updated",
-    ledgerTask: {
-      taskId,
-      conversationId: "conv",
-      taskVersion: 1,
-      title: "Task",
-      status: "completed",
-      originKind: "goat",
-      requesterLabel: "Person",
-      createdAt: "2026-10-12T09:40:00.000Z",
-      updatedAt: "2026-10-12T09:40:00.000Z",
-      summary: "Outcome",
-      openQuestionCount: 0,
-    },
-  });
-}
-function taskOutcome(threadId: ThreadId, id: string, taskId: string, ordinal: number) {
-  return decodeItem({
-    ...turnItem(threadId, id, "assistant", `Outcome ${id}`, ordinal),
-    startedAt: "2026-10-12T09:40:00.000Z",
-    completedAt: "2026-10-12T09:40:00.000Z",
-    updatedAt: "2026-10-12T09:40:00.000Z",
-    channel: {
-      conversationId: "conv",
-      originKind: "goat",
-      kind: "result",
-      taskId,
-      taskGeneration: 1,
-    },
-  });
-}
 async function taskList(taskIds: readonly string[]) {
   if (!mocks.taskThreads) throw new Error("task list atom unavailable");
   await act(() =>
@@ -347,43 +304,6 @@ async function taskList(taskIds: readonly string[]) {
       AsyncResult.success({ rows: taskIds.map((taskId) => ({ kind: "task", task: { taskId } })) }),
     ),
   );
-}
-
-function turnItem(
-  threadId: ThreadId,
-  id: string,
-  role: "user" | "assistant",
-  text: string,
-  ordinal: number,
-): OrchestrationV2TurnItem {
-  const common = {
-    id: TurnItemId.make(id),
-    threadId,
-    runId: null,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal,
-    status: "completed" as const,
-    title: null,
-    startedAt: at,
-    completedAt: at,
-    updatedAt: at,
-    messageId: MessageId.make(`message-${id}`),
-    text,
-  };
-  return role === "user"
-    ? {
-        ...common,
-        type: "user_message",
-        inputIntent: "turn_start",
-        attachments: [],
-        createdBy: "user",
-        creationSource: "web",
-      }
-    : { ...common, type: "assistant_message", streaming: false };
 }
 
 function projected(item: OrchestrationV2TurnItem, position: number) {
@@ -495,7 +415,7 @@ it("guard: an outcome hidden at baseline stays silent when the task list resolve
       <TaskChat threadRef={threadRef} />
     </AppAtomRegistryProvider>,
   );
-  await synchronized(threadRef);
+  const { details } = await synchronized(threadRef);
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome"));
   const scroll = screen.container.querySelector<HTMLElement>(".goat-timeline > div")!;
   await act(() => {
@@ -503,7 +423,9 @@ it("guard: an outcome hidden at baseline stays silent when the task list resolve
     scroll.dispatchEvent(new Event("scroll"));
   });
   expect(screen.container.textContent).not.toContain("Outcome old-outcome");
+  const source = appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef));
   await taskList(["task-1"]);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toBe(source);
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome old-outcome"));
   expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
     "",
@@ -541,10 +463,14 @@ it("announces a new hidden outcome once when the task list exposes it", async ()
   const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
   expect(status?.textContent).toBe("");
   expect(screen.container.textContent).not.toContain("Jump to latest");
+  const source = appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef));
   await taskList(["task-1"]);
+  expect(appAtomRegistry.get(details.visibleTurnItemsAtom(threadRef))).toBe(source);
   await vi.waitFor(() => expect(screen.container.textContent).toContain("Outcome new-outcome"));
   expect(status?.textContent).toMatch(/Research posted an update\.|New update from Research\./);
-  expect(screen.container.textContent).toContain("Jump to latest");
+  await expect
+    .element(screen.getByRole("button", { name: "Jump to latest", exact: true }))
+    .toBeVisible();
   const announced = status?.textContent;
   await taskList([]);
   await taskList(["task-1"]);
