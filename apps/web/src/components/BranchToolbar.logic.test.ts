@@ -4,6 +4,7 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   resolveBranchSelectionTarget,
+  shouldReuseSelectedWorktree,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
   resolveBranchToolbarPrBranch,
@@ -170,6 +171,11 @@ describe("dedupeRemoteBranchesWithLocalMatches", () => {
 });
 
 describe("resolveBranchSelectionTarget", () => {
+  it("does not initiate a checkout without source-control write permission", () => {
+    const active = { reuseExistingWorktree: true, staysInActiveCheckout: true };
+    expect(shouldReuseSelectedWorktree(active, false)).toBe(true);
+    expect(shouldReuseSelectedWorktree(active, true)).toBe(false);
+  });
   it("reuses an existing secondary worktree for the selected ref", () => {
     expect(
       resolveBranchSelectionTarget({

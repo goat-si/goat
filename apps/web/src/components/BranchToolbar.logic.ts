@@ -256,6 +256,15 @@ export function resolveBranchSelectionTarget(input: {
   };
 }
 
+export function shouldReuseSelectedWorktree(
+  selection: { readonly reuseExistingWorktree: boolean; readonly staysInActiveCheckout: boolean },
+  canWriteSourceControl: boolean,
+): boolean {
+  return (
+    selection.reuseExistingWorktree && !(selection.staysInActiveCheckout && canWriteSourceControl)
+  );
+}
+
 export function shouldIncludeBranchPickerItem(input: {
   itemValue: string;
   normalizedQuery: string;
