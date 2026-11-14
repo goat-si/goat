@@ -41,7 +41,13 @@ import { fileViewShortcutLabel } from "./fileViewCommands";
 import { useFileTreeActions } from "./useFileTreeActions";
 import { useFileTreeKeyboard } from "./useFileTreeKeyboard";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
-import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
+import {
+  areAllDirectoriesExpanded,
+  coalesceReentrantCalls,
+  readExpandedDirectories,
+  setAllDirectoriesExpanded,
+  writeExpandedDirectories,
+} from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
 import { loadFileAncestors } from "./loadFileAncestors";
 import { useDirectoryEntries } from "./useDirectoryEntries";
@@ -421,29 +427,44 @@ export default function FileBrowserPanel({
     search.close();
   };
   const expandedPathsRef = useRef(new Set<string>());
+  const expansionRoot = `${environmentId}:${cwd}`;
+  // Folders expanded when the panel last unmounted; each reopens once lazy loading lists it.
+  const [pendingExpandedPaths] = useState(() => new Set(readExpandedDirectories(expansionRoot)));
   useEffect(() => {
     const currentPaths = new Set(directoryPaths);
     for (const path of expandedPathsRef.current) {
       if (!currentPaths.has(path)) expandedPathsRef.current.delete(path);
     }
-    const loadExpanded = () => {
+    // Restoring calls item.expand(), which notifies subscribers synchronously.
+    const loadExpanded = coalesceReentrantCalls(() => {
       if (model.isSearchOpen()) return;
+      let changed = false;
       for (const path of directoryPaths) {
         const item = model.getItem(path);
+        if (item?.isDirectory() && pendingExpandedPaths.delete(path) && "expand" in item) {
+          item.expand();
+        }
         if (item?.isDirectory() && "isExpanded" in item && item.isExpanded()) {
           if (!expandedPathsRef.current.has(path)) {
             expandedPathsRef.current.add(path);
+            changed = true;
             void load(path.replace(/\/$/, ""));
           }
         } else {
           if (item?.isDirectory() && expandedPathsRef.current.has(path)) setExpandAll(false);
-          expandedPathsRef.current.delete(path);
+          if (expandedPathsRef.current.delete(path)) changed = true;
         }
       }
-    };
+      if (changed) {
+        writeExpandedDirectories(expansionRoot, [
+          ...expandedPathsRef.current,
+          ...pendingExpandedPaths,
+        ]);
+      }
+    });
     loadExpanded();
     return model.subscribe(loadExpanded);
-  }, [directoryPaths, load, model]);
+  }, [directoryPaths, expansionRoot, load, model, pendingExpandedPaths]);
   useEffect(() => {
     model.setGitStatus(
       entries

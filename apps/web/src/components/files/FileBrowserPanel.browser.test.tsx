@@ -410,4 +410,17 @@ describe("file viewer path copy shortcuts", () => {
     await userEvent.keyboard(COPY_PATH);
     expect(state.copy).not.toHaveBeenCalled();
   });
+
+  it("keeps expanded folders when the panel remounts", async () => {
+    setup();
+    {
+      await using first = await renderPanel({ cwd: "/repo-expansion-test" });
+      const folder = await row(first.container, "src/");
+      await userEvent.click(folder);
+      await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
+    }
+    await using second = await renderPanel({ cwd: "/repo-expansion-test" });
+    const folder = await row(second.container, "src/");
+    await vi.waitFor(() => expect(folder.getAttribute("aria-expanded")).toBe("true"));
+  });
 });
