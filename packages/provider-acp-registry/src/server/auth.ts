@@ -48,7 +48,10 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
-  readonly onChanged: (authenticated: boolean) => Effect.Effect<void>;
+  readonly onChanged: (
+    authenticated: boolean,
+    environment?: NodeJS.ProcessEnv,
+  ) => Effect.Effect<void>;
   readonly makeRuntime?: (
     spawn: AcpSessionRuntime.AcpSpawnInput,
   ) => Effect.Effect<Runtime, ProviderSetupError, Scope.Scope>;
@@ -205,9 +208,9 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       return yield* failure("start", "Enable this provider before signing in.");
     const login = Effect.scoped(
       Effect.gen(function* () {
-        const environment = yield* (
-          options.currentEnvironment ?? Effect.succeed(options.environment)
-        );
+        const environment = {
+          ...(yield* options.currentEnvironment ?? Effect.succeed(options.environment)),
+        };
         const resolved = yield* resolve(environment);
         const runtimeScope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(runtimeScope, Exit.void));
@@ -291,12 +294,13 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
               ),
             );
         }
+        return environment;
       }),
     );
-    yield* Option.isSome(coordinator)
+    const environment = yield* Option.isSome(coordinator)
       ? coordinator.value.withForegroundStartup(agentKey, login)
       : login;
-    yield* options.onChanged(true);
+    yield* options.onChanged(true, environment);
   });
   const logout = Effect.scoped(
     Effect.gen(function* () {

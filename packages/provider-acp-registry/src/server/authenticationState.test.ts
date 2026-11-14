@@ -71,6 +71,29 @@ it.layer(NodeServices.layer)("ACP sign-in confirmation", (it) => {
       }),
   );
 
+  it.effect("does not reuse a confirmation after the active profile changes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fs.makeTempDirectoryScoped();
+      const host = { HOME: "/home/test", XDG_CONFIG_HOME: "/profile/one" };
+      const state = yield* makeAcpRegistryAuthenticationState({
+        cacheDir,
+        instanceId: ProviderInstanceId.make("acp_profile_change"),
+        settings,
+        environment: [],
+        processEnvironment: host,
+      });
+      yield* state.set(true);
+      assert.isTrue(yield* state.get);
+      host.XDG_CONFIG_HOME = "/profile/two";
+      assert.isFalse(yield* state.get);
+      yield* state.set(true, { HOME: "/home/test", XDG_CONFIG_HOME: "/profile/one" });
+      assert.isFalse(yield* state.get);
+      yield* state.set(true);
+      assert.isTrue(yield* state.get);
+    }),
+  );
+
   it.effect("ignores damaged confirmation and keeps another instance independent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

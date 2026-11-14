@@ -550,6 +550,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         settings: effectiveConfig,
         environment,
         processEnvironment,
+        currentEnvironment,
       });
     const withLiveRuntimeState = Effect.fn("AcpRegistryDriver.withLiveRuntimeState")(function* (
       input: ServerProvider,
@@ -793,9 +794,9 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       cwd: host.paths.cwd,
       environment: processEnvironment,
       currentEnvironment,
-      onChanged: (authenticated) =>
+      onChanged: (authenticated, environment) =>
         confirmedAuthentication
-          .set(authenticated)
+          .set(authenticated, environment)
           .pipe(
             Effect.andThen(authenticated ? Effect.void : clearLiveState),
             Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
