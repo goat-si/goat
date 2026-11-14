@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as NodeV8 from "node:v8";
+import * as NodeVM from "node:vm";
+import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { makeEnvironmentQueryHarness, readEnvironmentQuery } from "./runtimeTestSupport.ts";
@@ -63,6 +66,45 @@ describe("query revalidation", () => {
         registry.set(toggle, true);
         yield* Effect.yieldNow;
         expect(executions).toBe(1);
+      }),
+    ),
+  );
+  it.effect("keeps its cache when collected while unmounted, inside its stale time", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        NodeV8.setFlagsFromString("--expose-gc");
+        const gc = NodeVM.runInNewContext("gc") as () => void;
+        using _now = vi.spyOn(Date, "now").mockReturnValue(0);
+        let fetches = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => {
+            fetches += 1;
+            return fetches;
+          }),
+        );
+        const registry = AtomRegistry.make();
+        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+        // `Atom.family` holds members weakly, so the test must hold none: another environment
+        // than `harness.atom`'s, which the harness holds.
+        const environmentId = EnvironmentId.make("unheld-environment");
+        const query = () => harness.family({ environmentId, input: undefined });
+        const first = new WeakRef(query());
+        const remount = Effect.gen(function* () {
+          const unmount = registry.mount(query());
+          yield* Effect.yieldNow;
+          const value = yield* readEnvironmentQuery(registry, query());
+          unmount();
+          return value;
+        });
+        // A WeakRef target survives until the current job ends, so collect after it.
+        const collect = Effect.yieldNow.pipe(Effect.andThen(Effect.sync(gc)));
+
+        expect(yield* remount).toBe(1);
+        yield* collect;
+        expect(yield* remount).toBe(1);
+        yield* collect;
+        expect(first.deref()).toBe(query());
+        expect(fetches).toBe(1);
       }),
     ),
   );
