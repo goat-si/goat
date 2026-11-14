@@ -8,7 +8,7 @@ import {
   goatBotPreviewText,
   goatBotAccent,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import { BotId, type BotProfile, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import {
   Platform,
   Pressable,
@@ -28,6 +28,8 @@ import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 import { useMobileMemberStatus } from "./useMobileMemberStatus";
+import { MobileBotRowSignalMarks } from "./MobileBotRowSignalMarks";
+import { useMobileBotRowSignals } from "./useMobileBotRowSignals";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { MobileNeedsYouStrip } from "./MobileNeedsYouStrip";
 
@@ -88,6 +90,8 @@ export function MobileBotRosterView(props: {
   slackEnabled: boolean;
   preview?: string;
   unread?: boolean;
+  /** The main bot's computer, whose Home may govern its work signals. */
+  mainEnvironmentId?: EnvironmentId | null;
   onOpenBot: (bot: BotRosterEntry) => void;
   /** Opens one task in its bot's chat, from an ask in the Needs you strip. */
   onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
@@ -117,6 +121,10 @@ export function MobileBotRosterView(props: {
     Math.max(insets.bottom, useWorkspaceTabs()?.bottomClearance ?? 0) -
     (Platform.OS === "ios" ? insets.bottom : 0);
   const mainFace = useMobileGoatBotFace(null);
+  const mainSignals = useMobileBotRowSignals({
+    environmentId: props.mainEnvironmentId ?? null,
+    botId: BotId.make("main"),
+  });
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
   const mainEmoji = goatBotAvatarEmoji(
     props.bots.find((bot) => bot.kind === "main")?.profile?.avatar,
@@ -169,6 +177,7 @@ export function MobileBotRosterView(props: {
                 mainFaceLabel,
                 bot.profile?.name ?? "GOAT Bot",
                 props.unread ? "unread" : null,
+                ...(mainSignals?.spoken ?? []),
               ]
                 .filter((part) => part !== null)
                 .join(", ")}
@@ -185,9 +194,12 @@ export function MobileBotRosterView(props: {
                 emoji={mainEmoji}
                 surface={selected ? "selected" : "screen"}
               />
-              <Text numberOfLines={1} className="text-base font-semibold text-foreground">
-                {bot.profile?.name ?? "GOAT Bot"}
-              </Text>
+              <View className="max-w-full flex-row items-center gap-2">
+                <Text numberOfLines={1} className="shrink text-base font-semibold text-foreground">
+                  {bot.profile?.name ?? "GOAT Bot"}
+                </Text>
+                <MobileBotRowSignalMarks signals={mainSignals} />
+              </View>
               {props.preview ? (
                 <View className="max-w-full flex-row items-center gap-1">
                   {props.unread ? (
@@ -314,11 +326,21 @@ function MemberRow(props: {
   readonly onLongPress: (() => void) | undefined;
 }) {
   const { bot } = props;
-  const { waitingCount, latest, unread, status } = useMobileMemberStatus(bot);
+  const member = useMobileMemberStatus(bot);
+  const { waitingState, latest, unread, status } = member;
+  const signals = useMobileBotRowSignals({
+    environmentId: bot.environmentId,
+    botId: bot.botId,
+    waiting: waitingState,
+  });
+  // Where Home governs, a count that could not be read is marked unavailable, not shown stale.
+  const stale = signals !== null && waitingState === "unavailable";
+  const waitingCount = stale ? 0 : member.waitingCount;
   const face = useMobileGoatBotFace(
     null,
     { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
-    { status },
+    // A status whose refresh failed is not read for the face either; it keeps the face it had.
+    { status: stale ? null : status },
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -333,6 +355,7 @@ function MemberRow(props: {
     bot.name,
     props.hidden ? "hidden" : null,
     unread ? "unread" : null,
+    ...(signals?.spoken ?? []),
     line || null,
   ]
     .filter((part) => part !== null)
@@ -363,6 +386,7 @@ function MemberRow(props: {
           <Text numberOfLines={1} className="shrink font-semibold text-foreground">
             {bot.name}
           </Text>
+          <MobileBotRowSignalMarks signals={signals} />
           {waitingCount > 0 ? (
             <Text
               accessibilityElementsHidden

@@ -6,6 +6,8 @@ import * as Schema from "effect/Schema";
 
 // The roster's member rows through the real member-status hook: only the status read underneath
 // it, the thread shells and the native views stand in.
+// Home's work signals are not under test here.
+vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   View: (props: {

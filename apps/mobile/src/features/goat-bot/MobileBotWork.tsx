@@ -29,7 +29,7 @@ import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { mobileBotHomeListShown, pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
 import { MobileBotComputer } from "./MobileBotComputer";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
@@ -42,6 +42,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { type MobileBotHomeItem, mobileBotTaskListItems, carded } from "./MobileBotTaskList";
 import { MobileBotPeek } from "./MobileBotPeek";
 import { mobileBotWorkDetails } from "./mobileBotWorkDetails";
+import { useMobileHomeCurrentWork } from "./useMobileHomeCurrentWork";
 import { useKeptWhileOffline } from "./useKeptWhileOffline";
 import { useMobileBotWorkHistory } from "./useMobileBotWorkHistory";
 import { useMobileHistoryAnnouncements } from "./useMobileHistoryAnnouncements";
@@ -142,10 +143,11 @@ export function MobileBotWork(props: {
     ? presentationById.get(environmentId)?.serverConfig?.environment.capabilities
     : undefined;
   const member = props.member ?? null;
-  const enabled =
-    selected?.connected === true &&
-    capabilities?.goatBotTaskThreads === true &&
-    (member === null || capabilities?.goatBotMembers === true);
+  const enabled = mobileBotHomeListShown({
+    connected: selected?.connected === true,
+    capabilities,
+    member: member !== null,
+  });
   const botName = props.botName ?? member?.name ?? "GOAT Bot";
   // A member's model sits beside Work in its chat; the main bot's is the GOAT Bot model setting.
   const threads = useEnvironmentQuery(
@@ -219,6 +221,7 @@ export function MobileBotWork(props: {
     childGroups: childData?.groups ?? [],
   });
   const { lookup } = actions;
+  const current = useMobileHomeCurrentWork(environmentId, botId);
   const openTaskFromHome = (id: ChannelTaskId, title?: string) => {
     closeSheet();
     props.onOpenTask(id, title);
@@ -621,6 +624,7 @@ export function MobileBotWork(props: {
                     groupChildren:
                       expandedData?.groups.find((group) => group.taskId === id)?.children.length ??
                       null,
+                    currentLinks: current.linksFor(id),
                     openThread: (thread) => {
                       closeSheet();
                       props.onOpenThread(thread);
@@ -639,6 +643,7 @@ export function MobileBotWork(props: {
                   supported: history.supported,
                   currentTaskIds: history.currentTaskIds,
                   launchesTruncated: history.launchesTruncated,
+                  currentEligible: current.eligible,
                   hasMore: history.hasMore,
                   loading: history.loading,
                   incomplete: history.incomplete,
