@@ -29,6 +29,12 @@ export const Detach = Schema.Struct({
   stop: Schema.optionalKey(Schema.String),
   /** A silent machine's purge the forced revoke replaced, resolved once the force committed. */
   supersedes: Schema.optionalKey(Schema.String),
+  /** The refusal code of a revoke OpenCodex never recorded. */
+  refusal: Schema.optionalKey(Schema.String),
+  /** A link under the machine's alias that GOAT did not make and left as it is. */
+  foreignLinkId: Schema.optionalKey(Schema.String),
+  /** The forced id was sent once more after recover found its removal pending. */
+  pendingResent: Schema.optionalKey(Schema.Literal(true)),
 });
 export type Detach = typeof Detach.Type;
 

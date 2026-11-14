@@ -138,19 +138,33 @@ export const makeDetachAdmission = Effect.fn("DetachAdmission.make")(function* (
                 : "done";
         const { stop: _stop, ...kept } = known ?? { step: stepFor, attempt: 0 };
         // A person's force starts its sends afresh and reads the stored id again before any stop;
-        // a silent machine's outcome stays, so the purge the force replaces is resolved after it.
+        // an open purge stays, as OpenCodex refuses any other revoke while it is open.
         const { sends: _sends, outcome, ...rest } = kept;
-        const fresh = outcome === "unreachable" ? { ...rest, outcome } : rest;
+        const fresh = outcome === "open" ? { ...rest, outcome } : rest;
+        // A revoke OpenCodex left open or never recorded goes again under its id after a detach.
+        const resend =
+          known?.stop === "revoke_unsettled" &&
+          (outcome === "open" || outcome === "not_found" || outcome === "unreadable");
+        // A stopped retirement force goes on under its id while the machine fails or it is open.
+        const retirement =
+          row.state === "linked" &&
+          known?.force === true &&
+          known.stop !== undefined &&
+          ((enroll.health?.failures ?? 0) > 0 || outcome === "open");
         const next: Detach =
           row.state === "detaching" || row.state === "retired"
             ? input.force === true
               ? { ...fresh, force: true as const }
-              : kept
-            : {
-                step: stepFor,
-                attempt: known?.attempt ?? 0,
-                ...(input.force === true ? { force: true as const } : {}),
-              };
+              : resend
+                ? fresh
+                : kept
+            : retirement
+              ? { ...fresh, force: true as const }
+              : {
+                  step: stepFor,
+                  attempt: known?.attempt ?? 0,
+                  ...(input.force === true ? { force: true as const } : {}),
+                };
         const now = yield* nowIso;
         const commit = sql
           .withTransaction(
