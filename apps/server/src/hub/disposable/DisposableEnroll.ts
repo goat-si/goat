@@ -279,7 +279,8 @@ export const makeEnroll = Effect.fn("DisposableEnroll.make")(function* (
             noisePub: row.expected_noise_pub,
             proxyCommand: route.proxyCommand,
             user: route.user,
-            knownHostsFile: route.knownHostsFile,
+            // The file just written at the current state path: a stored one outlives a home move.
+            knownHostsFile: pinned?._tag === "Success" ? pinned.success : route.knownHostsFile,
             identityFile: key.value.privateKeyFile,
           });
     const at = yield* nowIso;

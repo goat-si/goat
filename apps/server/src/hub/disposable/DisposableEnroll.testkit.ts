@@ -109,6 +109,8 @@ export const fakeEnrollHost = () => {
     holdReach: undefined as Hold | undefined,
     holdKnownHosts: undefined as Hold | undefined,
     knownHostsUnwritable: false,
+    /** Where GOAT's state folder keeps known_hosts now; a moved home changes it. */
+    knownHostsDir: "/srv/goat/disposable/known_hosts/",
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
@@ -198,7 +200,7 @@ export const fakeEnrollHost = () => {
             if (known !== undefined && known !== line)
               return Effect.fail(new KnownHostsError({ reason: "changed" }));
             control.knownHosts.set(attachId, line);
-            return Effect.succeed("/srv/goat/disposable/known_hosts/" + attachId);
+            return Effect.succeed(control.knownHostsDir + attachId);
           }),
         ),
       ),
@@ -207,6 +209,8 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.reached.push(route);
+            // ssh finds no host key in a file under a home that moved away.
+            if (!route.knownHostsFile.startsWith(control.knownHostsDir)) return "host_key_unknown";
             return (
               control.reachAnswers.get(route.nodeId) ??
               (control.unreachable.has(route.nodeId) ? "key_refused" : "ok")
