@@ -44,6 +44,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
 
   const commands: string[] = [];
   const invocations: ProcessRunner.ProcessRunInput[] = [];
+  const onManagerProbe: Array<() => void> = [];
   const timeouts = new Map<string, unknown>();
   const control: {
     failCommand: string | undefined;
@@ -106,6 +107,9 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
       input: ProcessRunner.ProcessRunInput,
     ) {
       const command = `${input.command} ${input.args.join(" ")}`;
+      if (command === "systemctl --user show-environment") {
+        for (const callback of onManagerProbe) callback();
+      }
       commands.push(command);
       invocations.push(input);
       timeouts.set(command, input.timeout);
@@ -276,6 +280,7 @@ export const makeHarness = Effect.fn("test.make_boot_service_harness")(function*
     statePath,
     commands,
     invocations,
+    onManagerProbe,
     timeouts,
     control,
     runtime,
