@@ -54,8 +54,9 @@ import {
   type ServerPairingLinkRecord,
 } from "~/environments/primary";
 import { readEnvironmentScope } from "~/state/session";
-import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import { PairingLinkTarget } from "./PairingLinkTarget";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
   formatAccessTimestamp,
@@ -573,17 +574,6 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
 }: AuthorizedClientsHeaderActionProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const targetEnvironmentId = environmentId ?? primaryEnvironmentId;
-  const { environments } = useEnvironments();
-  const targetLabel =
-    environments.find((environment) => environment.environmentId === targetEnvironmentId)?.label ??
-    "this backend";
-  // A pairing link is minted by the environment it pairs with, so name the others this app shows.
-  const otherLabels = environments
-    .filter(
-      (environment) =>
-        environment.entry.enabled && environment.environmentId !== targetEnvironmentId,
-    )
-    .map((environment) => environment.label);
   const [dialogOpen, setDialogOpen] = useState(connectFlow?.resume ?? false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
@@ -670,11 +660,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
           <DialogHeader>
             <DialogTitle>Create pairing link</DialogTitle>
             <DialogDescription>
-              Generate a one-time link that another device can use to pair with {targetLabel} as an
-              authorized client.
-              {otherLabels.length > 0
-                ? ` This app also shows ${new Intl.ListFormat("en").format(otherLabels)}, which this link does not pair with. To pair a device with ${otherLabels.length === 1 ? "it" : "one of those"}, run goat auth pairing create on the machine that runs it.`
-                : null}
+              <PairingLinkTarget environmentId={targetEnvironmentId} />
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
