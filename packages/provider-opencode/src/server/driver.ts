@@ -777,63 +777,70 @@ export const OpenCodeDriver: ProviderDriver<
       snapshotForCwd: (cwd) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
-          : runtimeProbe.get.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderDriverError({
-                    driver: DRIVER_KIND,
-                    instanceId,
-                    detail: `Failed to probe OpenCode for '${cwd}'`,
-                    cause,
-                  }),
-              ),
-              Effect.flatMap((probed) =>
-                byOpenCodeRuntime(Effect.succeed(probed), {
-                  v2: Effect.all([
-                    snapshot.getSnapshot,
-                    listOpenCode2Workspace(cwd).pipe(
-                      Effect.timeout("20 seconds"),
-                      Effect.mapError(
-                        (cause) =>
-                          new ProviderDriverError({
-                            driver: DRIVER_KIND,
-                            instanceId,
-                            detail: `Failed to list OpenCode commands and skills for '${cwd}'`,
-                            cause,
-                          }),
+          : currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                runtimeProbe.get.pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderDriverError({
+                        driver: DRIVER_KIND,
+                        instanceId,
+                        detail: `Failed to probe OpenCode for '${cwd}'`,
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap((probed) =>
+                    byOpenCodeRuntime(Effect.succeed(probed), {
+                      v2: Effect.all([
+                        snapshot.getSnapshot,
+                        listOpenCode2Workspace(cwd).pipe(
+                          Effect.timeout("20 seconds"),
+                          Effect.mapError(
+                            (cause) =>
+                              new ProviderDriverError({
+                                driver: DRIVER_KIND,
+                                instanceId,
+                                detail: `Failed to list OpenCode commands and skills for '${cwd}'`,
+                                cause,
+                              }),
+                          ),
+                        ),
+                      ]).pipe(
+                        Effect.map(([machineSnapshot, { skills, commands }]) => ({
+                          ...machineSnapshot,
+                          skills: openCode2SkillsToServerProviderSkills(skills),
+                          slashCommands: openCode2CommandsToServerProviderSlashCommands(commands),
+                          // A finished scan lists at least the built-ins. None means it
+                          // timed out, so the registry decides from the provider's health.
+                          slashCommandsPending: commands.length > 0 ? false : undefined,
+                        })),
                       ),
-                    ),
-                  ]).pipe(
-                    Effect.map(([machineSnapshot, { skills, commands }]) => ({
-                      ...machineSnapshot,
-                      skills: openCode2SkillsToServerProviderSkills(skills),
-                      slashCommands: openCode2CommandsToServerProviderSlashCommands(commands),
-                      // A finished scan lists at least the built-ins. None means it
-                      // timed out, so the registry decides from the provider's health.
-                      slashCommandsPending: commands.length > 0 ? false : undefined,
-                    })),
+                      v1: Effect.all([
+                        snapshot.getSnapshot,
+                        loadWorkspaceForCwd(cwd).pipe(Effect.timeout("20 seconds")),
+                      ]).pipe(
+                        Effect.map(
+                          ([machineSnapshot, { skills, commands, slashCommandsPending }]) => ({
+                            ...machineSnapshot,
+                            skills: openCodeSkillsToServerProviderSkills(skills),
+                            slashCommands: openCodeCommandsToServerProviderSlashCommands(commands),
+                            slashCommandsPending,
+                          }),
+                        ),
+                        Effect.mapError(
+                          (cause) =>
+                            new ProviderDriverError({
+                              driver: DRIVER_KIND,
+                              instanceId,
+                              detail: `Failed to probe OpenCode commands and skills for '${cwd}'`,
+                              cause,
+                            }),
+                        ),
+                      ),
+                    }),
                   ),
-                  v1: Effect.all([
-                    snapshot.getSnapshot,
-                    loadWorkspaceForCwd(cwd).pipe(Effect.timeout("20 seconds")),
-                  ]).pipe(
-                    Effect.map(([machineSnapshot, { skills, commands, slashCommandsPending }]) => ({
-                      ...machineSnapshot,
-                      skills: openCodeSkillsToServerProviderSkills(skills),
-                      slashCommands: openCodeCommandsToServerProviderSlashCommands(commands),
-                      slashCommandsPending,
-                    })),
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderDriverError({
-                          driver: DRIVER_KIND,
-                          instanceId,
-                          detail: `Failed to probe OpenCode commands and skills for '${cwd}'`,
-                          cause,
-                        }),
-                    ),
-                  ),
-                }),
+                  Effect.provideService(LaunchEnvironment, environment),
+                ),
               ),
             ),
       orchestrationAdapter,
