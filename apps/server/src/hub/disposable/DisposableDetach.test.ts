@@ -21,6 +21,8 @@ import { makeHold } from "./DisposableEnroll.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
 import { decodeEnroll, encodeEnroll } from "./enrollModel.ts";
+import { withPersonConsent } from "./disposableSwitch.ts";
+import * as Settings from "../../serverSettings.ts";
 
 const HOUR = 60 * 60 * 1000;
 const THREAD: Attach.AttachCaller = {
@@ -721,6 +723,38 @@ it.effect(
         yield* TestClock.adjust(HOUR / 2);
         yield* detachPass;
         expect((yield* listed(attachId))?.state).not.toBe("linked");
+      }),
+    ),
+);
+
+// The race the lock closes (a thread's read finishing before a person's write starts, its commit
+// after it) has no deterministic order without polling; this pins that a held change decides it.
+it.effect(
+  "a person's provisioner change that holds the settings lock decides a thread's detach waiting on it",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        fakeDetachHome(host);
+        const { attachId } = yield* linked(pen, home, host, 1);
+        const settings = yield* Settings.ServerSettingsService;
+        const holding = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const removing = yield* Effect.forkChild(
+          withPersonConsent(
+            settings.updateSettings(
+              { hub: { attachDisposableMachines: { provisioners: [] } } },
+              Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+            ),
+          ),
+        );
+        yield* Deferred.await(holding); // the person's change holds the settings write lock
+        home.settingsAccess = yield* Deferred.make<void>();
+        const detaching = yield* Effect.forkChild(Effect.flip(detach(THREAD, attachId, "d-1")));
+        yield* Deferred.await(home.settingsAccess); // the detach reads the consent now
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(removing);
+        expect((yield* Fiber.join(detaching)).reason).toBe("provisioner_refused");
+        expect((yield* listed(attachId))?.state).toBe("linked");
       }),
     ),
 );

@@ -235,18 +235,30 @@ export interface Grant {
 export const world = <A, E>(
   body: (
     pen: ReturnType<typeof fakePen>,
-    home: { contracts: Set<string>; settingsUnreadable: boolean; contractsAsked: number },
+    home: {
+      contracts: Set<string>;
+      settingsUnreadable: boolean;
+      contractsAsked: number;
+      /** Completed by the next settings read or locked snapshot. */
+      settingsAccess?: Deferred.Deferred<void> | undefined;
+    },
     grant: Grant,
     host: ReturnType<typeof fakeEnrollHost>,
   ) => Effect.Effect<A, E, World>,
 ) => {
   const pen = fakePen();
   const host = fakeEnrollHost();
-  const home = {
+  const home: Parameters<typeof body>[1] = {
     contracts: new Set<string>(HOME_ATTACH_CONTRACTS),
     settingsUnreadable: false,
     contractsAsked: 0,
   };
+  const accessed = () =>
+    Effect.suspend(() => {
+      const seen = home.settingsAccess;
+      home.settingsAccess = undefined;
+      return seen === undefined ? Effect.void : Deferred.succeed(seen, undefined);
+    });
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 147 });
@@ -289,7 +301,7 @@ export const world = <A, E>(
           }),
       }),
     ),
-    // A settings read fails while home.settingsUnreadable is set.
+    // A settings read fails while home.settingsUnreadable is set; settingsAccess sees the next read.
     Effect.provideServiceEffect(
       Settings.ServerSettingsService,
       Effect.map(Settings.ServerSettingsService, (inner) =>
@@ -300,8 +312,10 @@ export const world = <A, E>(
               ? Effect.fail(
                   new ServerSettingsError({ settingsPath: "<memory>", operation: "read-file" }),
                 )
-              : inner.getSettings,
+              : Effect.andThen(accessed(), inner.getSettings),
           ),
+          withSettingsSnapshot: (use) =>
+            Effect.andThen(accessed(), inner.withSettingsSnapshot(use)),
         }),
       ),
     ),
