@@ -1,5 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -8,17 +8,15 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
     identity,
     eligible: new Set<string>(),
     consumed: new Set<string>(),
+    pending: new Map<string, Extract<GoatBotRow, { kind: "bot" }>>(),
   }));
   const [announcement, setAnnouncement] = useState<{
     identity: string;
     sequence: number;
     row: Extract<GoatBotRow, { kind: "bot" }>;
   } | null>(null);
-  const pending = useRef<{ identity: string; row: Extract<GoatBotRow, { kind: "bot" }> } | null>(
-    null,
-  );
   if (speech.identity !== identity) {
-    setSpeech({ identity, eligible: new Set(), consumed: new Set() });
+    setSpeech({ identity, eligible: new Set(), consumed: new Set(), pending: new Map() });
     setAnnouncement(null);
   }
   const onExposure = useStableCallback((exposed: ReadonlyArray<GoatBotRow>) => {
@@ -33,11 +31,11 @@ export function useGoatBotReplyAnnouncement(identity: string, source: GoatBotSou
       newest = row;
     }
     if (source.baselineIds === null) {
-      if (newest !== null) pending.current = { identity, row: newest };
+      if (newest !== null) speech.pending.set("reply", newest);
       return;
     }
-    const row = newest ?? (pending.current?.identity === identity ? pending.current.row : null);
-    pending.current = null;
+    const row = newest ?? speech.pending.get("reply") ?? null;
+    speech.pending.clear();
     if (row !== null) {
       setAnnouncement((previous) => ({
         identity,
