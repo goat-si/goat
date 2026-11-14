@@ -134,7 +134,7 @@ it.effect(
         assert.include(args, `--project=${project}`, remoteUrl);
         assert.include(args, `--organization=${organization}`, remoteUrl);
       }
-    }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
+    }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))));
   },
 );
 
@@ -176,7 +176,7 @@ it.effect("follows the selected remote's project when another one is detected", 
       const args = [...(run.mock.calls[0]?.[0].args ?? [])];
       assert.include(args, `--project=${project}`, project);
     }
-  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
+  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))));
 });
 
 it.effect(
@@ -191,5 +191,12 @@ it.effect(
         }),
         { headSelectors: ["feature"], limit: 100 },
       );
-    }).pipe(Effect.provide(Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
+          TestSourceControlHost.layer(),
+        ),
+      ),
+    ),
 );
