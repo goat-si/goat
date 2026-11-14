@@ -1,3 +1,5 @@
+import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
+import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { resolvePastedPath } from "@goat/shared/path";
 import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
@@ -227,7 +229,7 @@ import {
 import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
-import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
+import { CommandPaletteDialog } from "./CommandPaletteDialog";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
   selectCommandPaletteClientSettings,
@@ -259,16 +261,14 @@ import {
 } from "./CommandPaletteResults";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { Checkbox } from "./ui/checkbox";
-import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
-import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import { CommandDialog, CommandFooterAction } from "./ui/command";
+import { CommandDialog } from "./ui/command";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -431,51 +431,21 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         <div className="contents" inert={state.open}>
           {children}
         </div>
-        <CommandPaletteDialog
-          open={state.open}
-          mode={state.mode}
-          openIntent={state.openIntent}
-          setOpen={setOpen}
-          openChildSearch={openChildSearch}
-          initialContext={state.restoredSearch}
-          clearOpenIntent={clearOpenIntent}
-        />
+        <CommandPaletteDialog mode={state.mode} setOpen={setOpen}>
+          <OpenCommandPaletteDialog
+            open={state.open}
+            openIntent={state.openIntent}
+            setOpen={setOpen}
+            openChildSearch={openChildSearch}
+            initialContext={state.restoredSearch}
+            clearOpenIntent={clearOpenIntent}
+          />
+        </CommandPaletteDialog>
       </CommandDialog>
     </ComposerHandleContext>
   );
 }
 
-function CommandPaletteDialog(props: {
-  readonly open: boolean;
-  readonly mode: SearchOverlayMode;
-  readonly openIntent: CommandPaletteOpenIntent | null;
-  readonly setOpen: (open: boolean) => void;
-  readonly openChildSearch: (
-    mode: "files" | "content",
-    context: CommandPaletteReturnContext,
-  ) => void;
-  readonly initialContext: CommandPaletteReturnContext | undefined;
-  readonly clearOpenIntent: () => void;
-}) {
-  return (
-    <CommandPaletteDialogFrame mode={props.mode} setOpen={props.setOpen}>
-      {props.mode === "files" ? (
-        <ProjectFilePicker setOpen={props.setOpen} />
-      ) : props.mode === "content" ? (
-        <ProjectContentSearchDialog onOpenChange={props.setOpen} />
-      ) : (
-        <OpenCommandPaletteDialog
-          open={props.open}
-          openIntent={props.openIntent}
-          setOpen={props.setOpen}
-          openChildSearch={props.openChildSearch}
-          initialContext={props.initialContext}
-          clearOpenIntent={props.clearOpenIntent}
-        />
-      )}
-    </CommandPaletteDialogFrame>
-  );
-}
 function OpenCommandPaletteDialog(props: {
   readonly open: boolean;
   readonly openIntent: CommandPaletteOpenIntent | null;
@@ -2867,6 +2837,17 @@ function OpenCommandPaletteDialog(props: {
         );
         return;
       }
+      if (
+        await clonePickedFolder({
+          flow: addProjectCloneFlow,
+          path: selection.linuxPath,
+          environmentId: selection.environmentId,
+          name: pinnedCloneDirectoryName,
+          caseSensitive: true,
+          submit: submitAddProjectCloneFlow,
+        })
+      )
+        return;
       await handleAddProjectForEnvironment({
         environmentId: selection.environmentId,
         rawCwd: selection.linuxPath,
@@ -2875,6 +2856,16 @@ function OpenCommandPaletteDialog(props: {
       });
       return;
     }
+    if (
+      await clonePickedFolder({
+        flow: addProjectCloneFlow,
+        path: pickedPath,
+        name: pinnedCloneDirectoryName,
+        caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
+        submit: submitAddProjectCloneFlow,
+      })
+    )
+      return;
     await handleAddProject(pickedPath);
   };
 
@@ -2936,33 +2927,24 @@ function OpenCommandPaletteDialog(props: {
       />
     ) : null;
 
-  const footerActionLabel =
-    newProjectFlow !== null
-      ? highlightedItemValue === null
-        ? "Create"
-        : highlightedItemValue === newProjectPublishToggleValue
-          ? "Toggle"
-          : "Select"
-      : addProjectCloneFlow?.step === "repository"
-        ? (remoteProjectButtonLabel ?? "Continue")
-        : !canSubmitBrowsePath || hasHighlightedBrowseItem
-          ? "Select"
-          : undefined;
-
-  const footerTrailing = canOpenProjectFromFileManager ? (
-    <CommandFooterAction
+  const footerActionLabel = paletteFooterLabel({
+    isNew: newProjectFlow !== null,
+    highlighted: highlightedItemValue,
+    toggleValue: newProjectPublishToggleValue,
+    cloneFlow: addProjectCloneFlow,
+    remoteLabel: remoteProjectButtonLabel,
+    canSubmitBrowsePath,
+    hasHighlightedBrowseItem,
+  });
+  const footerTrailing = (
+    <CommandPaletteFooter
+      canOpen={canOpenProjectFromFileManager}
       disabled={isPickingProjectFolder}
-      onClick={() => {
-        void handleOpenProjectFromFileManager();
-      }}
-    >
-      {`Open in ${fileManagerName}`}
-    </CommandFooterAction>
-  ) : isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing ? (
-    // In the footer, so the list keeps its height while message results may
-    // still arrive below it.
-    <span className="text-muted-foreground text-xs">Searching messages…</span>
-  ) : null;
+      fileManagerName={fileManagerName}
+      onOpen={handleOpenProjectFromFileManager}
+      searching={isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing}
+    />
+  );
 
   return (
     <CommandPaletteContent
