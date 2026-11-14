@@ -295,7 +295,25 @@ const make = Effect.gen(function* () {
     Duration.infinity,
   );
   const scratchProbe = probe.pipe(Effect.onInterrupt(() => invalidate));
-  const scratchRoot = scratchProbe.pipe(Effect.map(Result.getSuccess));
+  // A symlinked scratch folder lets the No project live at either the link or its target.
+  const scratchProjectRoot = (root: string) =>
+    fileSystem.realPath(root).pipe(
+      Effect.flatMap((target) =>
+        target === root
+          ? Effect.succeed(root)
+          : projects
+              .getByWorkspaceRoot(target)
+              .pipe(Effect.map((project) => (Option.isSome(project) ? target : root))),
+      ),
+      Effect.orElseSucceed(() => root),
+    );
+  const scratchRoot = scratchProbe.pipe(
+    Effect.flatMap((probed) =>
+      Result.isSuccess(probed)
+        ? scratchProjectRoot(probed.success).pipe(Effect.asSome)
+        : Effect.succeedNone,
+    ),
+  );
 
   const makeScratchFolder = (folder: string) =>
     fileSystem
@@ -361,7 +379,8 @@ const make = Effect.gen(function* () {
   const ensureScratchProject: ManagedProjectFolders["Service"]["ensureScratchProject"] = Effect.gen(
     function* () {
       const root = yield* scratchProbe.pipe(Effect.flatMap(Effect.fromResult));
-      return yield* ensureScratchAt(root);
+      yield* makeScratchFolder(root);
+      return yield* ensureScratchAt(yield* scratchProjectRoot(root));
     },
   );
 
