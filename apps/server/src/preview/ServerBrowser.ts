@@ -1012,6 +1012,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
+        colorScheme: opener.colorScheme,
         ...(opener.session.store === "server" ? { serverRendered: true as const } : {}),
         ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
