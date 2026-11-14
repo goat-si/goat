@@ -501,32 +501,39 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     });
   });
 
-  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
-    yield* resetUsage;
+  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* (
+    profile?: string,
+  ) {
     if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* reconcileProfile();
+    yield* resetUsage;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* SubscriptionRef.update(
-      metadata,
-      (state) =>
-        ({
-          authRevision: state.authRevision + 1,
-          draft: {
-            ...state.draft,
-            auth: {
-              status: "unauthenticated",
-              ...(usesCredentials ? options.auth : {}),
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* SubscriptionRef.update(metadata, (state) =>
+      state.authProfile !== undefined && state.authProfile !== profile
+        ? state
+        : ({
+            authRevision: state.authRevision + 1,
+            ...(profile === undefined ? {} : { authProfile: profile }),
+            draft: {
+              ...state.draft,
+              auth: {
+                status: "unauthenticated",
+                ...(usesCredentials ? options.auth : {}),
+              },
+              status: "warning",
+              message: signInMessage,
+              checkedAt: updatedAt,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [],
+              supportsTextGeneration: false,
+              usageLimits: undefined,
             },
-            status: "warning",
-            message: signInMessage,
-            checkedAt: updatedAt,
-            models: [],
-            slashCommands: [],
-            skills: [],
-            workspaceSnapshots: [],
-            supportsTextGeneration: false,
-            usageLimits: undefined,
-          },
-        }) satisfies AntigravityProviderState,
+          } satisfies AntigravityProviderState),
     );
     discoveredSkills.clear();
     thinkingLevels.clear();
@@ -582,8 +589,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       ),
       Effect.asVoid,
     ),
-    onSignedOut: clearAccountMetadata(),
-    onAuthRequired: clearAccountMetadata(),
+    onSignedOut: clearAccountMetadata,
+    onAuthRequired: clearAccountMetadata,
     snapshotForCwd,
   };
 });

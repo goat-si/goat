@@ -321,7 +321,7 @@ export const AntigravityDriver: ProviderDriver<
             Effect.tap((started) => Effect.sync(() => startedProfiles.set(started, userHome))),
             Effect.tapError((cause): Effect.Effect<void> =>
               input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
-                ? provider.onAuthRequired
+                ? provider.onAuthRequired(userHome)
                 : Effect.void,
             ),
           ),
@@ -354,13 +354,16 @@ export const AntigravityDriver: ProviderDriver<
           Effect.provideService(Path.Path, path),
         ),
       );
+      const sessionEnvironment = yield* currentEnvironment;
       const runtime = yield* makeRuntime({
         cwd,
         mcpServers: [],
+        sessionEnvironment,
         ...(input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {}),
       });
       return {
         ...runtime,
+        userHome: resolveAntigravityUserHome(platform, sessionEnvironment, homeDirectory),
         start: () =>
           runtime.start().pipe(
             Effect.tap((started) =>
@@ -410,7 +413,7 @@ export const AntigravityDriver: ProviderDriver<
         Effect.suspend(() => provider.onSignedIn).pipe(
           Effect.andThen(publishCatalog(started, runtime)),
         ),
-      onSignedOut: Effect.suspend(() => provider.onSignedOut),
+      onSignedOut: (runtime) => provider.onSignedOut(runtime.userHome),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
     });
 
@@ -561,9 +564,6 @@ export const AntigravityDriver: ProviderDriver<
             }),
           ),
       }),
-      Effect.tapError((cause) =>
-        isAntigravitySignInRequiredError(cause) ? provider.onAuthRequired : Effect.void,
-      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderDriverError"
           ? cause

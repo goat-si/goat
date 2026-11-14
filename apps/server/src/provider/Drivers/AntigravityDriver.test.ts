@@ -356,6 +356,49 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("authenticated");
     }).pipe(Effect.scoped),
   );
+  // The runtime fixture uses POSIX shell scripts.
+  it.effect.skipIf(windowsHost)(
+    "an old session sign-in failure does not clear the current profile",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, HOME: "/fixture/home-a" };
+        const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+        const acquired = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        h.controls.beforeAcquire = Deferred.succeed(acquired, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        const threadId = ThreadId.make("old-auth-failure");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const opening = yield* Effect.forkChild(
+          h.instance.orchestrationAdapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("old-auth"),
+            modelSelection,
+            runtimePolicy,
+          }),
+        );
+        yield* Deferred.await(acquired);
+        h.controls.beforeAcquire = Effect.void;
+        host.HOME = "/fixture/home-b";
+        yield* h.refresh();
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        h.controls.selected = h.signedOut;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(opening).pipe(Effect.flip);
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        yield* h.refresh().pipe(Effect.flip);
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
+        host.HOME = "/fixture/home-c";
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("unauthenticated");
+      }).pipe(Effect.scoped),
+  );
   // The runtime fixture uses POSIX shell scripts and profile symlinks.
   it.effect.skipIf(windowsHost)(
     "overlapping sessions retain their captured home skills across restart",

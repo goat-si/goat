@@ -406,7 +406,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         const auth = { type: "gemini-api-key", label: "Gemini API key" };
         const harness = yield* makeHarness({ auth });
         yield* harness.initialize;
-        for (const clear of [harness.provider.onSignedOut, harness.provider.onAuthRequired]) {
+        for (const clear of [harness.provider.onSignedOut(), harness.provider.onAuthRequired()]) {
           yield* harness.provider.onSessionStarted(started, "/workspace");
           yield* harness.provider.onAvailableCommands(commands, "/workspace");
           yield* clear;
@@ -517,7 +517,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         const harness = yield* makeHarness();
         yield* harness.initialize;
         yield* harness.provider.onSessionStarted(started);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* harness.provider.onSessionStarted({
           ...started,
           sessionSetupResult: {
@@ -616,7 +616,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         );
         const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
         yield* Deferred.await(probeEntered);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* Deferred.succeed(releaseProbe, initializeResult);
         const snapshot = yield* Fiber.join(refresh);
         expect(snapshot).toMatchObject({
@@ -739,7 +739,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           yield* harness.provider.snapshot.refresh;
           yield* Deferred.await(failedReadApplied);
           expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
-          yield* harness.provider.onSignedOut;
+          yield* harness.provider.onSignedOut();
           expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
           yield* Ref.set(usage, {
             checkedAt: "2026-10-09T12:02:00.000Z",
@@ -772,7 +772,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         );
         const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
         yield* Deferred.await(readStarted);
-        yield* harness.provider.onSignedOut;
+        yield* harness.provider.onSignedOut();
         yield* Deferred.succeed(readResult, {
           checkedAt: "2026-10-09T12:01:00.000Z",
           windows: [
