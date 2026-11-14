@@ -175,8 +175,10 @@ onto hub nodes as the machine's class, and an unreadable table reads as kept. A 
 `ocx link revoke --purge`, clean only with the Child's purged receipt; a machine silent for 24 hours
 (48 handshakes 30 minutes apart), or a person's force, gets `ocx link revoke --force` and a tombstone
 that `ocx link recover` settles once the machine answers. OpenCodex's refusals are states with their
-own text (`detachModel.ts`, `detachText.ts`), and final records whose key left Pen are pruned after
-30 days. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are thin transports over it.
+own text (`detachModel.ts`, `detachText.ts`). Final records whose key left Pen, or was never admitted,
+and that name no link are pruned 30 days after they ended and left Pen; a released record only once
+Pen's member list shows its key absent. RPC `hub.machines.*` and the `goat_hub_machine_*` tools are
+thin transports over it.
 
 `apps/server/src/opencodex/OpenCodexChildBootstrap.ts` coordinates setup of cloud machines this
 hub created and opted-in SSH hosts. The Home prepares GOAT and OpenCodex there and links the

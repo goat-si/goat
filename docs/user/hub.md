@@ -181,21 +181,26 @@ Each machine is a full Pen member and can reach services on your machines'
 loopback, and it stays a Pen member until you remove it with
 [`pen revoke`](pen.md#remove-a-machine).
 
-**Detach** on a machine's row, or `goat_hub_machine_detach` from the thread that
-attached it, removes its OpenCodex link and the lightweight Child on the machine;
-the record then reads purged. A machine that does not answer keeps its link: GOAT
-tries again every 30 minutes, and after 24 hours without an answer it removes the
-link without the machine and cleans the machine once it answers. GOAT does the
-same for a linked machine that stops answering for 24 hours, which then reads
-retired. **Force detach** removes the link now, without the machine; only a person
-can force. If a forced or retired machine is gone for good, run
+**Detach** on a machine's row in Settings → Hub on web and desktop, or
+`goat_hub_machine_detach` from the thread that attached it, removes its OpenCodex
+link and the lightweight Child on the machine. The machine stays a Pen member, and
+keeps its slot in the cap, until you remove it with `pen revoke`. A machine that
+does not answer keeps its link: GOAT tries again every 30 minutes, and after 24
+hours without an answer it removes the link without the machine and cleans the
+machine once it answers. GOAT does the same for a linked machine that stops
+answering for 24 hours; if it answers again later, detach it to end its record.
+**Force detach** removes the link now, without the machine; only a person can
+force, and it is also the way out for a machine that presents another SSH host
+key. If a forced or silent machine is gone for good, run
 `ocx link recover --forget --link-id <id> --yes` on the hub yourself, as the
 machine list says; OpenCodex refuses it from an agent. **Release** frees the slot
 of an attach whose invite Pen lost or used without recording who joined, once that
-invite has expired; if that machine did join, remove it with `pen revoke`.
-Removing a linked machine from Pen
-without detaching it leaves its link on the hub; the machine list names the link
-and the `ocx link revoke` command that removes it. An older GOAT on the hub shows
+invite has expired and Pen's member list shows the machine did not join. The
+phone app shows each machine's state but cannot detach or release yet
+([#3221](https://github.com/goat-si/goat/issues/3221)). Ended records are deleted
+30 days after they ended and left Pen. Removing a linked machine from Pen without
+detaching it leaves its link on the hub; the machine list names the link and the
+`ocx link revoke` command that removes it. An older GOAT on the hub shows
 **Update GOAT on this hub** instead of these settings.
 
 ## Sync OpenCodex models
