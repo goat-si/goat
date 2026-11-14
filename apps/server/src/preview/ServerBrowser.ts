@@ -1441,17 +1441,24 @@ const make = Effect.gen(function* () {
         session = opened;
         const frames = makeRecordingFrames({
           acknowledge: (sessionId) => opened.send("Page.screencastFrameAck", { sessionId }),
-          encode: (data, width) =>
-            channel.call(() =>
-              encoder.evaluate(
-                ([frameData, cssWidth]) =>
-                  (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
-                    frameData,
-                    cssWidth,
-                  ),
-                [data, width] as const,
-              ),
-            ),
+          encode: async (data, width) => {
+            try {
+              return await channel.call(() =>
+                encoder.evaluate(
+                  ([frameData, cssWidth]) =>
+                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(
+                      frameData,
+                      cssWidth,
+                    ),
+                  [data, width] as const,
+                ),
+              );
+            } catch (cause) {
+              if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+                return false;
+              throw cause;
+            }
+          },
           stop: () => opened.send("Page.stopScreencast"),
           isPrivate: () => tab.control.isPrivate,
         });
