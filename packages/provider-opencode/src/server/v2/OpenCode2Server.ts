@@ -185,7 +185,8 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
   return OpenCode2Server.of({
     withMemoryConnection: (operation, providerId, use) =>
       Effect.gen(function* () {
-        const isolated = yield* prepareMemoryServer(operation, providerId, input.environment, 2);
+        const environment = yield* input.currentEnvironment ?? Effect.succeed(input.environment);
+        const isolated = yield* prepareMemoryServer(operation, providerId, { ...environment }, 2);
         const password = yield* generatePassword;
         let connection: OpenCode2Connection | undefined;
         yield* runtime.startOpenCodeServerProcess({
