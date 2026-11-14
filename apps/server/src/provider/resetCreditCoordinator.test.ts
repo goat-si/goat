@@ -130,4 +130,61 @@ describe("ResetCreditCoordinator", () => {
         Effect.provide(Layer.mergeAll(ResetCreditCoordinator.layerTest, NodeServices.layer)),
       ),
   );
+
+  it.effect(
+    "a login directory created after its first redemption keeps the account's pending key across links",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const real = NodePath.join(root, "real");
+        const link = NodePath.join(root, "link");
+        yield* fs.makeDirectory(real);
+        yield* fs.symlink(real, link);
+        const { redeem } = yield* ResetCreditCoordinator.ResetCreditCoordinator;
+        const keys = yield* Ref.make<ReadonlyArray<string>>([]);
+        const record = (key: string) => Ref.update(keys, (seen) => [...seen, key]);
+        yield* redeem(NodePath.join(link, "new"), (key) =>
+          record(key).pipe(Effect.andThen(Effect.fail("timed out" as const))),
+        ).pipe(Effect.result);
+        yield* fs.makeDirectory(NodePath.join(real, "new"));
+        yield* redeem(NodePath.join(real, "new"), (key) =>
+          record(key).pipe(Effect.as("reset" as const)),
+        );
+        const [first, second] = yield* Ref.get(keys);
+        assert.strictEqual(second, first);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(ResetCreditCoordinator.layerTest, NodeServices.layer)),
+      ),
+  );
+
+  it.effect(
+    "forgets settled accounts and refuses a new account while too many outcomes are uncertain",
+    () =>
+      Effect.gen(function* () {
+        const { redeem } = yield* ResetCreditCoordinator.ResetCreditCoordinator;
+        const limit = ResetCreditCoordinator.MAX_TRACKED_ACCOUNTS;
+        for (let index = 0; index < limit * 2; index += 1) {
+          yield* redeem(`/settled/${index}`, () => Effect.succeed("reset" as const));
+        }
+        for (let index = 0; index < limit; index += 1) {
+          yield* redeem(`/uncertain/${index}`, () => Effect.fail("timed out" as const)).pipe(
+            Effect.result,
+          );
+        }
+        const refused = yield* redeem("/uncertain/new", () =>
+          Effect.succeed("reset" as const),
+        ).pipe(Effect.flip);
+        assert.strictEqual(refused._tag, "ResetCreditAccountLimitError");
+        assert.strictEqual(
+          yield* redeem("/uncertain/0", () => Effect.succeed("reset" as const)),
+          "reset",
+        );
+        assert.strictEqual(
+          yield* redeem("/uncertain/new", () => Effect.succeed("reset" as const)),
+          "reset",
+        );
+      }).pipe(Effect.provide(ResetCreditCoordinator.layerTest)),
+  );
 });

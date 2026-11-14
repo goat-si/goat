@@ -1,12 +1,16 @@
 /** Instances sharing a login directory share credits; serialize redemptions on that directory. */
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import type { ProviderConsumeResetCreditOutcome } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 interface AccountRedemptionState {
@@ -14,6 +18,18 @@ interface AccountRedemptionState {
   /** Read and written only while holding the lock. */
   pendingKey: string | null;
   holders: number;
+}
+
+/** Accounts tracked at once; an uncertain outcome keeps its entry until a retry settles it. */
+export const MAX_TRACKED_ACCOUNTS = 64;
+
+export class ResetCreditAccountLimitError extends Schema.TaggedError<ResetCreditAccountLimitError>()(
+  "ResetCreditAccountLimitError",
+  {},
+) {
+  override get message(): string {
+    return "Too many reset-credit redemptions have an uncertain outcome. Retry those accounts first.";
+  }
 }
 
 export class ResetCreditCoordinator extends Context.Service<
@@ -24,7 +40,11 @@ export class ResetCreditCoordinator extends Context.Service<
       accountKey: string,
       consume: (idempotencyKey: string) => Effect.Effect<ProviderConsumeResetCreditOutcome, E, R>,
       isSettled?: (error: E) => boolean,
-    ) => Effect.Effect<ProviderConsumeResetCreditOutcome, E | PlatformError.PlatformError, R>;
+    ) => Effect.Effect<
+      ProviderConsumeResetCreditOutcome,
+      E | PlatformError.PlatformError | ResetCreditAccountLimitError,
+      R
+    >;
   }
 >()("goat/provider/resetCreditCoordinator") {}
 
@@ -32,21 +52,36 @@ export class ResetCreditCoordinator extends Context.Service<
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   // An entry lives while a redemption holds it or an uncertain outcome keeps its idempotency key.
   const states = new Map<string, AccountRedemptionState>();
-  // Links to one login directory are one account; a missing directory keeps its given path.
-  const canonical = (accountKey: string) =>
-    fileSystem.realPath(accountKey).pipe(Effect.orElseSucceed(() => accountKey));
+  // Links to one login directory are one account, including one not created yet: resolve the
+  // nearest existing ancestor and keep the missing tail.
+  const canonical = Effect.fn("ResetCreditCoordinator.canonical")(function* (accountKey: string) {
+    let existing = path.resolve(accountKey);
+    const missing: Array<string> = [];
+    while (true) {
+      const real = yield* fileSystem.realPath(existing).pipe(
+        Effect.asSome,
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+      );
+      if (Option.isSome(real)) return path.join(real.value, ...missing.toReversed());
+      const parent = path.dirname(existing);
+      if (parent === existing) return path.resolve(accountKey);
+      missing.push(path.basename(existing));
+      existing = parent;
+    }
+  });
   const acquire = (accountKey: string) =>
-    Effect.sync(() => {
-      const state = states.get(accountKey) ?? {
-        lock: Semaphore.makeUnsafe(1),
-        pendingKey: null,
-        holders: 0,
-      };
+    Effect.suspend(() => {
+      const existing = states.get(accountKey);
+      if (existing === undefined && states.size >= MAX_TRACKED_ACCOUNTS) {
+        return Effect.fail(new ResetCreditAccountLimitError());
+      }
+      const state = existing ?? { lock: Semaphore.makeUnsafe(1), pendingKey: null, holders: 0 };
       state.holders += 1;
       states.set(accountKey, state);
-      return state;
+      return Effect.succeed(state);
     });
   const release = (accountKey: string, state: AccountRedemptionState) =>
     Effect.sync(() => {
@@ -102,7 +137,7 @@ export const layerTest = Layer.effect(
           digest: (_algorithm, data) => Effect.succeed(data),
         }),
       ),
-      Effect.provide(NodeFileSystem.layer),
+      Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
     );
   }),
 );
