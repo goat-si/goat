@@ -197,6 +197,19 @@ function threadPullRequests(
 
 type LinkScope = Pick<McpInvocationScope, "environmentId" | "client">;
 
+const threadBackgroundWork = (shell: OrchestrationV2ThreadShell) => ({
+  blockedOnThreadWait: shell.blockedOnThreadWait === true,
+  pendingBackgroundTasks: (shell.pendingBackgroundTasks ?? []).map((task) => ({
+    taskId: task.taskId,
+    kind: task.kind,
+    ...(task.description === undefined ? {} : { description: task.description }),
+    ...(task.awaited === undefined ? {} : { awaited: task.awaited }),
+    ...(task.kind === "subagent" && task.childThreadId !== undefined
+      ? { childThreadId: task.childThreadId }
+      : {}),
+  })),
+});
+
 export const listedThreadStatus = (shell: OrchestrationV2ThreadShell) =>
   shell.activityRunStatus ??
   (backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks ?? []) ? "waiting" : shell.status);
@@ -224,6 +237,7 @@ export function listItemFromShell(
     pullRequests: threadPullRequests(shell.pullRequests),
     ...threadSettlement(shell),
     ...threadSnooze(shell, nowMs),
+    ...threadBackgroundWork(shell),
     parentThreadId: shell.lineage.parentThreadId,
     relationshipToParent: shell.lineage.relationshipToParent,
     itemCount: shell.visibleItemCount,
@@ -280,6 +294,7 @@ export function threadDetail(
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
     ...threadSnooze(shell, nowMs),
+    ...threadBackgroundWork(shell),
     ...threadOrganization(projection.thread, latest, shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),

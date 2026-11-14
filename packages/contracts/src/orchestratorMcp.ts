@@ -553,6 +553,14 @@ export const OrchestratorMcpThreadPullRequest = Schema.Struct({
 });
 export type OrchestratorMcpThreadPullRequest = typeof OrchestratorMcpThreadPullRequest.Type;
 
+export const OrchestratorMcpThreadBackgroundTask = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  kind: Schema.Literals(["subagent", "command", "monitor", "background_task"]),
+  description: Schema.optional(TrimmedNonEmptyString),
+  awaited: Schema.optional(Schema.Literal(true)),
+  childThreadId: Schema.optional(ThreadId),
+});
+
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
@@ -573,6 +581,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -743,6 +753,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   ...OrchestratorMcpReconcileFields.thread,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

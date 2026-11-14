@@ -185,6 +185,9 @@ describe("goat_thread_list lineage", () => {
         result.threads.map((thread) => [thread.threadId, thread.status]),
         [[waiting.id, "waiting"]],
       );
+      assert.deepEqual(result.threads[0]?.pendingBackgroundTasks, [
+        { taskId: "sleep-600", kind: "command", awaited: true },
+      ]);
     }).pipe(
       Effect.provide(
         layerFor({
