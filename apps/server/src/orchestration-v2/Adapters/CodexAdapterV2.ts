@@ -1,3 +1,5 @@
+import { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
+export { CodexProviderCapabilitiesV2 } from "./CodexCapabilities.ts";
 import { makeCodexMcpConfigReader } from "./goatCodexMcpServers.ts";
 import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import * as Meta from "./CodexThreadMetadata.ts";
@@ -96,7 +98,6 @@ import type {
   ModelSelection,
   OrchestrationV2PlanArtifact,
   OrchestrationV2CommandAction,
-  OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderFailure,
   OrchestrationV2ProviderRetry,
   OrchestrationV2ProviderSession,
@@ -299,101 +300,6 @@ const CODEX_CLIENT_CAPABILITIES = {
   optOutNotificationMethods: ["turn/diff/updated"],
   extensions: { [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] } },
 } as const;
-
-export const CodexProviderCapabilitiesV2 = {
-  sessions: {
-    supportsMultipleProviderThreadsPerSession: true,
-    supportsModelSwitchInSession: true,
-    supportsProviderSwitchingViaHandoff: true,
-    supportsRuntimeModeSwitchInSession: true,
-    pendingRequestsSurviveRestart: false,
-  },
-  threads: {
-    canCreateEmptyThread: true,
-    canReadThreadSnapshot: true,
-    canRollbackThread: true,
-    canForkThread: true,
-    canForkFromTurn: true,
-    canForkFromSubagentThread: true,
-    exposesNativeThreadId: true,
-    forkHonorsTargetCwd: true,
-  },
-  turns: {
-    exposesNativeTurnId: true,
-    emitsTurnStarted: true,
-    emitsTurnCompleted: true,
-    supportsInterrupt: true,
-    supportsActiveSteering: true,
-    supportsSteeringByInterruptRestart: true,
-    supportsQueuedMessages: true,
-    terminalStatusQuality: "strong",
-  },
-  streaming: {
-    streamsAssistantText: true,
-    streamsReasoning: true,
-    streamsToolOutput: true,
-    streamsPlanText: true,
-    emitsMessageCompleted: true,
-  },
-  tools: {
-    exposesToolItemIds: true,
-    emitsToolStarted: true,
-    emitsToolCompleted: true,
-    emitsToolOutput: true,
-    supportsMcpTools: true,
-    supportsDynamicToolCallbacks: true,
-  },
-  approvals: {
-    supportsCommandApproval: true,
-    supportsFileReadApproval: true,
-    supportsFileChangeApproval: true,
-    supportsApplyPatchApproval: true,
-    approvalsHaveNativeRequestIds: true,
-    approvalCallbacksAreLiveOnly: true,
-    approvalsCanOriginateFromSubagents: true,
-  },
-  planning: {
-    emitsPlanUpdated: true,
-    emitsTodoList: true,
-    emitsProposedPlan: true,
-    supportsStructuredQuestions: true,
-    planDeltasHaveItemIds: true,
-  },
-  subagents: {
-    supportsSubagents: true,
-    exposesSubagentThreadIds: true,
-    emitsSubagentLifecycle: true,
-    canWaitForSubagents: true,
-    canCloseSubagents: true,
-    canForkSubagentThread: true,
-  },
-  context: {
-    acceptsSystemContext: true,
-    acceptsDeveloperContext: true,
-    acceptsSyntheticUserContext: true,
-    canGenerateSummaries: true,
-    canConsumeHandoffSummaries: true,
-    supportsDeltaHandoff: true,
-    supportsFullThreadHandoff: true,
-    maxRecommendedHandoffChars: null,
-  },
-  checkpointing: {
-    appCanCheckpointFilesystem: true,
-    supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: true,
-    providerRollbackReturnsSnapshot: true,
-    providerCanReadConversationSnapshot: true,
-  },
-  identity: {
-    nativeThreadIds: "strong",
-    nativeTurnIds: "strong",
-    nativeItemIds: "strong",
-    nativeRequestIds: "strong",
-  },
-  runtimePolicy: {
-    enforcement: "native",
-  },
-} satisfies OrchestrationV2ProviderCapabilities;
 
 function toProtocolError(
   detail: string,
@@ -4821,6 +4727,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(context.providerTurnId, state);
               return updated;
             });
+            yield* failStalledProviderRetry(context, state, payload.error.codexErrorInfo).pipe(
+              Effect.delay("10 minutes"),
+              Effect.forkIn(scope, { startImmediately: true }),
+            );
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CODEX_PROVIDER,
@@ -6250,12 +6160,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly completedAt: DateTime.Utc;
           readonly failureMessage?: string;
           readonly failureErrorInfo?: CodexErrorInfo;
+          readonly stalledRetry?: ActiveCodexProviderRetry;
+          readonly stalledRateLimited?: boolean;
         }): Effect.Effect<boolean> =>
           turnTerminalizationPermit.withPermits(1)(
             Effect.gen(function* () {
               const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
               if (current !== input.context) {
                 return false;
+              }
+              if (input.stalledRetry !== undefined) {
+                const retry = (yield* Ref.get(providerRetries)).get(input.context.providerTurnId);
+                if (
+                  retry !== input.stalledRetry ||
+                  (yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId)
+                )
+                  return false;
+                input.context.latestProviderFailure ??= {
+                  nativeMessage: retry.nativeMessage,
+                  nativeCode: retry.nativeCode,
+                  failure: {
+                    ...retry.failure,
+                    retryable: false,
+                    ...(input.stalledRateLimited ? { class: "usage_limit" as const } : {}),
+                  },
+                };
               }
               const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
               const heldRetry = nativeThreadId == null ? undefined : retryHolds.get(nativeThreadId);
@@ -6663,6 +6592,48 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return true;
             }),
           );
+        const failStalledProviderRetry = Effect.fn("CodexAdapterV2.failStalledProviderRetry")(
+          function* (
+            context: ActiveCodexTurnContext,
+            state: ActiveCodexProviderRetry,
+            errorInfo: CodexErrorInfo | null | undefined,
+          ) {
+            const detail =
+              typeof errorInfo === "object" && errorInfo !== null
+                ? Object.values(errorInfo)[0]
+                : undefined;
+            const rateLimited =
+              typeof detail === "object" &&
+              detail !== null &&
+              "httpStatusCode" in detail &&
+              detail.httpStatusCode === 429;
+            // Retain the original identity for the race check while applying its classified failure.
+            const finalized = yield* finalizeCodexTurn({
+              context,
+              nativeTurnId: context.nativeTurnId,
+              status: "failed",
+              completedAt: yield* DateTime.now,
+              stalledRetry: state,
+              stalledRateLimited: rateLimited,
+              failureErrorInfo: errorInfo ?? undefined,
+            });
+            if (!finalized) return;
+            const nativeThreadId = yield* getNativeThreadId(context.providerThread);
+            yield* client
+              .request("turn/interrupt", { threadId: nativeThreadId, turnId: context.nativeTurnId })
+              .pipe(
+                Effect.timeout("10 seconds"),
+                Effect.catch((cause) =>
+                  Effect.logWarning("orchestration-v2.codex-stalled-retry-interrupt-failed", {
+                    nativeThreadId,
+                    nativeTurnId: context.nativeTurnId,
+                    cause,
+                  }),
+                ),
+              );
+          },
+        );
+
         // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
