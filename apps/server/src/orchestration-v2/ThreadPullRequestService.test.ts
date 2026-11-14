@@ -570,6 +570,138 @@ describe("ThreadPullRequestServiceV2 reads", () => {
   );
 
   it.effect.each([
+    { state: "open", checkedOut: false },
+    { state: "merged", checkedOut: false },
+    { state: "closed", checkedOut: false },
+    { state: "merged", checkedOut: true },
+  ] as const)(
+    "associates a $state branch PR (checkedOut=$checkedOut) only with threads that predate its completion or saved it",
+    ({ state, checkedOut }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reference = {
+            projectId: ProjectId.make("project-1"),
+            repository: "acme/project",
+            number: 42,
+            url: "https://github.com/acme/project/pull/42",
+          };
+          const terminalAt = "2026-09-19T00:00:00.000Z";
+          const detected = {
+            number: 42,
+            url: reference.url,
+            title: "Previous staging work",
+            baseRef: "main",
+            headRef: "staging",
+            state,
+            updatedAt: terminalAt,
+            closedAt: state === "closed" ? terminalAt : null,
+            mergedAt: state === "merged" ? terminalAt : null,
+            repositoryKey: "github.com/acme/project",
+          };
+          const threads = [
+            { ...threadShell("older"), createdAt: DateTime.makeUnsafe("2026-09-18T00:00:00Z") },
+            { ...threadShell("same-time"), createdAt: DateTime.makeUnsafe(terminalAt) },
+            threadShell("new"),
+            { ...threadShell("saved"), branchPullRequest: reference },
+            { ...threadShell("explicit"), linkedPullRequest: reference },
+          ].map((thread) => ({ ...thread, branch: "staging" }));
+          const project: OrchestrationProjectShell = {
+            id: reference.projectId,
+            title: "Project",
+            workspaceRoot: "/workspace/project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          };
+          const activation = yield* Deferred.make<void>();
+          const sweepStarted = yield* Deferred.make<void>();
+          const commands: Array<OrchestrationV2ServerCommand> = [];
+          const dependencies = Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.never,
+              getPullRequestSnapshot: () =>
+                Deferred.succeed(sweepStarted, undefined).pipe(
+                  Effect.as({ snapshotSequence: 1, threads }),
+                ),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  return { sequence: 2, storedEvents: [] };
+                }),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+              getShell: () => Effect.succeedSome(project),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: () => Effect.succeed(detected),
+              checkedOutPullRequest: () => Effect.succeed(checkedOut),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({
+              summary: () =>
+                Effect.succeed({
+                  ...detected,
+                  ...reference,
+                  provider: SourceControlProviderKind.make("github"),
+                  baseBranch: detected.baseRef,
+                  headBranch: detected.headRef,
+                }),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () =>
+                Effect.succeed({
+                  canonicalKey: "github.com/acme/project",
+                  locator: {
+                    source: "git-remote" as const,
+                    remoteName: "origin",
+                    remoteUrl: "git@github.com:acme/project.git",
+                  },
+                  provider: SourceControlProviderKind.make("github"),
+                  owner: "acme",
+                  name: "project",
+                }),
+            }),
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+              shouldRunScopeWork: () => Effect.succeed(true),
+              shouldRunOpportunisticWork: Effect.succeed(true),
+            }),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              Crypto.Crypto,
+              Crypto.make({
+                randomBytes: (size) => new Uint8Array(size).fill(1),
+                digest: (_algorithm, data) => Effect.succeed(data),
+              }),
+            ),
+            FileSystem.layerNoop({}),
+            Path.layer,
+          );
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadPullRequestService.make;
+            yield* service.start();
+            yield* Deferred.succeed(activation, undefined);
+            yield* Deferred.await(sweepStarted);
+            yield* service.drain;
+          }).pipe(Effect.provide(dependencies));
+
+          expect(
+            commands.map((command) => {
+              if (command.type !== "thread.pull-request.sync") throw new Error(command.type);
+              expect(command).not.toHaveProperty("linkedPullRequest");
+              return [command.threadId, command.branchPullRequest];
+            }),
+          ).toEqual(
+            (state === "open" || checkedOut
+              ? ["older", "same-time", "new", "explicit"]
+              : ["older", "same-time"]
+            ).map((id) => [id, reference]),
+          );
+        }),
+      ),
+  );
+
+  it.effect.each([
     { repository: "fork/project", expected: "fork/project", previous: false },
     { repository: "upstream/project", expected: "upstream/project", previous: false },
     { repository: "other/project", expected: null, previous: false },

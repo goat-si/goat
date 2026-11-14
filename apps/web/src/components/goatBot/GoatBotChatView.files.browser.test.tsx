@@ -59,6 +59,7 @@ vi.mock("./useBotRoster", () => ({
     loaded: true,
     failed: false,
     turnsWaiting: [],
+    chips: new Map(),
     refresh: () => {},
   }),
 }));

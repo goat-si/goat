@@ -193,11 +193,11 @@ answering for 24 hours; if it answers again later, detach it to end its record.
 A failed try counts only while this hub's Pen answers its member list, so a
 stopped Pen does not remove its machines' links; a hub whose network is cut while
 Pen keeps running still counts them. A machine that answers but whose cleanup
-OpenCodex cannot confirm waits for you instead, once GOAT has repeated the revoke:
-the machine list says what to check before you force it. A force repeats an
-unfinished removal first, as OpenCodex asks; the list names
-`ocx link operations resolve --operation-id <id> --yes` only for an entry that
-stays unknown after that. If an unfinished removal by another revoke holds the
+OpenCodex cannot confirm waits for you instead: the machine list says what to
+check on it and names `ocx link operations resolve --operation-id <id> --yes` to
+run before you force it. A forced revoke that reads unknown goes the other way
+round, as OpenCodex asks: a force repeats it first, and the list names the
+resolve only if it stays unknown after that. If an unfinished removal by another revoke holds the
 link, the list says how to find it and names the
 `ocx link revoke --link-id <id> --force --yes` that finishes it on the hub; then
 detach it again. A revoke OpenCodex left running, or never recorded, goes again

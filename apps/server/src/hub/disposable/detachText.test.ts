@@ -102,3 +102,47 @@ it("an unproven detach names the planted ocx-child by the path a person can run 
   // Resolve refuses an open entry, so the next action does not send a person there for one.
   expect(shown?.nextAction).toContain("an open entry cannot be resolved");
 });
+
+it("a linked row whose retirement force stopped and whose host key changed names the person's Force its conflict row offers", () => {
+  const shown = detachMessage({
+    state: "linked",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 1,
+      operationId: "a.force.1",
+      force: true,
+      sends: 3,
+      stop: "revoke_unsettled",
+      outcome: "not_found",
+    },
+    health: { failures: 0, checkedAtMs: 0 },
+    linkKeyMoved: false,
+    inPen: true,
+    stop: "host_key_changed",
+  });
+  expect(shown?.message).toContain("another SSH host key");
+  expect(shown?.nextAction).toContain("forces the detach");
+});
+
+it("a purge that stays unknown tells a person to fix what stopped it before forcing", () => {
+  const shown = detachMessage({
+    state: "detaching",
+    name: "cc-1",
+    linkId: "lnk_1",
+    detach: {
+      step: "revoke",
+      attempt: 1,
+      operationId: "a.purge.1",
+      stop: "revoke_unsettled",
+      outcome: "unsettled",
+    },
+    health: undefined,
+    linkKeyMoved: false,
+    inPen: true,
+    stop: undefined,
+  });
+  expect(shown?.message).toContain("fixes what stopped it");
+  expect(shown?.nextAction).toContain("fixes what stopped it");
+});

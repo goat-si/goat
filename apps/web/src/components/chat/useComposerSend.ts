@@ -112,11 +112,13 @@ import {
 } from "@goat/shared/composerContextReferences";
 import {
   draftSendState,
+  notifySendBusy,
   type MultipleModelTarget,
   resolveMultipleModelTargets,
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { UnifiedSettings } from "@goat/contracts";
 import type { Dispatch } from "react";
@@ -153,7 +155,6 @@ import { sshThreadHandoffBlockReason } from "../../lib/sshWorktree";
 import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
-import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useSideChatStore } from "../sideChat/sideChatStore";
@@ -506,9 +507,7 @@ export function useComposerSend(input: ComposerSendInput) {
       },
     };
   };
-
   const showSshStartedNotOpened = sshStartedNotOpenedToast(makeSshThreadOpenPorts);
-
   const continueThreadOnSsh = async (
     selected: SavedSshWorktreeOption,
     instructions: string,
@@ -638,7 +637,6 @@ export function useComposerSend(input: ComposerSendInput) {
       forkCommand.run();
       return;
     }
-
     const sendCtx = composerRef.current?.getSendContext();
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       if (directAnnotation) notifyDirectAnnotationAttached(true);
@@ -653,16 +651,18 @@ export function useComposerSend(input: ComposerSendInput) {
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
-      (isSendBusy && !sendQueuesBehindSetup) ||
       isConnecting ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       readPendingEnvironmentChange() !== null ||
-      sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
-      notifyDirectAnnotationAttached(Boolean(directAnnotation));
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
+      return;
+    }
+    if ((isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
+      notifySendBusy(directAnnotation !== undefined);
       return;
     }
     if (needsLoadBalancing) {
@@ -836,7 +836,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (!sendCtx?.providerAvailable) {
-      notifyDirectAnnotationAttached(Boolean(directAnnotation));
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
