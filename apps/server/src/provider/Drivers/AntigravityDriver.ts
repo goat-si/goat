@@ -274,7 +274,9 @@ export const AntigravityDriver: ProviderDriver<
             new ProviderSetupError({
               instanceId,
               operation: "start",
-              detail: "Could not create an Antigravity runtime temp directory.",
+              detail:
+                (cause.reason._tag === "Busy" ? cause.reason.description : undefined) ??
+                "Could not create an Antigravity runtime temp directory.",
               cause,
             }),
         ),

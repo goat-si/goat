@@ -3,9 +3,12 @@ import * as NodeFSP from "node:fs/promises";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+/** Live runtimes whose directories the sweep must skip; past this a new runtime is refused. */
+export const MAX_LIVE_ANTIGRAVITY_RUNTIMES = 256;
 const runtimeTempGate = Semaphore.makeUnsafe(1);
 const liveRuntimeDirectories = new Set<string>();
 
@@ -16,6 +19,14 @@ export const acquireAntigravityRuntimeTemp = Effect.fn("acquireAntigravityRuntim
   return yield* Effect.acquireRelease(
     runtimeTempGate.withPermits(1)(
       Effect.gen(function* () {
+        if (liveRuntimeDirectories.size >= MAX_LIVE_ANTIGRAVITY_RUNTIMES) {
+          return yield* PlatformError.systemError({
+            _tag: "Busy",
+            module: "AntigravitySessionFiles",
+            method: "acquireAntigravityRuntimeTemp",
+            description: "Too many Antigravity sessions are running. Close one and try again.",
+          });
+        }
         yield* fs.makeDirectory(root, { recursive: true });
         const directory = yield* fs.makeTempDirectory({ directory: root, prefix: "run-" });
         liveRuntimeDirectories.add(directory);
