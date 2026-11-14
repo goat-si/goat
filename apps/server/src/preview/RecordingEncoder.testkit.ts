@@ -77,3 +77,17 @@ export function makeEncoderPage<T extends object>(
     ),
   };
 }
+
+export const mockFinalRecordingFrame = (
+  cdp: ReturnType<typeof import("./ServerBrowserTestFixtures.ts").makeSession>,
+  refreshFails: boolean,
+) => {
+  const send = cdp.send.getMockImplementation();
+  if (!send) throw new Error("Missing CDP implementation");
+  cdp.send.mockImplementation((method, input) => {
+    if (method !== "Page.captureScreenshot") return send(method, input);
+    return refreshFails
+      ? Promise.reject(new Error("Page cannot capture a frame"))
+      : Promise.resolve({ data: Buffer.from("final frame").toString("base64") });
+  });
+};

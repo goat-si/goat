@@ -605,7 +605,7 @@ const make = Effect.gen(function* () {
       if (desktop) opened.push(desktop.close);
       if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
       // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
-      if (adopted === undefined && desktop === null && desktopChannel.available) {
+      if (adopted === undefined && desktop === null) {
         await runPromise(
           manager
             .markServerRendered({

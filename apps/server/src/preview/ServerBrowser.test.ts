@@ -2,7 +2,7 @@ import { assertBusyCopy, assertClipboardAccess } from "./BusyCopyAssertions.test
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
-import { makeEncoderPage } from "./RecordingEncoder.testkit.ts";
+import { makeEncoderPage, mockFinalRecordingFrame } from "./RecordingEncoder.testkit.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -196,6 +196,7 @@ let contextFailure: Error | null = null;
 let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
+let desktopAvailable = true;
 let desktopPageUrl = "about:blank";
 /** Replaces the answer to the desktop page's size reads. */
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
@@ -241,7 +242,9 @@ const dependencies = Layer.mergeAll(
   }),
   Layer.succeed(PreviewBrowser.PreviewBrowser, unusedPreviewBrowser),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
-    available: true,
+    get available() {
+      return desktopAvailable;
+    },
     awaitAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     detached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
       Effect.acquireRelease(
@@ -335,6 +338,7 @@ beforeEach(() => {
   mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
+  desktopAvailable = true;
   desktopPageUrl = "about:blank";
   desktopSizeAnswer = null;
   desktopDetachReady = Promise.withResolvers<void>();
@@ -2182,6 +2186,7 @@ it.effect("a stalled desktop viewer still gets its size, control and reconnect",
   Effect.scoped(
     Effect.gen(function* () {
       const { tabId, viewer, context, resize } = yield* openDesktopViewer;
+      expect(context.page.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
       const output =
         viewer.output as unknown as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>;
       // Ready once the sizes measured on attach and on a first resize both arrived.
@@ -2647,14 +2652,7 @@ it.live.each([
         const { broker, tabId } = yield* ready;
         const fs = yield* FileSystem.FileSystem;
         yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
-        const cdp = contexts[0]!.sessions[0]!;
-        const send = cdp.send.getMockImplementation()!;
-        cdp.send.mockImplementation((method, input) => {
-          if (method !== "Page.captureScreenshot") return send(method, input);
-          return refreshFails
-            ? Promise.reject(new Error("Page cannot capture a frame"))
-            : Promise.resolve({ data: Buffer.from("final frame").toString("base64") });
-        });
+        mockFinalRecordingFrame(contexts[0]!.sessions[0]!, refreshFails);
         const stop = broker.invoke<{ path: string }>({
           scope,
           tabId,
@@ -2673,11 +2671,18 @@ it.live.each([
     ).pipe(Effect.provide(layer)),
 );
 
-it.effect("a desktop tab on system appearance clears Playwright's emulation", () =>
+it.effect("server tabs are marked server-rendered without a desktop channel", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { context } = yield* openDesktopViewer;
-      expect(context.page.emulateMedia).toHaveBeenCalledWith({ colorScheme: null });
+      desktopAvailable = false;
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const channel = yield* DesktopChannel.DesktopBrowserChannel;
+      expect(channel.available).toBe(false);
+      const manager = yield* Manager.PreviewManager;
+      const { tabId } = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      yield* browser.attachViewer(viewerInput(tabId, false));
+      const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+      expect(sessions.find((session) => session.tabId === tabId)?.serverRendered).toBe(true);
     }),
   ).pipe(Effect.provide(layer)),
 );
