@@ -185,6 +185,49 @@ describe("ssh command", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
+  it.effect.each(["pairing-secret\\", "pairing-secret\\u12", "pairing-secret"])(
+    "redacts incomplete credentials on failure and timeout: %s",
+    (value) =>
+      Effect.gen(function* () {
+        const stdout = `{"credential":"${value}`;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const failureSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed(makeFailedProcess({ stdout })),
+        );
+        const failure = yield* Effect.result(
+          runSshCommand(target, {}).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failureSpawner),
+          ),
+        );
+        assert.isTrue(Result.isFailure(failure));
+        if (Result.isFailure(failure))
+          assert.notInclude(failure.failure.stdout ?? "", "pairing-secret");
+
+        const read = yield* Deferred.make<void>();
+        const timeoutSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed({
+            ...makeNeverFinishingProcess(),
+            stdout: Stream.make(encoder.encode(stdout)).pipe(
+              Stream.ensuring(Deferred.succeed(read, undefined)),
+            ),
+          }),
+        );
+        const fiber = yield* Effect.forkChild(
+          Effect.result(
+            runSshCommand(target, { timeoutMs: 1 }).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, timeoutSpawner),
+            ),
+          ),
+        );
+        yield* Deferred.await(read);
+        yield* TestClock.adjust(Duration.millis(1));
+        const timeout = yield* Fiber.join(fiber);
+        assert.isTrue(Result.isFailure(timeout));
+        if (Result.isFailure(timeout))
+          assert.notInclude(timeout.failure.stdout ?? "", "pairing-secret");
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
+  );
+
   it.effect.each([
     ['Authenticated to fixture using "publickey".\n', 1],
     ["debug1: mux_client_request_session: master session id: 2\n", 1],
