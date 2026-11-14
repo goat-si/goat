@@ -1,4 +1,8 @@
-import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
+import {
+  pickGoatBotEnvironment,
+  resolveGoatBotHomeSelection,
+  type GoatBotEnvironmentInput,
+} from "@goat/client-runtime/goatBot";
 import type { ChannelBotRef, GoatBotHomeClaim } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 
@@ -70,6 +74,20 @@ export function pickMobileGoatBotEnvironment(
           left.environmentId.localeCompare(right.environmentId),
       )[0] ?? null
   );
+}
+
+/**
+ * The computer whose GOAT Bot this device talks to, lists in the roster and opens Home for: with
+ * Home claims, the claimed Home (or the candidate while unclaimed), as the chat sends there;
+ * otherwise the saved bot or the first connected bot computer.
+ */
+export function pickMobileGoatBotHomeEnvironment(
+  environments: ReadonlyArray<GoatBotEnvironmentInput>,
+  botRef: ChannelBotRef | null,
+): GoatBotEnvironmentInput | null {
+  return resolveGoatBotHomeSelection(environments, botRef).supported
+    ? pickGoatBotEnvironment(environments, botRef)
+    : pickMobileGoatBotEnvironment(environments, botRef);
 }
 
 /** Child detail pages still belong to the workspace stack above Home. */

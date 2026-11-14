@@ -3,14 +3,14 @@ import { useEffect } from "react";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 
 /** The bot list: bots only. The work each bot started is listed in that bot's home sheet. */
 export function useMobileBotRoster() {
   const home = useMobileGoatBotHomeMode();
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities =
@@ -63,7 +63,7 @@ export function useMobileBotRoster() {
  */
 export function useMobileGoatBotMember(botId: string | undefined) {
   const home = useMobileGoatBotHomeMode();
-  const selected = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const selected = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = selected?.environmentId ?? null;
   const { presentationById } = useEnvironments();
   const capabilities =

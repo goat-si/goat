@@ -923,7 +923,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     };
   const accountStatus = managedAuth
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
-    : accountProbeStatus(snapshot);
+    : accountProbeStatus(
+        snapshot,
+        codexSettings.homePath
+          ? expandHomePath(codexSettings.homePath, yield* HostProcess.HomeDirectory)
+          : undefined,
+      );
   const usageLimits =
     snapshot.account.account?.type === "apiKey"
       ? makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })
