@@ -1,5 +1,6 @@
 import {
   type HubMachineDetachInput,
+  type HubMachineReleaseInput,
   HubMachinesError,
   type HubMachineStatus,
 } from "@goat/contracts";
@@ -55,6 +56,7 @@ const READ_TIMEOUT_MS = 30_000;
 const DETACH_LIMIT = 100;
 const DETACH_CONCURRENCY = 4;
 const encodeConflicts = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const RELEASABLE = new Set(["unknown", "paused"]);
 /** Answers that leave the revoke's own id to be sent again, as OpenCodex asks. */
 const REPEAT = new Set(["open", "unsettled", "not_found", "unreadable"]);
 const DETACHABLE = new Set([
@@ -605,11 +607,91 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
     );
   });
 
-  return { detach, pass, advance } satisfies {
+  /**
+   * A person frees the slot of an attach whose invite Pen lost or used without a saved admit
+   * (state unknown, or paused with no admit). The machine may have joined anyway; the text says so.
+   */
+  const release = Effect.fn("DisposableDetach.release")(function* (
+    caller: AttachCaller,
+    principal: string,
+    input: HubMachineReleaseInput,
+  ) {
+    if (caller.provisioner.kind !== "person")
+      return yield* fail(
+        "person_required",
+        "Only a person releases an attach whose outcome Pen cannot tell.",
+      );
+    const requestKey = digest(principal + "\n" + input.clientRequestId);
+    return yield* exclusive(
+      Effect.gen(function* () {
+        const row = yield* read(input.attachId).pipe(Effect.mapError(storageFailed));
+        if (row === undefined) return yield* fail("not_found", "No attach has that id.");
+        const [earlier] = yield* sql<{ readonly attach_id: string }>`SELECT attach_id
+          FROM disposable_machine_requests WHERE request_key = ${requestKey}`.pipe(
+          Effect.mapError(storageFailed),
+        );
+        if (earlier !== undefined) {
+          if (earlier.attach_id !== row.attach_id)
+            return yield* fail(
+              "invalid_request",
+              "This clientRequestId was used for another attach.",
+            );
+          return status(row);
+        }
+        if (row.final_at !== null || row.pen_admitted_at !== null || !RELEASABLE.has(row.state))
+          return yield* fail(
+            "conflict",
+            "Only an attach Pen admitted nobody for, whose outcome it cannot tell, can be released.",
+          );
+        const enroll = decodeEnroll(row.enroll_json);
+        const now = yield* nowIso;
+        const saved = yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* sql`INSERT INTO disposable_machine_requests ${sql.insert({
+                request_key: requestKey,
+                attach_id: row.attach_id,
+                outcome: "ok",
+                detail: null,
+                created_at: now,
+                updated_at: now,
+              })}`;
+              return yield* sql<Row>`UPDATE disposable_machines SET ${sql.update({
+                state: "failed",
+                step: "released",
+                final_at: now,
+                fence: row.fence + 1,
+                enroll_json: encodeEnroll({
+                  ...enroll,
+                  detach: { step: "done", attempt: 0, outcome: "released" },
+                }),
+                state_since: now,
+                updated_at: now,
+              })} WHERE attach_id = ${row.attach_id} AND fence = ${row.fence} RETURNING *`;
+            }),
+          )
+          .pipe(Effect.mapError(storageFailed));
+        const updated = saved[0];
+        if (updated === undefined)
+          return yield* fail("conflict", "The record changed; read it and release again.");
+        yield* audit(row.attach_id, "hub.machine_release", "released").pipe(
+          Effect.mapError(storageFailed),
+        );
+        return status(updated);
+      }),
+    );
+  });
+
+  return { detach, release, pass, advance } satisfies {
     readonly detach: (
       caller: AttachCaller,
       principal: string,
       input: HubMachineDetachInput,
+    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
+    readonly release: (
+      caller: AttachCaller,
+      principal: string,
+      input: HubMachineReleaseInput,
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly pass: Effect.Effect<void, unknown>;
     readonly advance: (

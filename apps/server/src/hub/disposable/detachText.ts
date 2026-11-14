@@ -144,6 +144,15 @@ export const detachMessage = (
           LEAVE,
         nextAction: null,
       };
+    case "failed":
+      return detach?.outcome === "released"
+        ? {
+            message:
+              name +
+              "'s attach was released by a person and its slot is free. Pen lost its invite or saved no admit, so GOAT cannot tell whether the machine joined; if it did, it stays a Pen member until a person removes it with pen revoke.",
+            nextAction: null,
+          }
+        : undefined;
     default:
       return undefined;
   }

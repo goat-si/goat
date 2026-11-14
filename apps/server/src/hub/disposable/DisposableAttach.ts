@@ -6,6 +6,7 @@ import {
   type HubMachineDetachInput,
   type HubMachineList,
   type HubMachineListInput,
+  type HubMachineReleaseInput,
   type HubMachineReissueInput,
   HubMachinesError,
   type HubMachineStatus,
@@ -102,6 +103,12 @@ export class DisposableAttach extends Context.Service<
       caller: AttachCaller,
       principal: string,
       input: HubMachineDetachInput,
+    ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
+    /** A person frees the slot of an attach Pen cannot account for (DisposableDetach). */
+    readonly release: (
+      caller: AttachCaller,
+      principal: string,
+      input: HubMachineReleaseInput,
     ) => Effect.Effect<HubMachineStatus, HubMachinesError>;
     readonly list: (input: HubMachineListInput) => Effect.Effect<HubMachineList, HubMachinesError>;
     /** The stored record's Pen node id, read without asking Pen; for a caller's host check. */
@@ -781,6 +788,7 @@ export const make = Effect.gen(function* () {
     attach,
     reissue,
     detach: detacher.detach,
+    release: detacher.release,
     list,
     nodeOf,
     reconcile,

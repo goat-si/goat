@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Attach from "./DisposableAttach.ts";
-import { listed, rows, world } from "./DisposableAttach.testkit.ts";
+import { attach, listed, reconcile, rows, world } from "./DisposableAttach.testkit.ts";
 import { fakeDetachHome } from "./DisposableDetach.testkit.ts";
 import { enroll, joined, withIdentity } from "./DisposableEnroll.joined.testkit.ts";
 
@@ -11,7 +11,7 @@ const HOUR = 60 * 60 * 1000;
 const THREAD: Attach.AttachCaller = {
   provisioner: { kind: "thread", threadId: "thread-provisioner" },
 };
-const PERSON: Attach.AttachCaller = { provisioner: { kind: "person" } };
+const PERSON: Attach.AttachCaller = { provisioner: { kind: "person", sessionId: "s-1" } };
 const detachPass = Effect.flatMap(Attach.DisposableAttach, (service) => service.detachPass);
 const detach = (caller: Attach.AttachCaller, attachId: string, request: string, force?: boolean) =>
   Effect.flatMap(Attach.DisposableAttach, (service) =>
@@ -286,6 +286,34 @@ it.effect(
         yield* detachPass;
         expect(ocx.sent).toEqual([attachId + ".purge.1"]);
         expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
+
+const release = (caller: Attach.AttachCaller, attachId: string, request: string) =>
+  Effect.flatMap(Attach.DisposableAttach, (service) =>
+    service.release(caller, caller.provisioner.kind + ":x", { attachId, clientRequestId: request }),
+  );
+
+it.effect(
+  "an invite used without a saved admit holds its slot until a person releases it, and the text names pen revoke",
+  () =>
+    world((pen, _home, _grant, _host) =>
+      Effect.gen(function* () {
+        const first = yield* attach(1);
+        pen.control.join(first.attachId + ".1", false);
+        yield* reconcile;
+        expect((yield* listed(first.attachId))?.state).toBe("unknown");
+        yield* attach(2);
+        // The cap is 2 and the unknown record still holds its slot.
+        expect((yield* attach(3).pipe(Effect.flip)).reason).toBe("cap_reached");
+        expect((yield* release(THREAD, first.attachId, "r-1").pipe(Effect.flip)).reason).toBe(
+          "person_required",
+        );
+        const released = yield* release(PERSON, first.attachId, "r-2");
+        expect(released.state).toBe("failed");
+        expect(released.message).toContain("pen revoke");
+        expect((yield* attach(3)).state).toBe("invited");
       }),
     ),
 );
