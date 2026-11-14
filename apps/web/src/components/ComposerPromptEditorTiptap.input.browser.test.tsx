@@ -19,6 +19,8 @@ import { act, fakeTimers, render } from "../../test/render";
 
 import { flatToMarkdown, pmToFlat, serializeEditorDoc } from "~/composer-rich-text-doc";
 import { isMacPlatform } from "~/lib/utils";
+import { registerCommands } from "~/shortcuts/dispatcher";
+import { editorIn, mountEditor } from "./ComposerPromptEditorTiptap.input.test-support";
 import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
@@ -30,70 +32,6 @@ const babysit: ServerProviderSkill = {
   path: "/skills/babysit/SKILL.md",
   enabled: true,
 };
-
-function Composer({
-  value,
-  richTextEnabled,
-  skills,
-  onChange,
-}: {
-  value: string;
-  richTextEnabled: boolean;
-  skills: ReadonlyArray<ServerProviderSkill>;
-  onChange?: ComposerPromptEditorProps["onChange"] | undefined;
-}) {
-  const [prompt, setPrompt] = useState({ value, cursor: value.length });
-  return (
-    <ComposerPromptEditor
-      editorRef={createRef<ComposerPromptEditorHandle>()}
-      value={prompt.value}
-      cursor={prompt.cursor}
-      richTextEnabled={richTextEnabled}
-      contextRecords={new Map()}
-      skills={skills}
-      disabled={false}
-      placeholder=""
-      onChange={(...args) => {
-        setPrompt({ value: args[0], cursor: args[1] });
-        onChange?.(...args);
-      }}
-      onPaste={() => {}}
-    />
-  );
-}
-
-function composer(
-  value: string,
-  richTextEnabled = true,
-  skills: ReadonlyArray<ServerProviderSkill> = [],
-  onChange?: ComposerPromptEditorProps["onChange"],
-) {
-  return (
-    <Composer value={value} richTextEnabled={richTextEnabled} skills={skills} onChange={onChange} />
-  );
-}
-
-function editorIn(container: HTMLElement) {
-  const element = container.querySelector<HTMLElement & { editor: Editor }>(".tiptap");
-  if (!element) throw new Error("Composer did not mount");
-  return element.editor;
-}
-
-async function mountEditor(...props: Parameters<typeof composer>) {
-  await using stack = new AsyncDisposableStack();
-  const screen = stack.use(await render(composer(...props)));
-  const editor = editorIn(screen.container);
-  const environment = stack.move();
-  return Object.assign(screen, {
-    [Symbol.asyncDispose]: () => environment.disposeAsync(),
-    editor,
-    /** Rerenders the same composer with new props, as a parent would. */
-    update: async (...next: Parameters<typeof composer>) => {
-      await screen.rerender(composer(...next));
-      return editorIn(screen.container);
-    },
-  });
-}
 
 async function replaceDomText(editor: Editor, text: string, isComposing = false) {
   await act(async () => {
@@ -257,6 +195,55 @@ it.each([
     // Whether the selection spans shown markers or not, Mod+B removes the bold.
     await userEvent.keyboard(modB);
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(value));
+  },
+);
+
+it.each([
+  ["e", false, false],
+  ["i", false, false],
+  ["e", true, false],
+  ["e", false, true],
+])(
+  "leaves Mod+%s to an app command bound to it instead of formatting (composer command: %s, declined capture command: %s)",
+  async (key, composerClaimsKey, declinedCapture) => {
+    const openUsage = vi.fn((event: KeyboardEvent) => {
+      if (declinedCapture) return false;
+      event.preventDefault();
+    });
+    using _commands = {
+      [Symbol.dispose]: registerCommands(
+        { "usage.open": openUsage },
+        {
+          keybindings: () => [
+            {
+              command: "usage.open",
+              shortcut: {
+                key,
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+            },
+          ],
+          capture: declinedCapture,
+        },
+      ),
+    };
+    const composerCommand = vi.fn(() => composerClaimsKey);
+    await using screen = await mountEditor("word", true, [], undefined, composerCommand);
+    const { editor } = screen;
+    await act(async () => {
+      editor.commands.focus();
+      editor.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor.view.dom));
+    const modifier = isMacPlatform(navigator.platform) ? "Meta" : "Control";
+    await userEvent.keyboard(`{${modifier}>}${key}{/${modifier}}`);
+    expect(composerCommand).toHaveBeenCalled();
+    expect(openUsage).toHaveBeenCalledTimes(composerClaimsKey ? 0 : 1);
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(declinedCapture ? "`word`" : "word");
   },
 );
 
