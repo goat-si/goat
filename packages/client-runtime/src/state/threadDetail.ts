@@ -402,7 +402,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     const thread = key.slice(0, separator);
     const itemId = key.slice(separator + 1);
     return Atom.make((get) => {
-      // Streaming rows are usually newest; ids are unique, as the reducer's upsert assumes.
+      // Streamed replies land on the newest rows, so search from the end.
       const item = get(visibleTurnItemsAtomFamily(thread)).findLast(
         (visibleItem) => visibleItem.item.id === itemId,
       )?.item;

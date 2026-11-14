@@ -519,7 +519,7 @@ describe("assistantMessageTextAtom", () => {
     expect(missingText()).toBeNull();
   });
 
-  it("returns the newest row's text when a fork's inherited row shares the streaming row's id", () => {
+  it("returns the newest row's text if two visible rows ever share an item id", () => {
     const shared = TurnItemId.make("shared");
     const inherited: OrchestrationV2TurnItem = {
       ...assistant,
