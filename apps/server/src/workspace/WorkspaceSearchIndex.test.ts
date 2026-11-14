@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   FileFinder,
@@ -112,6 +113,31 @@ it.effect("fetches past a first page of Git-ignored results", () =>
       expect(result).toEqual({ entries: [{ kind: "file", path: "src/a.ts" }], truncated: false });
     }),
   ).pipe(Effect.provide(testLayer)),
+);
+
+// A backslash is a file name character on Linux and macOS, so only Windows may treat it as a separator.
+it.effect("keeps a backslash in a POSIX folder name as part of the search result path", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const items = [fileItem("dir\\one/report.txt")];
+      const finder = {
+        destroy: vi.fn(),
+        waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
+        fileSearch: vi.fn(() => ({
+          ok: true as const,
+          value: { items, scores: [], totalMatched: 1, totalFiles: 1 },
+        })),
+      } as unknown as FileFinder;
+      vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+
+      const searchIndex = yield* WorkspaceSearchIndex.make(
+        yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped(),
+      );
+      const result = yield* searchIndex.search("report", 50, "file");
+
+      expect(result.entries).toEqual([{ kind: "file", path: "dir\\one/report.txt" }]);
+    }),
+  ).pipe(Effect.provide(testLayer), Effect.provideService(HostProcess.Platform, "linux")),
 );
 
 it.effect("continues whole-word searches after a filtered grep page", () =>
