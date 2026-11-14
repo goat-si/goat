@@ -1,3 +1,6 @@
+import { formatDuration } from "./usageDuration.ts";
+export { formatDuration } from "./usageDuration.ts";
+export { resetCreditChoices, type ResetCreditChoice } from "./resetCreditChoices.ts";
 import {
   type EnvironmentId,
   type UsageLimitsReport,
@@ -18,8 +21,6 @@ import * as DateTime from "effect/DateTime";
 import { accountRefOfSourceId, quotaPoolAccountName } from "./quotaAccountName.ts";
 
 const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
 export const CHATGPT_USAGE_LIMIT_CODE = "subscription_sharing_usage_limit_exceeded";
@@ -726,16 +727,6 @@ function paceOfShares(usedPercent: number, elapsed: number): LimitPace {
   if (gap > 5) return "ahead";
   if (gap < -5) return "under";
   return "on";
-}
-
-export function formatDuration(ms: number): string {
-  const remaining = Math.max(0, ms);
-  const days = Math.floor(remaining / DAY);
-  const hours = Math.floor((remaining % DAY) / HOUR);
-  const minutes = Math.floor((remaining % HOUR) / MINUTE);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
 }
 
 export function formatResetsIn(window: ServerProviderUsageWindow, now: number): string | null {
