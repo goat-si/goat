@@ -3574,9 +3574,7 @@ const make = Effect.gen(function* () {
           : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const filtered = projectThreads
-        .filter(
-          (thread) => statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),
-        )
+        .filter((thread) => statuses === null || statuses.has(View.listedThreadStatus(thread)))
         .filter(
           (thread) =>
             input.settled === undefined || View.threadSettlement(thread).settled === input.settled,

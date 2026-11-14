@@ -147,6 +147,28 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("lists a thread awaiting background work as waiting", () => {
+    const waiting = finished(ThreadId.make("thread:awaiting"), {
+      activityRunStatus: null,
+      pendingBackgroundTasks: [{ taskId: "sleep-600", kind: "command", awaited: true }],
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, { projectId, statuses: ["waiting"] });
+      assert.deepEqual(
+        result.threads.map((thread) => [thread.threadId, thread.status]),
+        [[waiting.id, "waiting"]],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([waiting]),
+          listProjectThreads: () => Effect.succeed([waiting]),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   // The caller launched a, b (in another project) and d, and forked c; b launched a thread that asks.
   const a = ThreadId.make("thread:lazy-a");
   const b = ThreadId.make("thread:lazy-b");

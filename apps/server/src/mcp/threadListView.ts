@@ -16,6 +16,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -196,6 +197,10 @@ function threadPullRequests(
 
 type LinkScope = Pick<McpInvocationScope, "environmentId" | "client">;
 
+export const listedThreadStatus = (shell: OrchestrationV2ThreadShell) =>
+  shell.activityRunStatus ??
+  (backgroundWorkHoldsCompletion(shell.pendingBackgroundTasks ?? []) ? "waiting" : shell.status);
+
 export function listItemFromShell(
   scope: LinkScope,
   shell: OrchestrationV2ThreadShell,
@@ -209,7 +214,7 @@ export function listItemFromShell(
     link: threadLinkFor(scope, shell.id, shell.title),
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
-    status: shell.activityRunStatus ?? shell.status,
+    status: listedThreadStatus(shell),
     latestRunId: shell.latestRunId,
     providerInstanceId: shell.modelSelection.instanceId,
     model: shell.modelSelection.model,
