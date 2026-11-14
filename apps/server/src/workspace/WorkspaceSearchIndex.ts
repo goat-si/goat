@@ -28,6 +28,7 @@ import { isProjectFaviconPath } from "@goat/shared/projectFavicon";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { isNonRepositoryGitStderr } from "../vcs/gitNonRepository.ts";
 
 // fff-node's native library stays external; single-executables require disk packages instead of importing them.
 const requireForFff = NodeModule.createRequire(import.meta.url);
@@ -320,14 +321,21 @@ const listGitIgnoredPaths = Effect.fn("WorkspaceSearchIndex.listGitIgnoredPaths"
     })
     .pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Could not list Git ignored paths; continuing without them.", cause).pipe(
-          Effect.as(null),
-        ),
+        Effect.logWarning(
+          "Could not list Git ignored paths; continuing without them.",
+          { cwd },
+          cause,
+        ).pipe(Effect.as(null)),
       ),
     );
   if (result === null) return new Set<string>();
   if (result.exitCode !== 0 || result.stdoutTruncated || result.stderrTruncated) {
-    yield* Effect.logWarning("Could not list Git ignored paths; continuing without them.");
+    if (result.exitCode === 0 || !isNonRepositoryGitStderr(result.stderr)) {
+      yield* Effect.logWarning("Could not list Git ignored paths; continuing without them.", {
+        cwd,
+        exitCode: result.exitCode,
+      });
+    }
     return new Set<string>();
   }
   return new Set(

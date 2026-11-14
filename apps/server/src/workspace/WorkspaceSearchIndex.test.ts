@@ -11,6 +11,7 @@ import { afterEach, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
 
@@ -315,6 +316,42 @@ it.effect("searches a non-repository independently of the inherited locale", () 
     }),
   ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect.each([
+  ["non-repository", "fatal: not a git repository (or any of the parent directories): .git", false],
+  ["dubious ownership", "fatal: detected dubious ownership in repository", true],
+] as const)("logs ignore enumeration failures for %s", ([_name, stderr, shouldWarn]) => {
+  const messages: unknown[] = [];
+  const logger = Logger.make<unknown, void>(({ message }) => messages.push(message));
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      const actual = yield* VcsProcess.VcsProcess;
+      const failing = VcsProcess.VcsProcess.of({
+        run: (input) =>
+          input.args.includes("ls-files")
+            ? Effect.succeed({
+                exitCode: 128 as VcsProcess.VcsProcessOutput["exitCode"],
+                stdout: "",
+                stderr,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              })
+            : actual.run(input),
+      });
+      yield* WorkspaceSearchIndex.make(cwd).pipe(
+        Effect.provideService(VcsProcess.VcsProcess, failing),
+      );
+      if (shouldWarn) {
+        expect(messages).toEqual([
+          ["Could not list Git ignored paths; continuing without them.", { cwd, exitCode: 128 }],
+        ]);
+      } else {
+        expect(messages).toEqual([]);
+      }
+    }),
+  ).pipe(Effect.provide(Layer.merge(testLayer, Logger.layer([logger]))));
+});
 
 it.effect.each(["spawn", "non-zero", "truncated"] as const)(
   "searches when Git ignore enumeration fails: %s",
