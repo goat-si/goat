@@ -6,7 +6,6 @@ import * as Queue from "effect/Queue";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import { ChannelChildWork } from "./channelChildWork.ts";
 import {
-  BotThreadRow,
   BotWorkResult,
   ChannelListBotThreadsInput,
   ChannelListBotThreadsResult,
@@ -14,6 +13,16 @@ import {
   ChannelSearchBotTasksInput,
 } from "./channelGateway.ts";
 import { BotId } from "./botProfile.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ChannelTaskId } from "./channelCommon.ts";
+import { ChannelTaskStatus } from "./channelLedger.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 
 const decodeRows = Schema.decodeUnknownSync(ChannelListBotThreadsResult);
@@ -40,14 +49,38 @@ const taskRow = {
   unread: false,
   mainMessagesSinceQuiet: 0,
 };
-const withoutPullRequests = <F extends object>(fields: F) => {
-  const {
-    pullRequests: _pullRequests,
-    pullRequestsOmitted: _omitted,
-    ...rest
-  } = fields as F & { pullRequests?: unknown; pullRequestsOmitted?: unknown };
-  return rest as Omit<F, "pullRequests" | "pullRequestsOmitted">;
+// The task row and the lookup's row as clients shipped before pull requests decode them.
+const shippedRowFields = {
+  kind: Schema.Literal("task"),
+  view: Schema.Struct({
+    taskId: ChannelTaskId,
+    pinnedAt: Schema.NullOr(IsoDateTime),
+    doneAt: Schema.NullOr(IsoDateTime),
+    readThrough: Schema.NullOr(IsoDateTime),
+  }),
+  lastActivityAt: IsoDateTime,
+  unread: Schema.Boolean,
+  mainMessagesSinceQuiet: NonNegativeInt,
+  worker: Schema.optional(Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId })),
 };
+const shippedTaskFields = {
+  taskId: ChannelTaskId,
+  title: TrimmedNonEmptyString,
+  status: ChannelTaskStatus,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.optional(IsoDateTime),
+  generation: Schema.optional(PositiveInt),
+};
+const ShippedTaskRow = Schema.Struct({
+  ...shippedRowFields,
+  task: Schema.Struct(shippedTaskFields),
+});
+const ShippedLookupRow = Schema.Struct({
+  ...shippedRowFields,
+  task: Schema.Struct({ ...shippedTaskFields, titleTruncated: Schema.optionalKey(Schema.Boolean) }),
+});
+const decodeShippedTaskRow = Schema.decodeUnknownSync(ShippedTaskRow);
+const decodeShippedLookupRow = Schema.decodeUnknownSync(ShippedLookupRow);
 
 describe("bot thread contracts", () => {
   it.effect("rejects a NUL query at the RPC boundary the same way as an invalid limit", () =>
@@ -210,17 +243,8 @@ describe("bot thread contracts", () => {
   it("task rows carry their pull requests, which older clients ignore", () => {
     const row = { ...taskRow, pullRequests, pullRequestsOmitted: 2 };
     expect(decodeRows({ rows: [row], mainMessageCount: 0 }).rows).toEqual([row]);
-    // Today's row union and lookup row, as clients before the keys decode them.
-    const [taskArm, codingArm] = BotThreadRow.members;
-    const decodeRowsBefore = Schema.decodeUnknownSync(
-      Schema.Array(Schema.Union([taskArm.mapFields(withoutPullRequests), codingArm])),
-    );
-    expect(decodeRowsBefore([row])).toEqual([taskRow]);
-    const knownArm = BotWorkResult.fields.task.members[0];
-    const decodeLookupRowBefore = Schema.decodeUnknownSync(
-      knownArm.fields.row.mapFields(withoutPullRequests),
-    );
-    expect(decodeLookupRowBefore(row)).toEqual(taskRow);
+    expect(decodeShippedTaskRow(row)).toEqual(taskRow);
+    expect(decodeShippedLookupRow(row)).toEqual(taskRow);
   });
   it("bounds a row's pull requests at five", () => {
     const six = Array.from({ length: 6 }, (_, index) => ({

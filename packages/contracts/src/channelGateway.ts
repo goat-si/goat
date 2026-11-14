@@ -641,8 +641,9 @@ export const ChannelListBotThreadsResult = Schema.Struct({
       /** The walk cannot go on: the next task's stored id cannot be named in a cursor. */
       endedEarly: Schema.optionalKey(Schema.Boolean),
       /**
-       * This page left out stored tasks, launches or task views it could not read; a row whose
-       * view was unreadable shows the empty view. The walk is not a complete account of the bot.
+       * This page left out stored tasks, launches, task views or a thread's pull request links it
+       * could not read; a row whose view was unreadable shows the empty view. The walk is not a
+       * complete account of the bot.
        */
       partial: Schema.optionalKey(Schema.Boolean),
     }),

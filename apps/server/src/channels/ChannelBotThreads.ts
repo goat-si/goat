@@ -116,6 +116,8 @@ const make = Effect.gen(function* () {
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
   const warnMark = makeMarkWarnings();
+  // Home re-reads the current list often; one unreadable thread warns once.
+  const warnPullRequests = makeMarkWarnings("GOAT Bot work row pull request");
   /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
     owner: ChannelConnectionOwner,
@@ -258,11 +260,11 @@ const make = Effect.gen(function* () {
       truncated.has(task.taskId) ? [task.taskId] : [],
     );
     // A thread whose links cannot be read leaves the row to its other sources.
-    let skippedPullRequests = 0;
-    const readSource = (columns: ThreadPullRequestColumns | undefined) => {
+    const unreadablePullRequests: Array<string> = [];
+    const readSource = (columns: ThreadPullRequestColumns | undefined, threadId: string) => {
       const source = columns === undefined ? undefined : threadPullRequestSource(columns);
       if (source !== "unreadable") return source === undefined ? [] : [source];
-      skippedPullRequests += 1;
+      unreadablePullRequests.push(threadId);
       return [];
     };
     for (const task of tasks) {
@@ -284,13 +286,15 @@ const make = Effect.gen(function* () {
             },
           );
         const threadSources: Array<PullRequestSource> = [
-          ...readSource(
-            task.worker === undefined ? undefined : workerColumns.get(task.worker.threadId),
-          ),
+          ...(task.worker === undefined
+            ? []
+            : readSource(workerColumns.get(task.worker.threadId), task.worker.threadId)),
           // The join reads only a local launch's thread.
           ...children.flatMap(({ child, pullRequestColumns }) =>
-            child.ownerId === owner.ownerId && child.taskId === task.taskId
-              ? readSource(pullRequestColumns)
+            child.ownerId === owner.ownerId &&
+            child.taskId === task.taskId &&
+            child.destination?.threadId !== undefined
+              ? readSource(pullRequestColumns, child.destination.threadId)
               : [],
           ),
         ];
@@ -361,7 +365,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork, launchesTruncated, skippedLaunches, skippedPullRequests };
+    return { rows, remoteWork, launchesTruncated, skippedLaunches, unreadablePullRequests };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
@@ -439,11 +443,12 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed),
     );
     const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});
-    if (built.skippedPullRequests > 0)
-      yield* Effect.logWarning("GOAT Bot work rows left out pull requests they could not read", {
-        botId,
-        skippedThreads: built.skippedPullRequests,
-      });
+    for (const threadId of built.unreadablePullRequests)
+      yield* warnPullRequests(
+        threadId,
+        "GOAT Bot work rows left out a thread's pull requests they could not read",
+        { botId, threadId },
+      );
     return {
       rows: built.rows,
       mainMessageCount: messages,
@@ -486,14 +491,14 @@ const make = Effect.gen(function* () {
       page.skippedTasks > 0 ||
       built.skippedLaunches > 0 ||
       skippedViews > 0 ||
-      built.skippedPullRequests > 0;
+      built.unreadablePullRequests.length > 0;
     if (partial)
       yield* Effect.logWarning("GOAT Bot task history left out records it could not read", {
         botId,
         skippedTasks: page.skippedTasks,
         skippedLaunches: built.skippedLaunches,
         skippedViews,
-        skippedPullRequestThreads: built.skippedPullRequests,
+        skippedPullRequestThreads: built.unreadablePullRequests.length,
       });
     return {
       rows: built.rows,
@@ -611,7 +616,7 @@ const make = Effect.gen(function* () {
       ),
       remoteWork: built.remoteWork,
       launchesTruncated: built.launchesTruncated.length > 0,
-      partial: !known || built.skippedLaunches > 0 || built.skippedPullRequests > 0,
+      partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
     };
   });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (

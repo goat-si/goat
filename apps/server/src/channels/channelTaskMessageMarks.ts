@@ -106,7 +106,7 @@ export const MessageMarkLookup = Context.Reference<
 export const MARK_WARNINGS_REMEMBERED = 1_000;
 
 /** Warns at most once per key for the life of the process, remembering a bounded set of keys. */
-export const makeMarkWarnings = () => {
+export const makeMarkWarnings = (subject = "channel task message mark") => {
   const seen = new Set<string>();
   let capped = false;
   return Effect.fn("channelTaskMessageMarks.warn")(function* (
@@ -118,7 +118,7 @@ export const makeMarkWarnings = () => {
     if (seen.size >= MARK_WARNINGS_REMEMBERED) {
       if (capped) return;
       capped = true;
-      yield* Effect.logWarning("channel task message mark warnings stop here for this process", {
+      yield* Effect.logWarning(subject + " warnings stop here for this process", {
         remembered: MARK_WARNINGS_REMEMBERED,
       });
       return;
