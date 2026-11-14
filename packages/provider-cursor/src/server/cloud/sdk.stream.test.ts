@@ -88,9 +88,15 @@ it("keeps the production destination across stream messages and reconnects", asy
     expect((await iterator.next()).done).toBe(false);
     expect(reads).toBe(before);
     env.CURSOR_BACKEND_URL = "https://foreign.invalid";
+    const beforeRejectedOpen = requests.length;
     expect(() => guardedStream(run, () => new Error("backend mismatch"))).toThrow(
       "backend mismatch",
     );
+    expect(
+      requests
+        .slice(beforeRejectedOpen)
+        .filter(({ headers }) => headers.get("authorization")?.includes("fixture-key")),
+    ).toHaveLength(0);
     streamController.close();
     await refetched.promise;
     await vi.advanceTimersByTimeAsync(1000);
