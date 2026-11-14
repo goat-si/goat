@@ -1,4 +1,5 @@
-import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
+import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegistryHydration.ts";
+import { assertTerminalSecret, layerServerSettings } from "./serverSettingsLayers.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -2162,6 +2163,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
 
       const environment = yield* resolveProviderInstanceTerminalEnvironment({
+        deriveProviderInstanceConfigMap,
         serverSettings,
         path,
         rawProviderInstanceId: instanceId,
@@ -2169,10 +2171,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
       const persisted = yield* fileSystem.readFileString(serverConfig.settingsPath);
 
-      assert.equal(environment.OPENROUTER_API_KEY, "sk-terminal-secret");
-      assert.match(environment.CODEX_HOME ?? "", /[\\/][.]codex-terminal$/);
-      assert.notInclude(persisted, "sk-terminal-secret");
-      assert.include(persisted, '"valueRedacted": true');
+      assertTerminalSecret(environment, persisted);
     }).pipe(Effect.provide(layerServerSettings())),
   );
   it.effect("rolls back provider secret changes when the settings file commit fails", () =>

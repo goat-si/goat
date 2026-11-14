@@ -1,3 +1,4 @@
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { settlementCase } from "./ManagerSettlement.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -1781,6 +1782,7 @@ it.layer(
       const path = yield* Path.Path;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        deriveProviderInstanceConfigMap,
         serverSettings,
         path,
         rawProviderInstanceId: "configured_home",
@@ -1831,6 +1833,7 @@ it.layer(
         historyByteLimit: 8,
         resolveProviderInstanceEnvironment: (rawProviderInstanceId, env) =>
           TerminalManager.resolveProviderInstanceTerminalEnvironment({
+            deriveProviderInstanceConfigMap,
             serverSettings,
             path,
             rawProviderInstanceId,
