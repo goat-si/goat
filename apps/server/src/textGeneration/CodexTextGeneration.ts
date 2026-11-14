@@ -101,6 +101,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     Scope.Scope
   >,
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>,
 ) {
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const routeState = yield* Effect.serviceOption(CodexRoutes.CodexRouteState);
@@ -416,7 +417,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           operation,
           detail: "Codex is disabled in GOAT settings.",
         });
-      const effectiveEnvironment = resolved?.environment ?? resolvedEnvironment;
+      const effectiveEnvironment =
+        resolved?.environment ??
+        (currentEnvironment ? yield* currentEnvironment : resolvedEnvironment);
       const models = yield* getModels;
       const requestedModel = modelSelection.model;
       const listed = models.filter((candidate) => !candidate.isCustom);

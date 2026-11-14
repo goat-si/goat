@@ -109,6 +109,7 @@ it.live.each(
           enabled: true,
           config: decodeSettings({ setupMode: "managed", homePath: sharedHome }),
           environment: ambient,
+          currentEnvironment: Effect.sync(() => ({ ...ambient })),
         });
         yield* Effect.gen(function* () {
           const effective = yield* runtime.resolve;
@@ -137,6 +138,15 @@ it.live.each(
           assert.isUndefined(effective.environment.OPENAI_API_KEY);
           assert.isUndefined(effective.environment.OPENAI_BASE_URL);
           assert.isUndefined(effective.environment.GOAT_CODEX_LAUNCH_ARGS);
+          const initialPath = effective.environment.PATH;
+          ambient.PATH = "/updated/runtime/bin";
+          const next = yield* runtime.resolve.pipe(Effect.scoped);
+          assert.strictEqual(next.environment.PATH, "/updated/runtime/bin");
+          assert.strictEqual(effective.environment.PATH, initialPath);
+          assert.isUndefined(next.environment.ACCESS_TOKEN);
+          assert.isUndefined(next.environment.OPENAI_API_KEY);
+          assert.isUndefined(next.environment.OPENAI_BASE_URL);
+          assert.isUndefined(next.environment.GOAT_CODEX_LAUNCH_ARGS);
           const args = codexAppServerArgs(effective.config.launchArgs);
           assert.include(args, 'model_provider="openai_token_sharing"');
           const provider = args.find((arg) =>

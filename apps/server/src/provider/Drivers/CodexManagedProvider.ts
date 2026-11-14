@@ -33,6 +33,7 @@ import {
 import { codexContinuationIdentity } from "./CodexHomeLayout.ts";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import { HttpClient } from "effect/http";
+import * as HostProcess from "@goat/shared/HostProcess";
 const DRIVER = ProviderDriverKind.make("codex");
 
 export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(function* (
@@ -45,11 +46,20 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const host = yield* ProviderHost.ProviderHost;
+  const baseEnvironment = yield* HostProcess.Environment;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const currentEnvironment = Effect.suspend(() =>
+    mergeProviderInstanceEnvironment(input.environment, baseEnvironment),
+  ).pipe(
+    Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+    Effect.map((env) => ({ ...env })),
+  );
   const runtime = yield* makeCodexManagedRuntime({
     instanceId,
     enabled,
     config,
-    environment: yield* mergeProviderInstanceEnvironment(input.environment),
+    environment: yield* currentEnvironment,
+    currentEnvironment,
   });
   const continuationIdentity = codexContinuationIdentity(runtime.homeLayout);
   const stamp = withInstanceIdentity({

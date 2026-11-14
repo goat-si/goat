@@ -57,7 +57,11 @@ function shellQuote(value: string): string {
 }
 
 const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
-  options: { readonly config?: Partial<AntigravitySettings>; readonly enabled?: boolean } = {},
+  options: {
+    readonly config?: Partial<AntigravitySettings>;
+    readonly enabled?: boolean;
+    readonly inheritPath?: boolean;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -131,9 +135,11 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     beforeAcquire: Effect.Effect<void>;
   } = { selected: first, failResolution: false, beforeAcquire: Effect.void };
   const acquisitions: Array<{ binaryPath: string | undefined; path: string | undefined }> = [];
+  const resolutions: Array<string | undefined> = [];
   const releases: Array<string | null> = [];
   const launches: Array<{
     command: string;
+    path: string | undefined;
     args: ReadonlyArray<string>;
     cwd: string | undefined;
     extendEnv: boolean | undefined;
@@ -148,8 +154,9 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
     managedDirectory: root,
-    resolve: () =>
+    resolve: (_binaryPath, environment) =>
       Effect.gen(function* () {
+        resolutions.push(environment?.PATH);
         if (controls.failResolution) {
           return yield* new AntigravityInstallation.AntigravityInstallationError({
             operation: "resolve",
@@ -185,6 +192,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       const environment = command.options.env ?? {};
       launches.push({
         command: command.command,
+        path: environment.PATH,
         args: command.args,
         cwd: command.options.cwd,
         extendEnv: command.options.extendEnv,
@@ -208,7 +216,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     enabled: options.enabled ?? true,
     config: { ...AntigravityDriver.defaultConfig(), ...options.config },
     environment: [
-      { name: "PATH", value: instancePath },
+      ...(options.inheritPath ? [] : [{ name: "PATH", value: instancePath }]),
       { name: "GOAT_ACP_ANTIGRAVITY", value: "1" },
       { name: "GOAT_ACP_REQUEST_LOG_PATH", value: requestLog },
       { name: "GEMINI_API_KEY", value: "must-not-be-used" },
@@ -255,6 +263,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     signedOut,
     controls,
     acquisitions,
+    resolutions,
     releases,
     launches,
     readRequests,
@@ -299,6 +308,36 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect.skipIf(windowsHost)(
+    "regression #3079: status and new runtimes read the current host PATH while instance PATH wins",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, PATH: original.PATH ?? "/usr/bin:/bin" };
+        const inherited = yield* makeHarness({ inheritPath: true }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        const overridden = yield* makeHarness().pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        host.PATH = `/new/bin:${host.PATH}`;
+        yield* inherited.instance.snapshot.refresh;
+        expect(inherited.resolutions.at(-1)).toBe(host.PATH);
+        yield* inherited.refresh();
+        expect(inherited.acquisitions.at(-1)?.path).toBe(host.PATH);
+        expect(inherited.launches.at(-1)?.path).toBe(host.PATH);
+        const launchedPath = host.PATH;
+        const launch = inherited.launches.at(-1);
+        host.PATH = `/later/bin:${host.PATH}`;
+        yield* inherited.refresh();
+        expect(launch?.path).toBe(launchedPath);
+        expect(inherited.launches.at(-1)?.path).toBe(host.PATH);
+        yield* overridden.instance.snapshot.refresh;
+        yield* overridden.refresh();
+        expect(overridden.resolutions.at(-1)).toBe(overridden.instancePath);
+        expect(overridden.launches.at(-1)?.path).toBe(overridden.instancePath);
+      }).pipe(Effect.scoped),
+  );
   it.effect.skipIf(windowsHost)(
     "refreshes through the selected executable and personal Google ACP",
     () =>

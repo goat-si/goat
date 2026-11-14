@@ -148,7 +148,15 @@ export const AntigravityDriver: ProviderDriver<
       gcpLocation: settings.gcpLocation,
     };
     const authConfigIssue = antigravityAuthConfigIssue(auth);
-    const processEnvironment = yield* mergeProviderInstanceEnvironment(environment);
+    const baseEnvironment = yield* HostProcess.Environment;
+    const homeDirectory = yield* HostProcess.HomeDirectory;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, baseEnvironment),
+    ).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+      Effect.map((env) => ({ ...env })),
+    );
+    const processEnvironment = { ...(yield* currentEnvironment) };
     const userHome = resolveAntigravityUserHome(
       yield* HostProcess.Platform,
       processEnvironment,
@@ -211,6 +219,7 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
+      const processEnvironment = yield* currentEnvironment;
       const executable = yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
         Effect.mapError(
           (cause) =>
@@ -400,6 +409,7 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
+      const processEnvironment = yield* currentEnvironment;
       const executable = yield* installation.resolve(settings.binaryPath, processEnvironment).pipe(
         Effect.mapError(
           (cause) =>
