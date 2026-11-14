@@ -31,6 +31,8 @@ export interface FakePi {
   readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
   readonly failNextState: () => void;
   readonly failNextPrompt: () => void;
+  /** Pi before 0.99 acknowledges prompts without a disposition. */
+  readonly omitPromptDisposition: () => void;
   readonly failNextThinking: () => void;
   readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
   readonly deferNextModelSelection: () => void;
@@ -84,6 +86,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
   let failPrompt = false;
+  let promptDisposition = true;
   let failThinking = false;
   let vetoSwitch = false;
   let vetoNewSession = false;
@@ -150,7 +153,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
               "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
           };
         }
-        return isStreaming ? { ...base, data: { disposition: "queued" } } : base;
+        return promptDisposition && isStreaming
+          ? { ...base, data: { disposition: "queued" } }
+          : base;
       case "get_available_models":
         return { ...base, data: { models } };
       case "set_model":
@@ -293,6 +298,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     failNextPrompt: () => {
       failPrompt = true;
+    },
+    omitPromptDisposition: () => {
+      promptDisposition = false;
     },
     deferNextLifecycle: (type) => {
       deferredLifecycle = type;

@@ -4554,6 +4554,53 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("leaves a steer an older Pi acknowledges without a disposition unmarked", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.omitPromptDisposition();
+      fake.setStreaming(false);
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      assert(running.type === "provider_turn.updated");
+      fake.setStreaming(true);
+      yield* fake.emit({ type: "agent_start" });
+
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: running.providerTurn.id,
+        message: {
+          messageId: "message:thread-pi-test:bare-steer" as never,
+          text: "Steer an older Pi",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const steer = yield* fake.takeRequest("prompt");
+      assert.strictEqual(steer["streamingBehavior"], "steer");
+      yield* fake.emit({ type: "message_start", message: { role: "user" } });
+      fake.setStreaming(false);
+      yield* fake.emit({ type: "agent_settled" });
+
+      const next = yield* takeEvent(
+        (event) => event.type === "steer.updated" || event.type === "turn.terminal",
+      );
+      assert.strictEqual(next.type, "turn.terminal");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("ignores an idle snapshot made stale by a steer", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
