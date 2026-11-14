@@ -759,7 +759,6 @@
   "packages/provider-core/src/server/maintenanceResolver.test.ts": { "lines": 1663 },
   "packages/provider-core/src/server/maintenanceResolver.ts": { "nonNull": 4 },
   "packages/provider-core/src/server/memoryContext.ts": { "nonNull": 1 },
-  "packages/provider-cursor/src/server/CursorAgentSdk.ts": { "nonNull": 1 },
   "packages/provider-cursor/src/server/accountUsage.ts": { "nonNull": 2 },
   "packages/provider-cursor/src/server/adapter.test.ts": { "lines": 1891 },
   "packages/provider-cursor/src/server/adapter.ts": { "lines": 2434, "nonNull": 1 },

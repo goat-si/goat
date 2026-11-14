@@ -80,14 +80,17 @@ function sdkErrorReason(cause: unknown): string | undefined {
 
 export const isCursorAgentSdkRunnerError = Schema.is(CursorAgentSdkRunnerError);
 
-export interface CursorAgentSdkOpenInput {
-  readonly operation: "create" | "resume";
-  readonly agentId?: string;
+/** A create names no agent; a resume always names the agent it reopens. */
+export type CursorAgentOpenTarget =
+  | { readonly operation: "create"; readonly agentId?: undefined }
+  | { readonly operation: "resume"; readonly agentId: string };
+
+export type CursorAgentSdkOpenInput = CursorAgentOpenTarget & {
   readonly storeCwd?: string;
   readonly options: AgentOptions;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
-}
+};
 
 export interface CursorAgentSdkSendInput<Error> {
   readonly message: string | SDKUserMessage;
@@ -440,14 +443,13 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
               catch: (cause) => runnerError(cause, "agent.resume"),
             })
           : undefined;
-      const resumeAgentId = input.agentId!;
       const agent = yield* Effect.tryPromise({
         try: () =>
           input.operation === "create"
             ? Agent.create(input.options)
             : storePlatform === undefined
-              ? Agent.resume(resumeAgentId, input.options)
-              : storePlatform.resumeAgent(resumeAgentId, input.options),
+              ? Agent.resume(input.agentId, input.options)
+              : storePlatform.resumeAgent(input.agentId, input.options),
         catch: (cause) => runnerError(cause, `agent.${input.operation}`),
       });
 

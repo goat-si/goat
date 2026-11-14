@@ -67,7 +67,6 @@ const readCursorCliUseHttp1ForAgent = Effect.gen(function* () {
 }).pipe(Effect.withSpan("CursorSdk.readCliUseHttp1ForAgent"));
 
 /** Keeps the shell spawn guard armed while in-process agents run. */
-
 export class CursorSdk extends Context.Service<
   CursorSdk,
   {
@@ -78,7 +77,6 @@ export class CursorSdk extends Context.Service<
 
 export const layer = Layer.effect(
   CursorSdk,
-
   Effect.gen(function* () {
     yield* Effect.acquireRelease(
       Effect.sync(() => containRejections(classifyCursorRejection)),

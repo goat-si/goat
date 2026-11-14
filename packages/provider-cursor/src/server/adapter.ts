@@ -1696,14 +1696,14 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
         };
 
-        const openAgent = Effect.fnUntraced(function* (openInput: {
-          readonly operation: "create" | "resume";
-          readonly threadId: ThreadId;
-          readonly modelSelection: ModelSelection;
-          readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-          readonly agentId?: string;
-          readonly storeCwd?: string | undefined;
-        }) {
+        const openAgent = Effect.fnUntraced(function* (
+          openInput: CursorAgentSdk.CursorAgentOpenTarget & {
+            readonly threadId: ThreadId;
+            readonly modelSelection: ModelSelection;
+            readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+            readonly storeCwd?: string | undefined;
+          },
+        ) {
           const existing = yield* Ref.get(liveAgent);
           const mcpSession = yield* mcpSessions.read(openInput.threadId);
           const cwd = openInput.runtimePolicy.cwd ?? process.cwd();
@@ -1754,8 +1754,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
           const sdkSession = yield* runner
             .open({
-              operation: openInput.operation,
-              ...(openInput.agentId === undefined ? {} : { agentId: openInput.agentId }),
+              ...(openInput.operation === "create"
+                ? { operation: "create" as const }
+                : { operation: "resume" as const, agentId: openInput.agentId }),
               storeCwd,
               options,
               threadId: openInput.threadId,
