@@ -20,10 +20,21 @@ function editsText(event: KeyboardEvent) {
   return editable && event.key !== "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
 
+// A lazily revealed row replaces its placeholder <li> under the same thread key, so rows are
+// tracked by that key and an unmoved reveal does not look like an arrival.
+type RowId = string | Element;
+const rowId = (row: Element): RowId =>
+  (row instanceof HTMLElement ? row.dataset.threadItem : undefined) ?? row;
+
 function readTops(list: HTMLElement) {
-  const tops = new Map<HTMLElement, number>();
+  const tops = new Map<RowId, { top: number; height: number }>();
+  // A hidden list (the closed narrow sheet stays mounted) reports zero offsets; reading none
+  // makes the first pass after it opens a fill from empty.
+  if (list.getClientRects().length === 0) return tops;
   for (const child of list.children) {
-    if (child instanceof HTMLElement) tops.set(child, child.offsetTop);
+    if (child instanceof HTMLElement) {
+      tops.set(rowId(child), { top: child.offsetTop, height: child.offsetHeight });
+    }
   }
   return tops;
 }
@@ -37,7 +48,7 @@ function readTops(list: HTMLElement) {
 export function createSidebarShiftGuard(list: HTMLElement) {
   const view = list.ownerDocument.defaultView;
   let tops = readTops(list);
-  const movedAt = new WeakMap<Element, number>();
+  const movedAt = new Map<RowId, number>();
   let lastInputAt = Number.NEGATIVE_INFINITY;
   // Pointers still down on a dropped press. Only their own release or cancel ends the drop, so
   // a key or another pointer meanwhile cannot hand that press's click to the row.
@@ -60,7 +71,7 @@ export function createSidebarShiftGuard(list: HTMLElement) {
     if (releasedDrop === event.pointerId) releasedDrop = null;
     const now = performance.now();
     const row = rowOf(event.target);
-    const moved = row === null ? undefined : movedAt.get(row);
+    const moved = row === null ? undefined : movedAt.get(rowId(row));
     if (moved !== undefined && now - moved < MOVED_ROW_PRESS_DELAY_MS) {
       heldDrops.add(event.pointerId);
       pressDropped = true;
@@ -112,15 +123,18 @@ export function createSidebarShiftGuard(list: HTMLElement) {
       const now = performance.now();
       // A list filling from empty slid nothing under the pointer.
       const ownMove = tops.size === 0 || now - lastInputAt < OWN_INPUT_WINDOW_MS;
-      for (const [row, top] of next) {
-        const previous = tops.get(row);
+      for (const [row, { top, height }] of next) {
+        const previous = tops.get(row)?.top;
         if (previous === top) continue;
         // A nudge of under half a row, such as a header settling, still leaves the row the pointer
         // aimed at under it.
-        if (previous !== undefined && Math.abs(top - previous) * 2 < row.offsetHeight) continue;
+        if (previous !== undefined && Math.abs(top - previous) * 2 < height) continue;
         // The latest move decides: one the user caused clears an earlier mark.
         if (ownMove) movedAt.delete(row);
         else movedAt.set(row, now);
+      }
+      for (const row of movedAt.keys()) {
+        if (!next.has(row)) movedAt.delete(row);
       }
       tops = next;
     },

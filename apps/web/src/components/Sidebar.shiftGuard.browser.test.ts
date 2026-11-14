@@ -10,6 +10,7 @@ function mountList(container: HTMLElement, names: readonly string[]) {
   const rows = new Map<string, HTMLLIElement>();
   const add = (name: string) => {
     const row = document.createElement("li");
+    row.dataset.threadItem = name;
     row.style.height = "40px";
     const button = document.createElement("button");
     button.textContent = name;
@@ -22,11 +23,20 @@ function mountList(container: HTMLElement, names: readonly string[]) {
   container.append(list);
   const guard = createSidebarShiftGuard(list);
   return {
+    element: list,
     pressed,
     guard,
     button: (name: string) => rows.get(name)!.querySelector("button")!,
     add,
     remove: (name: string) => rows.get(name)!.remove(),
+    // A lazy row's reveal swaps its placeholder <li> for a new one under the same key.
+    reveal: (name: string) => {
+      const placeholder = rows.get(name)!;
+      const next = placeholder.cloneNode(true) as HTMLLIElement;
+      next.querySelector("button")!.addEventListener("click", () => pressed.push(name));
+      placeholder.replaceWith(next);
+      rows.set(name, next);
+    },
     [Symbol.dispose]: () => guard.dispose(),
   };
 }
@@ -67,6 +77,30 @@ describe("sidebar shift guard", () => {
     await userEvent.click(list.button("A"));
     await userEvent.click(list.button("B"));
     expect(list.pressed).toEqual(["A", "B"]);
+  });
+
+  it("keeps a lazily revealed row clickable when a later update finds it where it was", async () => {
+    await using screen = await render(null);
+    using list = mountList(screen.container, ["A", "B", "C"]);
+    using _clock = fakeTimers();
+
+    list.reveal("B");
+    list.guard.update();
+    await userEvent.click(list.button("B"));
+    expect(list.pressed).toEqual(["B"]);
+  });
+
+  it("ignores positions read while the list is hidden", async () => {
+    await using screen = await render(null);
+    using list = mountList(screen.container, ["A", "B", "C"]);
+    using _clock = fakeTimers();
+
+    list.element.style.display = "none";
+    list.guard.update();
+    list.element.style.display = "";
+    list.guard.update();
+    await userEvent.click(list.button("B"));
+    expect(list.pressed).toEqual(["B"]);
   });
 
   it("keeps rows clickable when an empty list first fills", async () => {
