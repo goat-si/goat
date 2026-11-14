@@ -54,7 +54,8 @@ export const make = Effect.fn("DisposableRouteGuard.make")(function* (
     const pen = input.alias === undefined ? undefined : penAliases(yield* penKnownHosts);
     const named = claimedBy(open, input, pen);
     if (named !== undefined) return named;
-    if (input.identify !== undefined) {
+    // Identifying the GOAT takes a network read; it is skipped while no record has one to compare.
+    if (input.identify !== undefined && open.some((record) => record.environmentId !== null)) {
       const environmentId = yield* input.identify;
       const reached = claimedBy(open, { environmentId: environmentId ?? null });
       if (reached !== undefined) return reached;

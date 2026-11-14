@@ -219,3 +219,11 @@ it.effect(
       expect(joined.message).not.toContain("disposable machine");
     }),
 );
+
+it.effect("no GOAT is identified while no open record has an environment to compare it with", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ disposable: [record({ environmentId: null, sshdPin: null })] });
+    yield* hub.membership.join(scope, { deviceAlias: "mini", transport: "hub-client" });
+    expect(hub.calls.some((call) => call.startsWith("identify"))).toBe(false);
+  }),
+);
