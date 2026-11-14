@@ -114,6 +114,12 @@ interface Props {
   ) => void;
 }
 
+function focusPreviewWebview(runtimeTabId: string) {
+  document
+    .querySelector<HTMLElement>(`[data-preview-viewport="${CSS.escape(runtimeTabId)}"] webview`)
+    ?.focus();
+}
+
 export function PreviewView({
   threadRef,
   tabId: requestedTabId,
@@ -752,6 +758,8 @@ export function PreviewView({
           readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
       );
       if (pickRequest.cancelled) return;
+      // Main's WebContents.focus() cannot reach a guest; focusing its <webview> hands it the keys.
+      focusPreviewWebview(runtimeTabId);
       const result = voice
         ? await bridge.pickElement(runtimeTabId, voice)
         : await bridge.pickElement(runtimeTabId);

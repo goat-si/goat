@@ -463,6 +463,27 @@ describe("PreviewView", () => {
     expect(mocks.setAnnotationSendEnabled).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
   });
 
+  it("hands key focus to the page's webview before picking an element", async () => {
+    setup();
+    using stack = new DisposableStack();
+    const viewport = document.createElement("div");
+    viewport.dataset.previewViewport = TEST_RUNTIME_TAB_ID;
+    const guest = document.createElement("webview");
+    guest.tabIndex = -1;
+    viewport.append(guest);
+    document.body.prepend(viewport);
+    stack.defer(() => viewport.remove());
+    let focusedAtPick: Element | null = null;
+    mocks.pickElement.mockImplementation(async () => {
+      focusedAtPick = document.activeElement;
+      return null;
+    });
+    await using _screen = await render(view());
+    await userEvent.click(page.getByRole("button", { name: "Annotate preview" }));
+    await vi.waitFor(() => expect(mocks.pickElement).toHaveBeenCalled());
+    expect(focusedAtPick).toBe(guest);
+  });
+
   it("still sends annotation text when the picked element's crop is malformed", async () => {
     setup();
     const picked = annotation("annotation-2", {
