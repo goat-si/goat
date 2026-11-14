@@ -191,8 +191,9 @@ retired. **Force detach** removes the link now, without the machine; only a pers
 can force. If a forced or retired machine is gone for good, run
 `ocx link recover --forget --link-id <id> --yes` on the hub yourself, as the
 machine list says; OpenCodex refuses it from an agent. **Release** frees the slot
-of an attach whose invite Pen lost or used without recording who joined; if that
-machine did join, remove it with `pen revoke`. Removing a linked machine from Pen
+of an attach whose invite Pen lost or used without recording who joined, once that
+invite has expired; if that machine did join, remove it with `pen revoke`.
+Removing a linked machine from Pen
 without detaching it leaves its link on the hub; the machine list names the link
 and the `ocx link revoke` command that removes it. An older GOAT on the hub shows
 **Update GOAT on this hub** instead of these settings.
