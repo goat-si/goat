@@ -473,12 +473,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
     anchorKey: string,
     reveal?: { readonly entryId?: string | undefined; readonly contentKey?: string | undefined },
   ) => {
-    const following = isWorking && listRef.current?.getState().isFollowingEnd;
+    const following =
+      isWorking && liveFollowEnabled && resolveTimelineIsAtEnd(listRef.current?.getState());
     disclosureReveal.prepare(anchorKey, following ? undefined : reveal);
     suspendEndScrollMaintenanceForDisclosure(anchorKey, !reveal);
   };
 
-  // Turn and attempt folds reveal later rows rather than growing their own row.
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
     setExpandedRunIds((existing) => {
