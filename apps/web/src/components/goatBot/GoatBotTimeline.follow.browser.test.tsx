@@ -812,6 +812,28 @@ it("announces and cues a filtered new reply only when first exposed", async () =
   expect(screen.container.textContent).not.toContain("Jump to latest");
 });
 
+it("consumes replies exposed during synchronization and announces only the newest on live", async () => {
+  projection.statuses = { speech: "live" };
+  const older = reply("sync-older");
+  const newer = reply("sync-newer");
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  projection.statuses.speech = "synchronizing";
+  await screen.rerender(
+    <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
+  );
+  expect(status?.textContent).toBe("");
+  await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
+  projection.statuses.speech = "live";
+  await screen.rerender(<SpeechChat shown={[...rows, newer]} source={[...rows, older, newer]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const text = status?.textContent;
+  await screen.rerender(
+    <SpeechChat shown={[...rows, older, newer]} source={[...rows, older, newer]} />,
+  );
+  expect(status?.textContent).toBe(text);
+});
+
 it("announces exposure while following and never revives its cue after scrolling up", async () => {
   projection.statuses = { speech: "live" };
   const fresh = reply("following-reply");
