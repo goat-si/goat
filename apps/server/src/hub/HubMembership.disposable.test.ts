@@ -283,6 +283,51 @@ it.effect(
 );
 
 it.effect(
+  "an unreadable or forbidden Home link status still refuses leave and repair by the Pen alias, before any device read",
+  () =>
+    Effect.gen(function* () {
+      for (const linkStatus of ["forbidden", "failed"] as const) {
+        for (const decisionId of [undefined, "decision-1"]) {
+          for (const action of ["leave", "repair"] as const) {
+            const hub = yield* setup({ linkStatus, disposable: [record()] });
+            const input = {
+              deviceAlias: "pen-" + node,
+              ...(decisionId === undefined ? {} : { decisionId }),
+            };
+            const refused =
+              action === "leave"
+                ? yield* hub.membership.leave(scope, input)
+                : yield* hub.membership.repair(scope, input);
+            expect(refused.state).toBe("failed");
+            expect(refused.message).toContain("Detach it in Settings → Hub on web or desktop");
+            expect((yield* hub.inboxItems).items).toEqual([]);
+            expect(onlyRead(hub.calls)).toBe(true);
+          }
+        }
+      }
+    }),
+);
+
+it.effect("a twin Pen name is refused by the record's own link id", () =>
+  Effect.gen(function* () {
+    const twin = penLine("cc-07", node) + penLine("cc-07", "d".repeat(26));
+    for (const action of ["leave", "repair"] as const) {
+      const hub = yield* setup({
+        linked: ["pen-cc-07"],
+        penKnownHosts: twin,
+        disposable: [record({ linkId: LINK })],
+      });
+      const refused =
+        action === "leave"
+          ? yield* hub.membership.leave(scope, { deviceAlias: "pen-cc-07" })
+          : yield* hub.membership.repair(scope, { deviceAlias: "pen-cc-07" });
+      expect(refused.message).toContain("matched by its OpenCodex link");
+      expect(onlyRead(hub.calls)).toBe(true);
+    }
+  }),
+);
+
+it.effect(
   "an ended record, a kept Pen member and a twin Pen name on another link leave hub.device_leave and repair as they were",
   () =>
     Effect.gen(function* () {

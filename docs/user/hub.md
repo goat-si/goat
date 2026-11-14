@@ -195,8 +195,9 @@ a Conflict.
 Its OpenCodex link ends only through Detach. An agent's request to remove it
 from the hub or to repair it, by its Pen alias or its link, is refused before
 anything is asked or changed. Repair is not needed for a dropped tunnel:
-OpenCodex retries the link by itself every minute, every 5 minutes after a
-refused key, and GOAT checks the machine every 30 minutes.
+OpenCodex retries the link by itself, at least every 5 minutes, unless the
+machine's host key changed or a removal holds the link, and GOAT checks the
+machine every 30 minutes; a changed host key shows on its row.
 Its row in **Hub devices** shows **Disposable**, or **Conflict** when something
 about it is ambiguous, **Still in Pen** while its key is a Pen member, who
 attached it and how long it has been in its state.

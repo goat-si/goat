@@ -130,9 +130,10 @@ export const refusalText = (claim: DisposableClaim | undefined, target: string) 
 const OWN_LINK = {
   leave:
     "GOAT ends its link only through Detach, which cleans the machine and settles OpenCodex's record of the removal; leaving the hub would skip both.",
-  // OpenCodex v2.100.3 retries a Home tunnel itself (HOME_TUNNEL_RETRY_POLICY, src/link/tunnel-state.ts).
+  // OpenCodex v2.100.3 retries a failed Home tunnel itself (HOME_TUNNEL_RETRY_POLICY, src/link/tunnel-state.ts),
+  // except a changed host key or a link a revoke holds (src/link/supervisor.ts spawnFor).
   repair:
-    "OpenCodex retries its link's tunnel by itself every minute (every 5 minutes after a refused key), and GOAT checks the machine every 30 minutes, so repair leaves its link alone. A changed host key or a machine that stays silent shows on its row.",
+    "OpenCodex retries its link's dropped tunnel by itself, at least every 5 minutes, unless its host key changed or a removal holds the link, and GOAT checks the machine every 30 minutes, so repair leaves its link alone; a changed host key shows on its row.",
 } as const;
 
 /** Design sections 1 and 3: a disposable machine's own link changes only through detach. */

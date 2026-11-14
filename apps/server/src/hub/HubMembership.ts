@@ -757,11 +757,11 @@ const make = Effect.gen(function* () {
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const { status, forbidden } = yield* readHomeLinks();
-      if (status === undefined && (!forbidden || (yield* hubClientKey(alias)) === undefined))
-        return homeUnavailable("repair", alias, steps, forbidden);
       const record = status?.links.find((entry) => entry.alias === alias);
       const own = yield* ownLink(alias, record?.id, "repair");
       if (own !== undefined) return result("repair", alias, "failed", own, steps);
+      if (status === undefined && (!forbidden || (yield* hubClientKey(alias)) === undefined))
+        return homeUnavailable("repair", alias, steps, forbidden);
       if (input.decisionId !== undefined) {
         // Step 4, re-link, only after a person approved it for the same host key.
         if (record === undefined) return yield* invalid(`${alias} has no link to re-create.`);
