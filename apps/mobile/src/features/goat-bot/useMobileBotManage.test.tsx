@@ -158,7 +158,10 @@ it("a write started from a menu opened before the computer went offline sends no
   link.phase = "disconnected";
   expect(await opened.restore(scout)).toBe(false);
   expect(await opened.hide(scout, true)).toBe(false);
-  expect(typeof (await opened.update(scout, { name: "Scout 2" }))).toBe("string");
+  // A profile save (the bot sheet, and Settings > GOAT Bot) says why it did not go out.
+  expect(await opened.update(scout, { name: "Scout 2" })).toBe(
+    "GOAT Bot's computer isn't connected.",
+  );
   expect(rpc.inputs).toEqual([]);
   link.phase = "connected";
   expect(await opened.restore(scout)).toBe(true);
