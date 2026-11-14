@@ -232,7 +232,10 @@ export class ThreadLaunchService extends Context.Service<
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
       | ProviderCliMissingError
     >;
-    /** Check before creation for early errors; launch otherwise accepts and reports base failures inside the thread. */
+    /**
+     * Refuses a worktree launch before any thread exists: a blocked branch name, a branch it cannot
+     * reuse, or a base ref that does not resolve. MCP and client (ws) launches both run it.
+     */
     readonly checkWorktreeBase: (
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy"> & {
         readonly commandId?: CommandId;
