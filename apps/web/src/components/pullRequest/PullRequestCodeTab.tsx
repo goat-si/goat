@@ -1,3 +1,4 @@
+import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
@@ -297,7 +298,7 @@ function PullRequestCodeTab({
   const effectiveFoldOverride =
     foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded");
   const diffLayout = settings.diffLayout;
-  const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+  const [wordWrap, setWordWrapOverride] = useWordWrap(settings.wordWrap);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     PULL_REQUEST_FILE_TREE_STORAGE_KEY,
@@ -1164,7 +1165,7 @@ function PullRequestCodeTab({
             </DropdownMenuCheckboxItem>
             <DropdownMenuCheckboxItem
               checked={wordWrap}
-              onCheckedChange={(checked) => setWordWrap(checked)}
+              onCheckedChange={(checked) => setWordWrapOverride(checked)}
             >
               Wrap lines
             </DropdownMenuCheckboxItem>
@@ -1235,7 +1236,7 @@ function PullRequestCodeTab({
                   size="sm"
                   pressed={wordWrap}
                   onPressedChange={(pressed) => {
-                    setWordWrap(Boolean(pressed));
+                    setWordWrapOverride(Boolean(pressed));
                   }}
                 />
               }
