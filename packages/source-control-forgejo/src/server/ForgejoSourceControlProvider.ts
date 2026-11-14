@@ -287,6 +287,7 @@ const updatedMillis = (pull: ForgejoPull) =>
   pull.updated_at?.pipe(Option.map(DateTime.toEpochMillis), Option.getOrUndefined);
 // Renaming a fork or deleting a pull request moves nothing in the list, so it is re-read in full.
 const UNFILTERED_PULLS_MAX_AGE_MS = 60 * 60_000;
+const UNFILTERED_PULLS_MAX_REPOSITORIES = 64;
 /** Every pull request of a repository whose server ignores `head=` (Gitea, Forgejo before 16). */
 interface UnfilteredPulls {
   readonly lock: Semaphore.Semaphore;
@@ -439,6 +440,10 @@ export const make = Effect.gen(function* () {
                 scannedAt: 0,
               };
               unfilteredPulls.set(key, unfiltered);
+              if (unfilteredPulls.size > UNFILTERED_PULLS_MAX_REPOSITORIES) {
+                const oldest = unfilteredPulls.keys().next().value;
+                if (oldest !== undefined) unfilteredPulls.delete(oldest);
+              }
               if (page === 1 && input.state === "all") firstPage = items;
               break;
             }

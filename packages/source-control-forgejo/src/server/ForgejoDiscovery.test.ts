@@ -478,3 +478,51 @@ it.effect("reads only the changed front of a Gitea pull request list it has read
     ),
   );
 });
+
+it.effect("evicts the oldest Gitea repository list while keeping the newest", () => {
+  const filtered: string[] = [];
+  const repo = { full_name: "maria/project", owner: { login: "maria" } };
+  const pull = {
+    number: 1,
+    title: "PR",
+    html_url: "https://forgejo.test/maria/project/pulls/1",
+    state: "open",
+    merged: false,
+    updated_at: "2026-10-12T00:00:00Z",
+    base: { ref: "main", label: "main", sha: "base", repo },
+    head: { ref: "other", label: "other", sha: "h", repo },
+  };
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.make;
+    const find = (n: number) =>
+      provider.listChangeRequests({ cwd: `/repo-${n}`, headSelector: "missing", state: "all" });
+    for (let n = 0; n < 65; n++) yield* find(n);
+    filtered.length = 0;
+    yield* find(64);
+    yield* find(0);
+    assert.deepStrictEqual(filtered, ["/repo-0"]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        TestSourceControlHost.layer({ process: {} }),
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          resolveRepository: (input) =>
+            Effect.succeed({
+              login: "work",
+              repository: `maria${input.cwd.slice(6)}/project`,
+              baseUrl: "https://forgejo.test",
+            }),
+          api: (input) => {
+            const params = new URLSearchParams(input.path.split("?")[1]);
+            if (params.has("head")) filtered.push(input.cwd);
+            return encodeJsonEffect(params.get("page") === "1" ? [pull] : []).pipe(
+              Effect.orDie,
+              Effect.map(processOutput),
+            );
+          },
+        }),
+      ),
+    ),
+  );
+});
