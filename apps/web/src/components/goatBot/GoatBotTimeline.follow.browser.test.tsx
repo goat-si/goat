@@ -36,7 +36,7 @@ vi.mock("~/state/entities", async (original) => ({
   },
 }));
 
-import { GoatBotTimeline } from "./GoatBotTimeline";
+import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { GoatBotChatView } from "./GoatBotChatView";
 
 const rows: ReadonlyArray<GoatBotRow> = Array.from({ length: 40 }, (_, index) => ({
@@ -696,6 +696,119 @@ const projectedItems = (shown: ReadonlyArray<GoatBotRow>) =>
         item: { id: row.id, type: "assistant_message" },
       }) as unknown as OrchestrationV2ProjectedTurnItem,
   );
+
+function SpeechChat({
+  shown,
+  source,
+  thread = "speech",
+  working = false,
+}: {
+  readonly shown: ReadonlyArray<GoatBotRow>;
+  readonly source: ReadonlyArray<GoatBotRow>;
+  readonly thread?: string;
+  readonly working?: boolean;
+}) {
+  const environmentId = EnvironmentId.make("env");
+  return (
+    <GoatBotActivityContext value={working ? { state: "working", text: "Working" } : null}>
+      <div style={{ display: "flex", height: 400, width: 360 }}>
+        <GoatBotChatView
+          projectionRef={{ environmentId, threadId: ThreadId.make(thread) }}
+          visibleTurnItems={projectedItems(source)}
+          environmentId={environmentId}
+          availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(thread) } }}
+          canOperate
+          rows={shown}
+          onSend={() => true}
+          onRetryInput={() => {}}
+          legacyAgentRoute={null}
+        />
+      </div>
+    </GoatBotActivityContext>
+  );
+}
+
+it("guard: live history and later exposure of a hidden baseline item are silent", async () => {
+  projection.statuses = { speech: "live" };
+  const hidden = reply("hidden-history");
+  await using screen = await render(<SpeechChat shown={rows} source={[...rows, hidden]} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  expect(status?.textContent).toBe("");
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={[...rows, hidden]} source={[...rows, hidden]} />);
+  expect(status?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("announces new bot replies once, batches newest and clears on the next activity change", async () => {
+  projection.statuses = { speech: "live" };
+  await using screen = await render(<SpeechChat shown={[]} source={[]} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  expect(status?.textContent).toBe("");
+  const first = reply("first");
+  await screen.rerender(<SpeechChat shown={[first]} source={[first]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  const firstText = status?.textContent;
+  await screen.rerender(<SpeechChat shown={[first]} source={[first]} />);
+  expect(status?.textContent).toBe(firstText);
+  const update = { ...reply("update"), proactive: true, tone: "status" as const };
+  const question = { ...reply("question"), proactive: true, tone: "question" as const };
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toMatch(/question/);
+  expect(status?.textContent).toContain("GOAT Bot is working");
+  const questionText = status?.textContent;
+  await screen.rerender(
+    <SpeechChat shown={[first, update]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toBe(questionText);
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} working />,
+  );
+  expect(status?.textContent).toBe(questionText);
+  await screen.rerender(
+    <SpeechChat shown={[first, update, question]} source={[first, update, question]} />,
+  );
+  expect(status?.textContent).toBe("GOAT Bot is done");
+  await screen.rerender(
+    <SpeechChat
+      shown={[first, update, question]}
+      source={[first, update, question]}
+      thread="other"
+    />,
+  );
+  expect(screen.container.querySelector('[role="status"][aria-atomic="true"]')?.textContent).toBe(
+    "",
+  );
+});
+
+it("announces and cues a filtered new reply only when first exposed", async () => {
+  projection.statuses = { speech: "live" };
+  const fresh = reply("filtered-new");
+  await using screen = await render(<SpeechChat shown={rows} source={rows} />);
+  const status = screen.container.querySelector('[role="status"][aria-atomic="true"]');
+  const element = scroller(screen.container);
+  await act(() => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  expect(status?.textContent).toBe("");
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toMatch(/GOAT Bot replied\.|New reply from GOAT Bot\./);
+  expect(screen.container.textContent).toContain("Jump to latest");
+  const text = status?.textContent;
+  await screen.rerender(<SpeechChat shown={rows} source={[...rows, fresh]} />);
+  await screen.rerender(<SpeechChat shown={[...rows, fresh]} source={[...rows, fresh]} />);
+  expect(status?.textContent).toBe(text);
+  expect(screen.container.textContent).not.toContain("Jump to latest");
+});
 
 it("failing-first: the viewed thread, not the current bot, owns the live baseline", async () => {
   projection.reads = [];
