@@ -254,4 +254,60 @@ it.layer(layer)("OpenCode native goal support", (it) => {
         assert.isFalse(yield* supportsGoals);
       }).pipe(Effect.scoped),
   );
+
+  it.effect("a configured server reports the version its sessions connected to", () =>
+    Effect.gen(function* () {
+      let version = "2.2.4";
+      const http = HttpClient.make((request) => {
+        const url = new URL(request.url);
+        const json = (body: unknown) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body)));
+        if (url.pathname === "/api/info")
+          return json({ ...JSON.parse(OPENCODE_2_RESPONSES["/api/info"].body), version });
+        if (url.pathname === "/api/model")
+          return json({ location: { directory: "/work" }, data: [] });
+        if (url.pathname === "/api/event")
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(new ReadableStream(), {
+                headers: { "content-type": "text/event-stream" },
+              }),
+            ),
+          );
+        return Effect.die("Unexpected request: " + url.pathname);
+      });
+      const instance = yield* OpenCodeDriver.create({
+        instanceId: ProviderInstanceId.make("opencode-external-goals"),
+        displayName: undefined,
+        environment: [],
+        enabled: true,
+        config: { ...OpenCodeDriver.defaultConfig(), serverUrl: "http://127.0.0.1:4096" },
+      }).pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+        // A configured server is reached over HTTP only; nothing local may run or start.
+        Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
+          runOpenCodeCommand: () => Effect.die("a configured server runs no local command"),
+          startOpenCodeServerProcess: () => Effect.die("a configured server starts no process"),
+        } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
+        Effect.provideService(HostProcess.Environment, { PATH: "/a", HOME: "/fixture" }),
+      );
+      const supportsGoals = Effect.map(
+        instance.orchestrationAdapter.getCapabilities(),
+        (capabilities) => capabilities.turns.supportsNativeGoals === true,
+      );
+      yield* instance.snapshot.resolveMaintenance({ fresh: true });
+      assert.isFalse(yield* supportsGoals);
+      // The server is upgraded; the next session connects to it and sees 2.2.5.
+      version = "2.2.5";
+      const session = yield* instance.orchestrationAdapter.openSession({
+        threadId: ThreadId.make("external-goals"),
+        providerSessionId: ProviderSessionId.make("external-goals"),
+        modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+      });
+      assert.isTrue(session.providerSession.capabilities.turns.supportsNativeGoals);
+      assert.isTrue(yield* supportsGoals);
+    }).pipe(Effect.scoped),
+  );
 });

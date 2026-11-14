@@ -165,6 +165,8 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
       Effect.tap(remember),
     );
     return OpenCode2Server.of({
+      // Every later session reuses this connection, so its version is what a new session gets.
+      runningVersion: Effect.sync(() => latest?.version),
       withConnection: Effect.fn("OpenCode2Server.withConnection")(function (use) {
         return Effect.suspend(() => (latest === undefined ? connect : Effect.succeed(latest))).pipe(
           Effect.flatMap(use),
