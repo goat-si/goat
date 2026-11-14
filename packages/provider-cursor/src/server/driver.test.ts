@@ -187,6 +187,15 @@ it.layer(layerTest)("CursorDriver", (it) => {
           .pipe(Effect.result))._tag,
       ).toBe("Failure");
       expect(openedKeys).toEqual([]);
+      process.env.CURSOR_BACKEND_URL = "https://custom.invalid";
+      const changed = yield* open("changed-after-sdk-load");
+      expect(
+        (yield* changed
+          .ensureThread({ threadId, modelSelection, runtimePolicy })
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(openedKeys).toEqual([]);
+      process.env.CURSOR_BACKEND_URL = "https://api2.cursor.sh";
       host.CURSOR_BACKEND_URL = "https://api2.cursor.sh/";
       const first = yield* open("first");
       const thread = yield* first.ensureThread({ threadId, modelSelection, runtimePolicy });

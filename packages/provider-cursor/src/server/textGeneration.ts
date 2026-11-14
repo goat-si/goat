@@ -97,7 +97,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
         return yield* new TextGenerationError({
           operation,
-          detail: "CURSOR_BACKEND_URL differs from the selected Cursor backend.",
+          detail:
+            "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
         });
       }
       const { Agent } = yield* Effect.try(sdk.load);
@@ -144,7 +145,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         if (!sdkBackendMatches((yield* currentEnvironment).CURSOR_BACKEND_URL)) {
           return yield* new TextGenerationError({
             operation,
-            detail: "CURSOR_BACKEND_URL differs from the selected Cursor backend.",
+            detail:
+              "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
           });
         }
         return yield* Effect.tryPromise((signal) =>

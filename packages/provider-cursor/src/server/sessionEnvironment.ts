@@ -50,7 +50,9 @@ export const forSession = (source: Source, auth: SessionAuth = {}) =>
                   : Effect.fail(
                       new CursorAgentSdkRunnerError({
                         method: "open",
-                        cause: new Error("CURSOR_BACKEND_URL differs from the session backend."),
+                        cause: new Error(
+                          "Cursor backend differs from the loaded SDK or current environment. Restart GOAT to use a different Cursor backend.",
+                        ),
                       }),
                     ),
               ),
