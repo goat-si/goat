@@ -149,7 +149,7 @@ import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../sta
 import { buildThreadRouteParams, resolveActiveThreadRouteRef } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { RelativeTime } from "./RelativeTime";
-import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -3494,7 +3494,8 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   const { archiveThread, deleteThread, markThreadUnread, pinThread, confirmAndUnpinThread } =
     useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
-  const routeTarget = useThreadRouteTarget();
+  // The Usage modal keeps the thread behind it current.
+  const routeTarget = useShownThreadRouteTarget().shownTarget;
   const routeDraftThread = useComposerDraftStore((store) =>
     routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
   );
