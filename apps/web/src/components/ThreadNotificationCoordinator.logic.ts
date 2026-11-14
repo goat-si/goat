@@ -172,7 +172,7 @@ export function notificationAttention(
   requestId: string | null = null,
 ): string | null {
   if (!NOTIFYING_STATUSES.has(status) || (feedOwned && status === "approval")) return null;
-  return requestId === null ? `${runId}:${status}` : `${runId}:${status}:${requestId}`;
+  return requestId === null ? `${runId}:${status}` : `${status}:${requestId}`;
 }
 
 const NO_THREADS: ReadonlySet<ThreadId> = new Set();
