@@ -74,9 +74,15 @@ describe("Pen's own pen-<name> alias", () => {
       claimedBy([record({ sshdPin: KEY_FINGERPRINT })], { alias: "pen-cc-08" }, rejoined),
     ).toMatchObject({ by: "alias" });
     const twins = penAliases(line("cc", "c".repeat(26)) + line("cc", node, "ssh-rsa", "AAAA"));
-    expect(claimedBy([record({ sshdPin: null })], { alias: "pen-cc" }, twins)).toMatchObject({
+    const twin = claimedBy([record({ sshdPin: null })], { alias: "pen-cc" }, twins);
+    expect(twin).toMatchObject({
       by: "alias",
     });
+    // The kept member under that name is reached by another alias, not by detaching anything.
+    const text = refusalText(twin, "pen-cc");
+    expect(text).toContain("more than one Pen member");
+    expect(text).toContain("pen-" + node);
+    expect(text).not.toContain("Detach it");
   });
 
   it("leaves a kept member's pen-<name>, an ended record's, and a line Pen did not write alone", () => {

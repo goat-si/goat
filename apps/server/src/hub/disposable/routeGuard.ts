@@ -14,6 +14,8 @@ export interface DisposableClaim {
   readonly attachId: string;
   readonly nodeId: string;
   readonly by: "alias" | "environment" | "host_key";
+  /** Pen's pen-<name> names several members, and this disposable machine is one of them. */
+  readonly shared?: true;
 }
 
 /** What Pen's own known_hosts ties each alias to: the members' node ids and ED25519 key fingerprints. */
@@ -72,18 +74,19 @@ export const claimedBy = (
   const members = alias === undefined ? undefined : pen.get(alias);
   for (const record of records) {
     if (record.final) continue;
-    const found = (by: DisposableClaim["by"]) => ({
+    const found = (by: DisposableClaim["by"], shared = false) => ({
       attachId: record.attachId,
       nodeId: record.nodeId,
       by,
+      ...(shared ? { shared: true as const } : {}),
     });
     const node = record.nodeId.toLowerCase();
+    if (alias === "pen-" + node) return found("alias");
     if (
-      alias === "pen-" + node ||
       members?.nodeIds.has(node) === true ||
       (record.sshdPin !== null && members?.fingerprints.has(record.sshdPin) === true)
     )
-      return found("alias");
+      return found("alias", (members?.nodeIds.size ?? 0) > 1);
     if (
       claim.environmentId !== undefined &&
       claim.environmentId !== null &&
@@ -106,9 +109,16 @@ const BY: Record<DisposableClaim["by"], string> = {
 export const refusalText = (claim: DisposableClaim | undefined, target: string) =>
   claim === undefined
     ? ""
-    : target +
-      " is a disposable machine (attach " +
-      claim.attachId +
-      ", matched by " +
-      BY[claim.by] +
-      "): GOAT reaches it only through its own Pen route, so no other route or link may name it. Detach it in Settings → Hub on web or desktop first; once its record has ended, it can be added as a kept machine.";
+    : claim.shared === true
+      ? target +
+        " names more than one Pen member, and one of them is the disposable machine pen-" +
+        claim.nodeId +
+        " (attach " +
+        claim.attachId +
+        "), which GOAT reaches only through its own Pen route. Reach the kept machine by an alias of your own (a Host block without the Pen name), or rename one of them in Pen."
+      : target +
+        " is a disposable machine (attach " +
+        claim.attachId +
+        ", matched by " +
+        BY[claim.by] +
+        "): GOAT reaches it only through its own Pen route, so no other route or link may name it. Detach it in Settings → Hub on web or desktop first; once its record has ended, it can be added as a kept machine.";
