@@ -754,7 +754,7 @@ const make = Effect.gen(function* () {
         });
         if (!eligible && retention !== null) [eligible, removalReason] = [true, retention];
         // Only proof that the commits shipped lets any rule remove a worktree that has them.
-        if (!deleted && (eligible || unchangedApplies || settings.worktreeOnMerge)) {
+        if (!deleted && (eligible || settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const shipping = yield* shipped({
             repositoryCwd: path.resolve(project.workspaceRoot),
             worktreePath,
@@ -767,8 +767,10 @@ const make = Effect.gen(function* () {
                   : "unshipped"
                 : "never",
           });
-          if (shipping._tag === "unshipped" || shipping._tag === "unknown")
-            return keep(shipping.reason);
+          if (shipping._tag === "unknown") return keep(shipping.reason);
+          if (!eligible && !unchangedApplies && !settings.worktreeOnMerge)
+            return keep("not settled");
+          if (shipping._tag === "unshipped") return keep(shipping.reason);
           if (!eligible && shipping._tag === "integrated" && unchangedApplies) {
             eligible = true;
             removalReason = shipping.remote
