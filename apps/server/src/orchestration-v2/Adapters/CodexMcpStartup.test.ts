@@ -26,6 +26,19 @@ describe("Codex MCP startup", () => {
           const startup: Array<CodexReplay.CodexAppServerReplayEntry> = [
             {
               type: "emit_inbound",
+              label: "mcp-failed-without-thread",
+              frame: {
+                method: "mcpServer/startupStatus/updated",
+                params: {
+                  threadId: null,
+                  name: "example_mcp",
+                  status: "failed",
+                  error: startupError,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
               label: "mcp-starting",
               frame: {
                 method: "mcpServer/startupStatus/updated",
@@ -95,7 +108,7 @@ describe("Codex MCP startup", () => {
             const serialized = JSON.stringify(event);
             return serialized.includes("example_mcp") && serialized.includes("failed to start");
           });
-          assert.isNotEmpty(surfaced);
+          assert.lengthOf(surfaced, 1);
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
