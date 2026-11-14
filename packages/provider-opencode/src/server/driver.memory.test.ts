@@ -14,6 +14,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import * as Hold from "../../../../apps/server/src/memory/MemoryGenerationHold.ts";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -28,14 +30,14 @@ import { OpenCodeDriver } from "./driver.ts";
 
 const isMemoryGenerationRunnerError = Schema.is(MemoryGenerationRunnerError);
 
-it.live("classifies a missing executable for the memory hold and retries after recovery", () =>
+it.effect("holds a missing executable until a due probe gets a non-repeatable version error", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped();
     const host = yield* ProviderHost.ProviderHost;
     const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
     let available = false;
-    let recoveredProbes = 0;
+    let commandCalls = 0;
     const instance = yield* OpenCodeDriver.create({
       instanceId: ProviderInstanceId.make("opencode-test"),
       displayName: undefined,
@@ -53,12 +55,13 @@ it.live("classifies a missing executable for the memory hold and retries after r
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
         ...runtime,
         runOpenCodeCommand: (input) =>
-          available
-            ? Effect.sync(() => {
-                recoveredProbes++;
-                return { stdout: "1.18.32", stderr: "", code: 0 };
-              })
-            : runtime.runOpenCodeCommand(input),
+          Effect.suspend(() => {
+            commandCalls++;
+            // A nonexistent absolute path fails at spawn with ENOENT; no child can hang.
+            return available
+              ? Effect.succeed({ stdout: "invalid version", stderr: "", code: 0 })
+              : runtime.runOpenCodeCommand(input);
+          }),
       }),
     );
     const input = GenerateMemorySummaryInput.make({
@@ -76,12 +79,37 @@ it.live("classifies a missing executable for the memory hold and retries after r
       modelSelection: { instanceId: instance.instanceId, model: "openai/gpt-5" },
     });
     yield* instance.snapshot.refresh;
-    const failure = yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.flip);
-    assert.isTrue(isMemoryGenerationRunnerError(failure.cause));
-    assert.deepInclude(failure.cause, { code: "unavailable" });
+    const hold = yield* Hold.make;
+    const key = yield* hold.keyFor(input.modelSelection);
+    const second = GenerateMemorySummaryInput.make({
+      ...input,
+      sourceThread: { ...input.sourceThread, threadId: ThreadId.make("second-thread") },
+    });
+    const callsBeforeFailure = commandCalls;
+    const failure = yield* hold
+      .guard(key, instance.textGeneration.generateMemorySummary!(input))
+      .pipe(Effect.flip);
+    assert.strictEqual((yield* hold.status(key))?.reason, "unavailable");
+    assert.isTrue(isMemoryGenerationRunnerError("cause" in failure ? failure.cause : undefined));
+    assert.deepInclude("cause" in failure ? failure.cause : undefined, { code: "unavailable" });
+    assert.isTrue(yield* hold.isHeld(key));
+    const callsAfterFailure = commandCalls;
+    assert.isAbove(callsAfterFailure, callsBeforeFailure);
+    const held = yield* hold
+      .guard(key, instance.textGeneration.generateMemorySummary!(second))
+      .pipe(Effect.flip);
+    assert.strictEqual(held._tag, "MemoryGenerationHeld");
+    assert.strictEqual(commandCalls, callsAfterFailure);
     available = true;
-    yield* instance.textGeneration.generateMemorySummary!(input).pipe(Effect.exit);
-    assert.isAbove(recoveredProbes, 0);
+    yield* TestClock.adjust(60_000);
+    const probeFailure = yield* hold
+      .guard(key, instance.textGeneration.generateMemorySummary!(second))
+      .pipe(Effect.flip);
+    assert.strictEqual(probeFailure._tag, "TextGenerationError");
+    assert.isUndefined(Hold.deterministicFailure(probeFailure));
+    assert.isAbove(commandCalls, callsAfterFailure);
+    assert.isFalse(yield* hold.isHeld(key));
+    assert.isUndefined(yield* hold.status(key));
   }).pipe(
     Effect.scoped,
     Effect.provide(
