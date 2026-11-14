@@ -55,7 +55,6 @@ const roster = vi.hoisted(() => {
   };
 });
 const channels = vi.hoisted(() => ({
-  homeCurrentOpenableWorkByEnvironment: () => "home-work",
   homeCurrentOpenableWorkAtom: () => "current-work",
   createBot: { permissionAtom: () => null },
   updateBot: { permissionAtom: () => null },
@@ -66,6 +65,7 @@ const channels = vi.hoisted(() => ({
   readBotArtifact: { permissionAtom: () => null },
 }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
     command === channels.createBot
@@ -75,8 +75,8 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: (atom: unknown) =>
-    atom === "home-work"
-      ? { rosterKnown: true, byBot: [{ eligible: false }] }
+    atom === "governed"
+      ? false
       : atom === "current-work"
         ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
         : true,
