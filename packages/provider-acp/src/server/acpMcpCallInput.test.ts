@@ -84,3 +84,28 @@ describe("extractMcpToolCallIdentity for OMP devices", () => {
     expect(extractMcpToolCallIdentity(docRead), "doc read").toBeUndefined();
   });
 });
+
+describe("extractMcpToolCallIdentity for Hermes", () => {
+  it("recovers GOAT identity from Hermes editor-renamed MCP tool titles", () => {
+    const identityFor = (title: string) =>
+      extractMcpToolCallIdentity(
+        toolCallFromUpdate({
+          sessionUpdate: "tool_call",
+          toolCallId: "hermes-1",
+          kind: "other",
+          title,
+          status: "pending",
+          rawInput: { title: "Chart", html: "<p>hi</p>", height: 320 },
+        }),
+      );
+
+    expect(identityFor("mcp__editor_goat_f6129534__html_render")).toEqual({
+      server: "goat",
+      tool: "html_render",
+    });
+    expect(identityFor("mcp__editor_github_1234abcd__html_render")).toEqual({
+      server: "editor_github_1234abcd",
+      tool: "html_render",
+    });
+  });
+});

@@ -5,6 +5,8 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
+  MessageId,
+  RunId,
   ProviderDriverKind,
   ProviderInstanceId,
   TurnItemId,
@@ -25,6 +27,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const layerNoProviderInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
   // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
@@ -197,5 +200,72 @@ layer("ProviderEventIngestorV2 screen rows", (it) => {
         assert.equal(fresh?.title, "goat screen run");
         assert.equal(fresh?.type === "dynamic_tool" ? fresh.toolSummary : "", undefined);
       }),
+  );
+
+  it.effect("keeps a steered message pending until the provider reports it read", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const threadEvent = yield* threadCreatedEvent(now);
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: threadEvent.threadId,
+      });
+      const runId = RunId.make("run:steer-read");
+      const messageId = MessageId.make("message:steer-read");
+      const steer: OrchestrationV2TurnItem = {
+        id: idAllocator.derive.userTurnItem({ messageId }),
+        threadId: threadEvent.threadId,
+        runId,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "user_message",
+        createdBy: "user",
+        creationSource: "web",
+        messageId,
+        inputIntent: "steer",
+        text: "Steer behind a command",
+        attachments: [],
+      };
+      yield* eventSink.write({ events: [threadEvent] });
+      const ingest = (event: ProviderAdapter.ProviderAdapterV2Event) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+          event,
+        });
+      const projected = projectionStore.getTurnItem({
+        threadId: threadEvent.threadId,
+        itemId: steer.id,
+      });
+      const steerUpdated = (status: "pending" | "completed") =>
+        ingest({
+          type: "steer.updated",
+          driver: CODEX_DRIVER,
+          threadId: threadEvent.threadId,
+          runId,
+          messageId,
+          status,
+        });
+
+      yield* ingest({ type: "turn_item.updated", driver: CODEX_DRIVER, turnItem: steer });
+      yield* steerUpdated("pending");
+      assert.deepInclude(yield* projected, { status: "pending", completedAt: null });
+      yield* steerUpdated("completed");
+      assert.equal((yield* projected)?.status, "completed");
+    }),
   );
 });

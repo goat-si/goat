@@ -4,8 +4,9 @@ import { isTerminalProviderTurnStatus, isSettledTurnItemStatus } from "./provide
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { repairSchedule } from "../retryJitter.ts";
-import { continuationOrigin } from "./ContinuationChain.ts";
+import { runMemoryPrepareInput } from "./RunMemoryPrepareInput.ts";
 import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
+export { runMemoryPrepareInput };
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
@@ -527,32 +528,6 @@ export const RunExecutionServiceV2Error = Schema.Union([
 export type RunExecutionServiceV2Error = typeof RunExecutionServiceV2Error.Type;
 
 /** L2 consumes this at provider prepare/reuse, before issuing credentials or snapshots. */
-export interface RunMemoryPrepareInput {
-  readonly memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling | null;
-}
-
-export function runMemoryPrepareInput(input: {
-  readonly run: OrchestrationV2Run;
-  readonly message: Pick<
-    import("@goat/contracts").OrchestrationV2ConversationMessage,
-    "createdBy" | "creationSource" | "scheduledTaskId"
-  >;
-  readonly projection: Pick<
-    import("@goat/contracts").OrchestrationV2ThreadProjection,
-    "runs" | "messages"
-  >;
-}): RunMemoryPrepareInput {
-  const origin = continuationOrigin(input);
-  if (origin === undefined) return { memoryGrantCeiling: "none" };
-  const { run, message } = origin;
-  const ordinary =
-    message.createdBy === "user" &&
-    (message.creationSource === "web" || message.creationSource === "mobile") &&
-    message.scheduledTaskId === undefined &&
-    run.delegatedTaskId === undefined;
-  return { memoryGrantCeiling: ordinary ? null : (run.memoryGrantCeiling ?? "none") };
-}
-
 /** Everything prepare reads from the run: its memory ceiling and its capability chips. */
 export const runPrepareInput = (
   input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnPrepareInput>[0],
