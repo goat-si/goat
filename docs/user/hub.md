@@ -177,6 +177,14 @@ linked. If you moved it anyway, move it back to bring the link back.
 A machine with a full OpenCodex install, or one that shares its SSH host key
 with another disposable machine, stops for you to decide.
 
+GOAT reaches a disposable machine only through its own Pen route. Adding it as
+an SSH device, joining, moving or re-linking it under another alias, or adding a
+route to it in **Hub devices** is refused while its record is open, matched by
+its Pen alias, the SSH host key it offers or the GOAT it runs; detach it first.
+Its row in **Hub devices** shows **Disposable**, or **Conflict** when something
+about it is ambiguous, **Still in Pen** while its key is a Pen member, who
+attached it and how long it has been in its state.
+
 Each machine is a full Pen member and can reach services on your machines'
 loopback, and it stays a Pen member until you remove it with
 [`pen revoke`](pen.md#remove-a-machine).
