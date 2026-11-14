@@ -126,8 +126,12 @@ const makeTildeProviderFixtures = Effect.fn(
     directory: homePath,
     prefix: ".goat-provider-path-test-",
   });
+  yield* fileSystem.writeFileString(
+    path.join(fixtureDir, "package.json"),
+    JSON.stringify({ type: "commonjs" }),
+  );
   const codexPath = path.join(fixtureDir, "codex");
-  const claudePath = path.join(fixtureDir, "claude");
+  const claudePath = path.join(fixtureDir, "claude.mjs");
   const claudeHomePath = path.join(fixtureDir, "claude-home");
   const codexScriptPath = path.join(fixtureDir, "codex-script.json");
   const codexFixtureDir = path.join(import.meta.dirname, "testFixtures");
@@ -497,7 +501,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
         const config = makeClaudeConfig({
           enabled: true,
-          binaryPath: "claude",
+          binaryPath: "claude.mjs",
           homePath: fixtures.claudeHomePath,
         });
         const inheritedId = ProviderInstanceId.make("claude_host_path");
