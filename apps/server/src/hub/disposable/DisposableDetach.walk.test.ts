@@ -159,6 +159,37 @@ it.effect(
 );
 
 it.effect(
+  "tombstone_limit on a force that owns its retirement: a resend resumes it once capacity is free, with no new id",
+  () =>
+    world((pen, home, _grant, host) =>
+      Effect.gen(function* () {
+        const ocx = fakeDetachHome(host);
+        const { attachId } = yield* linked(pen, home, host, 1);
+        ocx.tombstoneLimit = true;
+        ocx.ownsReceiptOnLimit = true;
+        yield* detach(PERSON, attachId, "d-1", true);
+        yield* detachPass;
+        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
+        // Capacity still full: the new id meets the owner, GOAT goes back to it and stops there.
+        yield* detach(PERSON, attachId, "d-2", true);
+        yield* detachPass;
+        expect(ocx.sent).toEqual([
+          attachId + ".force.1",
+          attachId + ".force.1",
+          attachId + ".force.2",
+          attachId + ".force.1",
+        ]);
+        expect(yield* stopOf(attachId)).toBe("tombstone_limit");
+        ocx.tombstoneLimit = false;
+        yield* detach(PERSON, attachId, "d-3", true);
+        yield* settle(attachId);
+        expect(ocx.sent.slice(4)).toEqual([attachId + ".force.1"]);
+        expect((yield* listed(attachId))?.state).toBe("purged");
+      }),
+    ),
+);
+
+it.effect(
   "a retirement force that stopped on a linked row: the person recovers or forgets cleanups and detaches it, and the removal goes on",
   () =>
     world((pen, home, _grant, host) =>

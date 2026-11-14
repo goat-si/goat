@@ -12,6 +12,8 @@ interface RevokeEntry {
   code?: string;
   purged?: true;
   resolvedAt?: string;
+  /** A forced revoke that began its removal keeps its link's retirement receipt until it finishes. */
+  ownsReceipt?: true;
 }
 
 /**
@@ -52,6 +54,12 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
     recoverRefusal: undefined as string | undefined,
     /** A forced revoke is refused, as OpenCodex does at 256 waiting tombstones. */
     tombstoneLimit: false,
+    /**
+     * A forced revoke refused by the tombstone limit had begun its removal in an earlier attempt, so it
+     * still owns the link's retirement receipt: a repeat of its id resumes it, a new id is refused with
+     * link_retirement_owned (link-routes.ts foreignRetirement, resumeRetirementBeforeReplay).
+     */
+    ownsReceiptOnLimit: false,
     /** The next forced revokes are refused before the journal (another operation holds the link). */
     busy: 0,
     /** The next journal reads fail, as a lost answer would. */
@@ -102,11 +110,12 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       known.code = "operation_interrupted";
       return answer(known);
     }
-    // A purge id replays; a forced one resumes unless it settled.
+    // A recorded id replays its answer (a failed_clean one too); a forced one left unsettled, or one
+    // that still owns its retirement receipt, resumes.
     if (
       known !== undefined &&
       (!force || known.state === "committed" || known.state === "failed_clean") &&
-      !(force && known.code === "tombstone_limit")
+      known.ownsReceipt !== true
     )
       return answer(known);
     if (force && control.busy > 0) {
@@ -123,6 +132,12 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       [...revokes.values()].some((entry) => entry.linkId === linkId && entry.state === "open")
     )
       return refused(5, { code: "link_operation_open" });
+    // Another forced revoke of this link owns its retirement receipt: a new id is refused.
+    if (
+      known === undefined &&
+      [...revokes.values()].some((entry) => entry.linkId === linkId && entry.ownsReceipt === true)
+    )
+      return refused(5, { code: "link_retirement_owned" });
     if (!host.control.links.has(linkId)) return refused(4, { code: "link_not_found" });
     const alias = host.control.links.get(linkId)?.alias;
     if (typeof alias === "string") aliases.set(linkId, alias);
@@ -132,12 +147,14 @@ export const fakeDetachHome = (host: ReturnType<typeof fakeEnrollHost>) => {
       if (control.tombstoneLimit) {
         entry.state = "failed_clean";
         entry.code = "tombstone_limit";
+        if (control.ownsReceiptOnLimit) entry.ownsReceipt = true;
         return answer(entry);
       }
       tombstones.add(linkId);
       host.control.links.delete(linkId);
       entry.state = "committed";
       delete entry.code;
+      delete entry.ownsReceipt;
       return answer(entry);
     }
     if (control.purgeOpen) {
