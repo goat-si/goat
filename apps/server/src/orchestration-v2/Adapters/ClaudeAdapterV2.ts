@@ -10607,6 +10607,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 model: compileClaudeModelSelection(turnInput.modelSelection, modelCatalog)
                   .apiModelId,
                 launchSettings: querySession.launchArgSettings,
+                environment: adapterOptions.environment,
                 files: yield* settingsFilesByPrecedence(querySession.settingsCwd),
                 fileSystem,
               }),
