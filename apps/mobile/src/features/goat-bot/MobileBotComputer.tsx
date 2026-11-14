@@ -5,10 +5,16 @@ import {
   goatBotTaskWait,
   presentTaskStatus,
 } from "@goat/client-runtime/goatBot";
-import { type BotId, CHANNEL_LIST_TASKS_MAX_LIMIT, type EnvironmentId } from "@goat/contracts";
+import {
+  BotId,
+  CHANNEL_LIST_TASKS_MAX_LIMIT,
+  type EnvironmentId,
+  MAIN_BOT_ID,
+} from "@goat/contracts";
 import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
@@ -25,6 +31,11 @@ export function MobileBotComputer(props: {
   const { environmentId, connected, botId } = props;
   const workKey = props.workKey ?? "";
   const botName = props.botName ?? "GOAT Bot";
+  // With member bots the server lists every bot's work unless asked for one; older servers have
+  // only the main bot and take no bot id.
+  const members =
+    useEnvironmentServerConfig(environmentId)?.environment.capabilities.goatBotMembers === true;
+  const scope = botId ?? (members ? BotId.make(MAIN_BOT_ID) : null);
   const readable = environmentId !== null && connected;
   const tasks = useEnvironmentQuery(
     readable
@@ -33,7 +44,7 @@ export function MobileBotComputer(props: {
           input: {
             status: [...BOT_RUNNING_TASK_STATUSES],
             limit: CHANNEL_LIST_TASKS_MAX_LIMIT,
-            ...(botId === null ? {} : { botId }),
+            ...(scope === null ? {} : { botId: scope }),
           },
         })
       : null,

@@ -15,18 +15,37 @@ const state = vi.hoisted(() => ({
   cause: null as unknown,
   refresh: vi.fn(),
   requested: vi.fn(),
+  /** When set, the server answers by the bot each read asks for, as channel.listTasks does. */
+  tasksByBot: null as Record<string, unknown[]> | null,
+  members: undefined as boolean | undefined,
 }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     listTasks: (target: unknown) => {
       state.requested(target);
-      return "tasks";
+      return target;
     },
   },
 }));
+vi.mock("../../state/entities", () => ({
+  useEnvironmentServerConfig: () =>
+    state.members === undefined
+      ? null
+      : { environment: { capabilities: { goatBotMembers: state.members } } },
+}));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (atom: unknown) => ({
-    data: atom === null ? null : state.data,
+  useEnvironmentQuery: (atom: { input?: { botId?: string } } | null) => ({
+    data:
+      atom === null
+        ? null
+        : state.tasksByBot === null
+          ? state.data
+          : {
+              tasks:
+                atom.input?.botId === undefined
+                  ? Object.values(state.tasksByBot).flat()
+                  : (state.tasksByBot[atom.input.botId] ?? []),
+            },
     cause: atom === null ? null : state.cause,
     error: null,
     isPending: false,
@@ -55,6 +74,8 @@ const task = (taskId: string, title: string, worker?: { host?: string }) => ({
 function setup(data: unknown, cause: unknown = null) {
   state.data = data;
   state.cause = cause;
+  state.tasksByBot = null;
+  state.members = undefined;
   state.refresh.mockReset();
   state.requested.mockReset();
 }
@@ -131,6 +152,46 @@ it("a member's tab lists only that bot's work", async () => {
   expect(state.requested).toHaveBeenCalledWith({
     environmentId,
     input: expect.objectContaining({ botId: "research" }),
+  });
+});
+
+it("the main bot's card lists only the main bot's work on a server with member bots", async () => {
+  setup(null);
+  state.members = true;
+  state.tasksByBot = {
+    main: [task("a", "Move the build to Node 24", {})],
+    scout: [task("b", "Pick the release branch", {})],
+  };
+  await render();
+  expect(container.textContent).toContain("Move the build to Node 24");
+  expect(container.textContent).not.toContain("Pick the release branch");
+});
+
+it("an older server without member bots is asked as before, without a bot", async () => {
+  setup(null);
+  state.members = false;
+  state.tasksByBot = { main: [task("a", "Move the build to Node 24", {})] };
+  await render();
+  expect(container.textContent).toContain("Move the build to Node 24");
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId,
+    input: expect.not.objectContaining({ botId: expect.anything() }),
+  });
+});
+
+it("follows the computer shown: main is named only where that computer has member bots", async () => {
+  setup(null);
+  state.tasksByBot = { main: [], scout: [] };
+  state.members = true;
+  await render();
+  expect(state.requested).toHaveBeenLastCalledWith(
+    expect.objectContaining({ input: expect.objectContaining({ botId: "main" }) }),
+  );
+  state.members = false;
+  await render({ environmentId: EnvironmentId.make("older") });
+  expect(state.requested).toHaveBeenLastCalledWith({
+    environmentId: EnvironmentId.make("older"),
+    input: expect.not.objectContaining({ botId: expect.anything() }),
   });
 });
 
