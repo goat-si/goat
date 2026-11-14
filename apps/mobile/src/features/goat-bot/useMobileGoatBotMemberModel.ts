@@ -78,8 +78,14 @@ export function useMobileGoatBotMemberModelMenu(
           : `Update GOAT on ${member.name}'s computer to change its model`,
     select: (id: string) => {
       const next = goatBotMemberModelChoice(state, member.defaultModelSelection, id);
-      if (next === undefined || !canChange || !goatBotComputerConnectedNow(member.environmentId))
+      if (next === undefined || !canChange) return;
+      if (!goatBotComputerConnectedNow(member.environmentId)) {
+        Alert.alert(
+          `Couldn't change ${member.name}'s model`,
+          `${member.name}'s computer isn't connected.`,
+        );
         return;
+      }
       setSaving(true);
       void runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
         environmentId: member.environmentId,

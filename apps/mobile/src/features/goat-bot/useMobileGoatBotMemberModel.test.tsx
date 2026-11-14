@@ -140,8 +140,14 @@ it("offers no model change while the member's computer is offline, and a menu op
   state.connected = false;
   const offline = await menuOf();
   expect(offline.canChange).toBe(false);
+  state.alert.mockClear();
   opened.select("codex:astra");
   expect(state.run).not.toHaveBeenCalled();
+  // Refused, and the person is told why, as the other bot changes do.
+  expect(state.alert).toHaveBeenCalledExactlyOnceWith(
+    "Couldn't change Research's model",
+    "Research's computer isn't connected.",
+  );
   state.connected = true;
   const back = await menuOf();
   expect(back.canChange).toBe(true);
