@@ -14,7 +14,7 @@ function makeTempHomeDir() {
 }
 
 describe("ssh config", () => {
-  it.effect("deduplicates hosts through quoted and escaped Include paths like OpenSSH", () =>
+  it.effect("deduplicates hosts through quoted, escaped, and Unicode Includes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -31,13 +31,25 @@ describe("ssh config", () => {
         path.join(homeDir, "escaped space.conf"),
         "Host escaped\n  HostName escaped.example.com\nHost *\n",
       );
+      const unicodeFiles = [
+        "\u00a0team\u00a0one.conf",
+        "team\u2003one.conf",
+        "team\u2028one.conf",
+        "team\u2029one.conf",
+      ].flatMap((file) => [file, `quoted-${file}`]);
+      for (const [index, file] of unicodeFiles.entries()) {
+        yield* fs.writeFileString(
+          path.join(sshDir, file),
+          `Host unicode-${index}\n  HostName unicode-${index}.example.com\nHost *\n`,
+        );
+      }
       yield* fs.writeFileString(
         path.join(sshDir, "config"),
         [
           `Include "${path.join(quotedDir, "team#1=a.conf")}" # comment`,
           `Include ${path.join(homeDir, "escaped space.conf").replaceAll(" ", "\\ ")}`,
-          "",
-        ].join("\n"),
+          `Include ${unicodeFiles.map((file, index) => (index % 2 === 0 ? file : `"${file}"`)).join("\t")}`,
+        ].join("\n") + "\r",
       );
 
       yield* fs.writeFileString(
@@ -51,6 +63,11 @@ describe("ssh config", () => {
         [
           ["escaped", "escaped.example.com", "ssh-config"],
           ["quoted", "quoted.example.com", "ssh-config"],
+          ...unicodeFiles.map((_, index) => [
+            `unicode-${index}`,
+            `unicode-${index}.example.com`,
+            "ssh-config",
+          ]),
         ],
       );
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -110,6 +127,11 @@ describe("ssh config", () => {
       const homeDir = yield* makeTempHomeDir();
       const sshDir = path.join(homeDir, ".ssh");
       yield* fs.makeDirectory(path.join(sshDir, "config.d"), { recursive: true });
+      yield* fs.makeDirectory(path.join(sshDir, "teams", "one"), { recursive: true });
+      const blockedDir = path.join(sshDir, "teams", "blocked");
+      yield* fs.makeDirectory(blockedDir);
+      yield* fs.chmod(blockedDir, 0o000);
+      yield* Effect.addFinalizer(() => fs.chmod(blockedDir, 0o755).pipe(Effect.ignore));
       yield* fs.writeFileString(
         path.join(sshDir, "config"),
         [
@@ -118,8 +140,13 @@ describe("ssh config", () => {
           "Host=equalsbox",
           "Host *",
           "Include=config.d/*.conf",
+          "Include teams/*/*.conf",
           "",
         ].join("\n"),
+      );
+      yield* fs.writeFileString(
+        path.join(sshDir, "teams", "one", "hosts.conf"),
+        "Host fixture\n  HostName fixture.example.com\n",
       );
       yield* fs.writeFileString(
         path.join(sshDir, "config.d", "team.conf"),
@@ -169,6 +196,13 @@ describe("ssh config", () => {
         {
           alias: "equalsbox",
           hostname: "equalsbox",
+          username: null,
+          port: null,
+          source: "ssh-config",
+        },
+        {
+          alias: "fixture",
+          hostname: "fixture.example.com",
           username: null,
           port: null,
           source: "ssh-config",
