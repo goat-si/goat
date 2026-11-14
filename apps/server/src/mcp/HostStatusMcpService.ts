@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
+  type HubNode,
   type ProviderInstanceId,
 } from "@goat/contracts";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
@@ -144,8 +145,18 @@ const make = Effect.gen(function* () {
   );
   // Optional so layers built for one tool need not read the hub's nodes.
   const hubNodes = yield* Effect.serviceOption(HubNodes.HubNodes);
+  /** The hub's nodes, read once per call for every host it reports. */
+  const hubNodeList = Option.isSome(hubNodes)
+    ? hubNodes.value.snapshot.pipe(
+        Effect.map((snapshot) => snapshot.nodes),
+        Effect.orElseSucceed((): ReadonlyArray<HubNode> => []),
+      )
+    : Effect.succeed<ReadonlyArray<HubNode>>([]);
   /** This machine's view of the host: whether its goatclaw policy reached it, and its Child setup. */
-  const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
+  const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (
+    entry: HostStatusEntry,
+    nodes: ReadonlyArray<HubNode>,
+  ) {
     if (entry.host === null) return entry;
     const goatclaw = Option.isSome(fleet) ? yield* fleet.value.hostState(entry.host) : undefined;
     // The switch first: reading it can record why the host's consent ended.
@@ -155,16 +166,12 @@ const make = Effect.gen(function* () {
     const child = Option.isSome(childBootstrap)
       ? yield* childBootstrap.value.status(entry.host)
       : undefined;
-    // The class Hub devices shows for the node one of whose routes this host alias is.
-    const nodes = Option.isSome(hubNodes)
-      ? yield* hubNodes.value.snapshot.pipe(
-          Effect.map((snapshot) => snapshot.nodes),
-          Effect.orElseSucceed(() => []),
-        )
-      : [];
-    const host = entry.host;
+    // The class Hub devices shows for the node one of whose routes this host alias is (as ssh compares).
+    const host = entry.host.toLowerCase();
     const machineClass = nodes.find((node) =>
-      node.routes.some((route) => route.target.kind !== "linked" && route.target.alias === host),
+      node.routes.some(
+        (route) => route.target.kind !== "linked" && route.target.alias.toLowerCase() === host,
+      ),
     )?.machineClass;
     return {
       ...entry,
@@ -474,6 +481,7 @@ const make = Effect.gen(function* () {
                 ),
                 LOCAL_HOST_COMPATIBILITY,
               ),
+              yield* hubNodeList,
             ),
           ],
         };
@@ -497,11 +505,12 @@ const make = Effect.gen(function* () {
         ],
         { concurrency: "unbounded" },
       );
+      const nodes = yield* hubNodeList;
       return {
         hosts: [
           local,
           ...(yield* Effect.forEach(remote, (entry) =>
-            withGoatclaw(markHostCompatibility(entry, LOCAL_HOST_COMPATIBILITY)),
+            withGoatclaw(markHostCompatibility(entry, LOCAL_HOST_COMPATIBILITY), nodes),
           )),
         ],
       };

@@ -140,7 +140,7 @@ it.effect(
         lastSeenAt: null,
         lastError: null,
       });
-      const { value } = yield* run(
+      const { value, snapshotReads } = yield* run(
         {
           hosts: ["lab", "box"],
           nodes: [
@@ -149,7 +149,7 @@ it.effect(
               environmentId: EnvironmentId.make("env-lab"),
               label: "lab",
               kind: "ssh",
-              routes: [route("pen-" + "d".repeat(26)), route("lab")],
+              routes: [route("pen-" + "d".repeat(26)), route("LAB")],
               status: "online",
               lastSeenAt: null,
               addedBy: null,
@@ -178,6 +178,8 @@ it.effect(
       });
       expect(hosts.find((host) => host.host === "box")?.machineClass).toBeUndefined();
       expect(hosts.find((host) => host.host === null)?.machineClass).toBeUndefined();
+      // One read of the hub's nodes serves every host of the call; aliases compare as ssh does.
+      expect(snapshotReads()).toBe(1);
     }),
 );
 it.effect("fans out to this machine and each connected host, sorted", () =>

@@ -141,6 +141,7 @@ export const run = <A, E>(
   let connectedReads = 0;
   let repositoryReads = 0;
   let parityReads = 0;
+  let snapshotReads = 0;
   const inventory = {
     installed: false,
     binaries: [],
@@ -155,10 +156,13 @@ export const run = <A, E>(
     HostStatusMcpService.layer.pipe(
       Layer.provide(
         Layer.mock(HubNodes.HubNodes)({
-          snapshot: Effect.succeed({
-            hubEnvironmentId: EnvironmentId.make("hub"),
-            nodes: options.nodes ?? [],
-            notices: [],
+          snapshot: Effect.sync(() => {
+            snapshotReads += 1;
+            return {
+              hubEnvironmentId: EnvironmentId.make("hub"),
+              nodes: options.nodes ?? [],
+              notices: [],
+            };
           }),
         }),
       ),
@@ -297,6 +301,7 @@ export const run = <A, E>(
       connectedReads: () => connectedReads,
       repositoryReads,
       parityReads,
+      snapshotReads: () => snapshotReads,
       interrupted: interrupted.value,
     };
   });
