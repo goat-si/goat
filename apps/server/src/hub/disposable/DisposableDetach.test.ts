@@ -145,6 +145,22 @@ it.effect("a lost answer is read back and the same revoke id is sent again, neve
   ),
 );
 
+it.effect("a person's force on a silent machine resolves the unknown purge it supersedes", () =>
+  world((pen, home, _grant, host) =>
+    Effect.gen(function* () {
+      const ocx = fakeDetachHome(host);
+      const { attachId } = yield* linked(pen, home, host, 1);
+      ocx.machineAnswers = false;
+      yield* detach(PERSON, attachId, "d-1");
+      yield* detachPass; // the purge settles unknown on the Home
+      yield* detach(PERSON, attachId, "d-2", true);
+      yield* detachPass;
+      expect(ocx.resolved).toEqual([attachId + ".purge.1"]);
+      expect(ocx.sent).toEqual([attachId + ".purge.1", attachId + ".force.2"]);
+    }),
+  ),
+);
+
 it.effect(
   "a linked machine silent for 24 hours is retired, returns once it answers, and then detaches at once",
   () =>

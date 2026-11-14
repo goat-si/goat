@@ -221,9 +221,16 @@ export const makeDetach = Effect.fn("DisposableDetach.make")(function* (
             : true;
       if (reuse && (before.sends ?? 0) >= REVOKE_SENDS)
         return yield* halt(row, enroll, before, "revoke_unsettled");
-    } else if (before.operationId !== undefined && before.outcome === "unreachable") {
-      // The purge this force supersedes stays unknown on the Home until resolved.
-      if (!(yield* resolveSuperseded(before.operationId))) return;
+    } else if (before.operationId?.includes(".purge.") === true) {
+      // A silent machine's purge this force supersedes stays unknown on the Home until resolved; a
+      // person's force drops the stored outcome, so the entry itself is read.
+      const purge = yield* readEntry(before.operationId, linkId, false);
+      if (
+        purge.kind === "unsettled" &&
+        purge.code === "remote_disconnect_failed" &&
+        !purge.resolved
+      )
+        if (!(yield* resolveSuperseded(before.operationId))) return;
     }
     const attempt = reuse ? before.attempt : before.attempt + 1;
     const operationId =
