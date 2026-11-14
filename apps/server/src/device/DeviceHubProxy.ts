@@ -256,7 +256,10 @@ const makeHandler = Effect.fnUntraced(function* (peers: ReturnType<typeof WebRtc
   upstreamSearch.delete("hostId");
   const search = upstreamSearch.size > 0 ? `?${upstreamSearch.toString()}` : "";
   const screenshotDevice = upstreamSearch.get("device");
-  if (!ready.upstream && hubPath === "/vendor/serve-sim/api/screenshot" && screenshotDevice) {
+  if (
+    screenshotDevice &&
+    ["/vendor/serve-sim/api/screenshot", "/vendor/serve-emu/api/screenshot"].includes(hubPath)
+  ) {
     const { png } = yield* devices.screenshot({ hostId: ready.hostId, deviceId: screenshotDevice });
     return HttpServerResponse.uint8Array(png, {
       contentType: "image/png",
