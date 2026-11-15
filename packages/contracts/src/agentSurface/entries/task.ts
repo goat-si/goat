@@ -78,7 +78,7 @@ export const taskEntries = {
     toolkit: "orchestrator",
     summary: "Get delegated task status",
     description:
-      "Read status and results of this parent thread's GOAT-owned delegated task; reading a terminal result acknowledges automatic delivery. A completed turn with live nested work can still be unfinished. Later child-thread runs do not reopen a published task and can remain active after it ends. stop=unresponsive: Stop went unanswered; only a person can Force stop (goat#2338).",
+      "Read status and results of this parent thread's GOAT-owned delegated task; reading a terminal result acknowledges automatic delivery. A completed turn with live nested work can still be unfinished. Later child-thread runs do not reopen a published task and can remain active after it ends. stop=unresponsive: Stop went unanswered; task.cancel with force: true ends it.",
     guide:
       "Use childRunId to identify the original delegated run. workState distinguishes working, waiting_for_children and result_available. A completed turn with live nested work is not a completed task. summary is the final result, includes provider errors on failure and stays stable after publication.\n\nhasPendingChildRuns reports later queued or executing turns in the backing child thread, even after the task is terminal. It does not reopen the task. goat_task_cancel stops those turns too. Turns held in a stopped queue wait for the user and do not count.\n\nlatestTerminal* exposes later non-monitor turn results. latestTerminalSummary and latestTerminalResultContextTransferId independently become null when they exactly repeat summary and resultContextTransferId, respectively.\n\npendingApproval identifies the oldest pending live approval for this task's own unfinished work. Consult the fresh full request in childThreadId before responding: a record can outlive its provider callback and grants no approval authority. Decisions remain with the child's existing approval holder.\n\nReading a terminal result acknowledges its automatic parent delivery. Remote tasks return host, a remote childThreadId or null, summary-only results, pendingApproval=null, null context transfer/run IDs and hasPendingChildRuns=false. Later remote work is outside the task. Do not watch the remote child; completion already reaches the parent.",
     idempotencyReason:
@@ -114,6 +114,8 @@ export const taskEntries = {
     parameters: {
       taskId: "The taskId goat_task_create returned.",
       reason: "Why it stops, recorded as the stop reason; up to 2000 characters.",
+      force:
+        "Only after a cancel left the child stop=unresponsive (task.read): kill its agent and end the run.",
     },
     examples: [
       {

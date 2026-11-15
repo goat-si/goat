@@ -38,7 +38,7 @@ import {
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
-import { OrchestratorMcpRunStop } from "./orchestratorMcpStop.ts";
+import { OrchestratorMcpRunStop, OrchestratorMcpTaskForce } from "./orchestratorMcpStop.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
@@ -344,6 +344,7 @@ export type OrchestratorMcpTaskStatusInput = typeof OrchestratorMcpTaskStatusInp
 export const OrchestratorMcpTaskCancelInput = Schema.Struct({
   taskId: NodeId,
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
+  force: OrchestratorMcpTaskForce,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpTaskCancelInput = typeof OrchestratorMcpTaskCancelInput.Type;
@@ -681,9 +682,8 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
-// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
-// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
-// 0 asks for nothing, and answering it with one item would be a different request.
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on decode
+// (pagination returns the rest). Below 1 still fails: 0 asks for nothing, so one item would differ.
 const clampedPositiveInt = (maximum: number) =>
   PositiveInt.pipe(
     Schema.decodeTo(

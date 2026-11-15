@@ -1375,6 +1375,52 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
             Effect.map((records) => runStop(runId, records.turnItems)),
           );
+  // goat#2338: ThreadManagementService decides; every refusal stops nothing.
+  const forceCancelTask = Effect.fn("OrchestratorMcpService.forceCancelTask")(function* (
+    scope: McpThreadInvocationScope,
+    taskId: NodeId,
+  ): Effect.fn.Return<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure> {
+    yield* requireCapability(scope);
+    const { subagents } = yield* threadManagement
+      .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [taskId] })
+      .pipe(Effect.mapError(threadManagementFailure));
+    const childThreadId = subagents.find((task) => task.id === taskId)?.childThreadId ?? null;
+    // Force writes only to the child, which its user may have raised above the parent's modes.
+    const [parent, child] = yield* Effect.forEach(
+      [scope.thread.threadId, childThreadId],
+      (threadId) =>
+        threadId === null
+          ? Effect.succeed(null)
+          : threadManagement
+              .getThreadShell(threadId)
+              .pipe(Effect.mapError(threadManagementFailure)),
+    );
+    if (parent && child && child.deletedAt === null) {
+      yield* resolveRuntimeMode(parent.runtimeMode, child.runtimeMode);
+      yield* resolveInteractionMode(parent.interactionMode, child.interactionMode);
+    }
+    const forced = yield* threadManagement
+      .forceStopDelegatedTask({ parentThreadId: scope.thread.threadId, taskId })
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "DelegatedForceStopRefused"
+            ? failure("task_not_cancellable", error.message)
+            : error._tag === "OrchestrationV2ForceStopThreadError" && error.reason !== undefined
+              ? failure("task_not_cancellable", `${error.reason}: ${error.message}`)
+              : threadManagementFailure(error),
+        ),
+      );
+    const task = yield* readTask(scope, taskId);
+    return {
+      taskId,
+      status: isTerminalTaskStatus(task.status) ? task.status : "cancel_requested",
+      forceStop: {
+        outcome: forced.outcome,
+        sharedWithThreadIds: forced.sharedWithThreadIds,
+        note: "The child's run was ended by force, so its work may be incomplete. Its lane slot is released as the run ends; read it with task.read.",
+      },
+    };
+  });
   const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
@@ -2926,6 +2972,7 @@ const make = Effect.gen(function* () {
       }),
     cancelTask: Effect.fn("OrchestratorMcpService.cancelTask")(function* (callerScope, input) {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
+      if (input.force === true) return yield* forceCancelTask(scope, input.taskId);
       const current = yield* readTask(scope, input.taskId);
       const key = yield* requestKey(input.clientRequestId);
       const parentProjection = yield* threadManagement
