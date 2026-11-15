@@ -64,6 +64,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean | ((snapshot: ServerProvider) => boolean);
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
+  /**
+   * Asked, inside the step that commits a check, whether usage reported while it ran belongs with
+   * it. When it does not, the check resolves against the usage from before it ran. Synchronous and
+   * pure; omitted, reported usage always stays.
+   */
+  readonly keepsReportedUsage?: (published: ServerProvider, probed: ServerProvider) => boolean;
 }): Effect.fn.Return<
   ManagedServerProvider,
   ServerSettingsError,
@@ -205,15 +211,17 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           differs(probedSnapshot.auth.email?.toLowerCase(), previous.email?.toLowerCase()) ||
           (probedSnapshot.auth.workspaceId !== undefined &&
             probedSnapshot.auth.workspaceId !== previous.workspaceId);
+        const published =
+          switchedAccount ||
+          state.snapshot.usageLimits === usageBeforeProbe ||
+          input.keepsReportedUsage?.(state.snapshot, probedSnapshot) !== false
+            ? state.snapshot.usageLimits
+            : usageBeforeProbe;
         const usageLimits = switchedAccount
           ? probedSnapshot.usageLimits
-          : probedSnapshot.usageLimits === undefined &&
-              state.snapshot.usageLimits !== usageBeforeProbe
-            ? state.snapshot.usageLimits
-            : resolveUsageLimitsAfterProbe({
-                published: state.snapshot.usageLimits,
-                probed: probedSnapshot.usageLimits,
-              });
+          : probedSnapshot.usageLimits === undefined && published !== usageBeforeProbe
+            ? published
+            : resolveUsageLimitsAfterProbe({ published, probed: probedSnapshot.usageLimits });
         const workspaceId =
           usageLimits === probedSnapshot.usageLimits ? undefined : state.snapshot.auth.workspaceId;
         const usageAuthLabel =
@@ -249,8 +257,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   // Providers call this on every token-usage tick, usually without changing the snapshot.
   const applyUsageLimits: ManagedServerProvider["applyUsageLimits"] = Effect.fnUntraced(
-    function* (update) {
+    function* (update, options) {
       const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+        if (options?.appliesTo?.(state.snapshot) === false) {
+          return [null, state] as const;
+        }
         const complete = update.complete && update.windows.length > 0;
         const usageLimits = complete
           ? makeUsageLimits(update)

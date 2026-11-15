@@ -259,6 +259,7 @@ export function layerTest(input: {
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
   readonly pauseAttachWrite?: Parameters<typeof layerPausingAttachEventSink>[0];
   readonly beforeUnchangedWrite?: Ref.Ref<Effect.Effect<void>>;
+  readonly beforeTurnItemsWrite?: Ref.Ref<ReadonlyArray<Effect.Effect<void>>>;
   readonly pauseResolve?: {
     readonly armed: Ref.Ref<boolean>;
     readonly paused: Deferred.Deferred<void>;
@@ -320,7 +321,10 @@ export function layerTest(input: {
       : input.pauseAttachWrite !== undefined
         ? layerPausingAttachEventSink(input.pauseAttachWrite)
         : input.beforeUnchangedWrite !== undefined
-          ? layerBeforeUnchangedWriteEventSink(input.beforeUnchangedWrite)
+          ? layerBeforeUnchangedWriteEventSink(
+              input.beforeUnchangedWrite,
+              input.beforeTurnItemsWrite,
+            )
           : input.failReleaseEventWrites
             ? layerFailingReleaseEventSink
             : layerTestEventSink;

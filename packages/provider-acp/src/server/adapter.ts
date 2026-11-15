@@ -1,4 +1,5 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
 import type {
@@ -22,8 +23,6 @@ import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -93,7 +92,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { acpPerTurnPromptUsage } from "./promptUsage.ts";
 
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { resolveNice } from "@goat/shared/toolPriority";
@@ -181,6 +179,9 @@ import {
   type AcpMcpContext,
 } from "./mcpContext.ts";
 
+import { acpPerTurnPromptUsage } from "./promptUsage.ts";
+export { acpPerTurnPromptUsage } from "./promptUsage.ts";
+
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 // Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
@@ -235,8 +236,6 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
     return `The agent did not accept the model "${this.model}". Choose another model for this provider, then retry.`;
   }
 }
-
-export { acpPerTurnPromptUsage };
 
 function acpSupportsImagePrompts(input: {
   readonly flavorSupportsImagePrompts?: boolean | undefined;
@@ -832,13 +831,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
+        const sessionLaunch = yield* (
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
+          ) ?? Effect.void
+        );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: options.clientTerminals.environment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);
@@ -1419,6 +1427,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
+            sessionEnvironment,
+            sessionLaunch,
             ...(mcpContext.processEnvironment === undefined
               ? {}
               : { processEnvironment: mcpContext.processEnvironment }),
@@ -3806,7 +3816,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             for (const event of parseSessionUpdateEvent(notification).events) {
               if (event._tag !== "ToolCallUpdated") continue;
               const toolCall = flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall;
-              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall);
+              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall, {
+                environment: sessionEnvironment,
+                launch: sessionLaunch,
+              });
               if (proposedPlanMarkdown !== undefined && proposedPlanMarkdown.length > 0) {
                 yield* captureProposedPlan({ planMarkdown: proposedPlanMarkdown });
               }
@@ -6983,7 +6996,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.rewriteUserText === undefined
               ? turnInput.message.text
               : yield* flavor
-                  .rewriteUserText(turnInput.message.text, turnInput)
+                  .rewriteUserText(turnInput.message.text, turnInput, {
+                    environment: sessionEnvironment,
+                    launch: sessionLaunch,
+                  })
                   .pipe(
                     Effect.provideService(
                       ChildProcessSpawner.ChildProcessSpawner,

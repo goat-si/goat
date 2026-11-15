@@ -35,6 +35,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
+import type { StartThreadBootstrap } from "./startThreadBootstrap.ts";
 import { dispatch, dispatchMessage } from "./dispatch.ts";
 
 interface CommandMetadata {
@@ -145,27 +146,6 @@ export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
 
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
-}
-
-interface StartThreadBootstrap {
-  readonly createThread?: {
-    readonly projectId: ProjectId;
-    readonly title: string;
-    readonly modelSelection: ModelSelection;
-    readonly runtimeMode: RuntimeMode;
-    readonly interactionMode: ProviderInteractionMode;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
-    readonly createdAt: string;
-  };
-  readonly prepareWorktree?: {
-    readonly requireWorktree?: boolean;
-    readonly projectCwd: string;
-    readonly baseBranch: string;
-    readonly branch?: string;
-    readonly startFromOrigin?: boolean;
-  };
-  readonly runSetupScript?: boolean;
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
@@ -1005,7 +985,12 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
           ? candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null
           : candidate.appRunOrdinal === input.turnCount,
       );
-    if (checkpoint === undefined || checkpoint.status !== "ready") {
+    if (
+      checkpoint === undefined ||
+      // Missing snapshots support conversation rewind only.
+      (checkpoint.status !== "ready" &&
+        !(input.restoreFiles === false && checkpoint.status === "missing"))
+    ) {
       const target =
         input.checkpointId === undefined
           ? `run ordinal ${input.turnCount ?? "unknown"}`

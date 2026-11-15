@@ -491,7 +491,7 @@ it.effect.each([
               ordinal: run.ordinal + 1,
               status: scenario === "provider-live-queue" ? "queued" : "cancelled",
               startedAt: null,
-              completedAt: now,
+              completedAt: cancelledQueue ? DateTime.add(now, { seconds: 1 }) : now,
             },
           },
         ],

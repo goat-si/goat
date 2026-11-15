@@ -120,6 +120,8 @@ export function WorkspaceToolbar(props: {
   const searchHostVisible = focused || settingsListOnTop || primaryColumn?.presented === true;
   const restoreSearchState = shouldRestoreNativeSearch(tab, duoSearch);
   const restoreSearch = useCallback(() => {
+    // A search cancelled while its screen was covered leaves its text in the native field.
+    if (tab.searchMode === "resting") searchRef.current?.setText("");
     if (searchHostVisible && searchVisible && isTabActive(selectedTab) && restoreSearchState) {
       searchRef.current?.setText(tab.query);
       // Integrated search collapses to its button when its screen reappears,
