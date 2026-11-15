@@ -156,9 +156,16 @@ function RunDetails(props: {
         {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
         {finished === null ? "" : `, ${finished}`}
       </PopoverTitle>
-      <p className="line-clamp-6 text-sm whitespace-pre-line text-muted-foreground">
+      {/* Only the body scrolls, so the heading and Show in chat stay in view; it takes focus so a
+          keyboard can scroll a reply whose chat row is gone. */}
+      <div
+        role="region"
+        aria-label="Run details"
+        tabIndex={0}
+        className="max-h-60 overflow-y-auto rounded-sm text-sm whitespace-pre-line text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      >
         {runBody({ ...props, state, quiet, inputId, read })}
-      </p>
+      </div>
       {show === undefined ? null : (
         <div className="flex justify-end">
           <Button
