@@ -101,6 +101,24 @@ do {
   print("Cut, Undo and Redo with controlled echoes passed")
 }
 
+do {
+  let pasteboard = UIPasteboard.withUniqueName()
+  defer { UIPasteboard.remove(withName: pasteboard.name) }
+  let editor = ComposerTextView()
+  editor.textPasteThresholdBytes = 32 * 1024
+  let halfA = String(repeating: "A", count: 20_000)
+  let halfB = String(repeating: "B", count: 20_000)
+  var intercepted: String?
+  editor.onPasteText = { text, _ in intercepted = text }
+
+  pasteboard.strings = [halfA]
+  check(!editor.interceptTextPaste(from: pasteboard), "A single short item should paste inline")
+  pasteboard.strings = [halfA, halfB]
+  check(editor.interceptTextPaste(from: pasteboard), "Combined items over the threshold must fold")
+  check(intercepted == halfA + halfB, "The attachment lost text or changed pasteboard order")
+  print("Multi-item text paste threshold passed")
+}
+
 // Two frames: compare original data so a still image cannot satisfy this check.
 private let gifBytes = Data(base64Encoded: "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAQABAAAIBAABBAQAIfkEAAoAAAAsAAAAAAEAAQCBAP8AAAAAAAAAAAAACAQAAQQEADs=")!
 private let gifProvider = NSItemProvider()

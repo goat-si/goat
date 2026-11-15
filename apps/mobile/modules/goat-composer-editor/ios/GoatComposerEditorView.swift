@@ -226,12 +226,20 @@ private final class ComposerTextView: UITextView {
         return
       }
     }
-    if !bypassTextPasteInterception,
-       let text = pasteboard.string, shouldInterceptTextPaste(text) {
-      onPasteText?(text, selectedRange)
-      return
+    if !interceptTextPaste(from: pasteboard) {
+      super.paste(sender)
     }
-    super.paste(sender)
+  }
+
+  func interceptTextPaste(from pasteboard: UIPasteboard) -> Bool {
+    // UIKit pastes all the items, while pasteboard.string covers only the first.
+    guard !bypassTextPasteInterception,
+          let text = pasteboard.strings?.joined(),
+          shouldInterceptTextPaste(text) else {
+      return false
+    }
+    onPasteText?(text, selectedRange)
+    return true
   }
 
   private func shouldInterceptTextPaste(_ text: String) -> Bool {
