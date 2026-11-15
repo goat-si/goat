@@ -1,5 +1,6 @@
 import {
   TailscaleCommandExitError,
+  TailscaleStatusParseError,
   disableTailscaleServe,
   ensureTailscaleServe,
   findExcludedRange,
@@ -22,6 +23,7 @@ import * as Schema from "effect/Schema";
 import { loopbackUrlHostForAddress } from "../startupAccess.ts";
 
 const isTailscaleCommandExitError = Schema.is(TailscaleCommandExitError);
+const isTailscaleStatusParseError = Schema.is(TailscaleStatusParseError);
 
 export interface TailscaleServeTarget {
   readonly localPort: number;
@@ -121,6 +123,28 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
       const attempts = yield* Ref.make(0);
       const holderOf = input.rootHolder ?? (() => Effect.succeed("none" as const));
       const at = { host: target.localHost.replace(/^\[|\]$/gu, ""), port: localPort };
+      const reads = yield* Ref.make(0);
+      // Tailscale may not answer yet at login, so read until it does, as apply retries; a
+      // status it printed but that cannot be parsed stays unreadable.
+      const readHolder = holderOf(at).pipe(
+        Effect.tapError((cause) =>
+          isTailscaleStatusParseError(cause)
+            ? Effect.void
+            : Ref.updateAndGet(reads, (count) => count + 1).pipe(
+                Effect.flatMap((read) =>
+                  (read <= 1 ? Effect.logWarning : Effect.logDebug)(
+                    "Could not read Tailscale Serve status; retrying",
+                    { cause, localPort, servePort: input.servePort },
+                  ),
+                ),
+              ),
+        ),
+        Effect.retry({
+          schedule: serveRetrySchedule,
+          while: (cause) => !isTailscaleStatusParseError(cause),
+        }),
+        Effect.orElseSucceed(() => "unreadable" as const),
+      );
       const apply = Effect.gen(function* () {
         const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
         yield* Ref.set(attempted, true);
@@ -151,13 +175,13 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
         Effect.retry(serveRetrySchedule),
       );
       const initial = Effect.gen(function* () {
-        const holder = yield* holderOf(at).pipe(Effect.orElseSucceed(() => "unreadable" as const));
-        // Another live server's route, or one we cannot see, is not ours to replace or turn off.
+        const holder = yield* readHolder;
+        // Another live server's route, or one we cannot parse, is not ours to replace or turn off.
         if (holder === "other" || holder === "unreadable") {
           return yield* Effect.logWarning(
             holder === "other"
               ? "Tailscale Serve left off; its port already serves another server or app"
-              : "Tailscale Serve left off; its current routes could not be read",
+              : "Tailscale Serve left off; its current routes could not be parsed",
             { localPort, servePort: input.servePort },
           );
         }
@@ -186,13 +210,22 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
         Effect.andThen(repair),
         Effect.forkScoped({ startImmediately: true }),
       );
-      return { fiber, attempted, servePort: input.servePort };
+      // At stop, only a route still ours is turned off; one another server took over stays.
+      const stillOurs =
+        input.rootHolder === undefined
+          ? Effect.succeed(true)
+          : holderOf(at).pipe(
+              Effect.map((holder) => holder === "ours"),
+              Effect.orElseSucceed(() => false),
+            );
+      return { fiber, attempted, stillOurs, servePort: input.servePort };
     }),
     (attempt) => {
       if (attempt === null) return Effect.void;
       // Interrupt first: an in-flight `tailscale serve` can still install the route.
       return Fiber.interrupt(attempt.fiber).pipe(
         Effect.flatMap(() => Ref.get(attempt.attempted)),
+        Effect.flatMap((started) => (started ? attempt.stillOurs : Effect.succeed(false))),
         Effect.flatMap((started) =>
           started
             ? input.disable({ servePort: attempt.servePort }).pipe(
