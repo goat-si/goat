@@ -44,6 +44,7 @@ import { GoatBotAttachButton, GoatBotAttachmentStrip } from "./GoatBotComposerAt
 import { GoatBotComposerMenu } from "./GoatBotComposerMenu";
 import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
 import { useGoatBotDraftAttachments } from "./useGoatBotDraftAttachments";
+import { useGoatBotDraftOwner } from "./useGoatBotDraftOwner";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import {
   startOpeningDetail,
@@ -417,10 +418,17 @@ export function GoatBotScreen(props: {
   );
   const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const mainModelMenu = useMobileGoatBotModelMenu();
-  const files = useGoatBotDraftAttachments(
-    props.visible,
-    JSON.stringify([session.historyEnvironmentId, session.threadId, taskId ?? null]),
+  // The draft belongs to the bot, task and destination it is written for; a new one drops it.
+  const draftOwner = useGoatBotDraftOwner(
+    {
+      botId: member?.botId ?? null,
+      taskId: props.taskId ?? null,
+      environmentId: session.historyEnvironmentId,
+      threadId: session.threadId,
+    },
+    () => setText(""),
   );
+  const files = useGoatBotDraftAttachments(props.visible, draftOwner);
   const { attachments, intake } = files;
   // What the list last reported about its scroll, size and footer; the progress line moves only
   // while enough of it shows. Kept in a ref so scroll events re-render only when that answer flips.
@@ -476,7 +484,7 @@ export function GoatBotScreen(props: {
   const inputRef = useRef<TextInputInstance>(null);
   const answering = useGoatBotAnswering(
     visibleRows,
-    JSON.stringify([member?.botId ?? null, taskId ?? null]),
+    JSON.stringify([member?.botId ?? null, taskId ?? null, draftOwner]),
   );
   const startAnswering = answering.start;
   const onSomethingElse = useCallback(
