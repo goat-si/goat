@@ -364,6 +364,12 @@ describe("mcpToolResultOutput", () => {
       screenshot,
     ]);
   });
+
+  it("stores the content when the structured output is empty", () => {
+    const text = { type: "text", text: "Done" };
+    expect(mcpToolResultOutput({ content: [text], structuredContent: {} })).toEqual([text]);
+    expect(mcpToolResultOutput({ content: [text], structuredContent: [] })).toEqual([text]);
+  });
 });
 
 describe("imageBlockFromDataUrl", () => {

@@ -38,6 +38,10 @@ type BrowserPreviewRouteScreenProps = StaticScreenProps<{
 export function BrowserPreviewRouteScreen({ route }: BrowserPreviewRouteScreenProps) {
   const navigation = useNavigation();
   const onClose = useCallback(() => navigation.goBack(), [navigation]);
+  const { environmentId, threadId } = route.params;
+  if (!environmentId?.trim() || !threadId?.trim()) {
+    return <BrowserUnavailableScreen onClose={onClose} />;
+  }
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <BrowserPreviewStack.Navigator
@@ -52,14 +56,26 @@ export function BrowserPreviewRouteScreen({ route }: BrowserPreviewRouteScreenPr
         <BrowserPreviewStack.Screen name="BrowserPreview">
           {() => (
             <BrowserPreviewScreen
-              environmentId={EnvironmentId.make(route.params.environmentId)}
-              threadId={ThreadId.make(route.params.threadId)}
+              environmentId={EnvironmentId.make(environmentId)}
+              threadId={ThreadId.make(threadId)}
               initialTabId={route.params.tabId ?? null}
               onClose={onClose}
             />
           )}
         </BrowserPreviewStack.Screen>
       </BrowserPreviewStack.Navigator>
+    </View>
+  );
+}
+
+function BrowserUnavailableScreen({ onClose }: { readonly onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      className="flex-1 bg-sheet"
+      style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+    >
+      <SheetHeader title="Browser" onClose={onClose} accessibilityLabel="Close browser" />
     </View>
   );
 }

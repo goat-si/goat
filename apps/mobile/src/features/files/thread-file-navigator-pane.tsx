@@ -3,7 +3,14 @@ import { environmentSession } from "../../state/session";
 import type { EnvironmentId } from "@goat/contracts";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ScreenContent } from "../../components/ui/ScreenContent";
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { Platform, Pressable, View, type NativeSyntheticEvent } from "react-native";
 import {
   Screen,
@@ -11,6 +18,7 @@ import {
   ScreenStackHeaderConfig,
   ScreenStackHeaderSearchBarView,
   SearchBar,
+  type SearchBarCommands,
 } from "react-native-screens";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -34,7 +42,23 @@ export function ThreadFileNavigatorPane(props: {
   readonly selectedPath: string | null;
   readonly onSelectFile: (path: string) => void;
 }) {
-  const [searchQuery, setSearchQuery] = useState("");
+  const workspaceKey = JSON.stringify([props.environmentId, props.cwd]);
+  // The pane stays mounted across thread switches; a query only filters the workspace it was typed in.
+  const [search, setSearch] = useState({ workspaceKey, query: "" });
+  const searchQuery = search.workspaceKey === workspaceKey ? search.query : "";
+  const setSearchQuery = (query: string) => setSearch({ workspaceKey, query });
+  const searchBarRef = useRef<SearchBarCommands>(null);
+  const nativeSearchText = useRef(searchQuery);
+  // oxlint-disable-next-line goat/react-effect-budget -- the native search bar keeps its own text; a query cleared by a workspace switch has to be pushed into it
+  useLayoutEffect(() => {
+    if (searchQuery === nativeSearchText.current) return;
+    nativeSearchText.current = searchQuery;
+    searchBarRef.current?.setText(searchQuery);
+  }, [searchQuery]);
+  const reportNativeSearchText = (text: string) => {
+    nativeSearchText.current = text;
+    setSearchQuery(text);
+  };
   const { toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const { themeAppearance: highlightTheme } = useAppearancePreferences();
   const theme = useUniwindTheme();
@@ -86,7 +110,7 @@ export function ThreadFileNavigatorPane(props: {
 
   const fileTree = (
     <FileTreeBrowser
-      key={JSON.stringify([props.environmentId, props.cwd])}
+      key={workspaceKey}
       revealSelection={entriesQuery.revealSelection}
       expandedPaths={entriesQuery.expandedPaths}
       setExpandedPaths={entriesQuery.setExpandedPaths}
@@ -144,6 +168,7 @@ export function ThreadFileNavigatorPane(props: {
             >
               <ScreenStackHeaderSearchBarView>
                 <SearchBar
+                  ref={searchBarRef}
                   allowToolbarIntegration
                   autoCapitalize="none"
                   barTintColor={sheetColor}
@@ -151,10 +176,10 @@ export function ThreadFileNavigatorPane(props: {
                   hideWhenScrolling={false}
                   obscureBackground={false}
                   onCancelButtonPress={() => {
-                    setSearchQuery("");
+                    reportNativeSearchText("");
                   }}
                   onChangeText={(event: NativeSyntheticEvent<{ readonly text?: string }>) => {
-                    setSearchQuery(event.nativeEvent.text ?? "");
+                    reportNativeSearchText(event.nativeEvent.text ?? "");
                   }}
                   placement="integratedButton"
                   placeholder="Search files"
