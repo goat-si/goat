@@ -12,7 +12,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
-import * as Types from "effect/Types";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -77,6 +76,7 @@ import {
 } from "./codexUsageLimits.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
+import { parseCodexSkillsListResponse } from "./codexSkillsList.ts";
 const isHomeRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
@@ -283,42 +283,6 @@ function appendCustomCodexModels(
 ): ReadonlyArray<ServerProviderModel> {
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   return providerModelsFromSettings(models, customModels, fallbackCapabilities);
-}
-
-function parseCodexSkillsListResponse(
-  response: CodexSchema.V2SkillsListResponse,
-  cwd: string,
-): ReadonlyArray<ServerProviderSkill> {
-  const matchingEntry = response.data.find((entry) => entry.cwd === cwd);
-  const skills = matchingEntry
-    ? matchingEntry.skills
-    : response.data.flatMap((entry) => entry.skills);
-
-  return skills.map((skill) => {
-    const shortDescription =
-      skill.shortDescription ?? skill.interface?.shortDescription ?? undefined;
-
-    const parsedSkill: Types.Mutable<ServerProviderSkill> = {
-      name: skill.name,
-      path: skill.path,
-      enabled: skill.enabled,
-    };
-
-    if (skill.description) {
-      parsedSkill.description = skill.description;
-    }
-    if (skill.scope) {
-      parsedSkill.scope = skill.scope;
-    }
-    if (skill.interface?.displayName) {
-      parsedSkill.displayName = skill.interface.displayName;
-    }
-    if (shortDescription) {
-      parsedSkill.shortDescription = shortDescription;
-    }
-
-    return parsedSkill;
-  });
 }
 
 const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
