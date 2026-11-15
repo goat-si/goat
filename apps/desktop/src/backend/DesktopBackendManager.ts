@@ -654,6 +654,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               );
             },
           ),
+          migratingDatabase: startupFailure.migratingDatabase.pipe(
+            Effect.tap((migrating) =>
+              migrating
+                ? logInstanceWarning("backend is still migrating its database; waiting")
+                : Effect.void,
+            ),
+          ),
           onOutput: (streamName, chunk) =>
             Ref.get(state).pipe(
               Effect.flatMap((current) =>

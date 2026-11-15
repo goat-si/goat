@@ -912,7 +912,7 @@ async function renderRoster() {
     // The unread mark and the waiting badge, told apart by how each is drawn.
     unread: () =>
       marked("rounded-full bg-subtle-strong px-1.5 text-xs font-semibold text-foreground"),
-    waiting: () => marked("text-xs font-semibold text-foreground"),
+    waiting: () => marked("text-xs font-semibold text-warning-foreground"),
     rerender: () => act(async () => {}),
     [Symbol.asyncDispose]: async () => act(async () => root.unmount()),
   };
