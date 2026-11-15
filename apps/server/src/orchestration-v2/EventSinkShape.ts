@@ -102,6 +102,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
+    readonly unlessInterruptRequested?: { readonly requestId: string; readonly resultId: string };
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<

@@ -346,7 +346,8 @@ export function layerWithRegistry<Error>(
   | ProviderTurnControlService.ProviderTurnControlServiceV2
   | ThreadManagementService.ThreadManagementService
   | ProviderSessionManager.ProviderSessionManagerV2
-  | CommandOutputRecorder.CommandOutputRecorder,
+  | CommandOutputRecorder.CommandOutputRecorder
+  | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | ReplayDatabaseError
 > {
   const layerServerConfig = Layer.effect(
@@ -471,6 +472,7 @@ export function layerWithRegistry<Error>(
         layerCheckpointServiceProvided,
         layerEventSinkProvided,
         IdAllocator.layer,
+        ThreadCommandExecutor.layer,
         layerProviderEventIngestorProvided,
         layerServerSettings,
         layerStores,
@@ -643,6 +645,7 @@ export function layerWithRegistry<Error>(
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
     layerCommandOutputHubProvided,
+    ThreadCommandExecutor.layer,
   ).pipe(
     Layer.provide(
       options.projects === undefined

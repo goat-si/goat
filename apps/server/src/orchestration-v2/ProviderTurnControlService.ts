@@ -8,7 +8,6 @@ import {
   RunAttemptId,
   ThreadId,
 } from "@goat/contracts";
-import * as Clock from "effect/Clock";
 import type * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -281,23 +280,44 @@ export const layer: Layer.Layer<
             );
           // Cloud acknowledgement requests cancellation; its observer owns terminal settlement.
           if (loaded.providerThread.cloudTask !== undefined) return;
-          // Use real time; ingestion fibers do not advance TestClock and would leave Stop blocked.
-          yield* Effect.gen(function* () {
-            const deadline = (yield* Clock.currentTimeMillis) + 2_000;
-            while (
-              loaded.providerTurn.status === "running" &&
-              (yield* Clock.currentTimeMillis) < deadline
-            ) {
-              const current = yield* projections.getProviderControlContext(input.threadId, input);
-              if (
-                current.providerTurn?.status !== "running" &&
-                current.attempt?.status !== "running"
-              ) {
-                return;
-              }
-              yield* Effect.sleep("10 millis");
-            }
-          }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()));
+          if (loaded.providerTurn.status === "running") {
+            const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
+            const { runAttemptId } = loaded.providerTurn;
+            const isSettled = projections
+              .getProviderControlContext(input.threadId, {
+                providerThreadId: input.providerThreadId,
+                providerTurnId: input.providerTurnId,
+                ...(runAttemptId === null ? {} : { attemptId: runAttemptId }),
+              })
+              .pipe(
+                Effect.map(
+                  ({ providerTurn, attempt }) =>
+                    providerTurn?.status !== "running" && attempt?.status !== "running",
+                ),
+              );
+            yield* Effect.gen(function* () {
+              if (yield* isSettled) return;
+              const settled = yield* eventSink
+                .stream({ threadId: input.threadId, afterSequence })
+                .pipe(
+                  Stream.filter(
+                    ({ event }) =>
+                      event.type === "provider-turn.updated" ||
+                      event.type === "run-attempt.updated",
+                  ),
+                  Stream.mapEffect(() => isSettled),
+                  Stream.filter(Boolean),
+                  Stream.runHead,
+                );
+              if (Option.isNone(settled))
+                return yield* new ProviderTurnControlError({
+                  threadId: input.threadId,
+                  operation: "interrupt",
+                  providerTurnId: input.providerTurnId,
+                  cause: "The persisted settlement event stream ended before Stop.",
+                });
+            }).pipe(Effect.timeoutOption("2 seconds"));
+          }
         },
         (effect, input) =>
           effect.pipe(
