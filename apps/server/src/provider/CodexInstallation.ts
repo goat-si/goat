@@ -4,7 +4,6 @@ import {
   type ProviderInstallState,
   type ServerProviderCompatibilityAdvisory,
 } from "@goat/contracts";
-import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
@@ -32,6 +31,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeCrypto from "node:crypto";
 import * as ServerConfig from "../config.ts";
 import { selectManagedRelease } from "./managedRelease.ts";
+import { extractCodexPackage } from "./CodexInstallationExtract.ts";
 import { UPSTREAM_MAX_ARCHIVE_BYTES, lookupCodexUpstreamRelease } from "./CodexUpstreamRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -75,7 +75,13 @@ interface CodexInstallationService {
   ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
   readonly start: Effect.Effect<ProviderInstallState, CodexInstallationError>;
   /** Installs GOAT's pinned release even when a supported Codex is on PATH. */
-  readonly startManagedOnly: Effect.Effect<ProviderInstallState, CodexInstallationError>;
+  /**
+   * Installs or re-checks GOAT's managed release only, whatever runs on PATH. `allowUpdate` false
+   * (OpenCodex child setup, which nobody pressed) never moves past the installed release.
+   */
+  readonly startManagedOnly: (input: {
+    readonly allowUpdate: boolean;
+  }) => Effect.Effect<ProviderInstallState, CodexInstallationError>;
   readonly cancel: (
     operationId: string,
   ) => Effect.Effect<ProviderInstallState, CodexInstallationError>;
@@ -668,26 +674,16 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             message: "Extracting Codex.",
           }) satisfies ProviderInstallState,
       );
-      // Bare `tar` on Windows can resolve to Git's MSYS tar, which reads `C:\...` as a remote host.
-      const tarCommand = cliArchiveTarCommand(platform, environment);
-      const entries = (yield* runCommand(tarCommand, ["-tzf", archivePath])).trim().split(/\r?\n/u);
-      const types = (yield* runCommand(tarCommand, ["-tvzf", archivePath])).trim().split(/\r?\n/u);
-      if (
-        entries.length > 10000 ||
-        entries.length !== types.length ||
-        types.some((line) => !["-", "d"].includes(line[0] ?? "")) ||
-        entries.some((entry) => {
-          const parts = entry.replace(/\/$/u, "").split("/");
-          return (
-            !entry ||
-            entry.includes("\\") ||
-            entry.startsWith("/") ||
-            parts.some((part) => part === ".." || part === "." || part === "" || part.includes(":"))
-          );
-        })
-      )
-        return yield* installationError("extract", "The Codex archive contains unsafe entries.");
-      yield* runCommand(tarCommand, ["-xzf", archivePath, "-C", runtime]);
+      yield* extractCodexPackage({
+        fs,
+        path,
+        spawner,
+        platform,
+        environment,
+        run: runCommand,
+        archivePath,
+        runtime,
+      });
       yield* SubscriptionRef.update(
         state,
         (current) =>
@@ -780,15 +776,26 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       ),
     ),
   );
-  const startWith = (managedOnly: boolean) =>
+  // Managed-only work reads the release active.json names; the shared state can name a local Codex.
+  const activeManagedVersion = readRecord(activePath, ActiveRelease).pipe(
+    Effect.map((active): string | null => active.version),
+    Effect.orElseSucceed(() => null),
+  );
+  const startWith = (managedOnly: boolean, allowUpdate = true) =>
     gate
       .withPermit(
         Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state);
           if (isRunning(current)) return current;
           if (!managedOnly && (yield* reuseLocal())) return yield* SubscriptionRef.get(state);
-          const installedVersion = yield* keptInstall(managedVersion(current));
-          const release = selectManagedRelease(installedVersion, asset, upstream);
+          const installedVersion = yield* keptInstall(
+            managedOnly ? yield* activeManagedVersion : managedVersion(current),
+          );
+          const release = selectManagedRelease(
+            installedVersion,
+            asset,
+            allowUpdate ? upstream : null,
+          );
           if (!release && installedVersion === null) {
             return yield* installationError(
               "start",
@@ -839,7 +846,8 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       )
       .pipe(Effect.mapError(wrapFailure("start", "Could not start the Codex installation.")));
   const start = startWith(false);
-  const startManagedOnly = startWith(true);
+  const startManagedOnly = (input: { readonly allowUpdate: boolean }) =>
+    startWith(true, input.allowUpdate);
 
   const cancel = Effect.fn("CodexInstallation.cancel")(function* (operationId: string) {
     return yield* gate.withPermit(

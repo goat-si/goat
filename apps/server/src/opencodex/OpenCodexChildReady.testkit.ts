@@ -237,10 +237,11 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
             );
       },
       acquire: () => Effect.succeed(executable),
-      startManagedOnly: Effect.sync(() => {
-        if (state.installResult === "succeeded") state.managedCodex = true;
-        return installState(state.installResult);
-      }),
+      startManagedOnly: () =>
+        Effect.sync(() => {
+          if (state.installResult === "succeeded") state.managedCodex = true;
+          return installState(state.installResult);
+        }),
     }),
     Layer.mock(ProcessRunner.ProcessRunner)({
       run: (input) =>

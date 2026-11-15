@@ -64,6 +64,72 @@ it.effect("updates a managed install to OpenAI's newest release and never downgr
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+/** Counts requests for the upstream archive, the download only an update makes. */
+const countedUpstream = (checksum: string) => {
+  const counter = { archive: 0 };
+  const responses = upstreamResponses(checksum);
+  const archiveUrl = `${upstreamReleaseUrl}/codex-package-aarch64-apple-darwin.tar.gz`;
+  return {
+    counter,
+    responses: {
+      ...responses,
+      [archiveUrl]: () => {
+        counter.archive++;
+        return new Response(upstreamArchive);
+      },
+    },
+  };
+};
+
+it.effect(
+  "an OpenCodex child's repair over a broken install never installs a cached newer release",
+  () =>
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      const checksum = Hex.encode(
+        yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+      );
+      const { counter, responses } = countedUpstream(checksum);
+      const h = yield* makeHarness({ responses });
+      yield* h.installation.start;
+      yield* terminalState(h.installation);
+      yield* h.installation.checkForUpdate;
+      expect((yield* h.installation.state).version).toBe(upstreamVersion);
+      // The managed runtime's files go missing while active.json still names 0.156.1.
+      yield* h.fs.remove(`${h.baseDir}/tools/codex/0.156.1/bin/codex`);
+      yield* h.installation.startManagedOnly({ allowUpdate: false });
+      yield* terminalState(h.installation);
+      expect(counter.archive).toBe(0);
+      const active = yield* h.fs.readFileString(`${h.baseDir}/tools/codex/active.json`);
+      expect(active).toContain("0.156.1");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("Install on an authless home with a Codex on PATH keeps the newer managed release", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const checksum = Hex.encode(
+      yield* crypto.digest("SHA-256", upstreamArchive).pipe(Effect.orDie),
+    );
+    const h = yield* makeHarness({ responses: upstreamResponses(checksum) });
+    yield* h.installation.start;
+    yield* terminalState(h.installation);
+    yield* h.installation.checkForUpdate;
+    yield* h.installation.start;
+    expect((yield* terminalState(h.installation)).installedVersion).toBe(upstreamVersion);
+    const withLocal = yield* makeHarness({ baseDir: h.baseDir, local: { version: "0.164.0" } });
+    yield* withLocal.installation.start;
+    yield* terminalState(withLocal.installation);
+    expect((yield* withLocal.installation.state).source).toBe("local");
+    yield* withLocal.installation.startManagedOnly({ allowUpdate: true });
+    yield* terminalState(withLocal.installation);
+    expect(withLocal.downloads()).toBe(0);
+    expect((yield* withLocal.installation.resolve({ managedOnly: true })).version).toBe(
+      upstreamVersion,
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("keeps the managed install when an update fails its published checksum", () =>
   Effect.gen(function* () {
     const h = yield* makeHarness({ responses: upstreamResponses("f".repeat(64)) });

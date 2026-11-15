@@ -143,7 +143,9 @@ const make = Effect.fn("makeProviderInstallation")(function* () {
       true,
     );
     const started = yield* (
-      managedRelease ? codexInstallation.startManagedOnly : installation.start
+      managedRelease
+        ? codexInstallation.startManagedOnly({ allowUpdate: true })
+        : installation.start
     ).pipe(Effect.mapError(failure(input.instanceId)));
     if (
       driver === ANTIGRAVITY &&

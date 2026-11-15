@@ -86,10 +86,11 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
         calls.push("codex-start");
         return { ...state, driver: ProviderDriverKind.make("codex") };
       }),
-      startManagedOnly: Effect.sync(() => {
-        calls.push("codex-start-managed-only");
-        return { ...state, driver: ProviderDriverKind.make("codex") };
-      }),
+      startManagedOnly: (input) =>
+        Effect.sync(() => {
+          calls.push(`codex-start-managed-only:${input.allowUpdate}`);
+          return { ...state, driver: ProviderDriverKind.make("codex") };
+        }),
       cancel: () =>
         Effect.sync(() => {
           calls.push("codex-cancel");
@@ -278,7 +279,7 @@ describe("provider installation routing", () => {
 
   it.effect.each([
     { route: "default", opencodexAuth: "openai", expected: "codex-start" },
-    { route: "opencodex", opencodexAuth: "none", expected: "codex-start-managed-only" },
+    { route: "opencodex", opencodexAuth: "none", expected: "codex-start-managed-only:true" },
   ] as const)(
     "installs managed Codex for a managed $route instance without reusing PATH only for Home None",
     ({ route, opencodexAuth, expected }) =>

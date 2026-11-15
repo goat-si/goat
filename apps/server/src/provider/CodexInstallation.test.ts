@@ -803,7 +803,7 @@ it.effect(
       expect((yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result))._tag).toBe(
         "Failure",
       );
-      yield* h.installation.startManagedOnly;
+      yield* h.installation.startManagedOnly({ allowUpdate: true });
       const finished = yield* terminalState(h.installation);
       expect(finished.phase).toBe("succeeded");
       expect(finished.source).toBe("managed");
