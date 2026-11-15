@@ -128,3 +128,66 @@ it.effect("does not apply or disable a Windows-reserved port", () =>
     expect(yield* Ref.get(disabled)).toBe(0);
   }),
 );
+
+it.effect.each(["other", "unreadable"] as const)(
+  "leaves a Serve route alone when its holder is %s, and never turns it off",
+  (holder) =>
+    Effect.gen(function* () {
+      const ensured = yield* Ref.make(0);
+      const disabled = yield* Ref.make(0);
+      const checked = yield* Deferred.make<{ readonly host: string; readonly port: number }>();
+      const parked = yield* Deferred.make<void>();
+      const layer = layerTailscaleServeStartupWith({
+        enabled: true,
+        servePort: 47743,
+        parked,
+        awaitActivation: Effect.void,
+        ensure: () => Ref.update(ensured, (count) => count + 1),
+        disable: () => Ref.update(disabled, (count) => count + 1),
+        rootHolder: (target) =>
+          Deferred.succeed(checked, target).pipe(
+            Effect.andThen(holder === "other" ? Effect.succeed(holder) : Effect.fail("no status")),
+          ),
+      }).pipe(Layer.provide(loopback));
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(layer);
+          expect(yield* Deferred.await(checked)).toEqual({ host: "127.0.0.1", port: 3773 });
+        }),
+      );
+      expect(yield* Ref.get(ensured)).toBe(0);
+      expect(yield* Ref.get(disabled)).toBe(0);
+    }),
+);
+
+it.effect("takes back a Serve route another server left on a dead port", () =>
+  Effect.gen(function* () {
+    const calls = yield* Queue.unbounded<number>();
+    const holder = yield* Ref.make<"none" | "ours" | "dead" | "other">("other");
+    const parked = yield* Deferred.make<void>();
+    const layer = layerTailscaleServeStartupWith({
+      enabled: true,
+      servePort: 47743,
+      parked,
+      awaitActivation: Effect.void,
+      ensure: (target) => Queue.offer(calls, target.servePort).pipe(Effect.asVoid),
+      disable: () => Effect.void,
+      rootHolder: () => Ref.get(holder),
+    }).pipe(Layer.provide(loopback));
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(layer);
+        yield* TestClock.adjust(Duration.seconds(30));
+        expect(yield* Queue.size(calls)).toBe(0);
+        yield* Ref.set(holder, "dead");
+        yield* TestClock.adjust(Duration.seconds(30));
+        expect(yield* Queue.take(calls)).toBe(47743);
+        yield* Ref.set(holder, "ours");
+        yield* TestClock.adjust(Duration.seconds(30));
+        expect(yield* Queue.size(calls)).toBe(0);
+      }),
+    );
+  }),
+);

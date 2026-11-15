@@ -3,10 +3,12 @@ import {
   disableTailscaleServe,
   ensureTailscaleServe,
   findExcludedRange,
+  readTailscaleServeRootHolders,
   readWindowsExcludedTcpPortRanges,
   reservedPortMessage,
   suggestFreePort,
 } from "@goat/tailscale";
+import * as NetService from "@goat/shared/Net";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -27,6 +29,25 @@ export interface TailscaleServeTarget {
   readonly localHost: string;
 }
 
+/** Who holds the Serve port's root: nobody, this server, only dead loopback ports, or another live one. */
+export type TailscaleServeRootHolderState = "none" | "ours" | "dead" | "other";
+
+const readRootHolder = Effect.fn("TailscaleServeStartup.readRootHolder")(function* (
+  servePort: number,
+  target: { readonly host: string; readonly port: number },
+) {
+  const net = yield* NetService.NetService;
+  const holders = yield* readTailscaleServeRootHolders(servePort, target);
+  if (holders.length === 0) return "none" as const;
+  if (holders.some((holder) => holder.ours)) return "ours" as const;
+  const live = yield* Effect.forEach(holders, (holder) =>
+    holder.ours || holder.loopback === undefined
+      ? Effect.succeed(true)
+      : net.hasListenerOnHost(holder.loopback.port, holder.loopback.host),
+  );
+  return live.includes(true) ? ("other" as const) : ("dead" as const);
+});
+
 interface TailscaleServeStartupBase {
   readonly enabled: boolean;
   readonly servePort: number;
@@ -46,6 +67,8 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
   E2,
   R2,
   R3,
+  E4,
+  R4,
 >(input: {
   readonly servePort: number;
   readonly parked: Deferred.Deferred<void>;
@@ -59,6 +82,10 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
     never,
     R3
   >;
+  readonly rootHolder?: (target: {
+    readonly host: string;
+    readonly port: number;
+  }) => Effect.Effect<TailscaleServeRootHolderState, E4, R4>;
 }) {
   return yield* Effect.acquireRelease(
     Effect.gen(function* () {
@@ -92,7 +119,9 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
       }
       const attempted = yield* Ref.make(false);
       const attempts = yield* Ref.make(0);
-      const fiber = yield* Effect.gen(function* () {
+      const holderOf = input.rootHolder ?? (() => Effect.succeed("none" as const));
+      const at = { host: target.localHost.replace(/^\[|\]$/gu, ""), port: localPort };
+      const apply = Effect.gen(function* () {
         const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1);
         yield* Ref.set(attempted, true);
         yield* input.ensure(target);
@@ -120,6 +149,41 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
           ),
         ),
         Effect.retry(serveRetrySchedule),
+      );
+      const initial = Effect.gen(function* () {
+        const holder = yield* holderOf(at).pipe(Effect.orElseSucceed(() => "unreadable" as const));
+        // Another live server's route, or one we cannot see, is not ours to replace or turn off.
+        if (holder === "other" || holder === "unreadable") {
+          return yield* Effect.logWarning(
+            holder === "other"
+              ? "Tailscale Serve left off; its port already serves another server or app"
+              : "Tailscale Serve left off; its current routes could not be read",
+            { localPort, servePort: input.servePort },
+          );
+        }
+        yield* apply;
+      });
+      // Startup is not the only time a route goes stale: whoever finds it on a dead port takes it back.
+      const repair = Effect.sleep("30 seconds").pipe(
+        Effect.andThen(holderOf(at)),
+        Effect.flatMap((holder) =>
+          holder === "dead"
+            ? Ref.set(attempted, true).pipe(
+                Effect.andThen(input.ensure(target)),
+                Effect.andThen(
+                  Effect.logInfo("Tailscale Serve repaired", {
+                    localPort,
+                    servePort: input.servePort,
+                  }),
+                ),
+              )
+            : Effect.void,
+        ),
+        Effect.ignore,
+        Effect.forever,
+      );
+      const fiber = yield* initial.pipe(
+        Effect.andThen(repair),
         Effect.forkScoped({ startImmediately: true }),
       );
       return { fiber, attempted, servePort: input.servePort };
@@ -151,7 +215,7 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
   );
 });
 
-export const layerTailscaleServeStartupWith = <E, R, E2, R2, R3 = never>(
+export const layerTailscaleServeStartupWith = <E, R, E2, R2, R3 = never, E4 = never, R4 = never>(
   input: TailscaleServeStartupBase & {
     readonly ensure: (target: TailscaleServeTarget) => Effect.Effect<void, E, R>;
     readonly disable: (request: { readonly servePort: number }) => Effect.Effect<void, E2, R2>;
@@ -162,6 +226,10 @@ export const layerTailscaleServeStartupWith = <E, R, E2, R2, R3 = never>(
       never,
       R3
     >;
+    readonly rootHolder?: (target: {
+      readonly host: string;
+      readonly port: number;
+    }) => Effect.Effect<TailscaleServeRootHolderState, E4, R4>;
   },
 ) => (input.enabled ? Layer.effectDiscard(openTailscaleServe(input)) : Layer.empty);
 
@@ -170,6 +238,8 @@ export const layerTailscaleServeStartup = (input: TailscaleServeStartupBase) =>
     ...input,
     ensure: (target) => ensureTailscaleServe(target),
     disable: (request) => disableTailscaleServe(request),
+    rootHolder: (target) =>
+      readRootHolder(input.servePort, target).pipe(Effect.provide(NetService.layer)),
     excludedRange: (servePort) =>
       readWindowsExcludedTcpPortRanges().pipe(
         Effect.map((ranges) => {

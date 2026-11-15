@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
+import { parseTailscaleServeRootHolders } from "./serveRootHolders.ts";
 import { spawnTailscale } from "./tailscaleExecutable.ts";
 
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
@@ -235,7 +236,7 @@ export const parseTailscaleStatus = (
   );
 
 const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function* (
-  subcommand: "status" | "debug",
+  subcommand: "status" | "serve" | "debug",
   args: readonly string[],
 ) {
   const hostPlatform = yield* HostProcess.Platform;
@@ -486,6 +487,19 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
     TAILSCALE_SERVE_TIMEOUT,
   );
 });
+
+export const readTailscaleServeRootHolders = (
+  servePort: number,
+  target: { readonly host: string; readonly port: number },
+) =>
+  readTailscaleOutput("serve", ["serve", "status", "--json"]).pipe(
+    Effect.flatMap((status) => {
+      const holders = parseTailscaleServeRootHolders(status, servePort, target);
+      return holders === undefined
+        ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
+        : Effect.succeed(holders);
+    }),
+  );
 
 export type TailscaleHttpsEndpointClassification = "ok" | "refused" | "no-answer" | "not-goat";
 
