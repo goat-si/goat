@@ -647,6 +647,64 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex thread history", (it) =>
     }),
   );
 
+  it.effect("imports a history-only Codex thread from a linked worktree with its branch", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+      yield* TestClock.setTime(nowMs);
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const piAgentDir = yield* makeTempDir("goat-pi-agent-");
+      const repo = yield* makeTempDir("goat-workspace-repo-");
+      yield* fileSystem.makeDirectory(path.join(repo, ".git"));
+      yield* fileSystem.writeFileString(path.join(repo, ".git", "config"), "[core]\n");
+      const worktreeGitDir = path.join(repo, ".git", "worktrees", "feature");
+      yield* fileSystem.makeDirectory(worktreeGitDir, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(worktreeGitDir, "commondir"), "../..\n");
+      yield* fileSystem.writeFileString(
+        path.join(worktreeGitDir, "HEAD"),
+        "ref: refs/heads/feature\n",
+      );
+      const worktree = path.join(repo, ".codex", "worktrees", "feature");
+      yield* fileSystem.makeDirectory(worktree, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+      const threadId = "88888888-8888-4888-8888-888888888888";
+      yield* writeCodexState({
+        homePath: codexHomePath,
+        projectRoot: worktree,
+        threads: [{ id: threadId, updatedAtMs: nowMs - 60 * 60 * 1000, title: "In worktree" }],
+      });
+      yield* writeCodexHistory({
+        homePath: codexHomePath,
+        threads: [
+          {
+            id: threadId,
+            messages: [
+              { role: "user", text: "Question", createdAtMs: nowMs - 70 * 60 * 1000 },
+              { role: "assistant", text: "Answer", createdAtMs: nowMs - 69 * 60 * 1000 },
+            ],
+          },
+        ],
+      });
+
+      const outcomes = yield* runRecentThreads({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        workspaceRoot: repo,
+        windowDays: 30,
+      });
+      expect(
+        outcomes.flatMap((outcome) =>
+          outcome._tag === "Importable"
+            ? [{ id: outcome.thread.providerSessionId, worktree: outcome.worktree }]
+            : [],
+        ),
+      ).toEqual([{ id: threadId, worktree: { path: worktree, branch: "feature" } }]);
+    }),
+  );
+
   it.effect("ignores an unreadable Codex history database", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
