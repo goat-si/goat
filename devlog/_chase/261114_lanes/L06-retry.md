@@ -1,10 +1,10 @@
 # L06 retry: project and source control fixes (chase cycle 261114)
 
-Lane branch `chase/t3-261114-scm-retry` (head `c987c45a81`), merged with `origin/chase/t3-261114-all` for hand-over. No pull request: the catch-up lands as #3397. This lane decides 22 upstream commits and ports 20 of them (19 adapt, 1 take); 2 are deferred. Each port's commit message names its upstream commit and decision. Lane review of `9dfe33f115`: approve with nits on the ports, with two P2 findings that the fix round below settles.
+Lane branch `chase/t3-261114-scm-retry` (head `fb1ee53a97`), merged with `origin/chase/t3-261114-all` for hand-over. No pull request: the catch-up lands as #3397. This lane decides 22 upstream commits and ports 20 of them (19 adapt, 1 take); 2 are deferred. Each port's commit message names its upstream commit and decision. Lane review of `9dfe33f115`: approve with nits on the ports, with two P2 findings that the fix round below settles. A fresh review of `c987c45a81`: approve with nits (P3 only; the data-loss fix holds on every removal path), settled in round 2 below.
 
 ## Decisions
 
-Counts: 20 ported (adapt 19, take 1), 2 deferred (1 design question, 1 missing in-range predecessor). Deferrals are tracked in #3176.
+Counts: 20 ported (adapt 19, take 1), 2 deferred (1 missing predecessor before the range, 1 missing in-range predecessor). Deferrals are tracked in #3176.
 
 | upstream | decision | GOAT commit | reason |
 | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ Counts: 20 ported (adapt 19, take 1), 2 deferred (1 design question, 1 missing i
 | `9b6dde9a23` session import finds compressed Codex rollouts (#34947) | adapt | `d6b73cd03a` | |
 | `2d5e0ae2bd` session import brings in the linked-worktree sessions the Welcome page counts (#36242) | adapt | `176ed9d206` | C4 data loss fixed in `08d6d68b3d` and `42d93c89ef`, below |
 | `4596872940` linked-thread counts update when links change instead of polling every 10s (#35865) | adapt | `891349df0c` | C4 contract, below. `0a6c3427f4` coalesces the refresh signals per subscriber. |
-| `4e1be34436` watched GitHub pull requests react to host events, not only the 2-minute sweep (#33548) | deferred: design question | | Its predecessor `0c80751701` (sign in through the GitHub App) was skipped, and the event feed needs that credential: GOAT's GitHubRest.credential takes only a host (packages/source-control-github/src/server/GitHubRest.ts:51). Design settled for the port (option A): event-driven reads obey each group's read backoff, and a failed event read counts toward READ_FAILURE_LIMIT (apps/server/src/orchestration-v2/PullRequestWatchReactor.ts:53). |
+| `4e1be34436` watched GitHub pull requests react to host events, not only the 2-minute sweep (#33548) | deferred: missing predecessor `0c80751701` (before range, skipped) | | `0c80751701` (sign in through the GitHub App) comes before this range and was skipped, and the event feed needs that credential: GOAT's GitHubRest.credential takes only a host (packages/source-control-github/src/server/GitHubRest.ts:51). For the port the coordinator chose option A: event-driven reads obey each group's read backoff, and a failed event read counts toward READ_FAILURE_LIMIT (apps/server/src/orchestration-v2/PullRequestWatchReactor.ts:53). |
 | `e0d6aadb88` watched GitHub pull requests react when a check suite completes (#35709) | deferred: missing in-range predecessor | | Needs `4e1be34436`: its GitHub event module (gitHubPullRequestEvents.ts) is absent from packages/source-control-github/src/server/. |
 
 Moves came before ports whose files were near their code budgets, each in its own commit. Most change only exports and imports. Four add structure: `fabe7b4e97` wraps the moved transcript discovery in a `makeTranscriptDiscovery` factory, `86060e7b8c` copies the `isGraphQlClientError` helper into the new module (the original stays for its other caller), `faefdf8846` wraps the moved test in an `it.layer` and `describe` block, and `33a35a8122` groups the pull request method names in `PULL_REQUEST_WS_METHODS` and spreads it back into `WS_METHODS`. The last move (`910a7a6b51`) came after the first hand-over merge: merging put ProviderRegistry.ts at 1020 lines against its 1017 budget.
@@ -67,12 +67,18 @@ Harness renders: the browser-test harness with the app stylesheet and fixture da
 - Revert changes on a merged GitLab merge request: [light](https://raw.githubusercontent.com/goat-si/goat/02e340e3efb28adb99a9fc7649bd36360919ab65/3397/l06retry-harness-gitlab-revert-merged-light.png), [dark](https://raw.githubusercontent.com/goat-si/goat/02e340e3efb28adb99a9fc7649bd36360919ab65/3397/l06retry-harness-gitlab-revert-merged-dark.png)
 - Welcome page repository list: [light](https://raw.githubusercontent.com/goat-si/goat/02e340e3efb28adb99a9fc7649bd36360919ab65/3397/l06retry-harness-welcome-repositories-light.png), [dark](https://raw.githubusercontent.com/goat-si/goat/02e340e3efb28adb99a9fc7649bd36360919ab65/3397/l06retry-harness-welcome-repositories-dark.png)
 
-Mobile: not captured. No render harness exists for the React Native pull request actions, and a device run needs a real forge account.
+Not captured:
+
+- `c82e1ba515` (multi-line GitLab review comments): GOAT sends the line range to GitLab, and the result shows on GitLab's site; GOAT's own comment view is unchanged.
+- The "Delete the worktree too?" prompt that no longer appears for a worktree outside GOAT's worktrees folder: an absent prompt has nothing to show, so the web delete-flow tests and the RPC tests cover it.
+- Mobile: no render harness exists for the React Native pull request actions, and a device run needs a real forge account.
 
 ## Hand-over merges
 
 - `a49d76548f` merges `origin/chase/t3-261114-all` at `56421003ff`. Conflicts: ProviderRegistry.ts keeps the integration branch's scan-base snapshot and this lane's `scanCwd`; environment.test.ts keeps both sides' capability tests.
-- `d80fce1849` merges `origin/chase/t3-261114-all` at `24c7a4e0da`, then `952a4a2c89` at `bd69c4db0b` (#3207 and #3209 provider environments), `751874d64b` at `83138ac3b6` (#3208), `7b5fbf8bad` at `428af27456`, `d28ce505bc` at `1f34e35e42`, and `c987c45a81` at `3f9cb15cba`. No conflicts, and budgeted files stay within their entries: ws.ts 3612 of 3612 (this lane's `97f3444175` moved the workspace failure contexts out of it), orchestratorMcp.ts and runtimeLayer.test.ts untouched by this lane. No lane commit reads or keeps a provider environment, so the provider environment rule from #3207, #3208 and #3209 has nothing to apply to here.
+- `d80fce1849` merges `origin/chase/t3-261114-all` at `24c7a4e0da`, then `952a4a2c89` at `bd69c4db0b` (#3207 and #3209 provider environments), `751874d64b` at `83138ac3b6` (#3208), `7b5fbf8bad` at `428af27456`, `d28ce505bc` at `1f34e35e42`, and `c987c45a81` at `3f9cb15cba`. No conflicts, and budgeted files stay within their entries: ws.ts 3612 of 3612 (this lane's `97f3444175` moved the workspace failure contexts out of it), runtimeLayer.test.ts 10003 of 10003 (this lane changes it in `c865238b1e` and `770dd9a6c4`), orchestratorMcp.ts untouched by this lane. No lane commit reads or keeps a provider environment, so the provider environment rule from #3207, #3208 and #3209 has nothing to apply to here.
+
+- `fb1ee53a97` merges `origin/chase/t3-261114-all` at `17af62cba1`, which brings L09. Conflicts: in ws.ts the `vcsRemoveWorktree` handler keeps `clientWorktrees.remove(input)` and runs L09's two follow-ups on success, `refreshGitStatus(input.cwd)` and the forked `vcsStatusBroadcaster.refreshLocalStatus(input.path)`; the ws.ts budget entry is the merged length, 3532 (the coordinator's number, measured). L09's removed-checkout case in ws.gitActions.test.ts used `/repo-worktree`, which `vcs.removeWorktree` refuses (it failed after the merge with `expected false to be true`); it now uses `<worktrees folder>/repo/feature` with the same expectation, and ws.gitActions.test.ts with ws.lifecycle.test.ts passed 8 of 8. Against the tip, code-budgets.json differs only in the 13 entries of files this lane changes and the ws.ts entry. The regenerated agent surface audit differs from the tip in the pull request toolkit's error tags (22 against 21, from `f59aa4eba0`) and in `delegate_task` (400 bytes against 399, from task.ts, which this lane does not change); `vp run agent-surface:context-budget-check` exited 0. `git merge-tree` of `fb1ee53a97` with the later tips `db7310246f` and `679d576158` is clean.
 
 ## Fix round after review (on `9dfe33f115`)
 
@@ -84,6 +90,14 @@ Mobile: not captured. No render harness exists for the React Native pull request
 - `d0e5fcb572` types the new RPC test's mocks.
 - `1ce0767b31` user docs: deleting the thread or cleaning up worktrees leaves an imported worktree in place.
 
+## Fix round 2 (review of `c987c45a81`, P3 only)
+
+`3570928363`:
+
+- A ws.lifecycle.test.ts case reads `getWorktreeThreadIds` as a client for a path inside GOAT's worktrees folder (`managed: true`) and one outside (`managed: false`). It shares one client-session helper with the removal cases.
+- One helper, `isManagedWorktreeLocation` in worktreesDirectory.ts, decides GOAT ownership: exactly `<worktrees folder>/<repository>/<name>`, where GOAT creates worktrees (GitVcsDriverCore.ts). Both `isManagedWorktreePath` and the worktree inventory's `managed` flag use it, so `goat_worktree_remove` and `goat_worktree_cleanup` judge ownership as clients, turn start and `vcs.removeWorktree` do; the inventory used to accept any depth. Storage reclaim, which reads the same flag, becomes stricter in the same way.
+- AgentSessionImporter.ts and docs/user/welcome-wizard.md now say the imported worktree stays in place when it is outside GOAT's worktrees folder.
+
 ## Tests
 
 Fail-first this round, each run on the base before its fix:
@@ -94,6 +108,8 @@ Fail-first this round, each run on the base before its fix:
 - Linked-thread refreshes: a busy subscriber received all 10 revisions (`expected 10 to be at most 3`); then passed, three runs in a row.
 - `autoMergeMethod`: decoding a detail with an unknown method threw `Expected "merge" | "squash" | "rebase" | "fast-forward"`; then pullRequest.test.ts passed 14 of 14.
 
+Round 2 (`3570928363`): the one-level and three-level case ("only <worktrees folder>/<repository>/<name> counts as GOAT's") failed with the old any-depth rule (`expected [ true, true ] to deeply equal [ false, false ]`), then WorktreeInventoryService.test.ts passed 33 of 33. The inventory fixture now places worktrees at `<worktrees folder>/repo/<branch>`; its old one-level default failed 17 tests under the stricter rule. Ten server test files around the worktrees folder and the inventory (storage reclaim and cleanup included) passed 292 of 292, and the lifecycle file 6 of 6.
+
 Earlier rounds' fail-first evidence:
 
 - `9b6dde9a23`: 2 failed before (`expected []`), then 100 passed across the scanner and importer files.
@@ -101,7 +117,38 @@ Earlier rounds' fail-first evidence:
 - `4596872940`: 7 failed, 91 passed before (the service test timed out because no refresh was signalled), then 195 passed across 11 files. The full runtimeLayer.test.ts passed 171 of 171.
 - Run 3: `a1e0e507e1` 2 failed, then 165 passed. `dbaef808d5` 11 failed, then 423 passed. `f59aa4eba0` 4 failed, then 209 passed. `5e18314b88` 4 failed, then 37 passed. `2432ee10c6` 66 passed (test only).
 
-Gate on the lane head `c987c45a81` (`3f9cb15cba` merged), run by the coordinator on pen-macbookair (macOS 26.6.2, 10 cores, load 4 to 7), since pen-macbookpro2 never went quiet: `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` with pipefail. Verdict: pass after triage. Every static step passed, including typecheck (42 packages) and the agent surface audit. Tests: 2049 of 2063 files and 29257 of 29359 tests passed. No failure comes from this lane:
+Gate on the lane head `fb1ee53a97` (`17af62cba1` merged), run on pen-macbookair (cpaui-MacBookAir, Darwin 25.6.0 arm64, 10 cores, node v26.12.1; 1-minute load 2.39 at the start, about 4 to 5 during the run, 1.90 at the end): `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` with pipefail. The changed files include pnpm-lock.yaml and patches, so every suite ran. Verdict: pass after triage.
+
+```
+check:changed summary
+  pass  unused patches  0.7s
+  pass  format  1.7s
+  pass  lint  9.9s
+  pass  knip 1/2  29.0s
+  pass  knip 2/2  55.2s
+  pass  graphql (apps/server)  2.6s
+  pass  graphql (packages/source-control-github)  2.4s
+  pass  agent surface audit  6.3s
+  pass  agent context budget  5.6s
+  pass  typecheck (42 packages)  60.0s
+  FAIL  test (2104 files)  3225.7s
+```
+
+Tests: 2090 of 2104 files passed (7 failed, 7 skipped) and 29607 of 29709 tests (69 failed, 33 skipped). The candidate and `17af62cba1` have the same 66 failing test names, which a diff of the two lists confirmed; none comes from this lane:
+
+| File | Failed | Alone | On `17af62cba1` | Cause |
+| --- | --- | --- | --- | --- |
+| infra/relay FcmDeliveries.test.ts | 2 | NOT RUN | NOT RUN | needs PostgreSQL |
+| packages/ssh launchListenerScripts.test.ts | 1 | passes | | flake under load (goat#3403) |
+| apps/server cli/app.test.ts | 4 | fails | fails identically | inaccessible-cwd warning text (goat#3238) |
+| apps/server SshWorkspaceSync.test.ts | 44 | fails | fails identically | SSH fixture stops at remote_init (goat#3417) |
+| apps/server GrokTextGeneration.test.ts | 16 | fails | fails identically | fake grok fixture: `exec: node: not found` (goat#3425) |
+| packages/ssh runtimeFactsScripts.test.ts | 1 | fails | fails identically | missing node on PATH (macOS, goat#3363) |
+| packages/ssh tunnel.client-session.test.ts | 1 | fails | fails identically | the same node-on-PATH fixture (goat#3418) |
+
+The gate host did not match the node-on-PATH failures to issue numbers; the numbers above are the issues this record already tracks for the same files. `node scripts/goat-rename.ts --check` found no T3 residue and exited 0. On pen-macbookpro2, `fb1ee53a97`: server and web typecheck exit 0; 14 focused files, 335 tests passed; `vp run agent-surface:audit` and `vp run agent-surface:context-budget-check` (exit 0) as described under the round 2 merge.
+
+Earlier gate, on `c987c45a81` (`3f9cb15cba` merged): run by the coordinator on pen-macbookair (macOS 26.6.2, 10 cores, load 4 to 7), since pen-macbookpro2 never went quiet: `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` with pipefail. Verdict: pass after triage. Every static step passed, including typecheck (42 packages) and the agent surface audit. Tests: 2049 of 2063 files and 29257 of 29359 tests passed. No failure comes from this lane:
 
 - SshWorkspaceSync, 44 failures: passes alone (84 of 84), goat#3417.
 - launchListenerScripts: passes alone, goat#3403.
@@ -113,6 +160,6 @@ Gate on the lane head `c987c45a81` (`3f9cb15cba` merged), run by the coordinator
 
 On pen-macbookpro2 the same head's static steps passed in two earlier local runs, which were stopped before their test step when a new tip arrived or another lane's gate ran. Focused tests on `c987c45a81`: 9 files, 133 passed. `vp run agent-surface:audit` rewrote docs/internals/agent-surface-audit.md with no diff, and `vp run agent-surface:context-budget-check` exited 0. `node scripts/goat-rename.ts --check`: 0 lines with T3 residue in 0 files.
 
-NOT RUN: CI (it runs once on #3397); a real-client pass on web, desktop and mobile (captures are harness renders); a fresh review of this fix round; FcmDeliveries (no PostgreSQL on the gate host).
+NOT RUN: CI (it runs once on #3397); a real-client pass on web, desktop and mobile (captures are harness renders); a review of round 2 (`3570928363` and the `17af62cba1` merge); FcmDeliveries (no PostgreSQL on the gate host); the ci:full stages (build, rust, release smoke).
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-macbookpro2 (gate on pen-macbookair), coordinated by anthropic/claude-opus-5-5
