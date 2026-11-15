@@ -139,7 +139,7 @@ const environmentId = EnvironmentId.make("local");
 const threadId = ThreadId.make("bot");
 const at = "2026-11-14T09:00:00.000Z";
 const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
-const bot = (id: string, text: string): GoatBotRow => ({
+const bot = (id: string, text: string): Extract<GoatBotRow, { kind: "bot" }> => ({
   kind: "bot",
   id,
   text,
