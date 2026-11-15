@@ -81,6 +81,7 @@ vi.mock("./GoatBotTaskRow", () => ({
     </button>
   ),
 }));
+import { minuteTick } from "@goat/client-runtime/clock";
 import { mobileBotTaskListItems } from "./MobileBotTaskList";
 import { taskChip } from "./mobileTaskChipFixture";
 
@@ -504,4 +505,19 @@ it("a minute's tick re-renders only the row whose text changed", async () => {
   commits.clear();
   await act(async () => vi.advanceTimersByTime(60_000));
   expect([...commits.keys()]).toEqual([JSON.stringify(["task", "task-1"])]);
+});
+
+it("a row shown again reads the real time, even while another part of the app holds the minute clock", async () => {
+  using _clock = pinClock("2026-11-11T02:05:00.000Z");
+  // Another subscriber keeps the shared clock's cached minute; its tick is overdue after a suspension.
+  const other = minuteTick.subscribe(() => {});
+  try {
+    await show({ work: work([listedTask]), rows: [task], ticking: false });
+    expect(container.textContent).toContain("Waiting for you · 5m");
+    vi.setSystemTime(Date.parse("2026-11-11T02:40:00.000Z"));
+    await show({ work: work([listedTask]), rows: [task], ticking: true });
+    expect(container.textContent).toContain("Waiting for you · 40m");
+  } finally {
+    other();
+  }
 });
