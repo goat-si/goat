@@ -49,6 +49,7 @@ const asked: GoatBotRow = {
 function setup(destination: { environmentId: string; threadId: string } | null) {
   setupComposer();
   screenSession.rows = [];
+  screenSession.taskChips = new Map();
   screenSession.supportsTaskThreads = false;
   screenSession.send.mockClear();
   screenSession.answer.mockClear();
@@ -308,6 +309,10 @@ it("a question that closed during a reconnect keeps its chip while nothing can s
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chip()).not.toBeNull();
     move(main);
+    // The task's record says the question took an answer; its row shows it closed.
+    screenSession.taskChips = new Map([
+      ["task-ask", { answeredQuestions: [{ questionId: "q-ask" }] }],
+    ]);
     screenSession.rows = [{ ...asked, options: [], choices: [] }];
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chip()).toBeNull();
@@ -347,3 +352,58 @@ it("answering ends and its typed answer clears when the destination changes, eve
 });
 
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+
+it("a typed answer keeps answering when sending comes back before the history, and Send answers it (#3405)", async () => {
+  setup(main);
+  const chat = await open(<GoatBotScreen visible />);
+  screenSession.rows = [asked];
+  await chat.view.rerender(<GoatBotScreen visible />);
+  const chip = () => chat.view.container.querySelector('[aria-label^="Answering: "]');
+  try {
+    await act(async () =>
+      chat.view.container
+        .querySelector('button[aria-label="Something else"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    await typeInto(chat.view.container, "Keep it");
+    unconfirmed({ environmentId: "env", threadId: "older-main-thread" });
+    screenSession.rows = [];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    // Confirmed again: sending is back, the history is not.
+    move(main);
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    await chat.press("Send message");
+    expect(screenSession.send).not.toHaveBeenCalled();
+    expect(screenSession.answer).toHaveBeenCalledWith("Keep it", "task-ask", "q-ask");
+  } finally {
+    await chat.close();
+  }
+});
+
+it("a typed answer still answers once the history comes back after sending did (#3405)", async () => {
+  setup(main);
+  const chat = await open(<GoatBotScreen visible />);
+  screenSession.rows = [asked];
+  await chat.view.rerender(<GoatBotScreen visible />);
+  try {
+    await act(async () =>
+      chat.view.container
+        .querySelector('button[aria-label="Something else"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    await typeInto(chat.view.container, "Keep it");
+    unconfirmed({ environmentId: "env", threadId: "older-main-thread" });
+    screenSession.rows = [];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    move(main);
+    await chat.view.rerender(<GoatBotScreen visible />);
+    screenSession.rows = [asked];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chat.view.container.querySelector('[aria-label^="Answering: "]')).not.toBeNull();
+    await chat.press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith("Keep it", "task-ask", "q-ask");
+  } finally {
+    await chat.close();
+  }
+});

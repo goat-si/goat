@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
+export const FIRST_V2_MIGRATION_ID = 55;
+
 /**
  * GOAT's own migrations, which sit after upstream's in `migrationEntries`. An upstream sync that
  * adds ids GOAT already used moves these up; the names stay stable.
@@ -95,6 +97,72 @@ export const goatMigrationIdsMove = <E>(
 };
 
 /**
+ * The upstream migrations an id shift displaced: the unrecorded tail above the highest upstream id
+ * the ledger records below GOAT's block, up to its highest GOAT row. A gap below that tail is a
+ * lost ledger row, which keeps the migrator's rules (`skippedV2Migrations`).
+ */
+export const displacedUpstreamMigrations = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+): ReadonlyArray<MigrationEntry<E>> => {
+  const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+  const highestGoat = Math.max(
+    0,
+    ...history.map((row) =>
+      GOAT_MIGRATION_NAMES.has(row.name) ? (currentIds.get(row.name) ?? 0) : 0,
+    ),
+  );
+  const highestUpstream = highestUpstreamBelowGoat(entries, history);
+  const recordedIds = new Set(history.map((row) => row.migration_id));
+  return entries.filter(
+    ([id, name]) =>
+      !GOAT_MIGRATION_NAMES.has(name) &&
+      id > highestUpstream &&
+      id < highestGoat &&
+      !recordedIds.has(id),
+  );
+};
+
+const highestUpstreamBelowGoat = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+) => {
+  const firstGoatId = Math.min(
+    ...entries.flatMap(([id, name]) => (GOAT_MIGRATION_NAMES.has(name) ? [id] : [])),
+  );
+  return Math.max(
+    0,
+    ...history.flatMap((row) =>
+      !GOAT_MIGRATION_NAMES.has(row.name) && row.migration_id < firstGoatId
+        ? [row.migration_id]
+        : [],
+    ),
+  );
+};
+
+/** V2 migrations up to `upTo` that the ledger does not record under their name: the migrator skips them. */
+export const skippedV2Migrations = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+  upTo: number,
+  throughId?: number,
+) => {
+  const recordedNames = new Map(history.map((row) => [row.migration_id, row.name]));
+  const skipped = entries.flatMap(([id, name]) => {
+    if (id < FIRST_V2_MIGRATION_ID || id > upTo || (throughId !== undefined && id > throughId))
+      return [];
+    const recordedName = recordedNames.get(id);
+    return recordedName === name ? [] : [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+  });
+  return skipped.length === 0
+    ? undefined
+    : new Migrator.MigrationError({
+        kind: "BadState",
+        message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${upTo}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
+      });
+};
+
+/**
  * Read-only preflight: preview reconciliation must not mutate incompatible memory sandboxes.
  *
  * An upstream sync moves every recorded GOAT migration by the same distance, so a released ledger
@@ -156,71 +224,124 @@ export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigration
   },
 );
 
+const readHistory = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const ledger =
+    yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
+  if (ledger.length === 0) return undefined;
+  return yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations
+  `;
+});
+
+/** Runs the next displaced upstream migration and records it, in the caller's transaction. */
+const runNextDisplaced = Effect.fn("reconcileGoatMigrationIds.runNextDisplaced")(function* <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const [next] = displacedUpstreamMigrations(entries, history);
+  if (next === undefined) return undefined;
+  const [id, name, migration] = next;
+  yield* migration.pipe(
+    Effect.mapError(
+      (cause) =>
+        new Migrator.MigrationError({
+          kind: "Failed",
+          message: `Migration ${id}_${name} failed: ${String(cause)}`,
+        }),
+    ),
+  );
+  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+  return [id, name] as const;
+});
+
 /**
- * The migrator skips every id at or below the highest one recorded, so a database that recorded a
- * GOAT migration under an id upstream later claimed would never run upstream's migration there.
- * Before the migrator runs, this moves recorded GOAT migrations to their current ids and runs the
- * upstream migrations they displaced. Upstream migrations it runs must be idempotent, as upstream
- * writes them (`CREATE ... IF NOT EXISTS`).
+ * Moves recorded GOAT migrations to their current ids, refusing before any write when one would
+ * land on an id another migration recorded. The first displaced upstream migration commits with
+ * the move: a build from before the shift, reading a moved ledger that holds only names it knows,
+ * would move it back and start; with that name recorded it refuses as a newer database (exit 79).
+ */
+const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(function* <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* assertMemoryMigrationsCompatible(entries);
+  const history = yield* readHistory;
+  if (history === undefined || !goatMigrationIdsMove(entries, history)) return [];
+  const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+  const goatRows = history.flatMap((row) => {
+    const id = GOAT_MIGRATION_NAMES.has(row.name) ? currentIds.get(row.name) : undefined;
+    return id === undefined ? [] : [{ migration_id: id, name: row.name }];
+  });
+  const upstreamRows = new Map(
+    history
+      .filter((row) => !GOAT_MIGRATION_NAMES.has(row.name))
+      .map((row) => [row.migration_id, row.name]),
+  );
+  const unknownGoat = history.some(
+    (row) => GOAT_MIGRATION_NAMES.has(row.name) && !currentIds.has(row.name),
+  );
+  if (unknownGoat || goatRows.some((row) => upstreamRows.has(row.migration_id))) {
+    return yield* new Migrator.MigrationError({
+      kind: "BadState",
+      message: "Cannot move GOAT migrations onto ids another migration recorded.",
+    });
+  }
+  const highestMoved = Math.max(0, ...goatRows.map((row) => row.migration_id));
+  for (const [id, name] of entries) {
+    const recorded = upstreamRows.get(id);
+    // Below V2, other histories (v1 cutovers, site-local migrations) keep their own names.
+    if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved || id < FIRST_V2_MIGRATION_ID) continue;
+    if (recorded === undefined) continue;
+    if (recorded !== name) {
+      return yield* new Migrator.MigrationError({
+        kind: "BadState",
+        message: `Migration ${id} is recorded as ${recorded}, expected ${name}.`,
+      });
+    }
+  }
+  const moved = [...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)), ...goatRows];
+  const skipped = skippedV2Migrations(entries, moved, highestUpstreamBelowGoat(entries, moved));
+  if (skipped !== undefined) return yield* skipped;
+  yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
+  for (const row of goatRows) {
+    yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;
+  }
+  const first = yield* runNextDisplaced(entries, moved);
+  return first === undefined ? [] : [first];
+});
+
+/**
+ * The migrator skips ids at or below the highest recorded, so it never runs an upstream migration
+ * whose id GOAT recorded first. This moves GOAT's rows to their current ids, then runs each
+ * displaced upstream migration in its own transaction, so a restart resumes after the last one
+ * that finished. Those migrations must be rerun-safe.
  */
 export const reconcileGoatMigrationIds = Effect.fn("reconcileGoatMigrationIds")(function* <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  return yield* sql.withTransaction(
-    Effect.gen(function* () {
-      yield* assertMemoryMigrationsCompatible(entries);
-      const ledger =
-        yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
-      if (ledger.length === 0) return [];
-      const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
-        SELECT migration_id, name FROM effect_sql_migrations
-      `;
-      const currentIds = new Map(entries.map(([id, name]) => [name, id]));
-      const goatRows = history.filter((row) => GOAT_MIGRATION_NAMES.has(row.name));
-      if (!goatMigrationIdsMove(entries, history)) return [];
-
-      const upstreamRows = new Map(
-        history
-          .filter((row) => !GOAT_MIGRATION_NAMES.has(row.name))
-          .map((row) => [row.migration_id, row.name]),
-      );
-      const movedIds = goatRows.map((row) => currentIds.get(row.name));
-      if (movedIds.some((id) => id === undefined || upstreamRows.has(id))) {
-        return yield* new Migrator.MigrationError({
-          kind: "BadState",
-          message: "Cannot move GOAT migrations onto ids another migration recorded.",
-        });
-      }
-      const highestMoved = Math.max(...movedIds.map((id) => id ?? 0));
-      const executed: Array<readonly [number, string]> = [];
-      yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
-      for (const [id, name, migration] of entries) {
-        if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved) continue;
-        const recorded = upstreamRows.get(id);
-        if (recorded === name) continue;
-        if (recorded !== undefined) {
-          return yield* new Migrator.MigrationError({
-            kind: "BadState",
-            message: `Migration ${id} is recorded as ${recorded}, expected ${name}.`,
-          });
-        }
-        yield* migration.pipe(
-          Effect.mapError(
-            (cause) =>
-              new Migrator.MigrationError({
-                kind: "Failed",
-                message: `Migration ${id}_${name} failed: ${String(cause)}`,
-              }),
-          ),
-        );
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
-        executed.push([id, name]);
-      }
-      for (const row of goatRows) {
-        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${currentIds.get(row.name)!}, ${row.name})`;
-      }
-      return executed;
-    }),
-  );
+  const executed: Array<readonly [number, string]> = [
+    ...(yield* sql.withTransaction(moveGoatLedger(entries))),
+  ];
+  const pending = displacedUpstreamMigrations(entries, (yield* readHistory) ?? []);
+  for (const [index, [id, name]] of pending.entries()) {
+    yield* Effect.log("Upgrading database").pipe(
+      Effect.annotateLogs({
+        migration: `${id}_${name}`,
+        progress: `${index + 1} of ${pending.length}`,
+      }),
+    );
+    // Each step reads the ledger again in its transaction, so it runs whatever is next.
+    const ran = yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const history = yield* readHistory;
+        return history === undefined ? undefined : yield* runNextDisplaced(entries, history);
+      }),
+    );
+    if (ran === undefined) break;
+    executed.push(ran);
+  }
+  return executed;
 });

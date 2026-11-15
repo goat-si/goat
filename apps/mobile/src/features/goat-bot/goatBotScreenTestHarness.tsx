@@ -37,7 +37,14 @@ const screenSession = vi.hoisted(() => ({
   sending: undefined as { environmentId: string; threadId: string } | null | undefined,
   // Whether the bot can take messages now; Home opens either way.
   availability: "ready" as string,
+  // Whether the bot's computer, which Home and task screens read, is connected.
+  homeConnected: true,
+  // Each task's newest chip in the conversation, which says which questions it took answers to.
+  taskChips: new Map() as ReadonlyMap<string, unknown>,
 }));
+// Where the screen navigates, and which remote computers a card's work thread can reach.
+const navigation = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const remote = vi.hoisted(() => ({ connected: [] as string[] }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
 // Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
 // The provider stands in, but the chat's own opener is real: its viewer shows, and a test opens an
@@ -490,7 +497,7 @@ vi.mock("@react-navigation/elements", async () => ({
 }));
 vi.mock("@react-navigation/native", () => ({
   useIsFocused: () => device.focused,
-  useNavigation: () => ({ dispatch: () => {} }),
+  useNavigation: () => ({ dispatch: navigation.dispatch }),
   StackActions: { push: (name: string, params: object) => ({ name, params }) },
 }));
 vi.mock("react-native-reanimated", () => ({
@@ -510,7 +517,12 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => () => {},
 }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
-  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
+  useRemoteConnectionStatus: () => ({
+    connectedEnvironments: remote.connected.map((environmentId) => ({
+      environmentId,
+      connectionState: "connected",
+    })),
+  }),
 }));
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
@@ -529,6 +541,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
       replyingSince: null,
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
+      homeConnected: screenSession.homeConnected,
+      taskChips: screenSession.taskChips,
       streamingReplyIds: new Set<string>(),
       visibleTurnItems: screenSession.visibleTurnItems,
       boundedSnapshots: screenSession.boundedSnapshots,
@@ -575,6 +589,15 @@ export function setupComposer() {
   picker.release.mockClear();
 }
 
+/** Resets the bot computer's connection, navigation and reachable remote computers. */
+export function setupTaskNavigation() {
+  screenSession.homeConnected = true;
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [];
+  navigation.dispatch.mockReset();
+  remote.connected = [];
+}
+
 export async function typeInto(container: HTMLElement, value: string) {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
   // A person cannot type into a read-only box, so neither can a test.
@@ -612,7 +635,9 @@ export {
   layouts,
   list,
   models,
+  navigation,
   picker,
+  remote,
   screenSession,
   threadReads,
 };

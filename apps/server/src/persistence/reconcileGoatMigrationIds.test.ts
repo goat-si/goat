@@ -10,6 +10,7 @@ import {
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
 import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
+import { failingAfterWork, fresh, schema, snapshot } from "./reconcileGoatMigrationIds.testkit.ts";
 
 // GOAT builds record GOAT's own migrations right after the last upstream one they knew:
 // at 61 before the sync that added PullRequestReviewGuides, at 62 before the one that
@@ -215,25 +216,40 @@ describe("GOAT migration ids", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("retries an interrupted relocation without changing the old schema or ledger", () =>
-    Effect.gen(function* () {
-      yield* seedGoatLedger(goatNames, 70);
-      const sql = yield* SqlClient.SqlClient;
-      const before = yield* history;
-      const schema = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
-      const failing = migrationEntries.map((entry) =>
-        entry[0] === 76
-          ? ([entry[0], entry[1], sql`SELECT * FROM missing_migration_fixture`] as const)
-          : entry,
-      );
-      const failure = yield* Effect.flip(reconcileGoatMigrationIds(failing));
-      assert.strictEqual(failure._tag, "MigrationError");
-      assert.deepStrictEqual(yield* history, before);
-      assert.deepStrictEqual(yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`, schema);
-      yield* runMigrations();
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect(
+    "a relocation failing in 070 keeps the old ledger; failing in 076 rolls back 076 alone, keeps 070-075 and resumes at 076",
+    () =>
+      Effect.gen(function* () {
+        yield* seedGoatLedger(goatNames, 70);
+        const sql = yield* SqlClient.SqlClient;
+        const before = yield* history;
+        const tables = yield* schema;
+        // The collision check, the ledger move and 070, the first displaced migration, commit
+        // together or not at all.
+        const at070 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(70)));
+        assert.strictEqual(at070._tag, "MigrationError");
+        assert.deepStrictEqual(yield* history, before);
+        assert.deepStrictEqual(yield* schema, tables);
+        // 076 fails after its work: that work rolls back, 070-075 stay with their ledger rows.
+        const at076 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(76)));
+        assert.strictEqual(at076._tag, "MigrationError");
+        assert.deepStrictEqual(
+          yield* history,
+          migrationManifest.filter(([id, name]) => id < 76 || goatNames.includes(name)),
+        );
+        const projectColumns = yield* sql<{
+          readonly name: string;
+        }>`PRAGMA table_info(projection_projects)`;
+        assert.isFalse(
+          projectColumns.some((column) => ["pinned_at", "archived_at"].includes(column.name)),
+        );
+        assert.deepStrictEqual(
+          yield* runMigrations(),
+          migrationManifest.filter(([id]) => id >= 76 && id <= 89),
+        );
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("finishes a partial old 70-series ledger after a restart", () =>

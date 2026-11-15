@@ -228,6 +228,9 @@ export function setupSession() {
   harness.workerShell = null;
   harness.refresh.mockReset();
   harness.save.mockReset();
+  harness.upload.mockReset();
+  harness.transfer.mockReset();
+  harness.verify.mockReset();
   harness.release.mockReset().mockResolvedValue(undefined);
   harness.key.mockReset().mockReturnValue("request");
   harness.run.mockReset().mockImplementation(async (_registry, _command, { environmentId }) => ({

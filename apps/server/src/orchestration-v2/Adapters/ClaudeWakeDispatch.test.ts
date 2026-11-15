@@ -15,6 +15,7 @@ import {
   turnOneResult,
   wakeTaskStarted,
   wakeTurnInit,
+  WAKE_TASK_ID,
 } from "./ClaudeWakeFrames.testkit.ts";
 import { makeWakeHarnessWithOptions } from "./ClaudeWakeHarness.testkit.ts";
 
@@ -79,6 +80,15 @@ it.effect("offers a later wake after an earlier wake's continuation dispatch fai
       const failed = harness.continuationRequests[0]!;
       assert.isDefined(failed.clearIfCurrent);
       yield* failed.clearIfCurrent!();
+      yield* harness.awaitUntil(
+        () =>
+          !(
+            harness.events
+              .flatMap((event) => (event.type === "provider_thread.updated" ? [event] : []))
+              .at(-1)?.providerThread.pendingBackgroundTasks ?? []
+          ).some((task) => task.taskId === WAKE_TASK_ID),
+        "wake task released",
+      );
 
       yield* harness.offerAndWait(
         claudeSdkFrame({
