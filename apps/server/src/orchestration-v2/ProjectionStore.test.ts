@@ -1586,14 +1586,16 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const threadId = ThreadId.make("thread:bounded-sql-history");
       // The raw SQL edits below stand in for committed writes, which always append a thread event.
       let revision = 0;
-      const historyPage = (...args: Parameters<typeof projectionStore.getThreadHistoryPage>) =>
+      const committed = <A, E, R>(read: Effect.Effect<A, E, R>) =>
         sql`INSERT INTO orchestration_events (
           event_id, aggregate_kind, stream_id, stream_version, event_type,
           occurred_at, actor_kind, payload_json, metadata_json, application_event_version
         ) VALUES (
           ${`event:bounded-sql-history:revision:${++revision}`}, 'thread', ${threadId}, ${revision},
           'turn-item.updated', ${nowIso}, 'user', '{}', '{}', 2
-        )`.pipe(Effect.andThen(projectionStore.getThreadHistoryPage(...args)));
+        )`.pipe(Effect.andThen(read));
+      const historyPage = (...args: Parameters<typeof projectionStore.getThreadHistoryPage>) =>
+        committed(projectionStore.getThreadHistoryPage(...args));
       yield* projectionStore.apply({
         id: EventId.make("event:bounded-sql-history:thread"),
         type: "thread.created",
@@ -1921,6 +1923,134 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         WHERE thread_id = ${threadId} AND ordinal IN (500, 580)
       `;
 
+      // Older pages and timeline pages read the rows near the page, not the whole history. A
+      // full index that another read left cached gives the same page.
+      const pageStatements: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const recordPageStatements = <A, E, R>(read: Effect.Effect<A, E, R>) =>
+        committed(
+          read.pipe(
+            Effect.provideService(Statement.CurrentTransformer, (statement) => {
+              pageStatements.push(statement.compile());
+              return Effect.succeed(statement);
+            }),
+          ),
+        );
+      const olderCursor = encodeThreadHistoryCursor({
+        snapshotSequence: 0,
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:bounded-sql-history:990"),
+        position: 989,
+      });
+      const ordinalsFrom = (first: number, length: number) =>
+        Array.from({ length }, (_, index) => first + index);
+      for (const workMode of [undefined, "deferred"] as const) {
+        const read = (throughEntryId?: string) =>
+          projectionStore.getThreadHistoryPage(
+            threadId,
+            olderCursor,
+            throughEntryId,
+            false,
+            workMode,
+          );
+        const page = yield* recordPageStatements(read());
+        assert.deepEqual(
+          page.items.map((row) => row.item.ordinal),
+          ordinalsFrom(915, 75),
+        );
+        assert.strictEqual(decodeThreadHistoryCursor(page.nextCursor!).p, 914);
+        // A jump to an entry reads the full index and leaves it cached. With work, it scans
+        // payloads for inline output only in its page's runs, not in a run after its cursor.
+        const scannedRuns: Array<string> = [];
+        yield* read("turn-item:bounded-sql-history:950").pipe(
+          Effect.provideService(Statement.CurrentTransformer, (statement) => {
+            const [query, params] = statement.compile();
+            if (query.includes("LIKE '%htmlRender%'")) scannedRuns.push(String(params[0]));
+            return Effect.succeed(statement);
+          }),
+        );
+        assert.deepEqual(
+          [
+            scannedRuns.length,
+            scannedRuns.some((runs) => runs.includes('"run:bounded-sql-history:950"')),
+            scannedRuns.some((runs) => runs.includes('"run:bounded-sql-history:995"')),
+          ],
+          workMode === undefined ? [0, false, false] : [1, true, false],
+        );
+        assert.deepEqual(yield* read(), page);
+      }
+      for (const [view, ordinals] of [
+        ["activity", ordinalsFrom(902, 20)],
+        ["messages", [1000]],
+      ] as const) {
+        const read = projectionStore.getTimelinePage(threadId, {
+          afterPosition: 900,
+          limit: 20,
+          view,
+        });
+        const page = yield* recordPageStatements(read);
+        assert.deepEqual(
+          page.items.map((row) => [row.item.ordinal, row.position]),
+          ordinals.map((ordinal) => [ordinal, ordinal - 1]),
+        );
+        assert.strictEqual(page.totalItems, 1000);
+        // An attachment lookup reads the full index and leaves it cached.
+        yield* projectionStore.getTimelinePage(threadId, { attachmentId: "absent", limit: 1 });
+        assert.deepEqual(yield* read, page);
+      }
+      {
+        const pagePath = "file:/history-page-steps?vfs=memdb";
+        using copy = new NodeSqlite.DatabaseSync(pagePath);
+        yield* sql`VACUUM INTO ${pagePath}`;
+        // Only statements that count positions may grow with the history, and those read an
+        // index alone. Every other statement costs the same when the rows below the page are gone.
+        const countsPositions = ([query]: readonly [string, ReadonlyArray<unknown>]) =>
+          /COUNT\(\*\)|OFFSET/.test(query);
+        for (const [query, params] of pageStatements.filter(countsPositions)) {
+          const plan = copy
+            .prepare(`EXPLAIN QUERY PLAN ${query}`)
+            .all(...(params as ReadonlyArray<NodeSqlite.SQLInputValue>))
+            .map((row) => String(row.detail))
+            .filter((detail) => detail.includes("orchestration_v2_projection_turn_items"));
+          assert.isTrue(
+            plan.every((detail) => detail.includes("COVERING INDEX")),
+            `${query}\n${plan.join("\n")}`,
+          );
+        }
+        const rowReads = pageStatements.filter((statement) => !countsPositions(statement));
+        const rowReadSteps = () =>
+          rowReads.reduce((steps, [query, params]) => {
+            const statement = copy.prepare(query);
+            statement.all(...(params as ReadonlyArray<NodeSqlite.SQLInputValue>));
+            return steps + statement.stat("vmStep");
+          }, 0);
+        const fullSteps = rowReadSteps();
+        assert.isAbove(fullSteps, 0);
+        copy.exec(
+          "DELETE FROM orchestration_v2_projection_turn_items WHERE ordinal BETWEEN 2 AND 400",
+        );
+        assert.isAtMost(fullSteps, rowReadSteps() * 1.1);
+      }
+      // Rows that a rolled-back run hides below the page still shift every position above them.
+      const setOldRunStatus = (status: "rolled_back" | "completed") => sql`
+        UPDATE orchestration_v2_projection_runs
+        SET status = ${status}, payload_json = json_set(payload_json, '$.status', ${status})
+        WHERE thread_id = ${threadId} AND ordinal BETWEEN 100 AND 109`;
+      yield* setOldRunStatus("rolled_back");
+      const shiftedPage = yield* historyPage(threadId, olderCursor);
+      assert.strictEqual(decodeThreadHistoryCursor(shiftedPage.nextCursor!).p, 904);
+      const shiftedTimeline = yield* committed(
+        projectionStore.getTimelinePage(threadId, {
+          afterPosition: 900,
+          limit: 1,
+          view: "activity",
+        }),
+      );
+      assert.deepEqual(
+        [shiftedTimeline.totalItems, shiftedTimeline.items[0]?.item.ordinal],
+        [990, 912],
+      );
+      yield* setOldRunStatus("completed");
+
       const retainedRequestPlan = yield* sql<{ readonly detail: string }>`
         EXPLAIN QUERY PLAN
         WITH selected AS (
@@ -2076,21 +2206,24 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           window.projection.visibleTurnItems.find((row) => row.item.deferredWork)?.item.ordinal,
           3,
         );
+        const newestCursor = encodeThreadHistoryCursor({
+          snapshotSequence: 0,
+          sourceThreadId: threadId,
+          sourceItemId: "turn-item:bounded-sql-history:1000",
+          position: 1000,
+        });
+        const page = yield* historyPage(threadId, newestCursor, undefined, false, "deferred");
+        assert.isUndefined(page.items.find((row) => row.item.ordinal === 2)?.item.deferredWork);
+        // Tool payloads hold megabytes, so a page that reads the full index, as a jump to an
+        // entry does, looks for inline output only in its own runs.
         const pageRead = traceSqlStatements();
-        const page = yield* historyPage(
+        yield* historyPage(
           threadId,
-          encodeThreadHistoryCursor({
-            snapshotSequence: 0,
-            sourceThreadId: threadId,
-            sourceItemId: "turn-item:bounded-sql-history:1000",
-            position: 1000,
-          }),
-          undefined,
+          newestCursor,
+          "turn-item:bounded-sql-history:2",
           false,
           "deferred",
         ).pipe(Effect.withTracer(pageRead.tracer));
-        assert.isUndefined(page.items.find((row) => row.item.ordinal === 2)?.item.deferredWork);
-        // Tool payloads hold megabytes, so a page looks for inline output only in its own runs.
         const payloadScans = pageRead.statements.filter((statement) =>
           statement.includes("LIKE '%htmlRender%'"),
         );
