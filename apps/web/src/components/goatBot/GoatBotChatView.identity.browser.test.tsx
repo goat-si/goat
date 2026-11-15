@@ -134,6 +134,11 @@ const research = {
 const UNSAVED_BEHIND =
   "The chat behind this task has open or unsaved work. Leaving this task closes it and discards unsaved changes.";
 
+/** Resets the draft files a test's composer gave back. */
+function setup() {
+  released.length = 0;
+}
+
 /** The task pane's line about work in the chat behind it, read while the chat is hidden. */
 function HiddenChatLine({ hidden }: { readonly hidden: boolean }) {
   return useGoatBotHiddenChatNotice(hidden).notice;
@@ -189,7 +194,7 @@ async function draftWithFile(screen: Awaited<ReturnType<typeof render>>, box: st
 }
 
 it("regression #3393: a draft and its file in the main chat beside a task are dropped, not sent, when a member's task opens there", async () => {
-  released.length = 0;
+  setup();
   const toMain = vi.fn(() => true);
   const toResearch = vi.fn(() => true);
   await using screen = await render(besideTask({ member: null, onSend: toMain }));
@@ -208,8 +213,8 @@ it("regression #3393: a draft and its file in the main chat beside a task are dr
   expect(toMain).not.toHaveBeenCalled();
 });
 
-it("guard: the same bot rendering again, or reconnecting, keeps the draft and its file", async () => {
-  released.length = 0;
+it("guard: the same bot rendering again, or this chat view on its own going to connecting and back, keeps the draft and its file", async () => {
+  setup();
   const toMain = vi.fn(() => true);
   await using screen = await render(besideTask({ member: null, onSend: toMain }));
   await draftWithFile(screen, "Message GOAT Bot");
@@ -242,6 +247,7 @@ it("guard: the same bot rendering again, or reconnecting, keeps the draft and it
 });
 
 it("regression #3393: with the chat hidden behind the task, the unsaved-work line goes once a member's task drops the draft", async () => {
+  setup();
   const toMain = vi.fn(() => true);
   const toResearch = vi.fn(() => true);
   await using screen = await render(besideTask({ member: null, onSend: toMain }));
