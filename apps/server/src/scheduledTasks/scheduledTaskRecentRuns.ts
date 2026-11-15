@@ -29,7 +29,8 @@ interface RecentRunRow {
 /**
  * The most bytes one stored run may return to the server: snapshot plus input id, counted over the
  * whole value, NULs included. A run this server writes is about 430. A routine with a larger run
- * carries no history, so at most 350 of these reach the server; SQLite still reads one to measure it.
+ * carries no history, so at most 350 of these reach the server. octet_length reads the size from the
+ * record header, so SQLite never loads an oversized value.
  */
 const MAX_STORED_RUN_BYTES = 1024;
 
@@ -117,8 +118,8 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
     SELECT task_id, CASE WHEN NOT oversized THEN snapshot_json END AS snapshot_json,
       CASE WHEN NOT oversized THEN input_id END AS input_id, quiet, oversized FROM (
       SELECT c.task_id, r.snapshot_json, l.input_id, r.requested_at, r.firing_id,
-        length(CAST(r.snapshot_json AS BLOB)) + coalesce(length(CAST(l.input_id AS BLOB)), 0)
-          > ${MAX_STORED_RUN_BYTES} AS oversized,
+        octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0) > ${MAX_STORED_RUN_BYTES}
+          AS oversized,
         CASE WHEN octet_length(i.decision_json) <= ${MAX_QUIET_DECISION_BYTES} AND json_valid(i.decision_json)
           THEN json_extract(i.decision_json, '$.action.type') END
           = 'no_update' AS quiet
@@ -128,7 +129,8 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
         WHERE n.task_id = c.task_id AND n.task_created_at = c.created_at
         ORDER BY n.requested_at DESC, n.firing_id DESC LIMIT ${SCHEDULED_TASK_RECENT_RUNS})
       LEFT JOIN scheduled_task_channel_inputs l ON l.firing_id = r.firing_id
-      LEFT JOIN channel_inbox i ON i.input_id = l.input_id)
+      LEFT JOIN channel_inbox i ON i.input_id =
+        CASE WHEN octet_length(l.input_id) <= ${MAX_STORED_RUN_BYTES} THEN l.input_id END)
     ORDER BY task_id, requested_at DESC, firing_id DESC`;
   const byTask = new Map<string, Array<ScheduledTaskRecentRun>>();
   const oversized = new Set<string>();
