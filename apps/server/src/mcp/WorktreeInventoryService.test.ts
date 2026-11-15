@@ -275,6 +275,28 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live(
+    "a thread pointing at a checkout outside GOAT's worktrees folder never gets it removed",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, root, addWorktree, setThreads } = yield* fixture;
+        // An imported session records the user's own linked worktree as its thread's checkout.
+        const own = yield* addWorktree("imported", root + "/user-checkout");
+        setThreads([{ id: "imported-thread", worktreePath: own, branch: "imported" }]);
+
+        const message = yield* refusal(
+          service.remove({ threadId: ThreadId.make("imported-thread"), force: true }),
+        );
+        expect(message).toContain("outside GOAT's worktrees folder");
+        const swept = yield* service.cleanup({ dryRun: false });
+        expect(swept.removed).toEqual([]);
+        expect(swept.kept.find((entry) => entry.path === own)?.reason).toContain(
+          "outside GOAT's worktrees folder",
+        );
+        expect(yield* fs.exists(own)).toBe(true);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("accepts commits a merged pull request names after the remote branch is gone", () =>
     Effect.gen(function* () {
       const { service, fs, addWorktree, commit, setMergedPullRequest } = yield* fixture;
