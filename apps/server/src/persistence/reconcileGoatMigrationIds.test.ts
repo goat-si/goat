@@ -215,12 +215,10 @@ describe("GOAT migration ids", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("retries an interrupted relocation without changing the old schema or ledger", () =>
+  it.effect("an interrupted relocation keeps the steps before the failure and finishes", () =>
     Effect.gen(function* () {
       yield* seedGoatLedger(goatNames, 70);
       const sql = yield* SqlClient.SqlClient;
-      const before = yield* history;
-      const schema = yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
       const failing = migrationEntries.map((entry) =>
         entry[0] === 76
           ? ([entry[0], entry[1], sql`SELECT * FROM missing_migration_fixture`] as const)
@@ -228,8 +226,10 @@ describe("GOAT migration ids", () => {
       );
       const failure = yield* Effect.flip(reconcileGoatMigrationIds(failing));
       assert.strictEqual(failure._tag, "MigrationError");
-      assert.deepStrictEqual(yield* history, before);
-      assert.deepStrictEqual(yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`, schema);
+      assert.deepStrictEqual(
+        yield* history,
+        migrationManifest.filter(([id, name]) => id < 76 || goatNames.includes(name)),
+      );
       yield* runMigrations();
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);

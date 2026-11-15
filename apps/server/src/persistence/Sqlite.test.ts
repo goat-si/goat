@@ -555,4 +555,30 @@ it.layer(NodeServices.layer)("layerCliConfig", (it) => {
       yield* Effect.void.pipe(Effect.provide(SqlitePersistence.layerCliConfig));
     }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
   );
+
+  it.effect("does not resume GOAT's id shift in a home a running server owns", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          // A shift stopped after 082: GOAT's rows moved, upstream 083-089 still to run.
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 83 AND 89`;
+        }),
+      );
+      const before = yield* recordedMigrations;
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.deepEqual(yield* recordedMigrations, before);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
 });

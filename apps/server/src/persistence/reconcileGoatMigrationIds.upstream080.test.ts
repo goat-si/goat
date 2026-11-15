@@ -150,13 +150,11 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.deepStrictEqual(yield* schema, tables);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
-  it.effect("an upgrade interrupted in the last upstream step rolls back whole and resumes", () =>
+  it.effect("an upgrade interrupted in the last upstream step keeps the steps before it", () =>
     Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       yield* seedUserData;
       const sql = yield* SqlClient.SqlClient;
-      const before = yield* history;
-      const tables = yield* schema;
       const data = yield* userData;
       const [lastId] = UPSTREAM_80S.at(-1)!;
       const failing = migrationEntries.map((entry) =>
@@ -166,9 +164,11 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       const failure = yield* Effect.flip(reconcileGoatMigrationIds(failing));
       assert.strictEqual(failure._tag, "MigrationError");
-      assert.deepStrictEqual(yield* history, before);
-      assert.deepStrictEqual(yield* schema, tables);
-      assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S);
+      assert.deepStrictEqual(
+        yield* history,
+        migrationManifest.filter(([id]) => id !== lastId),
+      );
+      assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S.slice(-1));
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* userData, data);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   assertMemoryMigrationsCompatible,
+  displacedUpstreamMigrations,
   goatMigrationIdsMove,
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
@@ -383,7 +384,8 @@ const run = Migrator.make({});
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 
 // Mirrors runMigrations' writes: the Migrator runs only ids above the highest recorded, plus the
-// V2-preview reconciliation and GOAT's id shift (reconcileGoatMigrationIds).
+// V2-preview reconciliation and GOAT's id shift with the upstream migrations it displaced
+// (reconcileGoatMigrationIds), which a restart resumes.
 export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const tables = yield* sql`
@@ -398,7 +400,10 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     (row) => row.name === "OrchestrationV2" && (row.migration_id === 53 || row.migration_id === 54),
   );
   return (
-    latestId < latestMigrationId || previewRows || goatMigrationIdsMove(migrationEntries, history)
+    latestId < latestMigrationId ||
+    previewRows ||
+    goatMigrationIdsMove(migrationEntries, history) ||
+    displacedUpstreamMigrations(migrationEntries, history).length > 0
   );
 });
 
