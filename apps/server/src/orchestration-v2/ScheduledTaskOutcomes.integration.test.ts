@@ -11,6 +11,7 @@ import {
   MessageId,
   ScheduledTaskError,
   ScheduledTaskId,
+  TurnItemId,
   type OrchestrationV2Run,
 } from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -143,6 +144,67 @@ it.effect.each(["completed", "failed", "interrupted", "cancelled", "rolled_back"
       const before = current.nextRunAt;
       yield* update(run, status, `${status}:duplicate`);
       assert.equal((yield* tasks.list()).tasks[0]?.nextRunAt, before);
+    }).pipe(Effect.provide(harness())),
+);
+
+it.effect.each([
+  { status: "failed", failure: "Weekly usage limit reached", error: "Weekly usage limit reached" },
+  { status: "failed", failure: null, error: "The run failed." },
+  { status: "failed", failure: "x".repeat(4_096), error: `${"x".repeat(499)}…` },
+  { status: "interrupted", failure: null, error: "The run was stopped." },
+  { status: "cancelled", failure: null, error: "The run was cancelled." },
+] as const)(
+  "a run that ends $status after its message was accepted records why on its task",
+  (outcome) =>
+    Effect.gen(function* () {
+      const tasks = yield* Tasks.ScheduledTaskService;
+      const projections = yield* Projections.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const task = yield* create();
+      const ran = yield* tasks.runNow({ id: task.id });
+      const run = (yield* projections.getThreadProjection(ran.threadId!)).runs[0]!;
+      if (outcome.failure !== null) {
+        const now = yield* DateTime.now;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("provider-failure"),
+              type: "turn-item.updated",
+              threadId: run.threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("turn-item:provider-failure"),
+                type: "error",
+                threadId: run.threadId,
+                runId: run.id,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "failed",
+                title: "Provider failure",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "usage_limit",
+                  message: outcome.failure,
+                  code: null,
+                  retryable: null,
+                },
+              },
+            },
+          ],
+        });
+      }
+      yield* update(run, outcome.status);
+      const current = (yield* tasks.list()).tasks[0]!;
+      assert.equal(current.lastRun?.status, outcome.status);
+      assert.equal(current.lastRunError, outcome.error);
+      yield* update(run, outcome.status, `${outcome.status}:duplicate`);
+      assert.equal((yield* tasks.list()).tasks[0]?.lastRunError, outcome.error);
     }).pipe(Effect.provide(harness())),
 );
 
