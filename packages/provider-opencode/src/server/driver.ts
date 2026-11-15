@@ -1,5 +1,5 @@
 import { settingsSecretLiteral, type ServerProviderModel } from "@goat/contracts";
-import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
+import { ProviderDriverKind } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -16,20 +16,17 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as OpenCode2TextGeneration from "./v2/textGeneration.ts";
 import { makeOpenCodeTextGeneration } from "./textGeneration.ts";
-import {
-  MemoryGenerationRunnerError,
-  type MemoryOperationName,
-} from "@goat/provider-core/server/memoryGenerationRunner";
+import { selectOpenCodeRuntimeTextGeneration } from "./runtimeTextGeneration.ts";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import { compareSemverVersions } from "@goat/shared/semver";
 import * as OpenCodeAdapterV2 from "./adapter.ts";
 import * as OpenCode2AdapterV2 from "./v2/adapter.ts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ProviderDriverError } from "@goat/provider-core/server/errors";
 import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
 import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
@@ -51,6 +48,12 @@ import {
 } from "./status.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import {
+  LaunchEnvironment,
+  currentLaunchEnvironment,
+  makeCurrentLaunchEnvironment,
+} from "./launchEnvironment.ts";
+import { hostEnvironmentHash } from "./hostEnvironmentHash.ts";
 import {
   makeOpenCodeRuntimeProbe,
   probeOpenCodeRuntime,
@@ -167,102 +170,60 @@ function workspaceModelsFor(
 function selectOpenCodeRuntimeAdapter(input: {
   readonly probe: OpenCodeRuntimeProbe;
   readonly resolve: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>;
+  readonly currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>;
   readonly v1: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly v2: ProviderAdapter.ProviderAdapterV2["Service"];
   readonly sessionConfigKey: string;
+  /** The version of the server already running for the current launch, if one is. */
+  readonly runningVersion: Effect.Effect<string | undefined>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
-  const pick = <PE>(probed: Effect.Effect<ProbedOpenCode | undefined, PE>) =>
-    byOpenCodeRuntime(probed, { v1: Effect.succeed(input.v1), v2: Effect.succeed(input.v2) });
-  const hot = pick(Effect.map(input.probe.lastSuccess, Option.getOrUndefined));
+  // What a new session would launch: the server already running for the current launch answers
+  // first, since a shim's probe can miss its version and a late probe for an earlier launch can
+  // evict the current one from the probe cache; otherwise the probe decides.
+  const current = Effect.gen(function* () {
+    const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
+    const running = probed?.generation === "v1" ? undefined : yield* input.runningVersion;
+    const v2 = running !== undefined || probed?.generation === "v2";
+    const version = running ?? (probed?.generation === "v2" ? probed.version : undefined);
+    return { adapter: v2 ? input.v2 : input.v1, version };
+  });
   return {
     instanceId: input.v1.instanceId,
     driver: DRIVER_KIND,
     sessionConfigKey: input.sessionConfigKey,
     getCapabilities: Effect.fn("OpenCodeDriver.getCapabilities")(function* () {
-      const probed = Option.getOrUndefined(yield* input.probe.lastSuccess);
-      const adapter = yield* pick(Effect.succeed(probed));
+      const { adapter, version } = yield* current;
       const capabilities = yield* adapter.getCapabilities();
       return {
         ...capabilities,
         turns: {
           ...capabilities.turns,
           supportsNativeGoals:
-            capabilities.turns.supportsNativeGoals ??
-            (probed?.generation === "v2" && compareSemverVersions(probed.version, "2.2.5") >= 0),
+            version !== undefined && compareSemverVersions(version, "2.2.5") >= 0,
         },
       };
     }),
     planSelectionTransition: (transition) =>
-      Effect.flatMap(hot, (adapter) => adapter.planSelectionTransition(transition)),
+      Effect.flatMap(current, ({ adapter }) => adapter.planSelectionTransition(transition)),
     openSession: (session) =>
-      Effect.flatMap(pick(input.resolve), (adapter) => adapter.openSession(session)),
-  };
-}
-
-function selectOpenCodeRuntimeTextGeneration(
-  probe: OpenCodeRuntimeProbe,
-  resolve: Effect.Effect<ProbedOpenCode, OpenCodeRuntime.OpenCodeRuntimeError>,
-  v1: ProviderTextGeneration,
-  v2: ProviderTextGeneration,
-): ProviderTextGeneration {
-  // Memory preflight must not start a probe/server before the identity/isolation gates.
-  const memoryProbe = Effect.map(probe.lastSuccess, Option.getOrUndefined);
-  const unsupportedMemory = (operation: MemoryOperationName) =>
-    Effect.fail(
-      new TextGenerationError({
-        operation,
-        detail: "The selected OpenCode runtime has no memory runner.",
-        cause: new MemoryGenerationRunnerError({ code: "unsupported_operation" }),
-      }),
-    );
-  return {
-    resolveMemoryConflict: (input) =>
-      byOpenCodeRuntime(memoryProbe, {
-        v1:
-          v1.resolveMemoryConflict === undefined
-            ? unsupportedMemory("resolveMemoryConflict")
-            : v1.resolveMemoryConflict(input),
-        v2:
-          v2.resolveMemoryConflict === undefined
-            ? unsupportedMemory("resolveMemoryConflict")
-            : v2.resolveMemoryConflict(input),
-      }),
-    generateMemorySummary: (input) =>
-      byOpenCodeRuntime(memoryProbe, {
-        v1:
-          v1.generateMemorySummary === undefined
-            ? unsupportedMemory("generateMemorySummary")
-            : v1.generateMemorySummary(input),
-        v2:
-          v2.generateMemorySummary === undefined
-            ? unsupportedMemory("generateMemorySummary")
-            : v2.generateMemorySummary(input),
-      }),
-    generateCommitMessage: (input) =>
-      byOpenCodeRuntime(resolve, {
-        v1: v1.generateCommitMessage(input),
-        v2: v2.generateCommitMessage(input),
-      }),
-    generatePrContent: (input) =>
-      byOpenCodeRuntime(resolve, {
-        v1: v1.generatePrContent(input),
-        v2: v2.generatePrContent(input),
-      }),
-    generateBranchName: (input) =>
-      byOpenCodeRuntime(resolve, {
-        v1: v1.generateBranchName(input),
-        v2: v2.generateBranchName(input),
-      }),
-    generateThreadTitle: (input) =>
-      byOpenCodeRuntime(resolve, {
-        v1: v1.generateThreadTitle(input),
-        v2: v2.generateThreadTitle(input),
-      }),
-    generateReviewGuide: (input) =>
-      byOpenCodeRuntime(resolve, {
-        v1: v1.generateReviewGuide(input),
-        v2: v2.generateReviewGuide(input),
-      }),
+      input.currentEnvironment.pipe(
+        Effect.flatMap((environment) =>
+          input.resolve.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: DRIVER_KIND,
+                  providerSessionId: session.providerSessionId,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((result) =>
+              (result.generation === "v2" ? input.v2 : input.v1).openSession(session),
+            ),
+            Effect.provideService(LaunchEnvironment, environment),
+          ),
+        ),
+      ),
   };
 }
 
@@ -308,8 +269,12 @@ export const OpenCodeDriver: ProviderDriver<
     const crypto = yield* Crypto.Crypto;
     const host = yield* ProviderHost.ProviderHost;
     const hostEnvironment = yield* HostProcess.Environment;
-    const currentEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment).pipe(
-      Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory),
+    const home = yield* HostProcess.HomeDirectory;
+    const currentEnvironment = currentLaunchEnvironment(
+      Effect.suspend(() => mergeProviderInstanceEnvironment(environment, hostEnvironment)).pipe(
+        Effect.provideService(HostProcess.HomeDirectory, home),
+        Effect.map((env) => ({ ...env })),
+      ),
     );
     const processEnv = yield* currentEnvironment;
     const probeEnvironment = currentEnvironment.pipe(Effect.map(providerProbeEnvironment));
@@ -335,73 +300,133 @@ export const OpenCodeDriver: ProviderDriver<
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       );
+    const resolveExecutable = yield* SpawnExecutableResolution;
+    const platform = yield* HostProcess.Platform;
+    const localExecutableIdentity = (env: NodeJS.ProcessEnv) => {
+      const path = resolveExecutable(effectiveConfig.binaryPath, platform, env);
+      if (path === undefined) return Effect.succeed({ path: effectiveConfig.binaryPath });
+      return fileSystem.stat(path).pipe(
+        Effect.map((stat) => ({
+          path,
+          dev: String(stat.dev),
+          ino: Option.match(stat.ino, { onNone: () => null, onSome: String }),
+          mtime: Option.match(stat.mtime, { onNone: () => null, onSome: (date) => date.getTime() }),
+          size: String(stat.size),
+        })),
+        Effect.orElseSucceed(() => ({ path })),
+      );
+    };
+    const executableIdentity = (env: NodeJS.ProcessEnv) =>
+      effectiveConfig.serverUrl.trim().length > 0
+        ? Effect.succeed(null)
+        : localExecutableIdentity(env);
     const runtimeProbe = yield* makeOpenCodeRuntimeProbe(
       probeEnvironment.pipe(Effect.flatMap(probeRuntime)),
+      currentEnvironment,
+      executableIdentity,
     );
     const resolveRuntime =
       effectiveConfig.serverUrl.trim().length > 0
         ? runtimeProbe.get
-        : runtimeProbe.lastSuccess.pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  currentEnvironment.pipe(
-                    Effect.flatMap(probeRuntime),
-                    Effect.tap(runtimeProbe.record),
-                  ),
-              }),
-            ),
-          );
+        : Effect.gen(function* () {
+            const identity = yield* runtimeProbe.identity;
+            const cached = yield* runtimeProbe.lastSuccessAt(identity);
+            const result = Option.isSome(cached)
+              ? cached.value
+              : yield* probeRuntime(yield* currentEnvironment);
+            if ((yield* runtimeProbe.identity) !== identity) {
+              return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
+                operation: "resolveRuntime",
+                detail: "The OpenCode executable changed during its version check; try again.",
+              });
+            }
+            if (Option.isNone(cached)) yield* runtimeProbe.recordAt(identity, result);
+            return result;
+          });
     const noUpdate = makeManualOnlyProviderMaintenanceCapabilities({
       provider: DRIVER_KIND,
       packageName: null,
     });
-    const maintenanceFor = (probed: typeof runtimeProbe.get) =>
-      probed.pipe(
-        Effect.map((result) => result.generation),
-        Effect.option,
-        Effect.flatMap((generation) =>
-          Option.isNone(generation)
-            ? Effect.succeed(noUpdate)
-            : currentEnvironment.pipe(
-                Effect.flatMap((env) =>
-                  resolveProviderMaintenanceCapabilitiesEffect(
+    const maintenanceFor = (
+      probedFor: (env: NodeJS.ProcessEnv) => typeof runtimeProbe.get,
+      lookupEnvironment = currentEnvironment,
+    ) =>
+      lookupEnvironment.pipe(
+        Effect.flatMap((env) =>
+          probedFor(env).pipe(
+            Effect.map((result) => result.generation),
+            Effect.option,
+            Effect.flatMap((generation) =>
+              Option.isNone(generation)
+                ? Effect.succeed(noUpdate)
+                : resolveProviderMaintenanceCapabilitiesEffect(
                     openCodeUpdateFor(generation.value),
-                    {
-                      binaryPath: effectiveConfig.binaryPath,
-                      env,
-                    },
+                    { binaryPath: effectiveConfig.binaryPath, env },
                   ),
-                ),
-              ),
+            ),
+            Effect.provideService(LaunchEnvironment, env),
+          ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
       );
+    // A loopback server can outlive its CLI installation, so its maintenance probes the local CLI,
+    // under the environment of the lookup it serves.
+    const maintenanceProbe = (env: NodeJS.ProcessEnv) =>
+      isLocalOpenCodeServerUrl(effectiveConfig.serverUrl)
+        ? probeOpenCodeBinary(effectiveConfig.binaryPath, providerProbeEnvironment(env)).pipe(
+            Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
+            Effect.catch(() => runtimeProbe.get),
+          )
+        : runtimeProbe.get;
     const cachedMaintenance = yield* makeCachedProviderMaintenanceResolution(
-      maintenanceFor(
-        isLocalOpenCodeServerUrl(effectiveConfig.serverUrl)
-          ? probeOpenCodeBinary(
-              effectiveConfig.binaryPath,
-              providerProbeEnvironment(processEnv),
-            ).pipe(
-              Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
-              Effect.catch(() => runtimeProbe.get),
-            )
-          : runtimeProbe.get,
-      ),
+      maintenanceFor(maintenanceProbe),
+      {
+        // The probe identity fingerprints the executable and the merged environment; the hash of
+        // the host snapshot resolveMaintenance provides joins it, because a native install's npm
+        // advisory reads the host environment, where an instance override can mask a change.
+        // A loopback server's maintenance probes the local CLI, so that executable joins the key.
+        lookup: Effect.all({
+          env: currentEnvironment,
+          identity: runtimeProbe.identity,
+          host: HostProcess.Environment,
+        }).pipe(
+          Effect.flatMap(({ env, identity, host }) =>
+            Effect.gen(function* () {
+              return isLocalOpenCodeServerUrl(effectiveConfig.serverUrl)
+                ? yield* localExecutableIdentity(env)
+                : null;
+            }).pipe(
+              Effect.map((local) => ({
+                env,
+                resolvedCommandPath: null,
+                install: `${identity}\0${JSON.stringify(local)}\0${hostEnvironmentHash(host)}`,
+              })),
+            ),
+          ),
+        ),
+        resolve: ({ env }) => maintenanceFor(maintenanceProbe, Effect.succeed(env)),
+      },
     );
     const resolveMaintenance = (options?: { readonly fresh?: boolean }) =>
       !effectiveConfig.enabled
         ? Effect.succeed(noUpdate)
-        : options?.fresh === true
-          ? runtimeProbe.refresh.pipe(
-              Effect.ignore,
-              Effect.andThen(cachedMaintenance({ fresh: true })),
-            )
-          : cachedMaintenance();
+        : Effect.suspend(() => {
+            const snapshot = { ...hostEnvironment };
+            return makeCurrentLaunchEnvironment(environment, snapshot, home).pipe(
+              Effect.flatMap((env) =>
+                (options?.fresh === true
+                  ? runtimeProbe.refresh.pipe(
+                      Effect.ignore,
+                      Effect.andThen(cachedMaintenance({ fresh: true })),
+                    )
+                  : cachedMaintenance()
+                ).pipe(Effect.provideService(LaunchEnvironment, env)),
+              ),
+              Effect.provideService(HostProcess.Environment, snapshot),
+            );
+          });
     const openCodeV1Adapter = yield* OpenCodeAdapterV2.OpenCodeAdapterV2Driver.create({
       instanceId,
       displayName,
@@ -426,6 +451,7 @@ export const OpenCodeDriver: ProviderDriver<
       serverPassword: effectiveConfig.serverPassword,
       directory: host.paths.cwd,
       environment: processEnv,
+      currentEnvironment,
     }).pipe(
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       Effect.provideService(
@@ -450,6 +476,7 @@ export const OpenCodeDriver: ProviderDriver<
     const orchestrationAdapter = selectOpenCodeRuntimeAdapter({
       probe: runtimeProbe,
       resolve: resolveRuntime,
+      currentEnvironment,
       v1: openCodeV1Adapter,
       v2: yield* OpenCode2AdapterV2.make(instanceId).pipe(
         Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server),
@@ -457,12 +484,21 @@ export const OpenCodeDriver: ProviderDriver<
       // Sessions belong to the build that opened them: a rebuild closes this build's server
       // owner, so ProviderSessionRetirement retires them even when the settings came back unchanged.
       sessionConfigKey: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+      runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
-      openCode2ProbeServer.withConnection(({ client }) =>
-        loadOpenCode2Catalog(client, host.paths.cwd),
-      ),
-      processEnv,
+      (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined) =>
+        openCode2ProbeServer.withConnection(
+          ({ client }) => loadOpenCode2Catalog(client, host.paths.cwd),
+          launch,
+        ),
+      openCode2ProbeServer.captureLaunch ??
+        Effect.succeed(undefined as OpenCodeServerOwner.OpenCodeServerLaunch | undefined),
+      (left, right) =>
+        left === undefined || right === undefined
+          ? left === right
+          : OpenCodeServerOwner.sameOpenCodeServerLaunch(left, right),
+      currentEnvironment,
     );
     // No location: OpenCode answers with the machine's global skills, which hold for every cwd.
     const loadOpenCode2Skills = loadOpenCode2GlobalSkills(
@@ -522,7 +558,7 @@ export const OpenCodeDriver: ProviderDriver<
                 ),
             // OpenCode answers provider.list for a location only once its skill scan has ended.
             client.provider.list({ location }).pipe(Effect.timeout("10 seconds"), Effect.ignore),
-            processEnv,
+            yield* currentEnvironment,
           );
         }).pipe(Effect.scoped),
       );
@@ -531,6 +567,7 @@ export const OpenCodeDriver: ProviderDriver<
       directory: host.paths.cwd,
       ...(effectiveConfig.serverPassword ? { serverPassword: effectiveConfig.serverPassword } : {}),
       environment: processEnv,
+      currentEnvironment,
     });
     const probeServerOwner = yield* OpenCodeServerOwner.make({
       binaryPath: effectiveConfig.binaryPath,
@@ -540,10 +577,17 @@ export const OpenCodeDriver: ProviderDriver<
       currentEnvironment: probeEnvironment,
     });
     const textGeneration = selectOpenCodeRuntimeTextGeneration(
-      runtimeProbe,
       resolveRuntime,
+      currentEnvironment,
+      {
+        providerInstanceId: instanceId,
+        ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
+      },
+      effectiveConfig.serverUrl.trim().length > 0,
+      effectiveConfig.binaryPath,
       yield* makeOpenCodeTextGeneration(effectiveConfig, {
         environment: processEnv,
+        currentEnvironment,
         memoryRunnerContext: {
           providerInstanceId: instanceId,
           ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
@@ -558,28 +602,35 @@ export const OpenCodeDriver: ProviderDriver<
       }).pipe(Effect.provideService(OpenCode2Server.OpenCode2Server, openCode2Server)),
     );
 
-    const legacyUsageLimits = readOpenCodeGoUsageLimits({
-      enabled: effectiveConfig.enabled,
-      serverUrl: effectiveConfig.serverUrl,
-      environment: processEnv,
-    }).pipe(
+    const legacyUsageLimits = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        readOpenCodeGoUsageLimits({
+          enabled: effectiveConfig.enabled,
+          serverUrl: effectiveConfig.serverUrl,
+          environment,
+        }),
+      ),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(Crypto.Crypto, crypto),
     );
     let unsupportedUsageVersion: string | undefined;
-    const checkUsageLimits = Effect.gen(function* () {
-      if (!effectiveConfig.enabled) return yield* legacyUsageLimits;
-      const runtime = yield* runtimeProbe.get;
-      if (runtime.generation === "v1" || runtime.version === unsupportedUsageVersion)
-        return yield* legacyUsageLimits;
-      const limits = yield* openCode2ProbeServer.withConnection((connection) =>
-        connection.usageLimits(host.paths.cwd),
-      );
-      if (limits === undefined) unsupportedUsageVersion = runtime.version;
-      return limits === undefined ? yield* legacyUsageLimits : withGoatUsageScopes(limits);
-    }).pipe(
+    // One environment per usage check, whether it runs inside a status check or on its own.
+    const checkUsageLimits = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        Effect.gen(function* () {
+          if (!effectiveConfig.enabled) return yield* legacyUsageLimits;
+          const runtime = yield* runtimeProbe.get;
+          if (runtime.generation === "v1" || runtime.version === unsupportedUsageVersion)
+            return yield* legacyUsageLimits;
+          const limits = yield* openCode2ProbeServer.withConnection((connection) =>
+            connection.usageLimits(host.paths.cwd),
+          );
+          if (limits === undefined) unsupportedUsageVersion = runtime.version;
+          return limits === undefined ? yield* legacyUsageLimits : withGoatUsageScopes(limits);
+        }).pipe(Effect.provideService(LaunchEnvironment, environment)),
+      ),
       Effect.timeout("10 seconds"),
       Effect.catch(() =>
         Effect.map(DateTime.now, (now) => ({
@@ -592,36 +643,39 @@ export const OpenCodeDriver: ProviderDriver<
         })),
       ),
     );
-    const checkProvider = Effect.all(
-      {
-        // A configured loopback server reports its running version. Probe the local
-        // CLI separately so a completed npm update is not mistaken for a failure
-        // while that independently managed server still runs the previous binary.
-        installedVersion:
-          effectiveConfig.enabled && isLocalOpenCodeServerUrl(effectiveConfig.serverUrl)
-            ? probeOpenCodeBinary(
-                effectiveConfig.binaryPath,
-                providerProbeEnvironment(processEnv),
-              ).pipe(
-                Effect.map((probed) => probed.version),
-                Effect.orElseSucceed(() => undefined),
-              )
-            : Effect.void,
-        provider: checkOpenCodeProviderStatus(
-          effectiveConfig,
-          host.paths.cwd,
-          runtimeProbe.refresh,
-          loadOpenCode2Models,
-          loadOpenCode2Skills,
-          processEnv,
-        ).pipe(
-          Effect.annotateLogs({ providerInstanceId: instanceId }),
-          Effect.annotateSpans({ providerInstanceId: instanceId }),
-        ),
-        usageLimits: checkUsageLimits,
-      },
-      { concurrency: "unbounded" },
-    ).pipe(
+    const checkProvider = currentEnvironment.pipe(
+      Effect.flatMap((environment) =>
+        Effect.all(
+          {
+            // A configured loopback server reports its running version. Probe the local
+            // CLI separately so a completed npm update is not mistaken for a failure
+            // while that independently managed server still runs the previous binary.
+            installedVersion:
+              effectiveConfig.enabled && isLocalOpenCodeServerUrl(effectiveConfig.serverUrl)
+                ? probeOpenCodeBinary(
+                    effectiveConfig.binaryPath,
+                    providerProbeEnvironment(environment),
+                  ).pipe(
+                    Effect.map((probed) => probed.version),
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : Effect.void,
+            provider: checkOpenCodeProviderStatus(
+              effectiveConfig,
+              host.paths.cwd,
+              runtimeProbe.refresh,
+              loadOpenCode2Models,
+              loadOpenCode2Skills,
+              environment,
+            ).pipe(
+              Effect.annotateLogs({ providerInstanceId: instanceId }),
+              Effect.annotateSpans({ providerInstanceId: instanceId }),
+            ),
+            usageLimits: checkUsageLimits,
+          },
+          { concurrency: "unbounded" },
+        ).pipe(Effect.provideService(LaunchEnvironment, environment)),
+      ),
       Effect.map(({ provider, usageLimits, installedVersion }) => ({
         ...provider,
         usageLimits,
@@ -641,8 +695,14 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.all(
         {
           skills: openCodeRuntime.loadOpenCodeSkills(client),
-          commandInventory: OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
-            Effect.timeoutOption(resolveProviderProbeTimeoutMs("opencode", 10_000, processEnv)),
+          commandInventory: currentEnvironment.pipe(
+            Effect.flatMap((environment) =>
+              OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
+                Effect.timeoutOption(
+                  resolveProviderProbeTimeoutMs("opencode", 10_000, environment),
+                ),
+              ),
+            ),
             Effect.map((commands) => ({
               commands: Option.getOrElse(commands, () => []),
               slashCommandsPending: Option.isNone(commands),
@@ -683,7 +743,7 @@ export const OpenCodeDriver: ProviderDriver<
                 ...(effectiveConfig.serverPassword
                   ? { serverPassword: effectiveConfig.serverPassword }
                   : {}),
-                environment: processEnv,
+                environment: yield* currentEnvironment,
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
@@ -714,11 +774,14 @@ export const OpenCodeDriver: ProviderDriver<
     const serverUrl = effectiveConfig.serverUrl.trim();
     const afterUpdate =
       serverUrl.length > 0
-        ? replaceOutdatedService({
-            binaryPath: effectiveConfig.binaryPath,
-            serverUrl,
-            environment: processEnv,
-          }).pipe(
+        ? currentEnvironment.pipe(
+            Effect.flatMap((environment) =>
+              replaceOutdatedService({
+                binaryPath: effectiveConfig.binaryPath,
+                serverUrl,
+                environment,
+              }),
+            ),
             Effect.ensuring(forgetServers),
             Effect.mapError(
               (cause) =>
@@ -788,91 +851,99 @@ export const OpenCodeDriver: ProviderDriver<
       snapshotForCwd: (cwd) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
-          : runtimeProbe.get.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderDriverError({
-                    driver: DRIVER_KIND,
-                    instanceId,
-                    detail: `Failed to probe OpenCode for '${cwd}'`,
-                    cause,
-                  }),
-              ),
-              Effect.flatMap((probed) =>
-                byOpenCodeRuntime(Effect.succeed(probed), {
-                  v2: Effect.all(
-                    [
-                      snapshot.getSnapshot,
-                      // A project's opencode.jsonc can define its own providers.
-                      readSettledOpenCode2Catalog(
-                        openCode2ProbeServer.withConnection(({ client }) =>
-                          loadOpenCode2DirectoryCatalog(client, pathService.resolve(cwd)),
-                        ),
-                        processEnv,
+          : currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                runtimeProbe.get.pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderDriverError({
+                        driver: DRIVER_KIND,
+                        instanceId,
+                        detail: `Failed to probe OpenCode for '${cwd}'`,
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap((probed) =>
+                    byOpenCodeRuntime(Effect.succeed(probed), {
+                      v2: Effect.all(
+                        [
+                          snapshot.getSnapshot,
+                          // A project's opencode.jsonc can define its own providers.
+                          readSettledOpenCode2Catalog(
+                            openCode2ProbeServer.withConnection(({ client }) =>
+                              loadOpenCode2DirectoryCatalog(client, pathService.resolve(cwd)),
+                            ),
+                            environment,
+                          ).pipe(
+                            Effect.map(
+                              Option.map((catalog) =>
+                                openCode2ProviderModels(effectiveConfig, catalog),
+                              ),
+                            ),
+                          ),
+                          listOpenCode2Workspace(cwd).pipe(
+                            // Leaves room for the reads around the scan wait, which uses the same override.
+                            Effect.timeout(
+                              2 * resolveProviderProbeTimeoutMs("opencode", 10_000, environment),
+                            ),
+                            Effect.mapError(
+                              (cause) =>
+                                new ProviderDriverError({
+                                  driver: DRIVER_KIND,
+                                  instanceId,
+                                  detail: `Failed to list OpenCode commands and skills for '${cwd}'`,
+                                  cause,
+                                }),
+                            ),
+                          ),
+                        ],
+                        { concurrency: "unbounded" },
                       ).pipe(
-                        Effect.map(
-                          Option.map((catalog) =>
-                            openCode2ProviderModels(effectiveConfig, catalog),
+                        Effect.map(([machineSnapshot, cwdModels, { skills, commands }]) => ({
+                          ...machineSnapshot,
+                          ...workspaceModelsFor(machineSnapshot.models, cwdModels),
+                          skills: openCode2SkillsToServerProviderSkills(skills),
+                          slashCommands: openCode2CommandsToServerProviderSlashCommands(commands),
+                          // A finished scan lists at least the built-ins. None means it
+                          // timed out, so the registry decides from the provider's health.
+                          slashCommandsPending: commands.length > 0 ? false : undefined,
+                        })),
+                      ),
+                      v1: Effect.all([
+                        snapshot.getSnapshot,
+                        loadWorkspaceForCwd(cwd).pipe(
+                          // Leaves room for connection setup before the command fallback below.
+                          Effect.timeout(
+                            2 * resolveProviderProbeTimeoutMs("opencode", 10_000, environment),
                           ),
                         ),
-                      ),
-                      listOpenCode2Workspace(cwd).pipe(
-                        // Leaves room for the reads around the scan wait, which uses the same override.
-                        Effect.timeout(
-                          2 * resolveProviderProbeTimeoutMs("opencode", 10_000, processEnv),
+                      ]).pipe(
+                        Effect.map(
+                          ([
+                            machineSnapshot,
+                            { skills, models, commands, slashCommandsPending },
+                          ]) => ({
+                            ...machineSnapshot,
+                            ...workspaceModelsFor(machineSnapshot.models, models),
+                            skills: openCodeSkillsToServerProviderSkills(skills),
+                            slashCommands: openCodeCommandsToServerProviderSlashCommands(commands),
+                            slashCommandsPending,
+                          }),
                         ),
                         Effect.mapError(
                           (cause) =>
                             new ProviderDriverError({
                               driver: DRIVER_KIND,
                               instanceId,
-                              detail: `Failed to list OpenCode commands and skills for '${cwd}'`,
+                              detail: `Failed to probe OpenCode commands and skills for '${cwd}'`,
                               cause,
                             }),
                         ),
                       ),
-                    ],
-                    { concurrency: "unbounded" },
-                  ).pipe(
-                    Effect.map(([machineSnapshot, cwdModels, { skills, commands }]) => ({
-                      ...machineSnapshot,
-                      ...workspaceModelsFor(machineSnapshot.models, cwdModels),
-                      skills: openCode2SkillsToServerProviderSkills(skills),
-                      slashCommands: openCode2CommandsToServerProviderSlashCommands(commands),
-                      // A finished scan lists at least the built-ins. None means it
-                      // timed out, so the registry decides from the provider's health.
-                      slashCommandsPending: commands.length > 0 ? false : undefined,
-                    })),
+                    }),
                   ),
-                  v1: Effect.all([
-                    snapshot.getSnapshot,
-                    loadWorkspaceForCwd(cwd).pipe(
-                      // Leaves room for connection setup before the command fallback below.
-                      Effect.timeout(
-                        2 * resolveProviderProbeTimeoutMs("opencode", 10_000, processEnv),
-                      ),
-                    ),
-                  ]).pipe(
-                    Effect.map(
-                      ([machineSnapshot, { skills, models, commands, slashCommandsPending }]) => ({
-                        ...machineSnapshot,
-                        ...workspaceModelsFor(machineSnapshot.models, models),
-                        skills: openCodeSkillsToServerProviderSkills(skills),
-                        slashCommands: openCodeCommandsToServerProviderSlashCommands(commands),
-                        slashCommandsPending,
-                      }),
-                    ),
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderDriverError({
-                          driver: DRIVER_KIND,
-                          instanceId,
-                          detail: `Failed to probe OpenCode commands and skills for '${cwd}'`,
-                          cause,
-                        }),
-                    ),
-                  ),
-                }),
+                  Effect.provideService(LaunchEnvironment, environment),
+                ),
               ),
             ),
       invalidateCaches: forgetServers,

@@ -4,6 +4,7 @@ import {
   botHomeWork,
   botTaskWait,
   COLLAPSED_FINISHED,
+  goatBotRowTime,
   presentTaskStatus,
   type BotWorkTask,
   type HomeCurrentOpenableLink,
@@ -25,7 +26,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { RelativeTimeLabel } from "../RelativeTimeLabel";
+import { useNowMinute } from "~/hooks/useNowMinute";
 import {
   BookmarkIcon,
   CheckIcon,
@@ -424,7 +425,11 @@ function WorkRow({
           </Link>
         )}
         {row.view.pinnedAt !== null && (
-          <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <BookmarkIcon
+            data-work-pin
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
         )}
         <Button
           variant="ghost"
@@ -481,7 +486,7 @@ function WorkRowText({
           <span className="truncate">{status}</span>
           <span aria-hidden>·</span>
           <span className="shrink-0">
-            <RelativeTimeLabel timestamp={row.lastActivityAt} />
+            <WorkRowTime timestamp={row.lastActivityAt} />
           </span>
         </span>
         <GoatBotPullRequestChips row={row} />
@@ -500,6 +505,18 @@ function WorkRowText({
         aria-hidden
         className="size-4 shrink-0 text-muted-foreground"
       />
+    </>
+  );
+}
+/** The row's last activity, compact on screen and in words to a screen reader; only it ticks. */
+function WorkRowTime({ timestamp }: { readonly timestamp: string }) {
+  const nowMinute = useNowMinute();
+  const time = goatBotRowTime(timestamp, Date.parse(`${nowMinute}:00.000Z`));
+  if (time === null) return null;
+  return (
+    <>
+      <span aria-hidden>{time.text}</span>
+      <span className="sr-only">{time.spoken}</span>
     </>
   );
 }

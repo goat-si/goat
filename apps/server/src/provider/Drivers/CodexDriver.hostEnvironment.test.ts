@@ -5,9 +5,12 @@ import { ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 
 import { CodexDriver } from "./CodexDriver.ts";
 import { layerTest } from "./CodexDriver.testkit.ts";
@@ -157,6 +160,61 @@ it.layer(layerTest)("CodexDriver host environment", (it) => {
         yield* configured.snapshot.refresh;
         expect(homes.length).toBeGreaterThan(0);
         expect(homes.at(-1)).toBe(NodePath.join(root, "configured"));
+      }).pipe(Effect.scoped),
+  );
+  // The fixture executable is a POSIX shell script, which Windows cannot execute.
+  it.effect.skipIf(windowsHost)(
+    "a probe timeout override the host sets after creation applies to the next skills scan",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const scanSpawned = yield* Deferred.make<void>();
+        let scanInterrupted = false;
+        const observedSpawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if ((yield* ObservedOperation) !== "skills scan") return yield* spawner.spawn(command);
+            yield* Deferred.succeed(scanSpawned, undefined);
+            return yield* Effect.never.pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  scanInterrupted = true;
+                }),
+              ),
+            );
+          }),
+        );
+        const root = yield* fs.makeTempDirectoryScoped();
+        const bin = NodePath.join(root, "bin");
+        yield* fs.makeDirectory(bin, { recursive: true });
+        yield* fs.writeFileString(NodePath.join(bin, "codex"), "#!/bin/sh\n");
+        yield* fs.chmod(NodePath.join(bin, "codex"), 0o755);
+        const host: NodeJS.ProcessEnv = { PATH: bin };
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("probe-timeout"),
+          displayName: "Codex probe timeout test",
+          enabled: true,
+          environment: [],
+          config: { ...CodexDriver.defaultConfig(), binaryPath: "codex" },
+        }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
+        );
+        const snapshotForCwd = instance.snapshotForCwd;
+        if (snapshotForCwd === undefined) return yield* Effect.die("Codex scans workspaces");
+        host.GOAT_CODEX_PROBE_TIMEOUT_MS = "30000";
+        const scan = yield* snapshotForCwd(root).pipe(
+          Effect.exit,
+          observing("skills scan"),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(scanSpawned);
+        yield* TestClock.adjust("25 seconds");
+        expect(scanInterrupted).toBe(false);
+        yield* TestClock.adjust("5 seconds");
+        expect((yield* Fiber.join(scan))._tag).toBe("Failure");
+        expect(scanInterrupted).toBe(true);
       }).pipe(Effect.scoped),
   );
 });

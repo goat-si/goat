@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -143,6 +144,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
     readonly clearUsage?: Effect.Effect<void>;
     readonly currentProfile?: Effect.Effect<string>;
+    readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
   } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
@@ -160,6 +162,7 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
       ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
       ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
       ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
+      ...(options.environment ? { environment: options.environment } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -639,6 +642,24 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         expect(snapshot.models).toEqual(buildAntigravityModelsFromSession(sessionSetupResult));
         expect(snapshot.slashCommands).toEqual(expectedCommands);
         expect(snapshot.workspaceSnapshots?.[0]?.cwd).toBe("/workspace");
+      }),
+    ),
+  );
+
+  it.effect("a probe timeout override set after construction applies at the next check", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const environment = yield* Ref.make<NodeJS.ProcessEnv>({});
+        const harness = yield* makeHarness({ environment: Ref.get(environment) });
+        yield* harness.initialize;
+        yield* Ref.set(environment, { GOAT_ANTIGRAVITY_PROBE_TIMEOUT_MS: "120000" });
+        yield* Ref.set(harness.probe, Effect.never);
+        const check = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
+        yield* TestClock.adjust("120 seconds");
+        const snapshot = yield* Fiber.join(check);
+        expect(snapshot.message).toBe(
+          "Antigravity did not respond to its local health check within 120 seconds.",
+        );
       }),
     ),
   );
