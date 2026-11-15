@@ -383,7 +383,6 @@
   "apps/server/src/persistence/Migrations/066_RepairClientSettlementTimestamps.ts": {
     "nonNull": 4
   },
-  "apps/server/src/persistence/reconcileGoatMigrationIds.ts": { "nonNull": 1 },
   "apps/server/src/preview/PortScanner.ts": { "nonNull": 1 },
   "apps/server/src/preview/PreviewBrowserHost.ts": { "nonNull": 1 },
   "apps/server/src/preview/ServerBrowser.test.ts": { "lines": 2614 },

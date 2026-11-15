@@ -827,6 +827,7 @@ export function MobileBotWork(props: {
       {props.taskId ? (
         <MobileTaskHeader
           task={task}
+          rows={rows}
           chips={chips}
           screen={actions}
           title={props.taskTitle ?? props.taskCardInfo?.title ?? null}

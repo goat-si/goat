@@ -3,7 +3,12 @@ import {
   type BotWorkTask,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelUpdateTaskViewInput, EnvironmentId, ThreadId } from "@goat/contracts";
+import type {
+  BotThreadRow,
+  ChannelUpdateTaskViewInput,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
@@ -44,6 +49,8 @@ import { lookedUpTitle } from "./lookedUpTitle";
  */
 export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
+  /** The bot list's rows, which carry the current task's coding thread titles. */
+  readonly rows: ReadonlyArray<BotThreadRow>;
   /** The conversation's newest task chips, which say what the task's worker asks. */
   readonly chips: MobileTaskChips;
   /** The by-id read for a task the current list does not hold, and the task's actions. */
@@ -165,6 +172,12 @@ export function MobileTaskHeader(props: {
       {task ? (
         <MobileTaskActions
           task={task}
+          rows={
+            props.task !== undefined || lookup.state !== "known"
+              ? props.rows
+              : lookup.result.codingRows
+          }
+          taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}
           canUpdate={canUpdate}
@@ -179,6 +192,7 @@ export function MobileTaskHeader(props: {
         <MobileTaskUnavailable
           task={unavailable.task}
           result={unavailable.result}
+          taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}
           canRetry={props.canRetry}
