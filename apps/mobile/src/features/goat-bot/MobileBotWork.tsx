@@ -532,6 +532,10 @@ export function MobileBotWork(props: {
             botId={botId}
             botName={botName}
             onOpenTask={openTaskFromHome}
+            // Lift the field under the tabs so the results below it stay above the keyboard.
+            onNeedsRoom={() =>
+              scrollHome({ key: "task-search", viewPosition: 0, viewOffset: STICKY_TABS_CLEARANCE })
+            }
           />,
         ),
       );

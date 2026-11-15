@@ -32,10 +32,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
-import {
-  createOrchestrationV2TurnItemVisibility,
-  isOrchestrationV2SupersededInterrupt,
-} from "@goat/shared/orchestrationV2Timeline";
+import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
 import {
   activeNativeSubagents,
   deriveBlockedOnThreadWait,
@@ -138,6 +135,28 @@ export function isTurnItemAtOrBeforeRun(input: {
   return ordinal !== undefined && ordinal <= input.sourceRunOrdinal;
 }
 
+// Run ordinals enforce the fork cutoff; this keeps later rollbacks from hiding
+// inherited history while retaining cancellation evidence for undelivered input.
+export function createInheritedTurnItemVisibility(
+  source: Parameters<typeof createOrchestrationV2TurnItemVisibility>[0],
+) {
+  const cancelledRunIds = new Set(
+    source.attempts
+      .filter((attempt) => attempt.status === "cancelled")
+      .map((attempt) => attempt.runId),
+  );
+  return createOrchestrationV2TurnItemVisibility({
+    ...source,
+    runs: source.runs.flatMap((run) =>
+      run.status !== "rolled_back"
+        ? [run]
+        : cancelledRunIds.has(run.id)
+          ? [{ ...run, status: "cancelled" as const }]
+          : [],
+    ),
+  });
+}
+
 // Rollback stamps completedAt; a fork made after the rewind never received that run.
 function runRolledBackAt(run: Pick<OrchestrationV2Run, "status" | "completedAt">) {
   return run.status === "rolled_back" ? run.completedAt : null;
@@ -173,6 +192,11 @@ function visibleTurnItemsThroughRun(input: {
   }
 
   const runOrdinalById = forkInheritedRunOrdinals(input.sourceProjection.runs, input.forkCreatedAt);
+  const isVisible = createInheritedTurnItemVisibility({
+    runs: input.sourceProjection.runs,
+    attempts: input.sourceProjection.attempts,
+    items: input.sourceProjection.turnItems,
+  });
   const inheritedPrefix = input.sourceProjection.visibleTurnItems
     .filter(
       (row) => row.item.threadId !== input.sourceProjection.thread.id || row.item.type === "fork",
@@ -190,23 +214,16 @@ function visibleTurnItemsThroughRun(input: {
           input.sourceSelectedTurnItemIds === undefined ||
           input.sourceSelectedTurnItemIds.has(String(item.id)),
       )
-      .filter((item) => {
-        if (
-          isOrchestrationV2SupersededInterrupt({
-            item,
-            attempts: input.sourceProjection.attempts,
-            items: input.sourceProjection.turnItems,
-          })
-        ) {
-          return false;
-        }
-        return isTurnItemAtOrBeforeRun({
-          historyOrigin: input.sourceProjection.thread.historyOrigin,
-          itemRunId: item.runId,
-          runOrdinalById,
-          sourceRunOrdinal: sourceRun.ordinal,
-        });
-      }),
+      .filter(
+        (item) =>
+          isVisible(item) &&
+          isTurnItemAtOrBeforeRun({
+            historyOrigin: input.sourceProjection.thread.historyOrigin,
+            itemRunId: item.runId,
+            runOrdinalById,
+            sourceRunOrdinal: sourceRun.ordinal,
+          }),
+      ),
   );
 
   return [...inheritedPrefix, ...localPrefix];

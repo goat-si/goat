@@ -1,3 +1,4 @@
+import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
@@ -1063,7 +1064,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const projection = yield* projectionStore.getThreadRecords(
       threadId,
       ["runs", "nodes", "attempts", "providerThreads", "turnItems", "messages"],
-      { turnItemTypes: [], messageRoles: ["user"] },
+      { turnItemTypes: ["user_message"], messageRoles: ["user"] },
     );
     const queuedRun =
       queuedRunId === undefined
@@ -1084,6 +1085,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       class: kind === "validation_error" ? "validation_error" : "unknown",
     });
     yield* writeSystemEvents([
+      ...retainedUserItemFailures(threadId, queuedRun, rootNode?.id, projection.turnItems, now),
       ...(attempt !== undefined && rootNode !== undefined
         ? [
             {

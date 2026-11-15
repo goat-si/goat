@@ -1,5 +1,6 @@
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
+import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
 import {
   pendingRuntimeRequestSummary,
   secretRequestAsPendingInput,
@@ -29,7 +30,6 @@ import {
   memoryTimelinePage,
   timelineAttachmentOwners,
 } from "./TimelineAttachment.ts";
-import { latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
@@ -118,10 +118,7 @@ import {
   ProjectId,
   ProviderInstanceId,
 } from "@goat/contracts";
-import {
-  createOrchestrationV2TurnItemVisibility,
-  isOrchestrationV2SupersededInterrupt,
-} from "@goat/shared/orchestrationV2Timeline";
+import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
 import {
   activeNativeSubagents,
   deriveBlockedOnThreadWait,
@@ -177,6 +174,7 @@ import {
   forkInheritedRunOrdinals,
   isActivityRunForShell,
   isTurnItemAtOrBeforeRun,
+  createInheritedTurnItemVisibility,
   makeForkMarkerTurnItem,
   notificationCursorContext,
   shellFromState,
@@ -478,28 +476,6 @@ export interface ProjectionRecordFilter {
   readonly omitSettledSubagents?: true | { readonly except: ReadonlyArray<NodeId> };
 }
 
-type ProjectionNode = OrchestrationV2ThreadProjection["nodes"][number];
-type ProjectionRun = OrchestrationV2ThreadProjection["runs"][number];
-const settledLeafNodeKinds: ReadonlySet<ProjectionNode["kind"]> = new Set([
-  "tool_call",
-  "assistant_message",
-  "reasoning",
-]);
-const settledNodeStatuses: ReadonlySet<ProjectionNode["status"]> = new Set([
-  "completed",
-  "interrupted",
-  "failed",
-  "cancelled",
-  "rolled_back",
-]);
-const activeRunStatuses: ReadonlySet<ProjectionRun["status"]> = new Set([
-  "preparing",
-  "queued",
-  "starting",
-  "running",
-  "waiting",
-]);
-
 // A fork inherits its source's history before it has messages of its own,
 // unless a portable handoff's budget left none of that history to deliver.
 const inheritsForkConversation = ({
@@ -520,12 +496,6 @@ const inheritsForkConversation = ({
   );
 };
 
-// In-memory twin of the omitSettledLeafNodes SQL clause in readCanonicalProjection.
-const isSettledLeafNode = (node: ProjectionNode, runs: ReadonlyArray<ProjectionRun>) =>
-  settledLeafNodeKinds.has(node.kind) &&
-  settledNodeStatuses.has(node.status) &&
-  node.runId !== null &&
-  !runs.some((run) => run.id === node.runId && activeRunStatuses.has(run.status));
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
   "thread" | "updatedAt" | "visibleTurnItems"
@@ -1274,6 +1244,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const CONVERSATION_INDEX_EXCLUDED_TYPES = sql.literal(
       `(${DEFERRED_WORK_ITEM_TYPES.map((type) => `'${type}'`).join(", ")})`,
     );
+
+    // A todo list is never closed when its run ends, so a long thread holds an active one per
+    // old run. Counting those as live work drags each run's nodes and subagents into every window.
+    const todoListOfSettledRun = (row: Statement.Fragment) => sql`(
+      ${row}.kind = 'todo_list' AND ${row}.run_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_runs AS todo_run
+        WHERE todo_run.run_id = ${row}.run_id
+          AND todo_run.status IN ('queued','preparing','starting','running','waiting')
+      ))`;
 
     // Other node indexes also start with thread_id. Without this hint SQLite reads a thread's live
     // nodes through one of them and fetches every node of the thread to check its status. The
@@ -2247,16 +2226,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       ),
                       9223372036854775807
                     )
+                    -- The fork cutoff below filters rewound runs; undelivered queued input stays hidden.
                     AND (
                       ${window.requiredRunId ?? null} IS NOT NULL
-                      OR (
-                        (run.status IS NULL OR run.status <> 'rolled_back')
-                        AND NOT (
-                          item.type = 'user_message'
-                          AND json_extract(item.payload_json, '$.inputIntent') = 'queued_turn'
-                          AND run.status IS 'cancelled'
+                      OR run.status IS NULL
+                      OR run.status <> 'rolled_back'
+                    )
+                    AND NOT (
+                      item.type = 'user_message'
+                      AND (
+                        COALESCE(run.status IN ('queued', 'cancelled'), 0)
+                        OR (
+                          run.status = 'rolled_back'
+                          AND EXISTS (
+                            SELECT 1
+                            FROM orchestration_v2_projection_run_attempts AS attempt
+                            WHERE attempt.run_id = run.run_id
+                              AND attempt.status = 'cancelled'
+                          )
                         )
                       )
+                      AND json_extract(item.payload_json, '$.inputIntent') = 'queued_turn'
                     )
                     AND (
                       ${window.requiredRunId ?? null} IS NULL
@@ -2377,55 +2367,124 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               `;
       const boundary = anchors[0] ?? { ordinal: 0, latest: null };
       // Folding needs whole segments, so the window would walk every item since the boundary.
-      // Non-deferrable types always keep their own row, so the window stays above the newest
-      // `tailRows` of them. Start at the latest segment start of each run that reaches that
-      // point, clamped to it so runless rows below stay in the scan.
+      // It stays above the newest `tailRows` rows that are sure to keep their own row. Start at
+      // the latest segment start of each run that reaches that point, clamped to it so runless
+      // rows below stay in the scan.
       const tailRows = Math.max(window.rowLimit, THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT);
-      const tailWorkStart = sql<{ readonly ordinal: number | null }>`
-                ${eligible}, visible_tail AS (
-                  SELECT ordinal FROM eligible
-                  WHERE ordinal >= ${boundary.ordinal}
-                    AND type NOT IN ${sql.in(DEFERRED_WORK_ITEM_TYPES)}
+      // The newest rows sure to keep their own row: conversation rows, and every row of the
+      // running run, which folds nothing. More of them than a whole turn may hold means the
+      // window pages from inside the newest turn with the row limit, so the tail shrinks to
+      // that limit. A turn of thousands of rows is then not walked to return the newest few.
+      const tailWorkStart = sql<{
+        readonly ordinal: number | null;
+        readonly long_turn: number;
+      }>`
+                ${eligible}, live_run AS (
+                  -- The oldest live run is the one at work. A queued run has no visible rows
+                  -- (its input stays hidden until it starts), so it never counts here.
+                  SELECT live.run_id FROM orchestration_v2_projection_runs AS live
+                  WHERE live.thread_id = ${threadId}
+                    AND live.status IN ('preparing','starting','running','waiting')
+                    AND ${window.requiredRunId ?? null} IS NULL
+                    AND NOT EXISTS (
+                      SELECT 1 FROM orchestration_v2_projection_run_attempts
+                      WHERE run_id = live.run_id AND status = 'superseded'
+                    )
+                  ORDER BY +live.ordinal ASC LIMIT 1
+                ), visible_tail AS (
+                  SELECT ordinal FROM (
+                    SELECT ordinal FROM eligible
+                    WHERE ordinal >= ${boundary.ordinal}
+                      AND type NOT IN ${CONVERSATION_INDEX_EXCLUDED_TYPES}
+                    ORDER BY ordinal DESC
+                    LIMIT ${tailRows}
+                  )
+                  UNION
+                  SELECT ordinal FROM (
+                    SELECT live_item.ordinal
+                    FROM orchestration_v2_projection_turn_items AS live_item
+                    -- The unary plus keeps this on the run index, whose ordinal order ends
+                    -- the walk at the limit.
+                    WHERE live_item.run_id = (SELECT run_id FROM live_run)
+                      AND +live_item.thread_id = ${threadId}
+                      AND live_item.ordinal >= ${boundary.ordinal}
+                      AND live_item.ordinal <= COALESCE(
+                        (
+                          SELECT ordinal FROM orchestration_v2_projection_turn_items
+                          WHERE thread_id = ${threadId}
+                            AND turn_item_id = ${window.anchorItemId ?? null}
+                          LIMIT 1
+                        ),
+                        9223372036854775807
+                      )
+                    ORDER BY live_item.ordinal DESC
+                    LIMIT ${tailRows}
+                  )
                   ORDER BY ordinal DESC
                   LIMIT ${tailRows}
+                ), turn AS (
+                  SELECT (
+                    SELECT COUNT(*) FROM visible_tail WHERE ordinal >= ${boundary.latest}
+                  ) > ${THREAD_HISTORY_PAGE_POLICY.maxTurnItems} AS long_turn
                 ), tail AS (
-                  SELECT MIN(ordinal) AS ordinal FROM visible_tail HAVING COUNT(*) >= ${tailRows}
+                  SELECT visible_tail.ordinal FROM visible_tail
+                  ORDER BY visible_tail.ordinal DESC
+                  LIMIT 1 OFFSET (
+                    SELECT MAX(CASE WHEN long_turn THEN ${window.rowLimit} ELSE ${tailRows} END, 1) - 1
+                    FROM turn
+                  )
                 ), tail_runs AS (
                   SELECT DISTINCT item.run_id
                   FROM tail CROSS JOIN eligible AS item
                   WHERE item.ordinal >= tail.ordinal AND item.run_id IS NOT NULL
                 )
-                SELECT MIN(MIN(COALESCE(
-                  (
-                    SELECT start.ordinal FROM eligible AS start
-                    WHERE start.run_id = tail_runs.run_id AND start.type = 'user_message'
-                      AND start.ordinal <= tail.ordinal
-                    ORDER BY start.ordinal DESC LIMIT 1
-                  ),
-                  (
-                    SELECT MIN(first.ordinal) FROM orchestration_v2_projection_turn_items AS first
-                    WHERE first.thread_id = ${threadId} AND first.run_id = tail_runs.run_id
-                  ),
-                  tail.ordinal
-                ), tail.ordinal)) AS ordinal
+                SELECT MIN(MIN(CASE
+                  -- Only a completed run or a superseded attempt folds work, and folding is
+                  -- what needs the whole segment. Any other run keeps every row.
+                  WHEN (
+                    SELECT status FROM orchestration_v2_projection_runs
+                    WHERE run_id = tail_runs.run_id
+                  ) IS NOT 'completed' AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_run_attempts
+                    WHERE run_id = tail_runs.run_id AND status = 'superseded'
+                  ) THEN tail.ordinal
+                  ELSE COALESCE(
+                    (
+                      SELECT start.ordinal FROM eligible AS start
+                      WHERE start.run_id = tail_runs.run_id AND start.type = 'user_message'
+                        AND start.ordinal <= tail.ordinal
+                      ORDER BY start.ordinal DESC LIMIT 1
+                    ),
+                    (
+                      SELECT MIN(first.ordinal) FROM orchestration_v2_projection_turn_items AS first
+                      WHERE first.thread_id = ${threadId} AND first.run_id = tail_runs.run_id
+                    ),
+                    tail.ordinal
+                  )
+                END, tail.ordinal)) AS ordinal, (SELECT long_turn FROM turn) AS long_turn
                 FROM tail LEFT JOIN tail_runs
               `;
       // A negative or fractional limit makes SQLite's LIMIT disagree with `tailRows`; keep the old start.
-      const workStart =
+      const tail =
         window.deferWork === true &&
         boundary.latest !== null &&
         Number.isSafeInteger(window.rowLimit) &&
         window.rowLimit >= 0
-          ? Math.max(boundary.ordinal, (yield* tailWorkStart)[0]?.ordinal ?? 0)
-          : boundary.ordinal;
+          ? (yield* tailWorkStart)[0]
+          : undefined;
+      const longTurn = tail?.long_turn === 1;
+      const workStart = Math.max(boundary.ordinal, tail?.ordinal ?? 0);
       return sql`
                 ${eligible}, blocked_runs AS MATERIALIZED (
                   SELECT DISTINCT run_id FROM orchestration_v2_projection_turn_items
                   WHERE thread_id = ${threadId} AND run_id IS NOT NULL
                     AND ${deferWork} = 1
+                    -- Only a run that can fold asks whether it is blocked. A live run cannot,
+                    -- and this check would read every row it ever wrote.
                     AND run_id IN (
                       SELECT run_id FROM eligible
                       WHERE ordinal >= ${workStart} AND run_id IS NOT NULL
+                        AND (run_status = 'completed' OR attempt_status = 'superseded')
                     )
                     AND (type IN ('run_interrupt_request', 'run_interrupt_result')
                       OR (type = 'error' AND status = 'failed' AND parent_item_id IS NULL))
@@ -2480,6 +2539,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   -- Every LIMIT here and in latest_user_turn must stay <= tailRows, or rows below workStart go missing.
                   LIMIT CASE
                     WHEN ${window.rowLimit} = 0 THEN 0
+                    WHEN ${longTurn ? 1 : 0} = 1 THEN ${window.rowLimit}
                     WHEN (SELECT row_count FROM latest_user_turn)
                       BETWEEN 1 AND ${THREAD_HISTORY_PAGE_POLICY.maxTurnItems}
                       THEN ${THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT}
@@ -2660,6 +2720,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               SELECT node_id FROM orchestration_v2_projection_nodes AS live
                 ${LIVE_NODES_INDEX}
               WHERE thread_id = ${threadId} AND status IN ('pending','starting','running','waiting')
+                AND NOT ${todoListOfSettledRun(sql`live`)}
               UNION
               SELECT root_node_id FROM orchestration_v2_projection_run_attempts
               WHERE thread_id = ${threadId} AND (
@@ -3020,18 +3081,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ORDER BY created_at ASC, message_id ASC
               `
               : sql<PayloadRow>`
-                SELECT payload_json FROM orchestration_v2_projection_messages AS message
-                WHERE message.thread_id = ${threadId}
-                  AND (
-                    message.message_id IN (
-                      SELECT value FROM json_each(${cohortMessageIds})
-                    )
-                    OR message.run_id IN (
-                      SELECT run_id FROM orchestration_v2_projection_runs
-                      WHERE thread_id = ${threadId}
-                        AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-                    )
-                  )
+                -- Look the window's messages up by key and the live runs' by run. One filter
+                -- over the thread reads every message the thread ever had.
+                SELECT payload_json FROM (
+                  SELECT message.payload_json, message.created_at, message.message_id
+                  FROM json_each(${cohortMessageIds}) AS wanted
+                  CROSS JOIN orchestration_v2_projection_messages AS message
+                    ON message.message_id = wanted.value
+                  WHERE message.thread_id = ${threadId}
+                  UNION
+                  SELECT message.payload_json, message.created_at, message.message_id
+                  FROM orchestration_v2_projection_runs AS run
+                  CROSS JOIN orchestration_v2_projection_messages AS message
+                    ON message.run_id = run.run_id
+                  WHERE run.thread_id = ${threadId}
+                    AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                    AND message.thread_id = ${threadId}
+                )
                 ORDER BY created_at ASC, message_id ASC
               `,
           fields !== undefined && !fields.includes("plans")
@@ -3045,7 +3111,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 SELECT payload_json FROM orchestration_v2_projection_plans AS plan
                 WHERE plan.thread_id = ${threadId}
                   AND (
-                    plan.status = 'active'
+                    (plan.status = 'active' AND NOT ${todoListOfSettledRun(sql`plan`)})
                     OR plan.plan_id = ${latestTodoList?.plan_id ?? null}
                     OR plan.plan_id IN (
                       SELECT value FROM json_each(${cohortPlanIds})
@@ -3086,6 +3152,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
               AND (status IN ('pending','capturing')
                 OR (run_id IS NULL AND ordinal_within_scope = 0 AND status = 'ready')
+                -- The diff of the last finished turn stays in reach while a long run is at work.
+                OR checkpoint_id = (
+                  SELECT checkpoint_id FROM orchestration_v2_projection_checkpoints
+                  WHERE thread_id = ${threadId} AND status = 'ready'
+                    AND app_run_ordinal IS NOT NULL
+                  ORDER BY app_run_ordinal DESC LIMIT 1
+                )
                 OR checkpoint_id IN (SELECT value FROM json_each(${cohortCheckpointIds}))
                 OR run_id IN (SELECT value FROM json_each(${cohortRunIds}))
                 OR node_id IN (SELECT value FROM json_each(${cohortNodeIds})))
@@ -5357,18 +5430,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         let inherited: Array<TimelineIndexRow> = [];
         if (sourceRun !== undefined) {
           const ordinals = forkInheritedRunOrdinals(source.records.runs, records.thread.createdAt);
-          const sourceItems = source.local.map((row) => row.item);
+          const isInheritedVisible = createInheritedTurnItemVisibility({
+            runs: source.records.runs,
+            attempts: source.records.attempts,
+            items: source.local.map((row) => row.item),
+          });
           inherited = [
             ...source.visible.filter(
               (row) => row.item.threadId !== fork.threadId || row.item.type === "fork",
             ),
             ...source.local.filter(
               (row) =>
-                !isOrchestrationV2SupersededInterrupt({
-                  item: row.item,
-                  attempts: source.records.attempts,
-                  items: sourceItems,
-                }) &&
+                isInheritedVisible(row.item) &&
                 isTurnItemAtOrBeforeRun({
                   historyOrigin: source.records.thread.historyOrigin,
                   itemRunId: row.item.runId,
@@ -5565,13 +5638,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         })),
       });
       // Only these runs can hide rows: every row of a rolled-back run, the queued turn of a
-      // cancelled run, and the stop result of a replaced attempt. So the hidden rows are found
-      // without reading the thread.
+      // queued or cancelled run, and the stop result of a replaced attempt. So the hidden rows
+      // are found without reading the thread.
       const stoppedRuns = new Set(stopRequests.map((row) => row.run_id));
-      const runsWithStatus = (status: "rolled_back" | "cancelled") =>
-        records.runs.flatMap((run) => (run.status === status ? [String(run.id)] : []));
+      const runsWithStatus = (...statuses: ReadonlyArray<OrchestrationV2Run["status"]>) =>
+        records.runs.flatMap((run) => (statuses.includes(run.status) ? [String(run.id)] : []));
       const rolledBack = runsWithStatus("rolled_back");
-      const cancelled = runsWithStatus("cancelled");
+      const heldInput = runsWithStatus("queued", "cancelled");
       const steered = [...new Set(superseded.map((attempt) => String(attempt.runId)))].filter(
         (runId) => !stoppedRuns.has(runId) && !rolledBack.includes(runId),
       );
@@ -5596,8 +5669,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
                 ON item.thread_id = ${threadId} AND item.run_id = wanted.value`,
         // The conversation index holds the type and run of these rows, so only the matches are
-        // fetched. Through the run index, every row of each cancelled run would be.
-        cancelled.length + steered.length === 0
+        // fetched. Through the run index, every row of each such run would be.
+        heldInput.length + steered.length === 0
           ? Effect.succeed([])
           : sql<HiddenCandidate>`
               SELECT ${candidateColumns}
@@ -5606,7 +5679,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE item.thread_id = ${threadId}
                 AND item.type NOT IN ${CONVERSATION_INDEX_EXCLUDED_TYPES}
                 AND ((item.type = 'user_message'
-                    AND item.run_id IN (SELECT value FROM json_each(${encodeIdList(cancelled)})))
+                    AND item.run_id IN (SELECT value FROM json_each(${encodeIdList(heldInput)})))
                   OR (item.type = 'run_interrupt_result'
                     AND item.run_id IN (SELECT value FROM json_each(${encodeIdList(steered)}))))`,
       ]);
@@ -6436,22 +6509,66 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
           `;
 
+    // Forks do not inherit undelivered queued input, including from cancelled runs
+    // rolled back later. Checking the run first limits sparse-index seeks to those few runs.
     const selectShellRunItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellRunItemCountRow>`
-        SELECT thread_id, run_key AS run_id, item_count
-        FROM orchestration_v2_projection_turn_item_counts
-        WHERE run_key <> '' AND thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
+        SELECT per_run.thread_id, per_run.run_key AS run_id,
+          per_run.item_count - CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM orchestration_v2_projection_runs AS run
+                INDEXED BY orchestration_v2_projection_runs_run_status_idx
+              WHERE run.run_id = per_run.run_key
+                AND (
+                  run.status IN ('queued', 'cancelled')
+                  OR (
+                    run.status = 'rolled_back'
+                    AND EXISTS (
+                      SELECT 1
+                      FROM orchestration_v2_projection_run_attempts AS attempt
+                      WHERE attempt.run_id = run.run_id
+                        AND attempt.status = 'cancelled'
+                    )
+                  )
+                )
+            ) THEN (
+              SELECT COUNT(*)
+              FROM orchestration_v2_projection_turn_items AS held
+                INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
+              WHERE held.run_id = per_run.run_key
+                AND held.type = 'user_message'
+                AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+            )
+            ELSE 0
+          END AS item_count
+        FROM orchestration_v2_projection_turn_item_counts AS per_run
+        WHERE per_run.run_key <> '' AND per_run.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
       `;
 
     const selectShellItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellItemCountRow>`
         SELECT counts.thread_id,
           SUM(CASE WHEN counts.run_key = '' OR r.status <> 'rolled_back'
-            THEN counts.item_count ELSE 0 END) AS item_count,
+            THEN counts.item_count - CASE
+              WHEN r.status IN ('queued', 'cancelled') THEN (
+                SELECT COUNT(*)
+                FROM orchestration_v2_projection_turn_items held
+                INDEXED BY orchestration_v2_projection_turn_items_queued_input_idx
+                WHERE held.run_id = counts.run_key
+                  AND held.type = 'user_message'
+                  AND json_extract(held.payload_json, '$.inputIntent') = 'queued_turn'
+              )
+              ELSE 0
+            END
+            ELSE 0 END) AS item_count,
           SUM(CASE WHEN counts.run_key = '' THEN counts.item_count ELSE 0 END)
             AS runless_item_count
         FROM orchestration_v2_projection_turn_item_counts counts
-        LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = counts.run_key
+        -- The primary key would load each run's whole row just for its status.
+        LEFT JOIN orchestration_v2_projection_runs r
+          INDEXED BY orchestration_v2_projection_runs_run_status_idx
+          ON r.run_id = counts.run_key
         WHERE counts.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
         GROUP BY counts.thread_id
       `;
@@ -7388,90 +7505,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   }),
 );
 
-const OPEN_WORK = new Set(["pending", "running", "waiting"]);
-const LIVE_RUN = new Set(["preparing", "starting", "running", "waiting"]);
-const BACKGROUND_ITEM = new Set(["command_execution", "dynamic_tool", "subagent"]);
-
-/** The replay twin of the SQLite blockers query in `layer`; keep the two in step. */
-function replayActivityBlockers(
-  projections: Iterable<OrchestrationV2ThreadProjection>,
-  cutoff: number,
-  limit: number,
-): Array<ServerActivityBlocker> {
-  const found = new Map<string, { readonly at: number; readonly blocker: ServerActivityBlocker }>();
-  for (const projection of projections) {
-    const thread = projection.thread;
-    const add = (reason: ServerActivityBlocker["reason"], at: DateTime.Utc) => {
-      const key = `${thread.id}\0${reason}`;
-      const millis = DateTime.toEpochMillis(at);
-      const known = found.get(key);
-      if (known !== undefined && known.at <= millis) return;
-      found.set(key, {
-        at: millis,
-        blocker: {
-          threadId: thread.id,
-          title: thread.title,
-          reason,
-          since: DateTime.formatIso(at),
-        },
-      });
-    };
-    const fresh = (at: DateTime.Utc | null): at is DateTime.Utc =>
-      at !== null && DateTime.toEpochMillis(at) >= cutoff;
-    const afterRoot = (runId: string | null) =>
-      runId === null ||
-      projection.runs.some((run) => run.id === runId && run.status === "completed");
-    const rootless = (nodeId: string) =>
-      projection.nodes.some((node) => node.id === nodeId && node.runId === null);
-    for (const run of projection.runs) {
-      if (LIVE_RUN.has(run.status) || (run.status === "queued" && run.queueHeld !== true))
-        add(
-          run.status === "waiting" ? "waiting" : run.status === "queued" ? "queued" : "running",
-          run.startedAt ?? run.requestedAt,
-        );
-    }
-    for (const node of projection.nodes)
-      if (
-        OPEN_WORK.has(node.status) &&
-        fresh(node.startedAt) &&
-        ((node.kind === "subagent" && afterRoot(node.runId)) ||
-          projection.runs.some((run) => run.id === node.runId && run.status === "queued"))
-      )
-        add(node.kind === "subagent" ? "background" : "running", node.startedAt);
-    for (const task of projection.subagents)
-      if (OPEN_WORK.has(task.status) && fresh(task.updatedAt) && afterRoot(task.runId))
-        add("background", task.updatedAt);
-    for (const item of projection.turnItems)
-      if (
-        BACKGROUND_ITEM.has(item.type) &&
-        OPEN_WORK.has(item.status) &&
-        fresh(item.updatedAt) &&
-        afterRoot(item.runId)
-      )
-        add("background", item.updatedAt);
-    for (const turn of projection.providerTurns)
-      if (
-        (turn.status === "pending" || turn.status === "running") &&
-        fresh(turn.startedAt) &&
-        rootless(turn.nodeId)
-      )
-        add("background", turn.startedAt);
-    for (const request of projection.runtimeRequests)
-      if (request.status === "pending" && fresh(request.createdAt) && rootless(request.nodeId))
-        add("waiting", request.createdAt);
-    for (const providerThread of projection.providerThreads)
-      if (
-        (providerThread.pendingBackgroundTasks?.length ?? 0) > 0 &&
-        fresh(providerThread.updatedAt)
-      )
-        add("background", providerThread.updatedAt);
-  }
-  return Array.from(found.values())
-    .sort((a, b) => a.at - b.at || a.blocker.threadId.localeCompare(b.blocker.threadId))
-    .slice(0, limit)
-    .map((entry) => entry.blocker);
-}
-
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,
   Effect.gen(function* () {
@@ -8177,118 +8210,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);
           if (projection === undefined)
             return yield* new ProjectionStoreThreadNotFoundError({ threadId });
-          const latestRun = latestIdleCompactionRun(projection.runs);
-          const matchingTurns = projection.providerTurns.filter(
-            (row) =>
-              (filter?.providerTurnAttemptIds === undefined ||
-                (row.runAttemptId !== null &&
-                  filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
-              (filter?.providerTurnThreadIds === undefined ||
-                filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
-              (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
-              (filter?.ancestryRunIds === undefined ||
-                projection.attempts.some(
-                  (attempt) =>
-                    attempt.id === row.runAttemptId &&
-                    filter.ancestryRunIds?.includes(attempt.runId),
-                )),
-          );
-          const selected = {
-            ...projection,
-            providerThreads: projection.providerThreads.filter(
-              (row) =>
-                filter?.providerThreadIds === undefined ||
-                filter.providerThreadIds.includes(row.id),
-            ),
-            providerTurns:
-              filter?.latestProviderTurnUsageOnly === true
-                ? matchingTurns
-                    .toSorted(
-                      (a, b) =>
-                        (Date.parse(b.tokenUsage?.updatedAt ?? "") || 0) -
-                          (Date.parse(a.tokenUsage?.updatedAt ?? "") || 0) ||
-                        a.providerThreadId.localeCompare(b.providerThreadId) ||
-                        a.ordinal - b.ordinal,
-                    )
-                    .slice(0, 1)
-                : matchingTurns,
-            runtimeRequests: projection.runtimeRequests.filter(
-              (row) =>
-                (filter?.runtimeRequestIds === undefined ||
-                  filter.runtimeRequestIds.includes(row.id)) &&
-                (filter?.runtimeRequestStatuses === undefined ||
-                  filter.runtimeRequestStatuses.includes(row.status)),
-            ),
-            messages: projection.messages.filter(
-              (row) =>
-                (filter?.messageRunIds === undefined ||
-                  (row.runId !== null && filter.messageRunIds.includes(row.runId))) &&
-                (filter?.messageIds === undefined || filter.messageIds.includes(row.id)) &&
-                (filter?.messageRoles === undefined || filter.messageRoles.includes(row.role)),
-            ),
-            runs: projection.runs.filter(
-              (row) =>
-                (filter?.runIds === undefined || filter.runIds.includes(row.id)) &&
-                (filter?.runStatuses === undefined ||
-                  filter.runStatuses.includes(row.status) ||
-                  (filter.includeLatestRun === true && row.id === latestRun?.id)),
-            ),
-            attempts: projection.attempts.filter(
-              (row) =>
-                filter?.ancestryRunIds === undefined || filter.ancestryRunIds.includes(row.runId),
-            ),
-            contextTransfers: projection.contextTransfers.filter(
-              (row) =>
-                filter?.contextTransferStatuses === undefined ||
-                filter.contextTransferStatuses.includes(row.status),
-            ),
-            turnItems: projection.turnItems.filter(
-              (row) =>
-                (filter?.turnItemRequestIds === undefined ||
-                  ((row.type === "approval_request" || row.type === "user_input_request") &&
-                    filter.turnItemRequestIds.includes(row.requestId))) &&
-                (filter?.turnItemRunIds === undefined ||
-                  filter.turnItemRunIds.includes(row.runId)) &&
-                (filter?.turnItemTypes === undefined || filter.turnItemTypes.includes(row.type)) &&
-                (filter?.turnItemStatuses === undefined ||
-                  filter.turnItemStatuses.includes(row.status)) &&
-                (filter?.turnItemNodeIds === undefined ||
-                  (row.nodeId !== null && filter.turnItemNodeIds.includes(row.nodeId))) &&
-                (filter?.turnItemRunId === undefined || filter.turnItemRunId === row.runId),
-            ),
-            nodes: projection.nodes.filter(
-              (node) =>
-                (filter?.nodeIds === undefined || filter.nodeIds.includes(node.id)) &&
-                (filter?.omitSettledLeafNodes !== true ||
-                  !isSettledLeafNode(node, projection.runs)),
-            ),
-            subagents: projection.subagents.filter((task) => {
-              if (filter?.subagentIds !== undefined && !filter.subagentIds.includes(task.id))
-                return false;
-              if (
-                filter?.subagentRunIds !== undefined &&
-                (task.runId === null || !filter.subagentRunIds.includes(task.runId))
-              )
-                return false;
-              const omit = filter?.omitSettledSubagents;
-              if (omit === undefined || (omit !== true && omit.except.includes(task.id)))
-                return true;
-              const terminal = ["completed", "failed", "cancelled", "interrupted"].includes(
-                task.status,
-              );
-              const delivered = ["acknowledged", "delivered", "disposed"].includes(
-                task.completionDelivery?.state ?? "",
-              );
-              const active = projection.runs.some(
-                (run) => run.id === task.runId && activeRunStatuses.has(run.status),
-              );
-              return !terminal || !delivered || active;
-            }),
-          };
-          return Object.fromEntries([
-            ["thread", projection.thread],
-            ...fields.map((field) => [field, selected[field]]),
-          ]) as ProjectionRecords<(typeof fields)[number]>;
+          return selectThreadRecords(projection, fields, filter);
         },
       ),
       getRuntimeRequest: Effect.fn("ProjectionStore.getRuntimeRequest")(
