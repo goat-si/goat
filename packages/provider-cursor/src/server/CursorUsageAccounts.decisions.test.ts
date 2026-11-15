@@ -425,4 +425,47 @@ describe("Cursor account scan decisions", () => {
       assert.isTrue(String(result.hostReads[0]).startsWith(result.home + "/"));
     }),
   );
+  it.effect("judges an inherited key and the instance's backend against the host it copied", () =>
+    Effect.gen(function* () {
+      // The copy sees "copied"; any later direct read sees the host after it moved to "later".
+      const movingServer =
+        (copied: NodeJS.ProcessEnv, later: NodeJS.ProcessEnv) =>
+        (home: string): NodeJS.ProcessEnv => {
+          let copying: string | symbol | undefined;
+          return new Proxy<NodeJS.ProcessEnv>(productionServer(copied)(home), {
+            getOwnPropertyDescriptor: (object, key) => {
+              copying = key;
+              return Reflect.getOwnPropertyDescriptor(object, key);
+            },
+            get: (object, key) => {
+              const fromCopy = copying === key;
+              copying = undefined;
+              return !fromCopy && typeof key === "string" && key in later
+                ? later[key]
+                : Reflect.get(object, key);
+            },
+          });
+        };
+      const instances = { "names-cursor": cursor({ CURSOR_BACKEND_URL: PRODUCTION }) };
+      // Copied on a private backend: the inherited key is the private server's and stays home.
+      const leftPrivate = yield* scanCase({
+        server: movingServer(
+          { CURSOR_API_KEY: "private-server-key", CURSOR_BACKEND_URL: PRIVATE },
+          { CURSOR_API_KEY: "later-key", CURSOR_BACKEND_URL: PRODUCTION },
+        ),
+        instances,
+      });
+      assert.deepStrictEqual(leftPrivate.keys, []);
+      assert.deepStrictEqual(leftPrivate.hostReads, []);
+      // Copied on Cursor's backend: the instance names the same backend and reads the copied key.
+      const stayedProduction = yield* scanCase({
+        server: movingServer(
+          { CURSOR_API_KEY: "copied-key", CURSOR_BACKEND_URL: PRODUCTION },
+          { CURSOR_API_KEY: "later-key", CURSOR_BACKEND_URL: PRIVATE },
+        ),
+        instances,
+      });
+      assert.deepStrictEqual(stayedProduction.keys, ["copied-key"]);
+    }),
+  );
 });
