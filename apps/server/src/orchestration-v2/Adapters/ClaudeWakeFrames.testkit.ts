@@ -1,4 +1,5 @@
 import type { SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 export const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
 export const WAKE_TASK_ID = "bdqirlcyw";
@@ -171,3 +172,116 @@ export const staleTaskNotificationResult = makeResultFrame({
   origin: { kind: "task-notification" },
   terminalReason: null,
 });
+
+export const makeSubagentAssistantFrames = (input: {
+  readonly parentToolUseId: string;
+  readonly uuid: string;
+  readonly messageId?: string;
+  readonly text?: string;
+  readonly bashToolUseId?: string;
+}): ReadonlyArray<SDKMessage> =>
+  [
+    ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
+    ...(input.bashToolUseId === undefined
+      ? []
+      : [
+          {
+            type: "tool_use",
+            id: input.bashToolUseId,
+            name: "Bash",
+            input: { command: "git log -5" },
+          },
+        ]),
+  ].map((block, index) =>
+    claudeSdkFrame({
+      type: "assistant",
+      message: {
+        model: "claude-sonnet-4-6",
+        id: input.messageId ?? `msg_${input.uuid}`,
+        type: "message",
+        role: "assistant",
+        content: [block],
+      },
+      parent_tool_use_id: input.parentToolUseId,
+      uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
+      session_id: WAKE_NATIVE_SESSION,
+    }),
+  );
+export const makeSubagentToolResultFrame = (input: {
+  readonly parentToolUseId: string;
+  readonly uuid: string;
+  readonly toolUseId: string;
+}) =>
+  claudeSdkFrame({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: input.toolUseId, content: "ok" }],
+    },
+    parent_tool_use_id: input.parentToolUseId,
+    uuid: input.uuid,
+    session_id: WAKE_NATIVE_SESSION,
+  });
+export const makeSubagentTaskStartedFrame = (input: {
+  readonly taskId: string;
+  readonly toolUseId: string;
+  readonly uuid: string;
+}) =>
+  claudeSdkFrame({
+    type: "system",
+    subtype: "task_started",
+    task_id: input.taskId,
+    tool_use_id: input.toolUseId,
+    description: "Audit recent commits",
+    subagent_type: "general-purpose",
+    is_backgrounded: true,
+    task_type: "local_agent",
+    prompt: "Audit the last five commits.",
+    uuid: input.uuid,
+    session_id: WAKE_NATIVE_SESSION,
+  });
+export const makeSubagentNotificationFrame = (input: {
+  readonly taskId: string;
+  readonly toolUseId: string;
+  readonly summary: string;
+  readonly uuid: string;
+}) =>
+  claudeSdkFrame({
+    type: "system",
+    subtype: "task_notification",
+    task_id: input.taskId,
+    tool_use_id: input.toolUseId,
+    status: "completed",
+    output_file: `/tmp/${input.taskId}.output`,
+    summary: input.summary,
+    uuid: input.uuid,
+    session_id: WAKE_NATIVE_SESSION,
+  });
+
+export const subagentRouting = (
+  events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
+  nativeToolIds: ReadonlyArray<string>,
+) => {
+  const childThreadId =
+    events.find((event) => event.type === "subagent.updated")?.subagent.childThreadId ?? undefined;
+  const toolThreadIds = new Map<string, Set<string>>();
+  for (const event of events) {
+    const nativeId =
+      event.type === "turn_item.updated" ? event.turnItem.nativeItemRef?.nativeId : undefined;
+    if (event.type === "turn_item.updated" && nativeId && nativeToolIds.includes(nativeId)) {
+      toolThreadIds.set(
+        nativeId,
+        (toolThreadIds.get(nativeId) ?? new Set()).add(event.turnItem.threadId),
+      );
+    }
+  }
+  const assistantTexts = (threadId: string | undefined) =>
+    events.flatMap((event) =>
+      event.type === "message.updated" &&
+      event.message.role === "assistant" &&
+      event.message.threadId === threadId
+        ? [event.message.text]
+        : [],
+    );
+  return { childThreadId, toolThreadIds, assistantTexts };
+};
