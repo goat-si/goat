@@ -130,6 +130,7 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
@@ -430,6 +431,8 @@ it.effect.each([
     ),
 );
 
+const isGitCommandError = Schema.is(GitCommandError);
+
 const removeWorktreeAsClient = Effect.fn("WsLifecycleTest.removeWorktreeAsClient")(function* (
   path: string,
 ) {
@@ -444,7 +447,9 @@ const removeWorktreeAsClient = Effect.fn("WsLifecycleTest.removeWorktreeAsClient
     Layer.mock(GitWorkflowService.GitWorkflowService)({
       removeWorktree: (input) => Effect.sync(() => void removed.push(input.path)),
     }),
-    Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({ refreshStatus: () => Effect.void }),
+    Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
+      refreshStatus: () => Effect.interrupt,
+    }),
     Layer.mock(ExternalLauncher.ExternalLauncher)({}),
     Layer.mock(ProviderRegistry.ProviderRegistry)({}),
     Layer.mock(UsageLimitSources.UsageLimitSources)({}),
@@ -514,7 +519,7 @@ it.effect(
       assert.isTrue(Exit.isFailure(exit));
       if (!Exit.isFailure(exit)) return;
       const error = Cause.squash(exit.cause);
-      if (!(error instanceof GitCommandError)) return assert.fail(String(error));
+      if (!isGitCommandError(error)) return assert.fail(String(error));
       assert.include(error.message, "outside GOAT's worktrees folder");
     }).pipe(Effect.provide(layerRemoveWorktreeSources), Effect.scoped),
 );
