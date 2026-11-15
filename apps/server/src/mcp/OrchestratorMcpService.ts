@@ -13,7 +13,6 @@ import {
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2TurnItem,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpCapabilitiesInput,
@@ -53,7 +52,6 @@ import {
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadStatusInput,
   OrchestratorMcpThreadStatusResult,
-  type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
   type OrchestratorMcpUpdateScheduledTaskInput,
@@ -88,6 +86,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import { textPageEnd, timelineItem, turnItemText } from "./threadReadItems.ts";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
@@ -182,6 +181,10 @@ const TERMINAL_THREAD_STATUSES: ReadonlySet<string> = new Set([
   "interrupted",
 ]);
 const DEFAULT_THREAD_READ_LIMIT = 50;
+// Claude Code saves MCP results over ~25k tokens to a file instead of showing them. Thread JSON
+// runs about 2 chars per token, so a read stops adding items here and reports the rest as more.
+const THREAD_READ_BUDGET_CHARS = 30_000;
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const DEFAULT_THREAD_RUN_LIMIT = 10;
 const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
 
@@ -878,141 +881,6 @@ function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
   return input.role === undefined || input.role === "general"
     ? input.task
     : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
-}
-
-function jsonText(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function turnItemText(item: OrchestrationV2TurnItem): string | null {
-  switch (item.type) {
-    case "notification":
-      return [item.summary, item.detail].filter((part) => part !== undefined).join("\n");
-    case "user_message":
-    case "assistant_message":
-    case "reasoning":
-      return item.text;
-    case "proposed_plan":
-      return item.markdown;
-    case "todo_list":
-      return [item.explanation, ...item.steps.map((step) => `[${step.status}] ${step.text}`)]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "user_input_request":
-      return jsonText(item.questions);
-    case "file_change":
-      return [
-        item.fileName,
-        item.additions === undefined && item.deletions === undefined
-          ? undefined
-          : `+${item.additions ?? 0} -${item.deletions ?? 0}`,
-        item.diffStr ?? item.newStr,
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "command_execution":
-      return [`$ ${item.input}`, item.output]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "file_search":
-      return jsonText({ pattern: item.pattern, results: item.results });
-    case "web_search":
-      return jsonText({ patterns: item.patterns, results: item.results });
-    case "approval_request":
-      return [item.prompt ?? item.requestKind, item.reason]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-    case "checkpoint":
-      return jsonText(item.files);
-    case "run_interrupt_request":
-    case "run_interrupt_result":
-    case "system_notice":
-      return item.message;
-    case "error":
-      return item.failure.message;
-    case "compaction":
-      return item.summary ?? null;
-    case "handoff":
-      return item.summary ?? `${item.strategy} handoff to ${item.toProviderInstanceId}`;
-    case "fork":
-      return `Forked to thread ${item.targetThreadId}.`;
-    case "thread_created":
-      return `Created thread ${item.targetThreadId} with ${item.targetProviderInstanceId} (${item.targetModel}).`;
-    case "human_handoff":
-      return `${item.handoff.title}: ${item.handoff.state} (${item.handoff.target.path})`;
-    case "secret_request":
-      return `Asked the user for ${item.label}: ${item.secretStatus}.`;
-    case "subagent":
-      return item.result ?? item.progress ?? item.prompt;
-    case "dynamic_tool":
-      return jsonText({ toolName: item.toolName, input: item.input, output: item.output });
-  }
-}
-
-function textPageEnd(text: string | null, offset: number, maxChars: number): number {
-  const end = offset + maxChars;
-  if (text === null || end >= text.length) return end;
-  const last = text.charCodeAt(end - 1);
-  if (last < 0xd800 || last > 0xdbff) return end;
-  return end - 1 > offset ? end - 1 : end + 1;
-}
-
-function timelineItem(input: {
-  readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
-  readonly maxChars: number;
-  readonly textOffset?: number;
-  readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
-  readonly tasksByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["subagents"]>;
-}): OrchestratorMcpThreadTimelineItem {
-  const item = input.row.item;
-  const task =
-    item.type === "subagent"
-      ? input.tasksByThreadId
-          .get(input.row.sourceThreadId)
-          ?.find((task) => task.id === item.subagentId)
-      : undefined;
-  const text = turnItemText(item);
-  const offset = input.textOffset ?? 0;
-  const end = textPageEnd(text, offset, input.maxChars);
-  const textTruncated = text !== null && text.length > end;
-  const messageId =
-    input.row.item.type === "user_message" || input.row.item.type === "assistant_message"
-      ? input.row.item.messageId
-      : null;
-  const message =
-    messageId === null
-      ? undefined
-      : input.messagesByThreadId
-          .get(input.row.sourceThreadId)
-          ?.find((candidate) => candidate.id === messageId);
-  return {
-    position: input.row.position,
-    visibility: input.row.visibility,
-    sourceThreadId: input.row.sourceThreadId,
-    itemId: input.row.sourceItemId,
-    ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
-    ...(task?.role === undefined ? {} : { role: task.role }),
-    ...(task?.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
-    ...(task?.parentModelSelection === undefined
-      ? {}
-      : { parentModelSelection: task.parentModelSelection }),
-    runId: input.row.item.runId,
-    messageId,
-    createdBy: message?.createdBy ?? null,
-    creationSource: message?.creationSource ?? null,
-    ...(message?.senderThreadId === undefined ? {} : { senderThreadId: message.senderThreadId }),
-    type: input.row.item.type,
-    status: input.row.item.status,
-    title: input.row.item.title,
-    text: text === null ? null : text.slice(offset, end),
-    textTruncated,
-    nextTextOffset: textTruncated ? end : null,
-    updatedAt: DateTime.formatIso(input.row.item.updatedAt),
-  };
 }
 
 const make = Effect.gen(function* () {
@@ -3621,28 +3489,38 @@ const make = Effect.gen(function* () {
       if (
         (summary || input.tail !== undefined) &&
         (input.afterPosition !== undefined ||
+          input.beforePosition !== undefined ||
           input.itemId !== undefined ||
           (summary && input.tail !== undefined))
       )
         return yield* failure(
           "invalid_request",
-          "Pass view summary or tail, not both, and neither with afterPosition or itemId.",
+          "Pass view summary or tail, not both, and neither with afterPosition, beforePosition or itemId.",
         );
       const view = input.view === "activity" ? "activity" : "messages";
       const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+      // Client callers (the CLI, linked environments) page forward from a cursorless read.
+      const newestFirst =
+        input.tail !== undefined ||
+        input.beforePosition !== undefined ||
+        (input.afterPosition === undefined && scope.thread !== undefined);
       const timeline = yield* threadManagement
         .getTimelinePage(input.threadId, {
-          afterPosition: input.afterPosition ?? -1,
+          ...(input.afterPosition === undefined ? {} : { afterPosition: input.afterPosition }),
+          ...(newestFirst && input.tail === undefined
+            ? { beforePosition: input.beforePosition ?? Number.POSITIVE_INFINITY }
+            : {}),
           limit: summary ? 0 : (input.tail ?? input.limit ?? DEFAULT_THREAD_READ_LIMIT),
           view,
           ...(input.tail === undefined ? {} : { tail: true }),
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
-      const page = timeline.items;
       const taskSources = [
         ...new Set(
-          page.filter((row) => row.item.type === "subagent").map((row) => row.sourceThreadId),
+          timeline.items
+            .filter((row) => row.item.type === "subagent")
+            .map((row) => row.sourceThreadId),
         ),
       ];
       const tasksByThreadId = new Map(
@@ -3654,7 +3532,7 @@ const make = Effect.gen(function* () {
         ),
       );
       const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
-      for (const row of page) {
+      for (const row of timeline.items) {
         if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
         const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
         ids.push(row.item.messageId);
@@ -3670,6 +3548,37 @@ const make = Effect.gen(function* () {
         { concurrency: 1 },
       );
       const messagesByThreadId = new Map(sourceMessages);
+      const thread = View.threadDetail(
+        scope,
+        target,
+        timeline.totalItems,
+        shell,
+        yield* Clock.currentTimeMillis,
+      );
+      const recentRuns = target.runs
+        .toSorted((left, right) => right.ordinal - left.ordinal)
+        .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
+        .map(threadRun);
+      const allItems = timeline.items.map((row) =>
+        timelineItem({
+          row,
+          maxChars,
+          messagesByThreadId,
+          tasksByThreadId,
+          ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+        }),
+      );
+      // Keep the end of the page the caller is reading toward, and at least one item.
+      let size = encodeJsonText({ thread, recentRuns }).length;
+      let kept = 0;
+      for (const item of newestFirst ? allItems.toReversed() : allItems) {
+        size += encodeJsonText(item).length + 1;
+        if (kept > 0 && size > THREAD_READ_BUDGET_CHARS) break;
+        kept++;
+      }
+      const start = newestFirst ? allItems.length - kept : 0;
+      const items = allItems.slice(start, start + kept);
+      const page = timeline.items.slice(start, start + kept);
       const returnedRunIds = new Set(
         page.filter((row) => row.sourceThreadId === target.thread.id).map((row) => row.item.runId),
       );
@@ -3722,31 +3631,16 @@ const make = Effect.gen(function* () {
       const summaryDigest = summary ? yield* readSummary(shell, target, timeline.totalItems) : null;
       return {
         ...(cloudTask === undefined ? {} : { cloudTask }),
-        thread: View.threadDetail(
-          scope,
-          target,
-          timeline.totalItems,
-          shell,
-          yield* Clock.currentTimeMillis,
-        ),
-        recentRuns: target.runs
-          .toSorted((left, right) => right.ordinal - left.ordinal)
-          .slice(0, input.runLimit ?? (summary ? 1 : DEFAULT_THREAD_RUN_LIMIT))
-          .map(threadRun),
+        thread,
+        recentRuns,
         ...(summaryDigest === null ? {} : { summaryDigest }),
         ...(input.tail === undefined ? {} : { tailStartPosition: page[0]?.position ?? null }),
-        items: page.map((row) =>
-          timelineItem({
-            row,
-            maxChars,
-            messagesByThreadId,
-            tasksByThreadId,
-            ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
-          }),
-        ),
-        nextPosition: page.at(-1)?.position ?? null,
+        items,
+        nextPosition: items.at(-1)?.position ?? null,
         // A summary returns no items, so there is nothing to page through.
-        hasMore: !summary && timeline.hasMore,
+        hasMore: !summary && (timeline.hasMore || (!newestFirst && kept < allItems.length)),
+        earlierPosition:
+          !summary && (timeline.hasEarlier || start > 0) ? (items[0]?.position ?? null) : null,
       } satisfies OrchestratorMcpThreadReadResult;
     }),
     acknowledgeChildRead: Effect.fn("OrchestratorMcpService.acknowledgeChildRead")(

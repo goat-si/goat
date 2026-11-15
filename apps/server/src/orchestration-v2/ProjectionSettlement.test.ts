@@ -691,3 +691,53 @@ it.effect.each([
       }
     }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: a provider-native subagent becomes a candidate once its parent is done, a task lane at once",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const parent = yield* createThread("subagent-parent");
+      const lineage = {
+        parentThreadId: parent,
+        relationshipToParent: "subagent",
+        rootThreadId: parent,
+      } as const;
+      const child = yield* createThread("subagent-child", { creationSource: "provider", lineage });
+      const lane = yield* createThread("task-lane", { creationSource: "mcp", lineage });
+      const ids = () =>
+        store
+          .getSettlementCandidates()
+          .pipe(Effect.map((rows) => new Set(rows.map((row) => row.id))));
+      assert.deepEqual(yield* ids(), new Set([parent, lane]));
+
+      const parentThread = yield* store.getThread(parent);
+      for (const [type, overrides] of [
+        ["thread.settled", { settledOverride: "settled", settledAt: now }],
+        ["thread.archived", { archivedAt: now }],
+        ["thread.deleted", { deletedAt: now }],
+      ] satisfies ReadonlyArray<
+        readonly [
+          "thread.settled" | "thread.archived" | "thread.deleted",
+          Partial<OrchestrationV2AppThread>,
+        ]
+      >) {
+        yield* store.apply({
+          id: EventId.make(`event:settlement:subagent-parent:${type}`),
+          type,
+          threadId: parent,
+          occurredAt: now,
+          payload: { ...parentThread, ...overrides, updatedAt: now },
+        });
+        assert.deepEqual(yield* ids(), new Set([child, lane]));
+      }
+      const orphan = yield* createThread("orphan", {
+        creationSource: "provider",
+        lineage: { ...lineage, parentThreadId: ThreadId.make("missing-parent") },
+      });
+      assert.deepEqual(yield* ids(), new Set([child, lane, orphan]));
+    }).pipe(Effect.provide(testLayer)),
+);
