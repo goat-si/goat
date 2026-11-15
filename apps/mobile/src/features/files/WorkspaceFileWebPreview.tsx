@@ -69,6 +69,7 @@ function DocumentWebPreview(props: { readonly uri: string }) {
           originWhitelist={["*"]}
           allowsBackForwardNavigationGestures
           allowsFullscreenVideo
+          allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           onShouldStartLoadWithRequest={(request) => {
             if (request.isTopFrame !== false && isPdfPreviewUri(request.url)) {

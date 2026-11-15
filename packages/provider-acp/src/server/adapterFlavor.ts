@@ -33,6 +33,8 @@ export interface AcpAdapterV2RuntimeInput {
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
+  readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
+  readonly sessionLaunch?: unknown;
   readonly resumeSessionId?: string;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
@@ -136,6 +138,7 @@ export interface AcpAdapterV2Flavor {
   readonly rewriteUserText?: (
     text: string,
     turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+    session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
   ) => Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner>;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
@@ -167,6 +170,11 @@ export interface AcpAdapterV2Flavor {
       }
     | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
+  readonly resolveSessionLaunch?: (
+    environment: NodeJS.ProcessEnv,
+    sessionEnvironment: NodeJS.ProcessEnv,
+  ) => Effect.Effect<unknown, EffectAcpErrors.AcpError, Scope.Scope>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
@@ -240,7 +248,10 @@ export interface AcpAdapterV2Flavor {
   ) => AcpAdapterV2SubagentUpdate | undefined;
   readonly isProvisionalSubagentTool?: (toolCall: AcpToolCallState) => boolean;
   readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
-  readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
+  readonly extractProposedPlanMarkdown?: (
+    toolCall: AcpToolCallState,
+    session?: { readonly environment: NodeJS.ProcessEnv | undefined; readonly launch: unknown },
+  ) => string | undefined;
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
   /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
   readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
@@ -336,6 +347,7 @@ export interface AcpAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly flavor: AcpAdapterV2Flavor;
   readonly selfInvocation: SelfInvocation;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly clientTerminals?: {
     readonly environment?: NodeJS.ProcessEnv;
     readonly shellCommands?: boolean;

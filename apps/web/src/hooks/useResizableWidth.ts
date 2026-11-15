@@ -3,11 +3,18 @@ import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useState } fro
 
 import { getLocalStorageItem, setLocalStorageItem } from "./useLocalStorage";
 import { useResizeDrag } from "./useResizeDrag";
+import { useStableCallback } from "./useStableCallback";
 
 const WidthSchema = Schema.Finite;
 
 /** The host must size itself from this custom property. */
 export const RESIZABLE_WIDTH_PROPERTY = "--resizable-width";
+
+// GOAT: a host its container caps (max-width, min()) shows less than the stored width.
+function renderedWidth(host: HTMLElement | null): number | null {
+  const width = host?.getBoundingClientRect().width ?? 0;
+  return width > 0 ? Math.round(width) : null;
+}
 
 export interface UseResizableWidthOptions {
   readonly storageKey: string;
@@ -54,6 +61,9 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
   }
 
   const clampedWidth = clamp(widthState.width);
+  const restoreWidth = useStableCallback((host: HTMLElement | null) => {
+    host?.style.setProperty(RESIZABLE_WIDTH_PROPERTY, `${clampedWidth}px`);
+  });
 
   const drag = useResizeDrag<HTMLElement>((event) => {
     const host = event.currentTarget.parentElement;
@@ -62,7 +72,8 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
     // The drag commits to the key and width it started from, even if the panel
     // switches keys before the pointer is released.
     const startStorageKey = storageKey;
-    const startWidth = clampedWidth;
+    const startWidth = Math.min(clampedWidth, renderedWidth(host) ?? clampedWidth);
+    let shownWidth: number | null = null;
     return {
       width: startWidth,
       edge,
@@ -71,17 +82,24 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
         host?.style.setProperty(RESIZABLE_WIDTH_PROPERTY, `${nextWidth}px`);
         return nextWidth;
       },
-      finish(finalWidth) {
-        setWidthState({ storageKey: startStorageKey, width: finalWidth });
+      finish(finalWidth, moved) {
+        if (!moved) {
+          restoreWidth(host);
+          return;
+        }
+        const savedWidth = Math.min(finalWidth, shownWidth ?? finalWidth);
+        setWidthState({ storageKey: startStorageKey, width: savedWidth });
         try {
-          setLocalStorageItem(startStorageKey, finalWidth, WidthSchema);
+          setLocalStorageItem(startStorageKey, savedWidth, WidthSchema);
         } catch (error) {
           console.error("Could not persist panel width.", error);
         }
       },
       cleanup(committed) {
+        // Read while transitions are still off: a read after would see where the animation starts.
+        if (committed) shownWidth = renderedWidth(host);
         host?.style.removeProperty("transition-property");
-        if (!committed) host?.style.setProperty(RESIZABLE_WIDTH_PROPERTY, `${startWidth}px`);
+        if (!committed) restoreWidth(host);
       },
     };
   });

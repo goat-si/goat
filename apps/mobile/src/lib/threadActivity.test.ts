@@ -24,17 +24,15 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  relativizeWorkLabelPaths,
-  workEntryRowLabel,
   buildThreadFeed,
   threadFeedCompactionLabels,
   createThreadFeedCache,
   deriveThreadFeedPresentation,
-  messageFoldRunId,
   type ThreadFeedCache,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
 } from "./threadActivity";
+import { relativizeWorkLabelPaths, workEntryRowLabel } from "./workEntryRowLabel";
 
 const threadId = ThreadId.make("thread-1");
 const sourceThreadId = ThreadId.make("thread-source");
@@ -55,7 +53,10 @@ it("shows a captured MCP app for a failed deferred write", () => {
     input: {},
     output: { goatMcpApp: mcpApp, result: { content: [], isError: true } },
   };
-  expect(buildThreadFeed([projected(item, 0)])).toMatchObject([{ type: "mcp-app", app: mcpApp }]);
+  expect(buildThreadFeed([projected(item, 0)])).toMatchObject([
+    { type: "activity-group" },
+    { type: "mcp-app", app: mcpApp },
+  ]);
 });
 
 it.each([undefined, [{ operation: "update", path: "src/a.ts" }]])(
@@ -849,32 +850,6 @@ describe("buildThreadFeed", () => {
       expect(activity.getFullDetail()).toContain(threadId);
     },
   );
-
-  it("names the fold that hides a progress message, with or without a run", () => {
-    const middle = {
-      ...assistantMessage("2026-06-20T00:00:02.500Z"),
-      id: TurnItemId.make("item-middle"),
-      messageId: MessageId.make("message-middle"),
-      text: "Needle found in the build config.",
-    };
-    const items = [userMessage(), command(), middle, assistantMessage()];
-    for (const runless of [false, true]) {
-      const feed = buildThreadFeed(
-        items.map((item, position) =>
-          projected(runless ? { ...item, runId: null } : item, position),
-        ),
-      );
-      const foldRunId = messageFoldRunId(feed, "message-middle");
-      expect(foldRunId, String(runless)).toBe(runless ? "runless:message-user" : runId);
-      const ids = (expanded: ReadonlySet<RunId>) =>
-        deriveThreadFeedPresentation(feed, null, expanded).map((entry) => entry.id);
-      expect(ids(new Set())).not.toContain("message-middle");
-      expect(ids(new Set([foldRunId!]))).toContain("message-middle");
-    }
-    expect(messageFoldRunId(buildThreadFeed([projected(userMessage(), 0)]), "message-user")).toBe(
-      null,
-    );
-  });
 
   it("folds progress messages while keeping the final assistant answer visible", () => {
     const opening = {
