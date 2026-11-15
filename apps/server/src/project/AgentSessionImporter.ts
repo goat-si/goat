@@ -313,7 +313,7 @@ const make = Effect.gen(function* () {
             runtimeMode: DEFAULT_RUNTIME_MODE,
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             branch: outcome.worktree?.branch ?? null,
-            // Turns resume in the session's own checkout; GOAT never removes it (ClientWorktrees.remove).
+            // Turns resume in this checkout; outside GOAT's worktrees folder it is never removed.
             worktreePath: outcome.worktree?.path ?? null,
             linkedPullRequest: null,
             branchPullRequest: null,

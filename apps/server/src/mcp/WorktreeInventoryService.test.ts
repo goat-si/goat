@@ -76,7 +76,8 @@ const fixture = Effect.gen(function* () {
   // Runs while a sweep lists the projects, before any worktree is checked.
   let duringScan: Effect.Effect<void> = Effect.void;
 
-  const addWorktree = (branch: string, at = worktreesDir + "/" + branch) =>
+  // GOAT places worktrees at <worktrees folder>/<repository>/<name>.
+  const addWorktree = (branch: string, at = worktreesDir + "/repo/" + branch) =>
     run(repo, ["worktree", "add", "-b", branch, at]).pipe(Effect.as(at));
   const commit = (cwd: string) =>
     run(cwd, ["commit", "--allow-empty", "-m", "work"]).pipe(
@@ -294,6 +295,31 @@ describe("WorktreeInventoryService", () => {
           "outside GOAT's worktrees folder",
         );
         expect(yield* fs.exists(own)).toBe(true);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live(
+    "only <worktrees folder>/<repository>/<name> counts as GOAT's, as turn start and clients judge it",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, addWorktree, setThreads } = yield* fixture;
+        const worktreesDir = yield* fs.realPath((yield* ServerConfig.ServerConfig).worktreesDir);
+        const shallow = yield* addWorktree("shallow", worktreesDir + "/shallow");
+        const deep = yield* addWorktree("deep", worktreesDir + "/a/b/deep");
+        setThreads([
+          { id: "shallow-thread", worktreePath: shallow, branch: "shallow" },
+          { id: "deep-thread", worktreePath: deep, branch: "deep" },
+        ]);
+
+        const { worktrees } = yield* service.inventory({});
+        const managed = Object.fromEntries(worktrees.map((entry) => [entry.path, entry.managed]));
+        expect([managed[shallow], managed[deep]]).toEqual([false, false]);
+        for (const threadId of ["shallow-thread", "deep-thread"])
+          expect(
+            yield* refusal(service.remove({ threadId: ThreadId.make(threadId), force: true })),
+          ).toContain("outside GOAT's worktrees folder");
+        expect((yield* service.cleanup({ dryRun: false })).removed).toEqual([]);
+        for (const path of [shallow, deep]) expect(yield* fs.exists(path)).toBe(true);
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

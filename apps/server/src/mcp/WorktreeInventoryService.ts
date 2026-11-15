@@ -33,6 +33,7 @@ import {
 } from "../workspace/workspaceLease.ts";
 import {
   isFilesystemRoot,
+  isManagedWorktreeLocation,
   makeIsManagedWorktreePath,
   managedWorktreesDirectories,
 } from "../worktreesDirectory.ts";
@@ -360,7 +361,9 @@ const make = Effect.gen(function* () {
             branch: record.branch,
             main: record === first,
             missing,
-            managed: context.managedRoots.some((root) => root !== key && within(root, key)),
+            managed: context.managedRoots.some((root) =>
+              isManagedWorktreeLocation(root, key, path),
+            ),
             threads: shells.map((thread) => ({
               threadId: thread.id,
               title: thread.title,
