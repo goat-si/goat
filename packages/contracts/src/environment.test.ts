@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   supportsMemoryProtocol,
+  ExecutionEnvironmentCapabilities,
   ExecutionEnvironmentDescriptor,
   ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -141,5 +142,32 @@ describe("memory advertisement", () => {
       expect(c.memory?.hub).toBeUndefined();
       expect(c.memory?.importProvider).toBeUndefined();
     }
+  });
+});
+
+describe("ExecutionEnvironmentCapabilities linked-thread refreshes", () => {
+  const decodeCapabilities = Schema.decodeUnknownSync(ExecutionEnvironmentCapabilities);
+  // A peer built before linked-thread refreshes: the same capabilities minus that one field.
+  const { linkedThreadRefreshes: _addedField, ...fieldsBeforeRefreshes } =
+    ExecutionEnvironmentCapabilities.fields;
+  const decodeWithPeerBeforeRefreshes = Schema.decodeUnknownSync(
+    Schema.Struct(fieldsBeforeRefreshes),
+  );
+
+  it("reads an older server's capabilities as not signalling linked-thread changes", () => {
+    const capabilities = decodeCapabilities({ repositoryIdentity: true });
+    expect(capabilities.linkedThreadRefreshes).toBeUndefined();
+  });
+
+  it("an older peer accepts capabilities that advertise linked-thread refreshes", () => {
+    const advertised = { repositoryIdentity: true, linkedThreadRefreshes: true };
+    expect(decodeCapabilities(advertised).linkedThreadRefreshes).toBe(true);
+    expect(Object.hasOwn(decodeWithPeerBeforeRefreshes(advertised), "linkedThreadRefreshes")).toBe(
+      false,
+    );
+  });
+
+  it("rejects a linked-thread refresh capability that is not a boolean", () => {
+    expect(() => decodeCapabilities({ linkedThreadRefreshes: "yes" })).toThrow();
   });
 });
