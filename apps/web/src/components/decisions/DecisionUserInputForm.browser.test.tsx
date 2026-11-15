@@ -1,10 +1,28 @@
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
-import { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { DecisionUserInputForm } from "./DecisionUserInputForm";
+
+const entitiesFixture = vi.hoisted(() => ({
+  threadShell: null as EnvironmentThreadShell | null,
+  project: null as EnvironmentProject | null,
+}));
+// Only the two hooks the form itself reads are fixture-driven; everything
+// else in this module stays real, so ChatMarkdown and the rest of the render
+// graph keep working.
+vi.mock("../../state/entities", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/entities")>();
+  return {
+    ...actual,
+    useThreadShell: () => entitiesFixture.threadShell,
+    useProject: () => entitiesFixture.project,
+  };
+});
 
 type InputItem = Extract<DecisionItem, { kind: "user_input" }>;
 const questionItem: InputItem = {
@@ -103,6 +121,8 @@ async function typeAnswer(value: string) {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   onSubmit.mockReset().mockResolvedValue(undefined);
+  entitiesFixture.threadShell = null;
+  entitiesFixture.project = null;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -236,6 +256,43 @@ it("rejects invalid provider selections and forbidden custom drafts", async () =
   await click("Incremental");
   await submit();
   expect(onSubmit).toHaveBeenLastCalledWith({ approach: " provider-id ", targets: ["web-id"] });
+});
+
+it("opens a workspace file a Decisions question cites by absolute path at its workspace path", async () => {
+  entitiesFixture.threadShell = {
+    environmentId: EnvironmentId.make("test-env"),
+    projectId: ProjectId.make("project"),
+    worktreePath: null,
+  } as unknown as EnvironmentThreadShell;
+  entitiesFixture.project = {
+    environmentId: EnvironmentId.make("test-env"),
+    workspaceRoot: "/synthetic/repo",
+  } as unknown as EnvironmentProject;
+  const cited: InputItem = {
+    ...questionItem,
+    request: {
+      ...questionItem.request,
+      questions: [
+        {
+          id: "probe",
+          header: "Probe",
+          question: "Update [probe.md](/synthetic/repo/docs/probe.md:12)?",
+          multiSelect: false,
+          options: [],
+        },
+      ],
+    },
+  };
+  using openFile = vi.spyOn(useRightPanelStore.getState(), "openFile").mockImplementation(() => {});
+  await render(cited);
+  const link = container.querySelector("a");
+  if (!link) throw new Error("Missing file link");
+  await act(async () => link.click());
+  expect(openFile).toHaveBeenCalledExactlyOnceWith(
+    { environmentId: EnvironmentId.make("test-env"), threadId: ThreadId.make("test-thread") },
+    "docs/probe.md",
+    12,
+  );
 });
 
 it("blocks native controls and form submission while responses are disabled", async () => {
