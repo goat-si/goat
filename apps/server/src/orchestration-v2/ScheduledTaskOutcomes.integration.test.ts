@@ -151,6 +151,12 @@ it.effect.each([
   { status: "failed", failure: "Weekly usage limit reached", error: "Weekly usage limit reached" },
   { status: "failed", failure: null, error: "The run failed." },
   { status: "failed", failure: "x".repeat(4_096), error: `${"x".repeat(499)}…` },
+  // An emoji across the cut is dropped whole, not split into half a surrogate pair.
+  {
+    status: "failed",
+    failure: `${"x".repeat(498)}😀${"x".repeat(100)}`,
+    error: `${"x".repeat(498)}…`,
+  },
   { status: "interrupted", failure: null, error: "The run was stopped." },
   { status: "cancelled", failure: null, error: "The run was cancelled." },
 ] as const)(
@@ -203,6 +209,8 @@ it.effect.each([
       const current = (yield* tasks.list()).tasks[0]!;
       assert.equal(current.lastRun?.status, outcome.status);
       assert.equal(current.lastRunError, outcome.error);
+      // A later receipt change for the same run keeps the stored reason.
+      yield* TestClock.adjust("1 second");
       yield* update(run, outcome.status, `${outcome.status}:duplicate`);
       assert.equal((yield* tasks.list()).tasks[0]?.lastRunError, outcome.error);
     }).pipe(Effect.provide(harness())),

@@ -304,9 +304,12 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
       const items = yield* Effect.forEach(rows, (row) => decodeTurnItem(row.payload_json));
       error = latestRootProviderFailure(run, items)?.message ?? error;
     }
-    return error.length > MAX_RUN_ERROR_LENGTH
-      ? `${error.slice(0, MAX_RUN_ERROR_LENGTH - 1)}…`
-      : error;
+    if (error.length <= MAX_RUN_ERROR_LENGTH) return error;
+    let end = MAX_RUN_ERROR_LENGTH - 1;
+    // Cut between characters, not inside an emoji's surrogate pair.
+    const atCut = error.charCodeAt(end);
+    if (atCut >= 0xdc00 && atCut <= 0xdfff) end--;
+    return `${error.slice(0, end)}…`;
   });
 
   const prune = Effect.fn("ScheduledTaskRuns.prune")(function* (
