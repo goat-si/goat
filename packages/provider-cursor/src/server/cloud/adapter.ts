@@ -87,6 +87,7 @@ export const capabilities = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 type Task = NonNullable<OrchestrationV2ProviderThread["cloudTask"]>;
+const RETRY_ACCEPT_TIMEOUT = "2 minutes";
 
 export const RETRY_PROMPT =
   "Your previous run stopped because of an unexpected error before it finished. Continue the original task from where it stopped.";
@@ -308,13 +309,19 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             // Spend the retry before sending: a restart in between reconciles as unknown.
             yield* commit(ctx, marked);
             yield* retryItem(ctx, "running", yield* DateTime.now);
-            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey }));
+            // The SDK has no deadline; a retry Cursor never takes otherwise leaves the task submitting.
+            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey })).pipe(
+              Effect.timeout(RETRY_ACCEPT_TIMEOUT),
+            );
             const sent = yield* call("send", () =>
               agent.send(RETRY_PROMPT, {
                 model: cursorSdkModelSelection(ctx.input.modelSelection),
                 idempotencyKey: `goat:${instanceId}:${ctx.input.runId}:${ctx.input.attemptId}:retry`,
               }),
-            ).pipe(Effect.ensuring(Effect.sync(() => agent.close())));
+            ).pipe(
+              Effect.timeout(RETRY_ACCEPT_TIMEOUT),
+              Effect.ensuring(Effect.sync(() => agent.close())),
+            );
             ctx.run = sent;
             yield* commit(ctx, {
               ...marked,

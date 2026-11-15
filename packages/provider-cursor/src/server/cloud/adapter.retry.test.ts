@@ -84,4 +84,35 @@ describe("Cursor Cloud automatic retry progress", () => {
       expect(h.cancelRun).not.toHaveBeenCalled();
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
+
+  effectIt.effect("ends the turn when Cursor never answers the retry", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const resumeCalled = yield* Deferred.make<void>();
+      const events: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+      yield* h.runtime.events.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      h.setResult({
+        id: runId,
+        status: "error",
+        error: { message: "The agent stopped because of an unexpected error." },
+      });
+      h.resume.mockImplementationOnce(() => {
+        Deferred.doneUnsafe(resumeCalled, Effect.void);
+        return new Promise(() => {});
+      });
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.streamStarted);
+      yield* h.finish;
+      yield* Deferred.await(resumeCalled);
+      yield* TestClock.adjust("5 minutes");
+
+      expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+        expect.objectContaining({ status: "failed" }),
+      ]);
+      expect(h.commits.at(-1)?.status).toBe("unknown");
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
 });
