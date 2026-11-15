@@ -1,6 +1,6 @@
 # L02 retry: provider adapter fixes (lane record)
 
-Lane branch: `chase/t3-261114-adapters-retry`, pushed at `779f653042` (run 7). No PR yet; this file is the lane's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Deferrals are tracked in #3176.
+Lane branch: `chase/t3-261114-adapters-retry`, pushed at `a862944dbe` (run 7). No PR yet; this file is the lane's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Deferrals are tracked in #3176.
 
 ## Decisions
 
@@ -102,6 +102,8 @@ Codex and Antigravity: GOAT looks for a newer release at most hourly, and only w
 - run 7, 779f653042 merges ec6e96aa34 (L06, dev 8b1a00bbb6 #3453): conflicts in ws.ts, ProviderRegistry.ts, runtimeLayer.test.ts (resolved as under Cross-lane) and the generated agent-surface-audit.md (regenerated).
 
 ## Gate (run 7)
+
+- run 7 follow-up (lane head a862944dbe): merged e943ef0c5f (1c3c1db840 tree ed509f792a; adds 1c3c1db840, the declined Cursor steer's queued follow-up stays out of visibleTurnItems, which held before L03's chain too) and 417eaf7fdb (a862944dbe, no conflicts; ws.ts 3535 is still the only code-budgets.json difference). Gate on 1c3c1db840: all fast steps pass; test 23/41075 failed, all known (Grok #3425 16, app.test serverCwd #3238 4 with this gate's fixtures SIGKILLed by PID, #3418, #3363, #3439) plus WorkspaceRootScreen.android.test.tsx ("__DEV__ is not defined", fixed by 417eaf7fdb; passes on a862944dbe, 3 passed). Focused on a862944dbe/1c3c1db840: Orchestrator, steering, turn start, projection, EffectWorker, ThreadStop and force-stop suites 370 passed; Cursor adapter.steer 4 passed; reconcileGoatMigrationIds 95 passed; server typecheck clean.
 
 check:changed on 779f653042 (merged with ec6e96aa34), Node v26.12.1, VITEST_MAX_WORKERS=4, alone on pen-macmini (after L09's gates ended). Unused patches, format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (42 packages) pass; goat-rename --check: 0. Test (3160 files): 6 files failed, 3146 passed, 8 skipped; 24 tests failed, 40995 passed. None is from this lane:
 - GrokTextGeneration.test.ts (16): goat#3425. src/cli/app.test.ts serverCwd (4): goat#3238; its fixture servers never exited, and I stopped this gate's own (21509, 14215, 76200; earlier gates of this run 41839, 79792, 10643, 47744), each by PID after checking it ran under this gate's check-changed.ts, with SIGKILL as SIGTERM was ignored. tunnel.client-session: goat#3418. runtimeFactsScripts: goat#3363. NotesGit: goat#3439.
