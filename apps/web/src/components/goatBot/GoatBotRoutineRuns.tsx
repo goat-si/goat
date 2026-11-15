@@ -162,7 +162,7 @@ function RunDetails(props: {
         role="region"
         aria-label="Run details"
         tabIndex={0}
-        className="max-h-60 overflow-y-auto rounded-sm text-sm whitespace-pre-line text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        className="max-h-60 overflow-y-auto rounded-sm text-sm whitespace-pre-line wrap-break-word text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         {runBody({ ...props, state, quiet, inputId, read })}
       </div>
