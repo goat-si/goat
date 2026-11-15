@@ -64,6 +64,7 @@ export function MobileBotTaskSearch(props: {
       <TextInput
         accessibilityLabel={`Search ${props.botName}'s tasks`}
         placeholder="Search tasks"
+        placeholderTextColorClassName="accent-placeholder"
         value={text}
         onChangeText={setText}
         maxLength={256}

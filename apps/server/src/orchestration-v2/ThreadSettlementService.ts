@@ -370,7 +370,9 @@ export const make = Effect.gen(function* () {
     const generation = mergeGeneration;
     const settings = yield* settingsService.getSettings;
     const automaticSettlementEnabled = autoSettlementConfigured(settings);
-    const threads = yield* projections.getSettlementCandidates(threadId);
+    const threads = yield* projections.getSettlementCandidates(threadId, {
+      providerNativeSubagentsOnly: !automaticSettlementEnabled,
+    });
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     if (threadId === undefined) {
       const live = new Set(threads.map((thread) => thread.id));

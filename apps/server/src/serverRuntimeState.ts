@@ -9,7 +9,7 @@ import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import packageJson from "../package.json" with { type: "json" };
 import type * as ServerConfig from "./config.ts";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";
+import { formatHostForUrl, isWildcardHost } from "@goat/shared/hostClassification";
 
 export const PersistedServerRuntimeState = Schema.Struct({
   version: Schema.Literal(1),

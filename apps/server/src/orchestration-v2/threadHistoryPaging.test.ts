@@ -11,7 +11,6 @@ import {
   type OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as DateTime from "effect/DateTime";
 
 import {
   buildBoundedThreadProjection,
@@ -27,67 +26,11 @@ import {
   selectRecentTimelineWindow,
   THREAD_HISTORY_PAGE_POLICY,
 } from "./threadHistoryPaging.ts";
+import { makeRow, makeTurnStart, NOW, THREAD } from "./threadHistoryPaging.testkit.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
-const NOW = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
-const THREAD = ThreadId.make("thread-1");
 const RUN = RunId.make("run-interrupt-1");
 const NODE = NodeId.make("node-interrupt-1");
-
-function makeRow(
-  index: number,
-  options?: { readonly outputBytes?: number },
-): OrchestrationV2ProjectedTurnItem {
-  const id = TurnItemId.make(`item-${index}`);
-  const output =
-    options?.outputBytes !== undefined ? "x".repeat(options.outputBytes) : `output-${index}`;
-  return {
-    position: index,
-    visibility: "local",
-    sourceThreadId: THREAD,
-    sourceItemId: id,
-    item: {
-      id,
-      type: "command_execution",
-      threadId: THREAD,
-      runId: null,
-      nodeId: null,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: index + 1,
-      status: "completed",
-      title: `Command ${index}`,
-      input: `cmd-${index}`,
-      output,
-      exitCode: 0,
-      startedAt: NOW,
-      completedAt: NOW,
-      updatedAt: NOW,
-    },
-  };
-}
-
-function makeTurnStart(
-  index: number,
-  createdBy: "user" | "agent",
-): OrchestrationV2ProjectedTurnItem {
-  const row = makeRow(index);
-  return {
-    ...row,
-    item: {
-      ...row.item,
-      type: "user_message",
-      createdBy,
-      creationSource: "provider",
-      inputIntent: "turn_start",
-      messageId: MessageId.make(`prompt-${index}`),
-      text: `Prompt ${index}`,
-      attachments: [],
-    },
-  } as OrchestrationV2ProjectedTurnItem;
-}
 
 function interruptItem(
   id: string,
@@ -474,6 +417,38 @@ describe("threadHistoryPaging", () => {
     expect([...older.items, ...first.items].map((row) => row.sourceItemId)).toEqual(
       items.map((row) => row.sourceItemId),
     );
+
+    // A caller that holds only the newest rows gets the same page when it says what it left
+    // out: a user turn, and run 3, whose late notification is then not a new turn.
+    const late = items.with(402, inRun(402, 3, notification("Late")));
+    const cursor = encodeThreadHistoryCursor({
+      snapshotSequence: 1,
+      sourceThreadId: THREAD,
+      sourceItemId: late.at(-1)!.sourceItemId,
+      position: late.length - 1,
+    });
+    const prefix = { hasUserTurn: true, startedRuns: new Set(["run-3"]) };
+    const whole = selectHistoryPageFromCursor({ items: late, cursor, snapshotSequence: 1, policy });
+    expect(whole.items[0]?.sourceItemId).toBe(`item-${11 * 4 + 1}`);
+    expect(
+      selectHistoryPageFromCursor({
+        items: late.slice(22),
+        cursor,
+        snapshotSequence: 1,
+        policy,
+        prefix,
+      }),
+    ).toEqual({ ...whole, oldestScanned: late[45] });
+    // A part that ends above the page reports its first row, so the caller reads further back.
+    expect(
+      selectHistoryPageFromCursor({
+        items: late.slice(60),
+        cursor,
+        snapshotSequence: 1,
+        policy,
+        prefix,
+      }).oldestScanned,
+    ).toBe(late[60]);
   });
 
   it("pages agent-only child transcripts instead of dropping their earlier activity", () => {

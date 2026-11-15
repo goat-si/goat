@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { formatHostForUrl, isWildcardHost } from "@goat/shared/hostClassification";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -59,12 +60,7 @@ import { getServerOwners } from "./telemetry/Identify.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as AutomationHold from "./automationHold.ts";
-import {
-  formatHeadlessServeOutput,
-  formatHostForUrl,
-  isWildcardHost,
-  issueHeadlessServeAccessInfo,
-} from "./startupAccess.ts";
+import { formatHeadlessServeOutput, issueHeadlessServeAccessInfo } from "./startupAccess.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
