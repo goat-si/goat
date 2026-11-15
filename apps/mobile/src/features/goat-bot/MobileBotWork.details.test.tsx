@@ -169,6 +169,9 @@ vi.mock("../../native/StackHeader", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     // Home's shared current work; tests that need its links set state.current.
