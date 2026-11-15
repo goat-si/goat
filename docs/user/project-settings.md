@@ -113,7 +113,9 @@ immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
 A run first shows Dispatching or Queued, then Running. Completed means the agent finished;
-Failed, Interrupted and Cancelled report how that run ended. Pausing stops future scheduled
+Failed, Interrupted and Cancelled report how that run ended, with the provider's reason when it
+gave one, such as a usage limit. A fixed-time task whose time passed while GOAT was not running
+shows Failed for that missed run and waits for its next time. Pausing stops future scheduled
 runs; stop an active run from its thread. Older environments may show Dispatched (legacy)
 because they did not record the final outcome.
 

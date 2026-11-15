@@ -192,6 +192,8 @@ The desktop app, and `goat serve --tailscale-serve`, re-apply that HTTPS port
 each time they start and keep trying until Tailscale is running, so the address
 stays the same across restarts. A mapping left by `goat pair --tailscale` on
 another port stays until you remove it with `tailscale serve --https=<port> off`.
+If that HTTPS port already serves another running server or app, GOAT leaves it
+alone; a mapping to a server that has stopped is taken over within a minute.
 
 To start a command-line server with Tailscale HTTPS:
 

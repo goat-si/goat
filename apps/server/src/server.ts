@@ -96,6 +96,7 @@ import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts"
 import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as AcpSessionService from "./provider/AcpSessionService.ts";
+import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -456,7 +457,7 @@ const layerPullRequestService = PullRequestService.layer.pipe(
 );
 
 export const layerTextGeneration = TextGeneration.layer.pipe(
-  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(Layer.mergeAll(layerSourceControlProviderRegistry, ProviderInstallationGate.layer)),
 );
 
 const layerGitManager = GitManager.layer.pipe(
@@ -925,6 +926,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.mergeAll(
       AntigravityInstallation.AntigravityInstallation.layer,
       CodexInstallation.CodexInstallation.layer,
+      // One gate for the server, below hydration so the Claude driver sees it: layers memoize
+      // by reference, so the runtime and text generation layers share it.
+      ProviderInstallationGate.layer,
     ),
   ),
 );
