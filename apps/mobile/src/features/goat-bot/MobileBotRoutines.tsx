@@ -16,6 +16,7 @@ import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
+import { MobileRoutineRunStrip } from "./MobileRoutineRunStrip";
 
 /** The bot's routines on its home: the check-in form, then each bound routine with its switch. */
 export function MobileBotRoutines(props: {
@@ -84,6 +85,8 @@ export function MobileBotRoutines(props: {
             key={routine.id}
             environmentId={environmentId}
             row={routine}
+            task={props.tasks?.find((task) => task.id === routine.id)}
+            botName={botName}
             onLayout={
               routine.id === props.focusRoutineId && props.onFocusedRowLayout
                 ? (y) => props.onFocusedRowLayout?.(y)
@@ -117,6 +120,9 @@ export function MobileBotRoutines(props: {
 function MobileRoutineRow(props: {
   readonly environmentId: EnvironmentId;
   readonly row: BotRoutineRow;
+  /** The routine as listed, whose recent runs draw under its first line. */
+  readonly task: ScheduledTask | undefined;
+  readonly botName: string;
   readonly onLayout?: ((y: number) => void) | undefined;
 }) {
   const { environmentId, row } = props;
@@ -192,6 +198,14 @@ function MobileRoutineRow(props: {
           onValueChange={(enabled) => void toggle(enabled)}
         />
       </View>
+      {props.task ? (
+        <MobileRoutineRunStrip
+          environmentId={environmentId}
+          task={props.task}
+          title={row.title}
+          botName={props.botName}
+        />
+      ) : null}
       {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
       {row.lastFailed && canRunNow ? (
         <Pressable

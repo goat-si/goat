@@ -200,7 +200,12 @@ const openTailscaleServe = Effect.fn("TailscaleServeStartup.open")(function* <
           ? Effect.succeed(true)
           : holderOf(at).pipe(
               Effect.map((holder) => holder === "ours"),
-              Effect.orElseSucceed(() => false),
+              Effect.catch((cause) =>
+                Effect.logWarning("Tailscale Serve left on; its current routes could not be read", {
+                  cause,
+                  servePort: input.servePort,
+                }).pipe(Effect.as(false)),
+              ),
             );
       return { fiber, attempted, stillOurs, servePort: input.servePort };
     }),
