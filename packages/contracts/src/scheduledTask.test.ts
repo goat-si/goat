@@ -1,16 +1,73 @@
 import { WsRpcGroup, WS_METHODS } from "./rpc.ts";
-import { MemoryTaskGrantCeilingField } from "./memory.ts";
+import { MemoryCurrentAccess, MemoryTaskGrantCeilingField } from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  ForwardCompatibleArray,
+  ForwardCompatibleOptional,
+  IsoDateTime,
+  ProjectId,
+  ScheduledTaskId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
+  OrchestrationV2Actor,
+  OrchestrationV2CreationSource,
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+} from "./orchestrationV2.ts";
+import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import {
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ScheduledTask,
   ScheduledTaskListResult,
+  ScheduledTaskRun,
+  ScheduledTaskRunStatus,
   ScheduledTaskUpsertInput,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
+  ScheduledTaskWebhookEndpoint,
 } from "./scheduledTask.ts";
+
+// ScheduledTask as clients shipped before recentRuns decode it, frozen at f74894c1a2e.
+const ShippedScheduledTask = Schema.Struct({
+  memoryGrantCeiling: MemoryTaskGrantCeilingField,
+  currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
+  id: ScheduledTaskId,
+  title: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+  notificationPolicy: Schema.optional(Schema.String),
+  schedule: ScheduledTaskSchedule,
+  projectId: ProjectId,
+  threadId: Schema.NullOr(ThreadId),
+  workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createdBy: OrchestrationV2Actor,
+  creationSource: OrchestrationV2CreationSource,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  nextRunAt: Schema.NullOr(IsoDateTime),
+  lastRunAt: Schema.NullOr(IsoDateTime),
+  lastRunStatus: ScheduledTaskRunStatus,
+  lastRun: ForwardCompatibleOptional(ScheduledTaskRun),
+  lastRunError: Schema.NullOr(Schema.String),
+  runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
+});
+const decodeShippedList = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      tasks: ForwardCompatibleArray(ShippedScheduledTask),
+      timeZone: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+);
 
 const decodeSchedule = Schema.decodeUnknownSync(ScheduledTaskSchedule);
 const decodeUpsertSchedule = Schema.decodeUnknownSync(ScheduledTaskUpsertSchedule);
@@ -265,17 +322,6 @@ describe("scheduled run outcomes", () => {
     ],
   };
   const decodeList = Schema.decodeUnknownSync(Schema.fromJsonString(ScheduledTaskListResult));
-  // The list as clients shipped before recentRuns decode it: today's fields, read off the wire.
-  const decodeShippedList = Schema.decodeUnknownSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        tasks: Schema.Array(
-          ScheduledTask.mapFields(({ recentRuns: _recent, ...fields }) => fields),
-        ),
-        timeZone: ScheduledTaskListResult.fields.timeZone,
-      }),
-    ),
-  );
   it("a routine's recent runs decode, and older clients ignore them", () => {
     const wire = JSON.stringify({ tasks: [routine], timeZone: "Asia/Seoul" });
     const [decoded] = decodeList(wire).tasks;
