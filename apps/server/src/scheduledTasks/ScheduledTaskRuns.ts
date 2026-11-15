@@ -2,6 +2,7 @@ import {
   CommandId,
   MessageId,
   RunId,
+  SCHEDULED_TASK_RECENT_RUNS,
   ScheduledTaskId,
   ScheduledTaskError,
   ScheduledTaskRun,
@@ -279,10 +280,15 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   const prune = Effect.fn("ScheduledTaskRuns.prune")(function* (
     row: Pick<Row, "task_id" | "task_created_at">,
   ) {
+    // A bot routine keeps its seven most recent firings, what its history strip shows. Only finished
+    // firings are deleted, so more can stay while they run. Other tasks keep one finished firing.
     yield* sql`DELETE FROM scheduled_task_runs
       WHERE task_id=${row.task_id} AND task_created_at=${row.task_created_at} AND dispatch_bookkept_at IS NOT NULL
       AND dispatch_status <> 'dispatching' AND status IN ('completed','failed','interrupted','cancelled','rolled_back')
       AND firing_id IS NOT (SELECT last_firing_id FROM scheduled_tasks WHERE task_id=${row.task_id})
+      AND NOT (message_id LIKE ${ROUTINE_MESSAGE_PREFIX + "%"} AND firing_id IN (SELECT firing_id FROM scheduled_task_runs
+        WHERE task_id=${row.task_id} AND task_created_at=${row.task_created_at}
+        ORDER BY requested_at DESC,firing_id DESC LIMIT ${SCHEDULED_TASK_RECENT_RUNS}))
       AND NOT EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p WHERE p.delivery_id=scheduled_task_runs.webhook_delivery_id)
       AND NOT (dispatch_status='failed' AND webhook_delivery_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM scheduled_task_webhook_deliveries d WHERE d.delivery_id=scheduled_task_runs.webhook_delivery_id))`;

@@ -330,13 +330,16 @@ it.effect(
           yield* runs.finishChannelFiring({ firingId, outcome: { type: "completed" }, at });
           yield* TestClock.adjust(Duration.hours(2));
           yield* workers.get("scheduled-tasks") ?? Effect.die("scheduler worker missing");
-          // The answered manual firing is pruned; the scheduled one is the routine's next firing.
+          // The answered manual firing stays in the routine's history; the scheduled one follows it.
           assert.deepStrictEqual(
             (yield* firings()).map((firing) => [
               firing.message_id.startsWith("scheduled-task-routine:"),
               firing.message_id.endsWith(":scheduled"),
             ]),
-            [[true, true]],
+            [
+              [true, false],
+              [true, true],
+            ],
           );
           assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_channel_inputs`, 2);
         }),

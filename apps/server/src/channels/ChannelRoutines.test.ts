@@ -12,11 +12,14 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
+import { readRecentRuns } from "../scheduledTasks/scheduledTaskRecentRuns.ts";
 import {
   makeScheduledBotRoutines,
   ROUTINE_MESSAGE_PREFIX,
@@ -211,6 +214,28 @@ describe("GOAT Bot routines", () => {
       assert.deepStrictEqual(yield* said("assistant"), [ROUTINE_COPY.cannotStartWork]);
       assert.strictEqual((yield* firing(quiet.firingId))?.status, "completed");
       const inputId = (yield* linkOf(quiet.firingId))?.input_id;
+      // Its run reads as quiet in the routine's history, through the input it sent.
+      const workInputId = (yield* linkOf(work.firingId))?.input_id;
+      const { byTask: history } = yield* readRecentRuns(yield* SqlClient.SqlClient, [
+        { id: work.taskId, createdAt: AT },
+        { id: quiet.taskId, createdAt: AT },
+      ]);
+      assert.deepStrictEqual(
+        [work.taskId, quiet.taskId].map((taskId) =>
+          history
+            .get(taskId)
+            ?.map((run) => [
+              run.status,
+              run.quiet === true,
+              run.conversation?.threadId,
+              run.conversation?.inputId,
+            ]),
+        ),
+        [
+          [["completed", false, botThreadId, workInputId ?? "missing"]],
+          [["completed", true, botThreadId, inputId ?? "missing"]],
+        ],
+      );
       const snapshot = yield* gateway.getInput(inputId!, rpcContext);
       assert.strictEqual(snapshot.state, "replied");
       assert.strictEqual(snapshot.reply?.text, ROUTINE_COPY.noUpdate);
@@ -365,6 +390,25 @@ describe("GOAT Bot routines", () => {
   );
 });
 describe("GOAT Bot routine resilience", () => {
+  it.effect("a routine's link outlives the seven-day prune while its run row stays", () => {
+    const harness = makeHarness();
+    harness.script.current = routineScript([]);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const { firingId, taskId } = yield* admit("Look over my tasks", "kept");
+      yield* runtime.drain;
+      assert.deepInclude(yield* linkOf(firingId), { state: "settled" });
+      yield* TestClock.adjust(Duration.days(8));
+      yield* runtime.drain;
+      assert.deepInclude(yield* linkOf(firingId), { state: "settled" });
+      // Deleting the routine deletes its runs; the next pass prunes the link with them.
+      yield* sql`DELETE FROM scheduled_tasks WHERE task_id = ${taskId}`;
+      yield* runtime.drain;
+      assert.isUndefined(yield* linkOf(firingId));
+    }).pipe(Effect.provide(harness.layer));
+  });
   it.effect(
     "routines that keep failing do not hold back the routines after them, however many",
     () => {

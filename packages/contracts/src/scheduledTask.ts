@@ -20,6 +20,7 @@ import {
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { ScheduledTaskRecentRun } from "./scheduledTaskRecentRuns.ts";
 
 const TimeOfDay = TrimmedNonEmptyString.check(
   Schema.isPattern(/^([01]?\d|2[0-3]):([0-5]\d)$/),
@@ -274,6 +275,8 @@ export const ScheduledTask = Schema.Struct({
   /** GOAT Bot answers this routine with its own model: it was set up in a GOAT Bot conversation,
       even one replaced since. Absent for other tasks and from older servers. */
   goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
+  /** Newest first, at most SCHEDULED_TASK_RECENT_RUNS. GOAT Bot routines only; absent from older servers. */
+  recentRuns: ForwardCompatibleOptional(ForwardCompatibleArray(ScheduledTaskRecentRun)),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 

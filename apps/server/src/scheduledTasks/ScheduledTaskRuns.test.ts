@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ScheduledTask, ScheduledTaskRun } from "@goat/contracts";
+import { CommandId, MessageId, ScheduledTask, ScheduledTaskRun, ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -232,5 +233,64 @@ it.effect.each([
     });
     yield* sql`UPDATE scheduled_task_runs SET snapshot_json=${yield* encodeRun(snapshot)},dispatch_status=${invalid.dispatchStatus},status=${invalid.status},thread_id=${invalid.threadId},run_id=${invalid.runId}`;
     assert.equal((yield* Effect.flip(runs.finishDispatch(finish("A"))))._tag, "ScheduledTaskError");
+  }).pipe(Effect.provide(layer)),
+);
+
+const minute = (index: number) =>
+  DateTime.formatIso(DateTime.add(DateTime.makeUnsafe(at), { minutes: index }));
+const firingIds = Effect.flatMap(SqlClient.SqlClient, (sql) =>
+  sql<{
+    readonly firing_id: string;
+  }>`SELECT firing_id FROM scheduled_task_runs ORDER BY requested_at DESC`.pipe(
+    Effect.map((rows) => rows.map((row) => row.firing_id)),
+  ),
+);
+
+it.effect(
+  "with every firing finished, a GOAT Bot routine keeps its seven newest and prunes the eighth",
+  () =>
+    Effect.gen(function* () {
+      const runs = yield* Runs.ScheduledTaskRuns;
+      const sql = yield* SqlClient.SqlClient;
+      const task = makeTask();
+      yield* seed(task);
+      for (let index = 0; index < 9; index++) {
+        const firingId = CommandId.make(`routine:${index}`);
+        const [current] = yield* sql<{
+          readonly next_run_at: string | null;
+        }>`SELECT next_run_at FROM scheduled_tasks WHERE task_id=${task.id}`;
+        yield* runs.begin({
+          ...claim(
+            { ...task, nextRunAt: current?.next_run_at ?? null },
+            firingId,
+            "manual",
+            minute(index),
+          ),
+          messageId: MessageId.make(`${Runs.ROUTINE_MESSAGE_PREFIX}${index}`),
+        });
+        const step = { firingId, at: minute(index) };
+        yield* runs.finishChannelFiring({
+          ...step,
+          outcome: { type: "accepted", threadId: ThreadId.make("bot") },
+        });
+        yield* runs.finishChannelFiring({ ...step, outcome: { type: "completed" } });
+      }
+      assert.deepEqual(
+        yield* firingIds,
+        [8, 7, 6, 5, 4, 3, 2].map((index) => `routine:${index}`),
+      );
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("an ordinary task still keeps only its last finished firing", () =>
+  Effect.gen(function* () {
+    const runs = yield* Runs.ScheduledTaskRuns;
+    const task = makeTask();
+    yield* seed(task);
+    for (let index = 0; index < 3; index++) {
+      yield* admit(task, `ordinary:${index}`, "manual", minute(index));
+      yield* runs.finishDispatch(finish(`ordinary:${index}`, true));
+    }
+    assert.deepEqual(yield* firingIds, ["ordinary:2"]);
   }).pipe(Effect.provide(layer)),
 );
