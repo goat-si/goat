@@ -11,6 +11,10 @@ open from the bot's home: select the bot's name at the top of its chat. Finished
 the chat never told, such as a request made from Slack, keeps its card. Older servers show each
 task as a card in the conversation.
 
+On mobile, **Something else** on a task's question lets you answer it in your own words. Until you
+close the "Answering" chip above the message box or the task records your answer, Send answers
+that question.
+
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with its
