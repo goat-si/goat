@@ -4,6 +4,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ProviderInstallState } fro
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -62,6 +63,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   const refreshed = yield* Deferred.make<void>();
   const observed = yield* Deferred.make<void>();
   const listening = yield* Deferred.make<void>();
+  const checked = yield* Deferred.make<void>();
   const installationState = yield* SubscriptionRef.make(state);
   let protectedPaths: ReadonlyArray<string> = [];
   const configured = input.instance ?? instance();
@@ -104,7 +106,9 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     }),
     Layer.mock(AntigravityInstallation.AntigravityInstallation)({
       managedDirectory: "/unused-managed-runtime",
-      checkForUpdate: Effect.void,
+      checkForUpdate: Effect.sync(() => calls.push("check")).pipe(
+        Effect.andThen(Deferred.succeed(checked, undefined)),
+      ),
       start: Effect.sync(() => {
         calls.push("start");
         return { ...state, operationId: "install-1", phase: "downloading" as const };
@@ -139,6 +143,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     listening,
     calls,
     refreshed,
+    checked,
     observed,
     installationState,
     protectedPaths: () => protectedPaths,
@@ -146,6 +151,21 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
 });
 
 describe("provider installation routing", () => {
+  // Ported from upstream 4099e62767, where the gate lived in the installer; GOAT gates the caller.
+  it.effect.each([true, false])(
+    "respects background update checks (%s) while allowing explicit installation",
+    (enabled) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ settings: { enableProviderUpdateChecks: enabled } });
+        yield* harness.router.subscribe({ instanceId }).pipe(Stream.runHead);
+        if (enabled) yield* Deferred.await(harness.checked);
+        // A check subscribe forked runs before this later fiber, so its absence is settled here.
+        else yield* Effect.forkDetach(Effect.void).pipe(Effect.flatMap(Fiber.join));
+        yield* harness.router.start({ instanceId });
+        assert.deepEqual(harness.calls, enabled ? ["check", "start"] : ["start"]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect.each([
     { phase: "succeeded", enabled: true, checkFails: false, expectedChecks: 1 },
     { phase: "succeeded", enabled: true, checkFails: true, expectedChecks: 1 },

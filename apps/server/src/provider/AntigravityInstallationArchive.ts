@@ -130,8 +130,11 @@ export const extractRuntime = Effect.fn("AntigravityInstallation.extract")(funct
   readonly asset: AntigravityReleaseAsset | AntigravityCliReleaseAsset;
   readonly archivePath: string;
   readonly pairDirectory: string;
+  /** The streamed extraction's cap; tests lower it to reach the refusal. */
+  readonly maxExecutableBytes?: number;
 }) {
   const { fs, path, spawner, platform, environment, asset, archivePath, pairDirectory } = input;
+  const maxExecutableBytes = input.maxExecutableBytes ?? MAX_EXECUTABLE_BYTES;
   const cli = "sha512" in asset;
   if (cli) {
     const executablePath = path.join(pairDirectory, asset.executable.name);
@@ -163,7 +166,7 @@ export const extractRuntime = Effect.fn("AntigravityInstallation.extract")(funct
           Stream.tap((chunk) =>
             Effect.gen(function* () {
               extractedBytes += chunk.byteLength;
-              if (extractedBytes > MAX_EXECUTABLE_BYTES)
+              if (extractedBytes > maxExecutableBytes)
                 return yield* installationError(
                   "extract",
                   "The Antigravity executable exceeded its size limit.",
