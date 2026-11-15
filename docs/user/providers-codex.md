@@ -39,6 +39,18 @@ app-server provider status,” set `GOAT_CODEX_PROBE_TIMEOUT_MS=60000` in the
 GOAT server's environment and restart it. See [Provider check timeouts](./install.md#provider-check-timeouts)
 for configuration and other providers.
 
+## Generate images
+
+Codex can generate images in a GOAT thread when your Codex version, model, and
+account support native image generation. If Codex reports that its image tool is
+unavailable, open **Settings → Providers**, edit your Codex instance, and add
+`-c features.image_generation=true` to **Launch arguments**, keeping any other
+arguments. This enables the feature for that instance without changing shared Codex
+configuration; it does not add support to an unsupported model or account.
+
+Start a new thread with that instance after saving the change and ask Codex to
+generate an image.
+
 ## Change an instance's settings
 
 Changing a Codex instance's binary path, launch arguments, environment,

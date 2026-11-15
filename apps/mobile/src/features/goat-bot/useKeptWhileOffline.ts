@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 /**
  * The last answer read for this scope, kept while its computer is offline so the work it listed
@@ -6,7 +6,8 @@ import { useState } from "react";
  */
 export function useKeptWhileOffline<T>(data: T | null, scope: string, offline: boolean): T | null {
   const [kept, setKept] = useState<{ scope: string; signature: string; data: T } | null>(null);
-  const signature = data === null ? null : JSON.stringify(data);
+  // Renders that did not change the answer (a streamed reply) do not serialize it again.
+  const signature = useMemo(() => (data === null ? null : JSON.stringify(data)), [data]);
   if (
     signature !== null &&
     data !== null &&

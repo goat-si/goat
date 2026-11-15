@@ -143,6 +143,7 @@ export function MobileBotProfileSheet(props: {
             maxLength={16}
             editable={!busy}
             placeholder="An emoji, or empty for the default face"
+            placeholderTextColorClassName="accent-placeholder"
             onChangeText={setAvatar}
             className={INPUT}
           />
@@ -175,6 +176,7 @@ export function MobileBotProfileSheet(props: {
                 editable={!busy}
                 multiline
                 placeholder="What should this bot help with?"
+                placeholderTextColorClassName="accent-placeholder"
                 onChangeText={setPurpose}
                 className={INPUT + " min-h-[120px]"}
               />

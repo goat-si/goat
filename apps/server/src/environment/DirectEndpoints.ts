@@ -17,17 +17,11 @@ import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isTailnetHost } from "@goat/shared/hostClassification";
+import { formatHostForUrl, isTailnetHost, isWildcardHost } from "@goat/shared/hostClassification";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
-import {
-  formatHostForUrl,
-  isLoopbackHost,
-  isPrivateNetworkAddress,
-  isWildcardHost,
-  VIRTUAL_INTERFACE,
-} from "../startupAccess.ts";
+import { isLoopbackHost, isPrivateNetworkAddress, VIRTUAL_INTERFACE } from "../startupAccess.ts";
 
 type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
 
