@@ -71,6 +71,8 @@ bot** changes its name, face, purpose and model. **Home** is one page: a status 
 something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
 a task shows its conversation right there, beside the chat, and marks it read; **Go to thread**
 opens it in full. A task's menu pins it, marks it done or marks it read.
+A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
+open its thread to see where it stands.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
