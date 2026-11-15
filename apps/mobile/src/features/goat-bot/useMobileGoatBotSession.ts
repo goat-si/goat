@@ -79,6 +79,9 @@ import {
   type MobileGoatBotNotHome,
   type MobileGoatBotEnsureDestination,
 } from "./mobileGoatBotEnsure";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
+
+const NO_TASK_IDS: ReadonlyArray<string> = [];
 
 interface Session {
   readonly machine: GoatBotEnsureMachine;
@@ -402,11 +405,21 @@ export function useMobileGoatBotSession(
         })
       : null,
   );
-  const knownTaskIds = useMemo(
+  // Offline the list is not read; the last answer for this computer and bot still decides which
+  // task cards the chat leaves to Home.
+  const listedTaskIds = useMemo(
     () =>
-      (threads.data?.rows ?? []).flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+      threads.data === null
+        ? null
+        : threads.data.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
     [threads.data],
   );
+  const keptTaskIds = useKeptWhileOffline(
+    listedTaskIds,
+    JSON.stringify([environmentId, member?.botId ?? null]),
+    environment?.connected !== true,
+  );
+  const knownTaskIds = keptTaskIds ?? NO_TASK_IDS;
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
   );
