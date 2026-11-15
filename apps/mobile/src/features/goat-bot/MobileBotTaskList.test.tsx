@@ -425,6 +425,13 @@ it("pull requests across repositories name their repository, in full where short
   );
 });
 
+it("a row whose pull requests are all counted, not listed, shows how many", async () => {
+  const counted = withPullRequests("task-counted", "Counted", [], 3);
+  await show({ work: finishedWork(counted), rows: [counted] });
+  expect(container.textContent).toContain("+3 more");
+  expect(rowNamed("Counted")?.getAttribute("aria-label")).toContain(", 3 more pull requests");
+});
+
 it("a row without pull requests has no chip line and names none", async () => {
   await show({ work: work([listedTask]), rows: [task] });
   expect(container.textContent).not.toContain("more");

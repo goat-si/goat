@@ -33,10 +33,12 @@ export function MobileBotComputer(props: {
   const botName = props.botName ?? "GOAT Bot";
   // With member bots the server lists every bot's work unless asked for one; older servers have
   // only the main bot and take no bot id.
-  const members =
-    useEnvironmentServerConfig(environmentId)?.environment.capabilities.goatBotMembers === true;
+  const config = useEnvironmentServerConfig(environmentId);
+  const members = config?.environment.capabilities.goatBotMembers === true;
   const scope = botId ?? (members ? BotId.make(MAIN_BOT_ID) : null);
-  const readable = environmentId !== null && connected;
+  // Until the config says whether this server has member bots, an unscoped read could list theirs.
+  const known = botId !== null || config !== null;
+  const readable = environmentId !== null && connected && known;
   const tasks = useEnvironmentQuery(
     readable
       ? channelEnvironment.listTasks({
@@ -58,6 +60,12 @@ export function MobileBotComputer(props: {
     return (
       <Text className="text-foreground-muted">
         Machines are unavailable while {botName} is offline.
+      </Text>
+    );
+  if (!known)
+    return (
+      <Text className="text-foreground-muted">
+        Machines can't be listed from this server right now.
       </Text>
     );
   if (accessDenied(tasks.cause))

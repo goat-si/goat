@@ -17,6 +17,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { latestUnheldRun } from "@goat/shared/orchestrationV2ThreadError";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   layerTest,
@@ -916,5 +917,52 @@ it.effect.each([
           newestRun: { id: removed, ordinal: 2 },
         });
       }
+    }).pipe(Effect.provide(layer)),
+);
+it.effect.each([
+  ["memory", ProjectionStore.layerMemory],
+  ["SQL", layerTest],
+] as const)(
+  "%s shell presents a run still going past two later runs cancelled before they started, as latestUnheldRun does",
+  ([, layer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = yield* addRolledBackRecoveryCandidate("outlived-twice");
+      const earlier = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      yield* store.apply({
+        id: EventId.make("outlived-twice:running"),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...earlier, status: "running", completedAt: null },
+      });
+      // The first queued message is removed, then the second is steered a second later: the
+      // nearer earlier run ended before the later cancellation, the run still going did not.
+      for (const [ordinal, cancelledAt] of [
+        [2, now],
+        [3, DateTime.add(now, { seconds: 1 })],
+      ] as const) {
+        yield* store.apply({
+          id: EventId.make(`outlived-twice:${ordinal}`),
+          type: "run.created",
+          threadId,
+          occurredAt: cancelledAt,
+          payload: {
+            ...earlier,
+            id: RunId.make(`outlived-twice:${ordinal}`),
+            ordinal,
+            userMessageId: MessageId.make(`outlived-twice:${ordinal}`),
+            status: "cancelled",
+            startedAt: null,
+            completedAt: cancelledAt,
+          },
+        });
+      }
+      assert.equal(
+        latestUnheldRun((yield* store.getThreadProjection(threadId)).runs)?.id,
+        earlier.id,
+      );
+      assert.equal((yield* store.getThreadShell(threadId))?.latestRunId, earlier.id);
     }).pipe(Effect.provide(layer)),
 );

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   assertMemoryMigrationsCompatible,
+  goatMigrationIdsMove,
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
@@ -378,6 +379,28 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
 });
 
 const run = Migrator.make({});
+
+const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
+
+// Mirrors runMigrations' writes: the Migrator runs only ids above the highest recorded, plus the
+// V2-preview reconciliation and GOAT's id shift (reconcileGoatMigrationIds).
+export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return true;
+  const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations
+  `;
+  const latestId = Math.max(0, ...history.map((row) => row.migration_id));
+  const previewRows = history.some(
+    (row) => row.name === "OrchestrationV2" && (row.migration_id === 53 || row.migration_id === 54),
+  );
+  return (
+    latestId < latestMigrationId || previewRows || goatMigrationIdsMove(migrationEntries, history)
+  );
+});
 
 const failIfDatabaseNewerThanBuild = Effect.fn("failIfDatabaseNewerThanBuild")(function* (
   error: Migrator.MigrationError,
