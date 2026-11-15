@@ -2238,6 +2238,12 @@ interface ActiveClaudeTurnContext {
     fallbackText: string;
     fallbackNativeItemId: string;
     emittedNativeItemIds: Set<string>;
+    // The root reply the latest assistant frame carried; a steer's aborted_streaming cuts it off.
+    lastReply: {
+      readonly nativeItemId: string;
+      readonly text: string;
+      readonly startedAt: DateTime.Utc;
+    } | null;
     // The CLI repeats a notice that ends a prompt as the turn's result text.
     noticeTexts: Set<string>;
   };
@@ -6225,13 +6231,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly text: string;
           readonly streaming?: boolean;
           readonly sealed?: boolean;
+          // Republishes an emitted reply that a steer cut off mid-stream.
+          readonly interrupted?: { readonly startedAt: DateTime.Utc };
         }) {
-          if (input.context.assistant.emittedNativeItemIds.has(input.nativeItemId)) {
-            return;
+          if (
+            input.interrupted === undefined &&
+            input.context.assistant.emittedNativeItemIds.has(input.nativeItemId)
+          ) {
+            return undefined;
           }
           if (!input.streaming)
             input.context.assistant.emittedNativeItemIds.add(input.nativeItemId);
           const now = yield* DateTime.now;
+          const startedAt =
+            input.interrupted?.startedAt ??
+            input.context.textProjector.startedAt(input.nativeItemId, now);
           const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
           const artifacts = buildAssistantArtifacts({
             idAllocator,
@@ -6240,7 +6254,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeItemId: input.nativeItemId,
             text: input.text,
             ordinal,
-            startedAt: input.context.textProjector.startedAt(input.nativeItemId, now),
+            ...(input.interrupted === undefined ? {} : { status: "interrupted" as const }),
+            startedAt,
             completedAt: now,
             streaming: input.streaming,
           });
@@ -6274,6 +6289,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ],
             { concurrency: 1 },
           );
+          return startedAt;
         });
 
         const endSubagentsOfClosedQuery = Effect.fnUntraced(function* (input: {
@@ -7721,10 +7737,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             )
               ? context.textProjector.snapshot(message)
               : null;
+          if (rootBlocks !== null) context.assistant.lastReply = null;
           for (const block of rootBlocks ??
             claudeToolUseBlocksFromAssistantMessage(message).map((toolUse) => ({ toolUse }))) {
             if ("text" in block) {
-              yield* emitAssistantTextArtifacts({ context, ...block });
+              const startedAt = yield* emitAssistantTextArtifacts({ context, ...block });
+              if (startedAt !== undefined && !block.streaming) {
+                context.assistant.lastReply = { ...block, startedAt };
+              }
               continue;
             }
             const toolUse = block.toolUse;
@@ -8023,6 +8043,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
+              const cutOffReply = context.assistant.lastReply;
+              context.assistant.lastReply = null;
+              if (message.terminal_reason === "aborted_streaming" && cutOffReply !== null) {
+                yield* emitAssistantTextArtifacts({
+                  context,
+                  nativeItemId: cutOffReply.nativeItemId,
+                  text: cutOffReply.text,
+                  interrupted: { startedAt: cutOffReply.startedAt },
+                });
+              }
               context.steeredSegmentUsage.push(message.usage);
               return;
             }
@@ -9378,6 +9408,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 fallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,
                 emittedNativeItemIds: new Set(),
+                lastReply: null,
                 noticeTexts: new Set(),
               },
               reasoning: {
