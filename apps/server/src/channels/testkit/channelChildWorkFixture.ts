@@ -115,6 +115,7 @@ const threadsLayer = (
       countThreads: unused,
       listLaunchEdges: unused,
       getThreadShell: unused,
+      getThreadNewestRun: unused,
       getShellSnapshot: unused,
       getAgentAwarenessSnapshot: unused,
       readShellSnapshot: unused,

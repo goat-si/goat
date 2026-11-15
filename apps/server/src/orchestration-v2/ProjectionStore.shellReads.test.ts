@@ -854,3 +854,67 @@ it.effect.each([
       assert.deepEqual(ProjectionStore.threadShellFromProjection(rolledBack).nativeSubagents, []);
     }).pipe(Effect.provide(layer)),
 );
+
+it.effect.each([
+  ["memory", ProjectionStore.layerMemory],
+  ["SQL", layerTest],
+] as const)(
+  "%s newest run read names the newest run by ordinal and the thread's archived and deleted state",
+  ([, layer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      assert.isNull(yield* store.getThreadNewestRun(ThreadId.make("thread:newest-run:unknown")));
+      const threadId = yield* addRolledBackRecoveryCandidate("newest-run");
+      const earlier = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      yield* store.apply({
+        id: EventId.make("newest-run:running"),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...earlier, status: "running", completedAt: null },
+      });
+      const removed = RunId.make("newest-run:removed");
+      yield* store.apply({
+        id: EventId.make("newest-run:removed"),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...earlier,
+          id: removed,
+          ordinal: 2,
+          userMessageId: MessageId.make("newest-run:removed"),
+          status: "cancelled",
+          startedAt: null,
+          completedAt: now,
+        },
+      });
+      // The shell presents the run still going; the newest run is the one removed before it started.
+      assert.equal((yield* store.getThreadShell(threadId))?.latestRunId, earlier.id);
+      assert.deepEqual(yield* store.getThreadNewestRun(threadId), {
+        archivedAt: null,
+        deletedAt: null,
+        newestRun: { id: removed, ordinal: 2 },
+      });
+      const thread = yield* store.getThread(threadId);
+      for (const [type, overrides] of [
+        ["thread.archived", { archivedAt: now }],
+        ["thread.deleted", { archivedAt: null, deletedAt: now }],
+      ] as const) {
+        yield* store.apply({
+          id: EventId.make(`newest-run:${type}`),
+          type,
+          threadId,
+          occurredAt: now,
+          payload: { ...thread, ...overrides, updatedAt: now },
+        });
+        const read = yield* store.getThreadNewestRun(threadId);
+        assert.deepEqual(read, {
+          archivedAt: overrides.archivedAt,
+          deletedAt: "deletedAt" in overrides ? overrides.deletedAt : null,
+          newestRun: { id: removed, ordinal: 2 },
+        });
+      }
+    }).pipe(Effect.provide(layer)),
+);

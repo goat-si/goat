@@ -1,4 +1,5 @@
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
+import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import {
   pendingRuntimeRequestSummary,
   secretRequestAsPendingInput,
@@ -701,6 +702,10 @@ export interface ProjectionStoreV2Shape
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
+  /** The thread's newest run by ordinal and whether it is archived or deleted; null when unknown. */
+  readonly getThreadNewestRun: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadNewestRun.ThreadNewestRun | null, ProjectionStoreV2Error>;
   /** The thread whose current guest share has this id. Scans thread rows; only redeem uses it. */
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
@@ -5022,6 +5027,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.map((rows) => [...new Set(rows.map((row) => ThreadId.make(row.child_thread_id)))]),
         Effect.mapError(controlReadError(threadId)),
       );
+    const getThreadNewestRun: ProjectionStoreV2Shape["getThreadNewestRun"] = (threadId) =>
+      ThreadNewestRun.selectThreadNewestRun(sql, threadId).pipe(
+        Effect.mapError(controlReadError(threadId)),
+      );
     const getNextTurnItemOrdinal: ProjectionStoreV2Shape["getNextTurnItemOrdinal"] = (threadId) =>
       sql<{ ordinal: number | null }>`SELECT MAX(ordinal) AS ordinal
         FROM orchestration_v2_projection_turn_items WHERE thread_id = ${threadId}`.pipe(
@@ -6692,6 +6701,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getSubagentCount: readOnReader(getSubagentCount),
       listAppOwnedChildThreadIds: readOnReader(listAppOwnedChildThreadIds),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
+      getThreadNewestRun: readOnReader(getThreadNewestRun),
       getTurnItem: readOnReader(getTurnItem),
       getMessagesById: readOnReader(makeMessageLookup(sql, decodeMessagePayload, controlReadError)),
       getThreadRecords: (threadId, fields, filter) =>
@@ -7429,6 +7439,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               ),
             ),
           ]),
+        ),
+      getThreadNewestRun: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            ThreadNewestRun.projectionThreadNewestRun(state.projections.get(threadId)),
+          ),
         ),
       getNextTurnItemOrdinal: (threadId) =>
         Ref.get(replayState).pipe(

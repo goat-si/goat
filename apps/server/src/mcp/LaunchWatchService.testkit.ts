@@ -247,6 +247,24 @@ const layerFor = (world: World, baseDir: string) =>
             ).pipe(
               Effect.as((world.shells.get(threadId) ?? null) as OrchestrationV2ThreadShell | null),
             ),
+          // The look's read: the shell's closed state and the newest of the runs the fixture holds.
+          getThreadNewestRun: (threadId) =>
+            Effect.sync(() => {
+              const shell = world.shells.get(threadId);
+              if (shell === undefined) return null;
+              const newestRun =
+                world.runs
+                  .map((run, index) => ({
+                    id: run.id as RunId,
+                    ordinal: (run.ordinal as number | undefined) ?? index + 1,
+                  }))
+                  .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
+              return {
+                archivedAt: shell.archivedAt ?? null,
+                deletedAt: shell.deletedAt ?? null,
+                newestRun,
+              };
+            }),
           waitForThread: (input) =>
             Effect.suspend(() => {
               world.waitCalls.push(input);
