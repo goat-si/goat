@@ -2,12 +2,13 @@ import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import {
   childRuns,
   continued,
-  layerTest,
+  layerTestWithContinuations,
   makeFixture,
   parentId,
   scope,
@@ -74,5 +75,18 @@ it.effect(
         (candidate) => candidate.id === created.taskId,
       );
       assert.equal(task?.completionDelivery?.state, "claimed");
-    }).pipe(Effect.provide(layerTest)),
+      // The claimed delivery is a real wake: it is offered to the parent's still-active run.
+      const parent = yield* fixture.store.getThreadRecords(parentId, ["runs", "messages"]);
+      const delivery = parent.runs
+        .flatMap((run) => run.delegatedCompletion?.delivery ?? [])
+        .find((candidate) => candidate.taskIds.includes(created.taskId));
+      assert.isDefined(delivery);
+      const wake = yield* (yield* ProviderContinuationRequests.ProviderContinuationRequests).take;
+      assert.equal(wake.threadId, parentId);
+      assert.deepEqual(wake.delegatedCompletion, {
+        parentRunId: parent.runs.find((run) => run.delegatedCompletion?.delivery === delivery)?.id,
+        generation: delivery?.generation,
+        messageId: delivery?.messageId,
+      });
+    }).pipe(Effect.provide(layerTestWithContinuations)),
 );
