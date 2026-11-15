@@ -1,5 +1,6 @@
 import {
   botRoutineRuns,
+  routineRunFinished,
   routineRunState,
   routineRunTime,
   type RoutineRunDot,
@@ -17,6 +18,7 @@ const RUNS_SHOWN = 7;
 type RunTask = Partial<Pick<ScheduledTask, "recentRuns" | "lastRunError">> & {
   readonly lastRun?: Pick<NonNullable<ScheduledTask["lastRun"]>, "firingId"> | undefined;
 };
+type TimeOptions = Parameters<typeof routineRunFinished>[2];
 
 /**
  * A routine's recent runs as dots, oldest first, and the run the person opened, under the strip.
@@ -27,10 +29,12 @@ export function MobileRoutineRunStrip(props: {
   readonly task: RunTask;
   readonly title: string;
   readonly botName: string;
-  readonly formatTime?: ((iso: string) => string) | undefined;
+  readonly timeOptions?: TimeOptions | undefined;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const dots = botRoutineRuns(props.task, RUNS_SHOWN, props.formatTime ?? routineRunTime);
+  const dots = botRoutineRuns(props.task, RUNS_SHOWN, (iso) =>
+    routineRunTime(iso, props.timeOptions),
+  );
   if (dots.length === 0) return null;
   // A run pushed out of the seven closes its panel.
   const open = dots.find((dot) => dot.firingId === openId) ?? null;
@@ -57,7 +61,7 @@ export function MobileRoutineRunStrip(props: {
           newest={open === dots.at(-1)}
           task={props.task}
           botName={props.botName}
-          formatTime={props.formatTime ?? routineRunTime}
+          timeOptions={props.timeOptions}
         />
       ) : null}
     </View>
@@ -85,7 +89,7 @@ function MobileRoutineRunPanel(props: {
   readonly newest: boolean;
   readonly task: RunTask;
   readonly botName: string;
-  readonly formatTime: (iso: string) => string;
+  readonly timeOptions: TimeOptions | undefined;
 }) {
   const { dot } = props;
   const state = routineRunState(dot);
@@ -99,21 +103,12 @@ function MobileRoutineRunPanel(props: {
       : null,
   );
   const word = dot.word.charAt(0).toUpperCase() + dot.word.slice(1);
-  const completedAt = dot.completedAt;
-  // A run that finished the day it started says only the finish time.
-  const finished =
-    completedAt === null
-      ? ""
-      : `, finished ${
-          new Date(completedAt).toDateString() === new Date(dot.requestedAt).toDateString()
-            ? routineRunTime(completedAt, { timeOnly: true })
-            : props.formatTime(completedAt)
-        }`;
+  const finished = routineRunFinished(dot.requestedAt, dot.completedAt, props.timeOptions);
   return (
     <View className="gap-1 pb-1">
       <Text className="text-foreground">
-        {word} · {props.formatTime(dot.requestedAt)}
-        {finished}
+        {word} · {routineRunTime(dot.requestedAt, props.timeOptions)}
+        {finished === null ? "" : `, ${finished}`}
       </Text>
       <Text numberOfLines={6} className="text-foreground-muted">
         {runBody({ ...props, state, quiet, inputId, read })}

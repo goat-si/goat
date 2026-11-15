@@ -120,3 +120,26 @@ export function routineRunTime(
   const day = formatter(options.locale, { month: "short", day: "numeric", ...zone });
   return `${day.format(at)}, ${time}`;
 }
+
+/**
+ * When a run finished: "finished 4:09 AM" on the day it started, else with its date; null while
+ * it runs. The day is read in the same locale and zone as the time.
+ */
+export function routineRunFinished(
+  requestedAt: string,
+  completedAt: string | null,
+  options: { readonly locale?: string; readonly hour12?: boolean; readonly timeZone?: string } = {},
+): string | null {
+  if (completedAt === null) return null;
+  const finish = Date.parse(completedAt);
+  if (Number.isNaN(finish)) return "finished Unknown time";
+  const start = Date.parse(requestedAt);
+  const day = formatter(options.locale, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
+  });
+  const sameDay = !Number.isNaN(start) && day.format(start) === day.format(finish);
+  return `finished ${routineRunTime(completedAt, { ...options, timeOnly: sameDay })}`;
+}

@@ -1,6 +1,5 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { routineRunTime } from "@goat/client-runtime/scheduledTasks";
 import { ChannelInputId, CommandId, ThreadId, type ScheduledTaskRecentRun } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -79,7 +78,7 @@ async function show(task: Task) {
       task={next}
       title="Morning check"
       botName="Scout"
-      formatTime={(iso) => `Nov 14, ${iso.slice(11, 16)}`}
+      timeOptions={{ locale: "en-US", hour12: false, timeZone: "UTC" }}
     />
   );
   await act(async () => root.render(element(task)));
@@ -303,9 +302,9 @@ it("names the outcome and both times, says Loading… while it reads, and reads 
   });
   await view.press("Run on Nov 14, 08:00, completed");
   expect(view.text()).toContain("Completed · Nov 14, 08:00Loading…");
-  // A finish on another day says its date; the stub formatter keeps the test's month and day.
+  // A finish on another day says its date.
   await view.press("Run on Nov 14, 07:00, completed");
-  expect(view.text()).toContain("Completed · Nov 14, 07:00, finished Nov 14, 10:30");
+  expect(view.text()).toContain("Completed · Nov 14, 07:00, finished Nov 16, 10:30");
   await view.press("Run on Nov 14, 06:00, failed");
   expect(view.text()).toContain("The model refused.");
   // An unknown status with a finish time has ended, so it is read.
@@ -326,8 +325,6 @@ it("a finish on the same day says only its time", async () => {
     ],
   });
   await view.press("Run on Nov 14, 12:00, completed");
-  expect(view.text()).toContain(
-    `Completed · Nov 14, 12:00, finished ${routineRunTime(completedAt, { timeOnly: true })}`,
-  );
+  expect(view.text()).toContain("Completed · Nov 14, 12:00, finished 12:00");
   await view.unmount();
 });

@@ -9,6 +9,7 @@ export {
 export { formatTimeUntil, scheduleLabel, WEEKDAY_LABELS } from "./scheduleLabel.ts";
 export {
   botRoutineRuns,
+  routineRunFinished,
   routineRunState,
   routineRunTime,
   type RoutineRunDot,

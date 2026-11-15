@@ -1,7 +1,12 @@
 import { expect, it } from "vite-plus/test";
 import { ChannelInputId, CommandId, ThreadId, type ScheduledTaskRecentRun } from "@goat/contracts";
 import { scheduledTaskRunPresentation } from "../scheduledTaskRun.ts";
-import { botRoutineRuns, routineRunState, routineRunTime } from "./routineRuns.ts";
+import {
+  botRoutineRuns,
+  routineRunFinished,
+  routineRunState,
+  routineRunTime,
+} from "./routineRuns.ts";
 
 const conversation = (input: string) => ({
   threadId: ThreadId.make("bot-thread"),
@@ -127,4 +132,33 @@ it("a time that cannot be read gives 'Unknown time' and does not throw", () => {
   );
   expect(dot?.accessibleName).toBe("Run on Unknown time, completed");
   expect(routineRunState({ status: "mystery", completedAt: "garbled" })).toBe("ended");
+});
+
+it("says when a run finished: the time alone on the day it started, in the formatter's zone, else date and time", () => {
+  const options = { locale: "en-US", hour12: true, timeZone: "UTC" } as const;
+  expect(routineRunFinished("2026-11-14T09:00:00.000Z", null, options)).toBeNull();
+  expect(routineRunFinished("2026-11-14T09:00:00.000Z", "2026-11-14T09:04:00.000Z", options)).toBe(
+    "finished 9:04 AM",
+  );
+  expect(routineRunFinished("2026-11-14T09:00:00.000Z", "2026-11-17T09:00:00.000Z", options)).toBe(
+    "finished Nov 17, 9:00 AM",
+  );
+  // 23:30 to 00:30 UTC is one day in Seoul and two in UTC: the day follows the given zone.
+  const lateStart = "2026-11-14T23:30:00.000Z";
+  const earlyFinish = "2026-11-15T00:30:00.000Z";
+  expect(routineRunFinished(lateStart, earlyFinish, options)).toBe("finished Nov 15, 12:30 AM");
+  expect(routineRunFinished(lateStart, earlyFinish, { ...options, timeZone: "Asia/Seoul" })).toBe(
+    "finished 9:30 AM",
+  );
+});
+
+it("a finish time that cannot be read says Unknown time, and an unreadable start gives the full finish, without throwing", () => {
+  const options = { locale: "en-US", hour12: true, timeZone: "UTC" } as const;
+  expect(routineRunFinished("garbled", "garbled", options)).toBe("finished Unknown time");
+  expect(routineRunFinished("2026-11-14T09:00:00.000Z", "garbled", options)).toBe(
+    "finished Unknown time",
+  );
+  expect(routineRunFinished("garbled", "2026-11-14T09:04:00.000Z", options)).toBe(
+    "finished Nov 14, 9:04 AM",
+  );
 });
