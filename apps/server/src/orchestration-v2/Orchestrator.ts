@@ -98,7 +98,6 @@ import {
   type OrchestrationV2ServerCommand,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
-  type ThreadPullRequestWatch,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
   type OrchestrationV2ContextTransfer,
@@ -290,6 +289,7 @@ import { canonicalUserInputAnswers, messageQuestionReplies } from "./userInputAn
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { legacyPullRequestLink, withPullRequestWatch } from "./threadPullRequestLink.ts";
 import { delegatedCompletionWakeDetail } from "./delegatedCompletionWake.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
@@ -604,45 +604,6 @@ function withoutPreparationResult(
 ) {
   const { output: _output, exitCode: _exitCode, outputIndicatesFailure: _failure, ...rest } = item;
   return rest;
-}
-
-function withPullRequestWatch(
-  link: ThreadPullRequestLink,
-  watch: ThreadPullRequestWatch | undefined,
-): ThreadPullRequestLink {
-  const { watch: previous, endedWatch, ...rest } = link;
-  if (watch !== undefined) return { ...rest, watch };
-  const ended = previous ?? endedWatch;
-  if (ended === undefined) return rest;
-  // Kept context is told when the watch ends (or dropped with it); an ended watch never holds it.
-  const { heldContext: _told, ...told } = ended;
-  return { ...rest, endedWatch: told };
-}
-
-function legacyPullRequestLink(
-  thread: OrchestrationV2AppThread,
-  linked: ThreadLinkedPullRequest,
-  now: DateTime.Utc,
-): ThreadPullRequestLink {
-  const key = legacyThreadPullRequestKey(linked);
-  const existing = threadPullRequestsOf(thread).find((link) =>
-    threadPullRequestKeysEqual(link, key),
-  );
-  return withPullRequestWatch(
-    {
-      ...key,
-      url: canonicalizeGitCafePullRequestUrl(linked.url),
-      source: "manual",
-      linkedAt: DateTime.formatIso(now),
-      snapshot: null,
-      stack: null,
-      ...(existing?.repositoryWebUrl !== undefined && {
-        repositoryWebUrl: existing.repositoryWebUrl,
-      }),
-      ...(existing?.endedWatch && { endedWatch: existing.endedWatch }),
-    },
-    existing?.watch,
-  );
 }
 
 function nextQueuedRun(
