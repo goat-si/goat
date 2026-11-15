@@ -1,7 +1,9 @@
 import { V2ConfigRequirementsReadResponse } from "effect-codex-app-server/schema";
 import * as Schema from "effect/Schema";
 
-const Version = Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u));
+export const Version = Schema.String.check(
+  Schema.isPattern(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u),
+);
 export const ActiveRelease = Schema.Struct({ version: Version });
 export const InstalledRelease = Schema.Struct({
   version: Version,
@@ -45,7 +47,8 @@ export interface CodexReleaseAsset {
   readonly target: string;
   readonly url: string;
   readonly sha256: string;
-  readonly archiveBytes: number;
+  /** Null for an upstream release, whose package checksum is published without a size. */
+  readonly archiveBytes: number | null;
 }
 const RELEASES: Readonly<Record<string, CodexReleaseAsset>> = {
   "darwin-arm64": {

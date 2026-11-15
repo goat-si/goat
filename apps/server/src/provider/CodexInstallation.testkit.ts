@@ -33,6 +33,8 @@ export const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
     platform?: NodeJS.Platform;
     spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
     runtimeRenameFailures?: number;
+    /** Served by URL instead of the pinned package. */
+    responses?: Readonly<Record<string, () => Response>>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -102,6 +104,8 @@ export const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
       HttpClient.make((request) =>
         Effect.sync(() => {
           downloads++;
+          const respond = input.responses?.[request.url];
+          if (respond) return HttpClientResponse.fromWeb(request, respond());
           return Object.defineProperty(
             HttpClientResponse.fromWeb(
               request,

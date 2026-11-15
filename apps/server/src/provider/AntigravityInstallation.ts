@@ -103,6 +103,8 @@ interface AntigravityInstallationService {
   ) => Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
   readonly state: Effect.Effect<ProviderInstallState>;
   readonly changes: Stream.Stream<ProviderInstallState>;
+  /** Antigravity stays on its pinned release, so there is nothing to look up. */
+  readonly checkForUpdate: Effect.Effect<void>;
   readonly remove: (
     protectedBinaryPaths?: ReadonlyArray<string>,
   ) => Effect.Effect<void, AntigravityInstallationError>;
@@ -957,6 +959,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     start,
     cancel,
     state: SubscriptionRef.get(state),
+    checkForUpdate: Effect.void,
     changes: SubscriptionRef.changes(state),
     remove,
   });
