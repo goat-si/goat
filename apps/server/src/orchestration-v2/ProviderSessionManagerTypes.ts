@@ -16,92 +16,14 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import type {
+  ProviderSessionManagerV2Error,
+  ProviderSessionReleaseReason,
+} from "./ProviderSessionManagerErrors.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-
-export const ProviderSessionReleaseReason = Schema.Literals([
-  "idle_timeout",
-  "runtime_error",
-  "manual_shutdown",
-  "server_shutdown",
-]);
-export type ProviderSessionReleaseReason = typeof ProviderSessionReleaseReason.Type;
-
-export class ProviderSessionOpenError extends Schema.TaggedError<ProviderSessionOpenError>()(
-  "ProviderSessionOpenError",
-  {
-    instanceId: ProviderInstanceId,
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to open provider instance ${this.instanceId} session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionLookupError extends Schema.TaggedError<ProviderSessionLookupError>()(
-  "ProviderSessionLookupError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to look up provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionCloseError extends Schema.TaggedError<ProviderSessionCloseError>()(
-  "ProviderSessionCloseError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to close provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionReleaseError extends Schema.TaggedError<ProviderSessionReleaseError>()(
-  "ProviderSessionReleaseError",
-  {
-    providerSessionId: ProviderSessionId,
-    reason: ProviderSessionReleaseReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to release provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionActivityError extends Schema.TaggedError<ProviderSessionActivityError>()(
-  "ProviderSessionActivityError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to update provider session activity for ${this.providerSessionId}.`;
-  }
-}
-
-export const ProviderSessionManagerV2Error = Schema.Union([
-  ProviderSessionOpenError,
-  ProviderWorkspaceMissingError,
-  ProviderSessionLookupError,
-  ProviderSessionCloseError,
-  ProviderSessionReleaseError,
-  ProviderSessionActivityError,
-]);
-export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error.Type;
 
 export interface ProviderMemoryPrepareInput {
   readonly runId?: RunId;

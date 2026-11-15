@@ -205,7 +205,9 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
       assert.isTrue(yield* orchestrator.delegatedTaskResultPending(recut.childThreadId));
       assert.isTrue(yield* orchestrator.delegatedTaskResultPending(resumed.childThreadId));
       assert.isFalse(yield* orchestrator.delegatedTaskResultPending(stopped.childThreadId));
-      yield* orchestrator.recoverDelegatedTask(recut.childThreadId, recut.childRunId);
+      yield* orchestrator.recoverDelegatedTask(recut.childThreadId, {
+        sourceRunId: recut.childRunId,
+      });
       const replayed = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(replayed.subagents.find((row) => row.id === recut.taskId)?.status, "running");
       yield* eventSink.write({

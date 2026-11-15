@@ -200,7 +200,7 @@ Only 46% of input parameters carry a description. 112 tools describe none of the
 | Tool                     | Characters | Declared at                                           |
 | ------------------------ | ---------- | ----------------------------------------------------- |
 | `goat_call`              | 1688       | packages/contracts/src/agentSurface/surfaceEntries.ts |
-| `delegate_task`          | 399        | packages/contracts/src/agentSurface/entries/task.ts   |
+| `delegate_task`          | 400        | packages/contracts/src/agentSurface/entries/task.ts   |
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts    |
 | `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts |
 | `goat_thread_read`       | 395        | packages/contracts/src/agentSurface/entries/thread.ts |

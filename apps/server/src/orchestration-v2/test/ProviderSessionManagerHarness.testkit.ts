@@ -35,6 +35,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
@@ -280,6 +281,7 @@ export function layerTest(input: {
   readonly archive?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
   readonly spawnBeforeOpen?: boolean;
   readonly scopeCloseReached?: Deferred.Deferred<void>;
+  readonly installationGateLayer?: Layer.Layer<ProviderInstallationGate.ProviderInstallationGate>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
   readonly cuaDriverLayer?: Layer.Layer<CuaDriver.CuaDriver | ComputerUseTestkit.Leases>;
@@ -410,6 +412,7 @@ export function layerTest(input: {
           layerConfiguredEventSink,
           IdAllocator.layer,
           layerProviderEventIngestorTest,
+          input.installationGateLayer ?? Layer.empty,
           layerConfiguredMcpRegistry,
           layerConfiguredStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),

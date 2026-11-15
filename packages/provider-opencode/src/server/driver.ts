@@ -487,9 +487,9 @@ export const OpenCodeDriver: ProviderDriver<
       runningVersion: openCode2Server.runningVersion ?? Effect.undefined,
     });
     const loadOpenCode2Models = yield* makeOpenCode2ModelLoader(
-      (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined) =>
+      (launch: OpenCodeServerOwner.OpenCodeServerLaunch | undefined, boundRead) =>
         openCode2ProbeServer.withConnection(
-          ({ client }) => loadOpenCode2Catalog(client, host.paths.cwd),
+          ({ client }) => boundRead(loadOpenCode2Catalog(client, host.paths.cwd)),
           launch,
         ),
       openCode2ProbeServer.captureLaunch ??
