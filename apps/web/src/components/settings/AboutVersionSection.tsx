@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { useCheckProviderUpdates } from "../ProviderUpdatesAction";
+import { downloadLocalUpdate } from "../sidebar/SidebarUpdatePill";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -65,15 +66,7 @@ export function AboutVersionSection() {
     if (!bridge) return;
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
     if (action === "download") {
-      void bridge.downloadUpdate().catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not download update",
-            description: error instanceof Error ? error.message : "Download failed.",
-          }),
-        );
-      });
+      void downloadLocalUpdate(bridge, { notifyDownloaded: false });
       return;
     }
     if (action === "install") {

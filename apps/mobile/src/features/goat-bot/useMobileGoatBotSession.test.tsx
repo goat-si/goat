@@ -1,212 +1,27 @@
-import { act, useLayoutEffect } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import {
-  goatBotActivitySources,
-  resolveGoatBotHomeSelection,
-  type GoatBotEnvironmentInput,
-} from "@goat/client-runtime/goatBot";
-import {
-  BotProfile,
-  EnvironmentId,
-  ChannelQuestionId,
-  ChannelTaskId,
-  ProjectId,
-  ThreadId,
-  type ChannelBotRef,
-} from "@goat/contracts";
+import "./useMobileGoatBotSession.testHarness";
+import { act } from "react";
+import { goatBotActivitySources } from "@goat/client-runtime/goatBot";
+import { BotProfile, EnvironmentId, ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import * as Option from "effect/Option";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
-const harness = vi.hoisted(() => ({
-  environments: [] as ReadonlyArray<GoatBotEnvironmentInput>,
-  botRef: null as ChannelBotRef | null,
-  loaded: true,
-  supportsTaskThreads: false,
-  listedTaskIds: [] as ReadonlyArray<string>,
-  run: vi.fn(),
-  save: vi.fn(),
-  items: [] as ReadonlyArray<unknown>,
-  itemReads: [] as Array<string | null>,
-  openAsks: false,
-  workerShell: null as object | null,
-  shellReads: [] as Array<string | null>,
-  upload: vi.fn(),
-  transfer: vi.fn(),
-  verify: vi.fn(),
-  release: vi.fn(async (_attachments: ReadonlyArray<unknown>) => {}),
-  key: vi.fn(() => "request"),
-  refresh: vi.fn(),
-}));
-vi.mock("expo-file-system", () => ({
-  File: class {
-    constructor(readonly uri: string) {}
-    upload(url: string, options: unknown) {
-      return harness.transfer(this.uri, url, options);
-    }
-  },
-  Paths: { document: { uri: "file:///documents" } },
-  UploadType: { BINARY_CONTENT: 0 },
-}));
-const preparedConnection = Symbol("prepared connection");
-vi.mock("@goat/client-runtime/state/attachments", async (original) => ({
-  ...(await original<typeof import("@goat/client-runtime/state/attachments")>()),
-  runAttachmentUploadCycle: harness.upload,
-  verifyPersistedAttachmentUpload: harness.verify,
-}));
-vi.mock("../../state/assets", () => ({ assetEnvironment: { createUrl: {} } }));
-vi.mock("../../state/attachments", () => ({
-  attachmentEnvironment: { createUploadUrl: {}, remove: {} },
-}));
-vi.mock("../../state/session", () => ({
-  readEnvironmentScope: () => true,
-  environmentSession: { preparedConnectionValueAtom: () => preparedConnection },
-}));
-vi.mock("../../state/use-composer-drafts", () => ({
-  releaseUnusedComposerAttachmentFiles: harness.release,
-}));
-const connection = AsyncResult.success({ phase: "connected", generation: 1 });
-vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: Atom.Atom<unknown>) =>
-    atom === permissionAtom
-      ? true
-      : atom === connectionAtom
-        ? connection
-        : atom === threadsAtom && harness.listedTaskIds.length > 0
-          ? AsyncResult.success({
-              rows: harness.listedTaskIds.map((taskId) => ({ kind: "task", task: { taskId } })),
-            })
-          : AsyncResult.initial(),
-  useAtomSet: () => harness.save,
-  useAtomRefresh: () => harness.refresh,
-}));
-vi.mock("@goat/client-runtime/state/runtime", () => ({
-  runAtomCommand: harness.run,
-  squashAtomCommandFailure: () => new Error("failed"),
-}));
-vi.mock("../../connection/catalog", () => ({
-  environmentCatalog: { stateAtom: () => connectionAtom },
-}));
-vi.mock("../../state/atom-registry", () => ({
-  get appAtomRegistry() {
-    return registry;
-  },
-}));
-// One stand-in detail atom for every worker ref, so a test can play the screen that loads it.
-vi.mock("../../state/threads", () => ({
-  environmentThreadDetails: { threadAtom: () => detailAtom },
-}));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    ensureBot: { permissionAtom: () => permissionAtom },
-    ingest: { permissionAtom: () => permissionAtom },
-    listBotThreads: () => threadsAtom,
-  },
-}));
-vi.mock("../../state/preferences", () => ({ updateMobilePreferencesAtom: {} }));
-vi.mock("../../state/use-thread-detail", () => ({
-  useThreadVisibleTurnItems: (target: { threadId: string | null }) => {
-    harness.itemReads.push(target.threadId);
-    return harness.items;
-  },
-}));
-vi.mock("../../state/entities", () => ({
-  useThreadShell: (ref: { threadId: string } | null) => {
-    harness.shellReads.push(ref?.threadId ?? null);
-    return ref?.threadId === "worker-1" && harness.workerShell !== null
-      ? { source: harness.workerShell }
-      : null;
-  },
-  useServerConfigs: () =>
-    new Map(
-      harness.environments.map(({ environmentId }) => [
-        environmentId,
-        {
-          environment: {
-            capabilities: {
-              goatBotTaskThreads: harness.supportsTaskThreads,
-              goatBotOpenAsks: harness.openAsks,
-            },
-          },
-        },
-      ]),
-    ),
-}));
-vi.mock("../../state/shell", () => ({
-  useEnvironmentShellReadiness: () => ({ status: "loading" }),
-}));
-vi.mock("../../lib/uuid", () => ({ uuidv4: () => harness.key() }));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({
-    ...harness,
-    home: resolveGoatBotHomeSelection(harness.environments, harness.botRef),
-  }),
-}));
-import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  bot,
+  detailAtom,
+  environment,
+  harness,
+  registry,
+  render,
+  setupSession,
+  unmountSession,
+  view,
+} from "./useMobileGoatBotSession.testHarness";
 import { conversation, detail, typedAnswer } from "./useMobileGoatBotSession.fixtures";
 import * as botSessions from "./useMobileGoatBotSession";
 import { syncMobileGoatBotMembers } from "./mobileGoatBotMembers";
 import * as fileOwnership from "../../lib/composerAttachmentFiles";
 
-const permissionAtom = Atom.make(true);
-const connectionAtom = Atom.make(connection);
-const detailAtom = Atom.make<unknown>(null);
-const threadsAtom = Atom.make(AsyncResult.initial());
-const registry = Object.assign(AtomRegistry.make(), {
-  get: (atom: unknown) =>
-    atom === preparedConnection ? Option.some({ httpBaseUrl: "https://example.test" }) : connection,
-});
-let root: Root | null = null;
-let session: ReturnType<typeof useMobileGoatBotSession>;
-let taskId: ChannelTaskId | null | undefined;
-let member: BotProfile | null = null;
-function Consumer() {
-  const value = useMobileGoatBotSession(true, taskId, member);
-  useLayoutEffect(() => {
-    session = value;
-  }, [value]);
-  return null;
-}
-async function render() {
-  root ??= createRoot(document.createElement("div"));
-  await act(async () => {
-    root!.render(<Consumer />);
-  });
-}
-function environment(id: string, connected = true): GoatBotEnvironmentInput {
-  return {
-    environmentId: EnvironmentId.make(id),
-    label: id,
-    connected,
-    primary: false,
-    supportsChannelLedger: true,
-  };
-}
-function bot(environmentId: EnvironmentId): ChannelBotRef {
-  return { environmentId, projectId: ProjectId.make("project"), threadId: ThreadId.make("bot") };
-}
-beforeEach(() => {
-  taskId = undefined;
-  member = null;
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  harness.environments = [];
-  harness.botRef = null;
-  harness.loaded = true;
-  harness.supportsTaskThreads = harness.openAsks = false;
-  harness.listedTaskIds = [];
-  harness.save.mockReset();
-  harness.release.mockReset().mockResolvedValue(undefined);
-  harness.key.mockReset().mockReturnValue("request");
-  harness.run.mockReset().mockImplementation(async (_registry, _command, { environmentId }) => ({
-    _tag: "Success",
-    value: bot(environmentId),
-  }));
-});
-afterEach(async () => {
-  await act(async () => root?.unmount());
-  root = null;
-});
+beforeEach(setupSession);
+afterEach(unmountSession);
 
 describe("mobile GOAT Bot session selection", () => {
   it("does not wait for a late upload mint or delete it after environment removal", async () => {
@@ -238,7 +53,7 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      session.onSend("hello", [file]);
+      view.session.onSend("hello", [file]);
       await started.promise;
     });
     await act(async () => {
@@ -299,7 +114,7 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      expect(session.onSend("hello", [file])).toBe(true);
+      expect(view.session.onSend("hello", [file])).toBe(true);
       await started.promise;
     });
     let settled = false;
@@ -394,21 +209,23 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      session.onSend("first");
+      view.session.onSend("first");
       await failed.promise;
     });
     await act(async () => {
-      session.onDiscardInput("old");
+      view.session.onDiscardInput("old");
       await cleanupStarted.promise;
     });
     await act(async () => {
-      session.onSend("second", [file, extra]);
+      view.session.onSend("second", [file, extra]);
       await started.promise;
     });
     await act(async () => {
-      expect(session.onSend("queued", [queued])).toBe(true);
+      expect(view.session.onSend("queued", [queued])).toBe(true);
     });
-    expect(session.rows.some((row) => row.kind === "user" && row.text === "queued")).toBe(true);
+    expect(view.session.rows.some((row) => row.kind === "user" && row.text === "queued")).toBe(
+      true,
+    );
     let settled = false;
     await act(async () => {
       void botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
@@ -462,11 +279,11 @@ describe("mobile GOAT Bot session selection", () => {
       });
       await render();
       await act(async () => {
-        session.onSend("active", [file]);
+        view.session.onSend("active", [file]);
         await started.promise;
       });
       await act(async () => {
-        session.onSend("queued", [other]);
+        view.session.onSend("queued", [other]);
       });
       await act(async () => {
         await botSessions.disposeMobileGoatBotEnvironment(env);
@@ -511,7 +328,7 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      session.onSend("two files", [first, second]);
+      view.session.onSend("two files", [first, second]);
       await started.promise;
     });
     await act(async () => {
@@ -563,20 +380,20 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      session.onSend("first", [file]);
+      view.session.onSend("first", [file]);
       await first.promise;
     });
     await act(async () => {
-      session.onSend("second", [file]);
+      view.session.onSend("second", [file]);
       await second.promise;
     });
     await act(async () => {
-      session.onDiscardInput("first");
+      view.session.onDiscardInput("first");
       await cleanup.promise;
     });
     expect(exists).toBe(true);
     await act(async () => {
-      session.onRetryInput("second");
+      view.session.onRetryInput("second");
       await retried.promise;
     });
     expect(received[2]).toMatchObject({
@@ -610,7 +427,7 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      session.onSend("hello", [file]);
+      view.session.onSend("hello", [file]);
       await sent.promise;
     });
     harness.environments = [environment(env, false)];
@@ -661,14 +478,14 @@ describe("mobile GOAT Bot session selection", () => {
     });
     await render();
     await act(async () => {
-      expect(session.onSend("hello", [file])).toBe(true);
+      expect(view.session.onSend("hello", [file])).toBe(true);
       await firstAttempt.promise;
     });
-    expect(session.rows.some((row) => row.kind === "user" && row.delivery.state === "failed")).toBe(
-      true,
-    );
+    expect(
+      view.session.rows.some((row) => row.kind === "user" && row.delivery.state === "failed"),
+    ).toBe(true);
     await act(async () => {
-      session.onRetryInput("request");
+      view.session.onRetryInput("request");
       await secondAttempt.promise;
     });
     expect(ingests).toHaveLength(2);
@@ -708,9 +525,9 @@ describe("mobile GOAT Bot session selection", () => {
     await render();
     expect(harness.run).not.toHaveBeenCalled();
     expect(harness.save).not.toHaveBeenCalled();
-    expect(session.availability).toBe("offline");
+    expect(view.session.availability).toBe("offline");
     // Links in the history still shown resolve where that history lives.
-    expect(session.historyEnvironmentId).toBe(EnvironmentId.make("missing-A"));
+    expect(view.session.historyEnvironmentId).toBe(EnvironmentId.make("missing-A"));
   });
   it("keeps a disconnected legacy stored bot offline without replacing its reference", async () => {
     harness.botRef = bot(EnvironmentId.make("offline-A"));
@@ -718,14 +535,14 @@ describe("mobile GOAT Bot session selection", () => {
     await render();
     expect(harness.run).not.toHaveBeenCalled();
     expect(harness.save).not.toHaveBeenCalled();
-    expect(session.availability).toBe("offline");
+    expect(view.session.availability).toBe("offline");
   });
   it("ensures on connected B when legacy A is offline and no bot is stored", async () => {
     harness.environments = [environment("new-A", false), environment("new-B")];
     await render();
     expect(harness.run).toHaveBeenCalledTimes(1);
     expect(harness.save).toHaveBeenCalledWith({ goatBotRef: bot(EnvironmentId.make("new-B")) });
-    expect(session.availability).toBe("ready");
+    expect(view.session.availability).toBe("ready");
   });
   it("does not ensure until delayed preferences identify stored B", async () => {
     harness.environments = [environment("loading-A"), environment("loading-B")];
@@ -756,7 +573,7 @@ describe("mobile GOAT Bot session selection", () => {
     await render();
     expect(harness.run).toHaveBeenCalledTimes(1);
     expect(harness.save).toHaveBeenCalledWith({ goatBotRef: bot(b) });
-    expect(session.availability).toBe("ready");
+    expect(view.session.availability).toBe("ready");
   });
 });
 
@@ -770,7 +587,7 @@ describe("mobile GOAT Bot activity", () => {
   it("follows the acknowledged worker's shell, with when the work began and what it is", async () => {
     setup({ environmentId: "env", threadId: "worker-1" });
     await render();
-    expect(session.activity).toEqual({ state: "working", text: "Copying files" });
+    expect(view.session.activity).toEqual({ state: "working", text: "Copying files" });
     expect(harness.shellReads).toContain("worker-1");
     expect(registry.getNodes().has(detailAtom)).toBe(false);
   });
@@ -781,9 +598,9 @@ describe("mobile GOAT Bot activity", () => {
     const unmountOtherScreen = registry.mount(detailAtom);
     try {
       await render();
-      expect(session.activity?.text).toBe("Waiting for your approval");
+      expect(view.session.activity?.text).toBe("Waiting for your approval");
       await act(async () => registry.set(detailAtom, detail("resolved")));
-      expect(session.activity?.text).toBe("Copying files");
+      expect(view.session.activity?.text).toBe("Copying files");
     } finally {
       unmountOtherScreen();
     }
@@ -795,7 +612,7 @@ describe("mobile GOAT Bot activity", () => {
     const unmountOtherScreen = registry.mount(detailAtom);
     try {
       await render();
-      expect(session.activity?.text).toBe("Copying files");
+      expect(view.session.activity?.text).toBe("Copying files");
       expect(harness.shellReads).not.toContain("worker-1");
     } finally {
       unmountOtherScreen();
@@ -809,19 +626,21 @@ it("filters the task conversation and sends messages with its task id", async ()
   harness.botRef = bot(env);
   harness.items = conversation({ environmentId: "env", threadId: "worker-1" });
   harness.supportsTaskThreads = true;
-  taskId = ChannelTaskId.make("task-1");
+  view.taskId = ChannelTaskId.make("task-1");
   const sent = Promise.withResolvers<unknown>();
   harness.run.mockImplementation(async (_registry, _command, args) => {
     if (args.input?.intent === "message") sent.resolve(args.input);
     return { _tag: "Success", value: bot(env) };
   });
   await render();
-  expect(session.rows.some((row) => row.kind === "bot" && row.text === "Checking now.")).toBe(true);
-  expect(session.rows.some((row) => row.kind === "user" && row.text === "Check the disks")).toBe(
-    false,
+  expect(view.session.rows.some((row) => row.kind === "bot" && row.text === "Checking now.")).toBe(
+    true,
   );
+  expect(
+    view.session.rows.some((row) => row.kind === "user" && row.text === "Check the disks"),
+  ).toBe(false);
   await act(async () => {
-    expect(session.onSend("Follow up")).toBe(true);
+    expect(view.session.onSend("Follow up")).toBe(true);
   });
   expect(await sent.promise).toMatchObject({
     intent: "message",
@@ -852,7 +671,7 @@ it("sends a member's message to the member's own conversation, and stops once it
       updatedAt: "2026-11-07T00:00:00.000Z",
       state,
     });
-  member = profile("active");
+  view.member = profile("active");
   const sent = Promise.withResolvers<{ conversationKey: string; replyAddress: object }>();
   harness.run.mockImplementation(async (_registry, _command, args) => {
     if (args.input?.intent === "message") {
@@ -862,9 +681,9 @@ it("sends a member's message to the member's own conversation, and stops once it
     return { _tag: "Success", value: bot(env) };
   });
   await render();
-  expect(session.threadId).toBe("thread-research");
+  expect(view.session.threadId).toBe("thread-research");
   await act(async () => {
-    expect(session.onSend("find sources")).toBe(true);
+    expect(view.session.onSend("find sources")).toBe(true);
   });
   expect(await sent.promise).toMatchObject({
     conversationKey: "thread-research",
@@ -876,15 +695,15 @@ it("sends a member's message to the member's own conversation, and stops once it
   harness.run.mockClear();
   syncMobileGoatBotMembers(env, []);
   await act(async () => {
-    session.onSend("after delete");
+    view.session.onSend("after delete");
   });
   expect(harness.run.mock.calls.filter(([, , args]) => args.input?.intent === "message")).toEqual(
     [],
   );
-  member = profile("deleted");
+  view.member = profile("deleted");
   await render();
-  expect(session.canSend).toBe(false);
-  expect(session.onSend("still there?")).toBe(false);
+  expect(view.session.canSend).toBe(false);
+  expect(view.session.onSend("still there?")).toBe(false);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });
 
@@ -905,10 +724,14 @@ it("hands a member's chat its own conversation and session, so its activity line
   const chip = { id: "chip", type: "notification", startedAt: at, source: { kind: "x" } };
   harness.items = [{ item: { ...chip, ledgerTask: { ...ledgerTask, createdAt: at } } }];
   const scout = { botId: "scout", role: "member", name: "Scout", environmentId: env };
-  member = { ...scout, sessionThreadId: "thread-scout", state: "active" } as unknown as BotProfile;
+  view.member = {
+    ...scout,
+    sessionThreadId: "thread-scout",
+    state: "active",
+  } as unknown as BotProfile;
   await render();
   expect(harness.itemReads.at(-1)).toBe("thread-scout");
-  const sources = goatBotActivitySources({ ...session, botEnvironmentId: env, taskId: null });
+  const sources = goatBotActivitySources({ ...view.session, botEnvironmentId: env, taskId: null });
   expect(sources).toMatchObject([{ kind: "local", refs: [{ threadId: worker.threadId }] }]);
   await botSessions.disposeMobileGoatBotEnvironment(env);
 });
@@ -919,7 +742,7 @@ it("reads answers as the server recorded them, and sends a card's answer with it
   harness.botRef = bot(env);
   harness.supportsTaskThreads = true;
   // The main chat, as the screen opens it.
-  taskId = null;
+  view.taskId = null;
   harness.listedTaskIds = ["task-1"];
   harness.items = typedAnswer("q1");
   const sent: unknown[] = [];
@@ -930,7 +753,7 @@ it("reads answers as the server recorded them, and sends a card's answer with it
   await render();
   // The task's card names the typed message as the question's answer.
   expect(
-    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+    view.session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
   ).toMatchObject({
     answer: "Use the staging cache",
   });
@@ -939,14 +762,14 @@ it("reads answers as the server recorded them, and sends a card's answer with it
   harness.items = typedAnswer(null, "Keep");
   await render();
   expect(
-    session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
+    view.session.rows.find((row) => row.kind === "bot" && row.text.startsWith("Which cache")),
   ).toMatchObject({
     options: ["Keep", "Clear"],
   });
-  expect(session.rows.some((row) => row.kind === "user" && row.text === "Keep")).toBe(true);
+  expect(view.session.rows.some((row) => row.kind === "user" && row.text === "Keep")).toBe(true);
   await act(async () => {
     expect(
-      session.onAnswer("Clear", ChannelTaskId.make("task-1"), ChannelQuestionId.make("q1")),
+      view.session.onAnswer("Clear", ChannelTaskId.make("task-1"), ChannelQuestionId.make("q1")),
     ).toBe(true);
   });
   await act(async () => {});
@@ -961,12 +784,12 @@ it("keeps the main chat to conversation where the work list opens the bot's task
   harness.items = conversation({ environmentId: "env", threadId: "worker-1" });
   harness.listedTaskIds = ["task-1"];
   await render();
-  expect(session.rows.map((row) => (row.kind === "day" ? "day" : `${row.kind}:${row.id}`))).toEqual(
-    ["day", "user:in", "bot:ack"],
-  );
+  expect(
+    view.session.rows.map((row) => (row.kind === "day" ? "day" : `${row.kind}:${row.id}`)),
+  ).toEqual(["day", "user:in", "bot:ack"]);
   harness.listedTaskIds = [];
   await render();
-  expect(session.rows.some((row) => row.kind === "task")).toBe(true);
+  expect(view.session.rows.some((row) => row.kind === "task")).toBe(true);
 });
 
 it("refreshes the work list per finished record or chip move (card or not), not per streamed chunk", async () => {

@@ -373,9 +373,13 @@ the published task result. Remote tasks expose summary-only results; a pending
 For local tasks, stops the child thread with the internal `thread.stop` command, then stops every
 task the child delegated, and disposes automatic parent delivery. Like a user Stop,
 `thread.stop` interrupts the running turn, holds queued turns, and ends pull request
-watches. A nonterminal task with no interruptible run is rejected. A terminal task
-returns its existing status, and its child thread still stops, including later
-runs and watch wakes. Published task results remain available. It accepts an
+watches. The task's own queued turn is cancelled even if Stop already held it;
+other queued turns remain held for Resume. A nonterminal task is rejected if it has
+no interruptible run or queued turn of its own and is not waiting for delegated
+work. A terminal task returns its existing status, and its child thread still stops,
+including later runs and watch wakes. A follow-up that lost its child run but still
+appears active on the parent is cancelled there and reported as `cancelled`.
+Published task results remain available. It accepts an
 optional cancellation reason. For remote tasks it requests an interrupt and
 returns `cancel_requested` until the remote run stops; parent Stop does not send
 that interrupt.
