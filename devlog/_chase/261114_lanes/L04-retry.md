@@ -275,6 +275,8 @@ Gate on `21d4694900`, run by the coordinator on pen-mac-studio (juns-Mac-Studio,
 
 `node scripts/goat-rename.ts --check`: 0. The integration tip moved to `428af27456` after the gate (mobile i18n and five mobile and GOAT Bot files only); the coordinator keeps the gate on `83138ac3b6`.
 
+Merged: `21d4694900` went into the integration branch as `1f34e35e42` (#3397) on 2026-11-15, after the coordinator accepted the second delta.
+
 NOT RUN: the real-provider reproduction for goat#3348; a real-client pass (no client code changed).
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-mac-studio, coordinated by anthropic/claude-opus-5-5
