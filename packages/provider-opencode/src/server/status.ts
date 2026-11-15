@@ -417,15 +417,32 @@ const settleOpenCode2Catalog = <E>(
 
 const OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS = 5_000;
 
-export const makeOpenCode2ModelLoader = <E>(
-  list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
-  environment?: NodeJS.ProcessEnv,
+export const makeOpenCode2ModelLoader = <E, Identity = undefined>(
+  list:
+    | Effect.Effect<ReadonlyArray<OpenCode2Model>, E>
+    | ((identity: Identity) => Effect.Effect<ReadonlyArray<OpenCode2Model>, E>),
+  identity?: Effect.Effect<Identity>,
+  sameIdentity: (left: Identity, right: Identity) => boolean = Object.is,
+  environment?: Effect.Effect<NodeJS.ProcessEnv>,
 ) =>
   Effect.sync(() => {
     let lastLoaded: ReadonlyArray<OpenCode2Model> = [];
-    return Effect.suspend(() => {
+    let lastIdentity: Identity | undefined;
+    let hasIdentity = false;
+    return Effect.gen(function* () {
+      const currentIdentity = identity === undefined ? (undefined as Identity) : yield* identity;
+      if (!hasIdentity || !sameIdentity(lastIdentity as Identity, currentIdentity)) {
+        lastLoaded = [];
+        lastIdentity = currentIdentity;
+        hasIdentity = true;
+      }
+      const settleTimeoutMs = resolveProviderProbeTimeoutMs(
+        "opencode",
+        OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS,
+        environment === undefined ? undefined : yield* environment,
+      );
       let latest: ReadonlyArray<OpenCode2Model> = [];
-      const tracked = list.pipe(
+      const tracked = (typeof list === "function" ? list(currentIdentity) : list).pipe(
         Effect.tap((models) =>
           Effect.sync(() => {
             if (models.length > 0) latest = models;
@@ -434,20 +451,14 @@ export const makeOpenCode2ModelLoader = <E>(
       );
       // The first read can include a cold server start, so only settling shares the budget.
       // Each retry borrows the managed server, so retries well inside its idle TTL keep it alive.
-      return tracked.pipe(
+      return yield* tracked.pipe(
         Effect.retry({ while: isActivatingPlugins, schedule: Schedule.spaced("1 second") }),
         Effect.timeoutOption(PLUGIN_ACTIVATION_DEADLINE),
         Effect.flatMap((first) =>
           Option.isNone(first)
             ? Effect.succeedNone
             : settleOpenCode2Catalog(tracked, first.value).pipe(
-                Effect.timeoutOption(
-                  resolveProviderProbeTimeoutMs(
-                    "opencode",
-                    OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS,
-                    environment,
-                  ),
-                ),
+                Effect.timeoutOption(settleTimeoutMs),
               ),
         ),
         Effect.catch((error) =>
@@ -455,9 +466,12 @@ export const makeOpenCode2ModelLoader = <E>(
         ),
         Effect.map((loaded) => {
           // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
-          if (loaded._tag === "Some") lastLoaded = loaded.value;
-          else if (latest.length > 0) lastLoaded = latest;
-          return lastLoaded;
+          if (sameIdentity(lastIdentity as Identity, currentIdentity)) {
+            if (loaded._tag === "Some") lastLoaded = loaded.value;
+            else if (latest.length > 0) lastLoaded = latest;
+            return lastLoaded;
+          }
+          return loaded._tag === "Some" ? loaded.value : latest;
         }),
       );
     });
