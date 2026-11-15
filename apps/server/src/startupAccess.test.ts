@@ -105,3 +105,20 @@ describe("acceptsPrivateNetworkConnection", () => {
     expect(accepts(undefined, "192.168.1.31")).toBe(false);
   });
 });
+
+it("keeps a routable Linux bridge in a private-network pairing URL", () => {
+  const options = {
+    interfaces: {
+      "ve-container": [ipv4("10.11.0.1")],
+      "vb-container": [ipv4("10.12.0.1")],
+      "vz-container": [ipv4("10.13.0.1")],
+      vmbr0: [ipv4("192.168.2.1")],
+    },
+    privateNetworkOnly: true,
+    platform: "linux" as const,
+  };
+  expect(resolveHeadlessConnectionString("0.0.0.0", 3773, options)).toBe("http://192.168.2.1:3773");
+  expect(resolveHeadlessConnectionString("0.0.0.0", 3773, { ...options, platform: "win32" })).toBe(
+    "http://10.11.0.1:3773",
+  );
+});
