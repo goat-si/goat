@@ -15,8 +15,9 @@ import { turnItem } from "./GoatBotChatView.sync.fixtures";
 
 import "~/index.css";
 
-// How many times Home's routine list and a routine's run strip have rendered.
-const probe = vi.hoisted(() => ({ routines: 0, strips: 0 }));
+// How many times Home's routine list and a routine's run strip have rendered, and the query
+// mock's one answer per query, kept between renders as the real atoms keep theirs.
+const probe = vi.hoisted(() => ({ routines: 0, strips: 0, answers: new Map<unknown, unknown>() }));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -97,8 +98,6 @@ vi.mock("~/state/use-atom-command", async (original) => ({
 }));
 vi.mock("~/state/query", async (original) => {
   const { routine } = await import("./GoatBotChatView.routines.fixtures");
-  // One answer per query, kept between renders as the real atoms keep theirs.
-  const answers = new Map<unknown, unknown>();
   const answerFor = (atom: unknown) => ({
     data:
       atom === null
@@ -122,8 +121,8 @@ vi.mock("~/state/query", async (original) => {
     ...(await original<typeof import("~/state/query")>()),
     useEnvironmentQuerySelector: () => ({ _tag: "Success", waiting: false }),
     useEnvironmentQuery: (atom: unknown) => {
-      if (!answers.has(atom)) answers.set(atom, answerFor(atom));
-      return answers.get(atom);
+      if (!probe.answers.has(atom)) probe.answers.set(atom, answerFor(atom));
+      return probe.answers.get(atom);
     },
   };
 });
@@ -133,6 +132,7 @@ import { GoatBotChatView } from "./GoatBotChatView";
 function setup() {
   probe.routines = 0;
   probe.strips = 0;
+  probe.answers.clear();
 }
 
 const environmentId = EnvironmentId.make("local");
