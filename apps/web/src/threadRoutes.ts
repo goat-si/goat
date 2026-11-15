@@ -65,10 +65,20 @@ export function buildThreadRouteParams(ref: ScopedThreadRef): {
   };
 }
 
-/** Whether a (decoded) location pathname is `ref`'s own thread route, `/$environmentId/$threadId`. */
+/** The router keeps reserved characters encoded in location.pathname. */
 export function isThreadRoutePathname(pathname: string, ref: ScopedThreadRef): boolean {
-  const { environmentId, threadId } = buildThreadRouteParams(ref);
-  return pathname.replace(/\/$/, "") === `/${environmentId}/${threadId}`;
+  const parts = pathname.replace(/\/$/, "").split("/");
+  if (parts.length !== 3 || parts[0] !== "") return false;
+  const [, environmentId, threadId] = parts;
+  if (environmentId === undefined || threadId === undefined) return false;
+  try {
+    return (
+      decodeURIComponent(environmentId) === ref.environmentId &&
+      decodeURIComponent(threadId) === ref.threadId
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function buildDraftThreadRouteParams(draftId: DraftId): {

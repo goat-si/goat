@@ -189,11 +189,10 @@ import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
-import { cn } from "~/lib/utils";
+import { cn, newMessageId } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
-import { newMessageId } from "~/lib/utils";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -2685,6 +2684,7 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const resumeCompactionTokens =
     activeContextWindow &&
+    pendingHandoff === null &&
     resolveIdleCompaction(
       settings,
       activeProviderInstanceId ?? ProviderInstanceId.make("claudeAgent"),

@@ -1,3 +1,6 @@
+import { CommandPaletteFooter, paletteFooterLabel } from "./CommandPaletteFooter";
+import { clonePickedFolder } from "./CommandPaletteClonePickedFolder";
+import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { resolvePastedPath } from "@goat/shared/path";
 import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
 import { validateMemorySettingsSearch } from "./settings/MemorySettings.logic";
@@ -91,6 +94,7 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useId,
   useReducer,
   useRef,
   useState,
@@ -225,7 +229,7 @@ import {
 import { childSearchEscape, useChildSearchEscape } from "./CommandPalette.escape";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
-import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
+import { CommandPaletteDialog } from "./CommandPaletteDialog";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
   selectCommandPaletteClientSettings,
@@ -241,11 +245,10 @@ import {
 import {
   CommandPaletteSubmitButton,
   NewProjectPublishHostPicker,
-  NewProjectSummary,
-  RemoteRepositorySummary,
   remoteProjectSourceIcon,
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
+import { CommandPaletteProjectSummaries } from "./CommandPaletteProjectSummaries";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
 import {
   APPEARANCE_OPTIONS,
@@ -258,16 +261,14 @@ import {
 } from "./CommandPaletteResults";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { Checkbox } from "./ui/checkbox";
-import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
-import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import { CommandDialog, CommandFooterAction } from "./ui/command";
+import { CommandDialog } from "./ui/command";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -414,6 +415,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
   return (
     <ComposerHandleContext value={composerHandleRef}>
+      <ThreadContextDragGhost />
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
@@ -429,51 +431,21 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         <div className="contents" inert={state.open}>
           {children}
         </div>
-        <CommandPaletteDialog
-          open={state.open}
-          mode={state.mode}
-          openIntent={state.openIntent}
-          setOpen={setOpen}
-          openChildSearch={openChildSearch}
-          initialContext={state.restoredSearch}
-          clearOpenIntent={clearOpenIntent}
-        />
+        <CommandPaletteDialog mode={state.mode} setOpen={setOpen}>
+          <OpenCommandPaletteDialog
+            open={state.open}
+            openIntent={state.openIntent}
+            setOpen={setOpen}
+            openChildSearch={openChildSearch}
+            initialContext={state.restoredSearch}
+            clearOpenIntent={clearOpenIntent}
+          />
+        </CommandPaletteDialog>
       </CommandDialog>
     </ComposerHandleContext>
   );
 }
 
-function CommandPaletteDialog(props: {
-  readonly open: boolean;
-  readonly mode: SearchOverlayMode;
-  readonly openIntent: CommandPaletteOpenIntent | null;
-  readonly setOpen: (open: boolean) => void;
-  readonly openChildSearch: (
-    mode: "files" | "content",
-    context: CommandPaletteReturnContext,
-  ) => void;
-  readonly initialContext: CommandPaletteReturnContext | undefined;
-  readonly clearOpenIntent: () => void;
-}) {
-  return (
-    <CommandPaletteDialogFrame mode={props.mode} setOpen={props.setOpen}>
-      {props.mode === "files" ? (
-        <ProjectFilePicker setOpen={props.setOpen} />
-      ) : props.mode === "content" ? (
-        <ProjectContentSearchDialog onOpenChange={props.setOpen} />
-      ) : (
-        <OpenCommandPaletteDialog
-          open={props.open}
-          openIntent={props.openIntent}
-          setOpen={props.setOpen}
-          openChildSearch={props.openChildSearch}
-          initialContext={props.initialContext}
-          clearOpenIntent={props.clearOpenIntent}
-        />
-      )}
-    </CommandPaletteDialogFrame>
-  );
-}
 function OpenCommandPaletteDialog(props: {
   readonly open: boolean;
   readonly openIntent: CommandPaletteOpenIntent | null;
@@ -2476,6 +2448,7 @@ function OpenCommandPaletteDialog(props: {
                 ),
                 ...(isCreatingNewProject ? { disabled: true } : {}),
                 keepOpen: true,
+                checked: newProjectPublishes,
                 run: async () => {
                   setNewProjectPublishes((publishes) => !publishes);
                 },
@@ -2738,6 +2711,7 @@ function OpenCommandPaletteDialog(props: {
       scrollCommandPaletteRowIntoView(
         resultListRef.current,
         resultRows.rowIndexByItemIndex[0] ?? 0,
+        true,
       );
       return;
     }
@@ -2864,6 +2838,17 @@ function OpenCommandPaletteDialog(props: {
         );
         return;
       }
+      if (
+        await clonePickedFolder({
+          flow: addProjectCloneFlow,
+          path: selection.linuxPath,
+          environmentId: selection.environmentId,
+          name: pinnedCloneDirectoryName,
+          caseSensitive: true,
+          submit: submitAddProjectCloneFlow,
+        })
+      )
+        return;
       await handleAddProjectForEnvironment({
         environmentId: selection.environmentId,
         rawCwd: selection.linuxPath,
@@ -2872,12 +2857,30 @@ function OpenCommandPaletteDialog(props: {
       });
       return;
     }
+    if (
+      await clonePickedFolder({
+        flow: addProjectCloneFlow,
+        path: pickedPath,
+        name: pinnedCloneDirectoryName,
+        caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
+        submit: submitAddProjectCloneFlow,
+      })
+    )
+      return;
     await handleAddProject(pickedPath);
   };
 
+  const submitButtonId = useId();
+  const browseSubmitLabel =
+    isCloneDestinationStep && !canCloneProject
+      ? "This connection needs permission to write source control and add projects."
+      : canCreateProject
+        ? `${submitActionLabel} (${addShortcutLabel})`
+        : "This connection cannot add projects.";
   const inputAccessory =
     newProjectFlow !== null ? (
       <CommandPaletteSubmitButton
+        id={submitButtonId}
         label={isCreatingNewProject ? "Creating" : "Create"}
         shortcutLabel={createShortcutLabel}
         ariaLabel={`Create (${createShortcutLabel})`}
@@ -2889,6 +2892,7 @@ function OpenCommandPaletteDialog(props: {
       />
     ) : addProjectCloneFlow?.step === "repository" ? (
       <CommandPaletteSubmitButton
+        id={submitButtonId}
         label={isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}
         shortcutLabel="Enter"
         ariaLabel={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
@@ -2900,16 +2904,11 @@ function OpenCommandPaletteDialog(props: {
       />
     ) : isBrowsing ? (
       <CommandPaletteSubmitButton
+        id={submitButtonId}
         label={isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
         shortcutLabel={addShortcutLabel}
-        ariaLabel={`${submitActionLabel} (${addShortcutLabel})`}
-        tooltip={
-          isCloneDestinationStep && !canCloneProject
-            ? "This connection needs permission to write source control and add projects."
-            : canCreateProject
-              ? `${submitActionLabel} (${addShortcutLabel})`
-              : "This connection cannot add projects."
-        }
+        ariaLabel={browseSubmitLabel}
+        tooltip={browseSubmitLabel}
         disabled={
           !canCreateProject ||
           !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
@@ -2929,33 +2928,24 @@ function OpenCommandPaletteDialog(props: {
       />
     ) : null;
 
-  const footerActionLabel =
-    newProjectFlow !== null
-      ? highlightedItemValue === null
-        ? "Create"
-        : highlightedItemValue === newProjectPublishToggleValue
-          ? "Toggle"
-          : "Select"
-      : addProjectCloneFlow?.step === "repository"
-        ? (remoteProjectButtonLabel ?? "Continue")
-        : !canSubmitBrowsePath || hasHighlightedBrowseItem
-          ? "Select"
-          : undefined;
-
-  const footerTrailing = canOpenProjectFromFileManager ? (
-    <CommandFooterAction
+  const footerActionLabel = paletteFooterLabel({
+    isNew: newProjectFlow !== null,
+    highlighted: highlightedItemValue,
+    toggleValue: newProjectPublishToggleValue,
+    cloneFlow: addProjectCloneFlow,
+    remoteLabel: remoteProjectButtonLabel,
+    canSubmitBrowsePath,
+    hasHighlightedBrowseItem,
+  });
+  const footerTrailing = (
+    <CommandPaletteFooter
+      canOpen={canOpenProjectFromFileManager}
       disabled={isPickingProjectFolder}
-      onClick={() => {
-        void handleOpenProjectFromFileManager();
-      }}
-    >
-      {`Open in ${fileManagerName}`}
-    </CommandFooterAction>
-  ) : isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing ? (
-    // In the footer, so the list keeps its height while message results may
-    // still arrive below it.
-    <span className="text-muted-foreground text-xs">Searching messages…</span>
-  ) : null;
+      fileManagerName={fileManagerName}
+      onOpen={handleOpenProjectFromFileManager}
+      searching={isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing}
+    />
+  );
 
   return (
     <CommandPaletteContent
@@ -2977,6 +2967,7 @@ function OpenCommandPaletteDialog(props: {
                 })
               : undefined,
         placeholder: inputPlaceholder,
+        "aria-describedby": inputAccessory ? submitButtonId : undefined,
         ...(isSubmenu
           ? {
               startAddon: (
@@ -3004,7 +2995,11 @@ function OpenCommandPaletteDialog(props: {
         setHighlightedItemValue(typeof value === "string" ? value : null);
         const rowIndex = resultRows.rowIndexByItemIndex[eventDetails.index];
         if (eventDetails.reason === "keyboard" && rowIndex !== undefined) {
-          scrollCommandPaletteRowIntoView(resultListRef.current, rowIndex);
+          scrollCommandPaletteRowIntoView(
+            resultListRef.current,
+            rowIndex,
+            eventDetails.index === 0,
+          );
         }
       }}
       onValueChange={(nextQuery, { event }) => handleQueryChange(nextQuery, event.target)}
@@ -3012,23 +3007,13 @@ function OpenCommandPaletteDialog(props: {
       showBackHint={isSubmenu}
       value={query}
     >
-      {newProjectPathPreview !== null ? (
-        <NewProjectSummary
-          name={newProjectName}
-          pathPreview={newProjectPathPreview}
-          projectsRoot={newProjectsRoot}
-          environmentLabel={newProjectEnvironmentLabel}
-        />
-      ) : null}
-      {addProjectCloneFlow?.step === "confirm" ? (
-        <RemoteRepositorySummary
-          source={addProjectCloneFlow.source}
-          title={
-            addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput
-          }
-          description={addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl}
-        />
-      ) : null}
+      <CommandPaletteProjectSummaries
+        pathPreview={newProjectPathPreview}
+        name={newProjectName}
+        projectsRoot={newProjectsRoot}
+        environmentLabel={newProjectEnvironmentLabel}
+        cloneFlow={addProjectCloneFlow}
+      />
       {browseAccessError ? (
         <div role="alert" className="px-4 py-3 text-sm text-muted-foreground">
           {browseAccessError}
@@ -3040,6 +3025,7 @@ function OpenCommandPaletteDialog(props: {
       ) : null}
       <BotTaskSearchStatus status={botTaskSearch.status} />
       <CommandPaletteVirtualizedResults
+        onDragStart={() => props.setOpen(false)}
         rows={resultRows.rows}
         listRef={resultListRef}
         highlightedItemValue={highlightedItemValue}

@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import { act, Profiler, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BotThreadRow, ChannelTaskId, type ChannelUpdateTaskViewInput } from "@goat/contracts";
 import type { BotWorkTask, GoatBotTaskCard } from "@goat/client-runtime/goatBot";
@@ -81,17 +81,32 @@ vi.mock("./GoatBotTaskRow", () => ({
     </button>
   ),
 }));
+import { minuteTick } from "@goat/client-runtime/clock";
 import { mobileBotTaskListItems } from "./MobileBotTaskList";
 import { taskChip } from "./mobileTaskChipFixture";
 
+// Each entry commits under its own Profiler, so a test can count which rows re-rendered.
+const commits = new Map<string, number>();
 function TaskList(props: Parameters<typeof mobileBotTaskListItems>[0]) {
   return (
     <>
       {mobileBotTaskListItems(props).map((item) => (
-        <div key={item.key}>{item.render()}</div>
+        <Profiler
+          key={item.key}
+          id={item.key}
+          onRender={(id) => commits.set(id, (commits.get(id) ?? 0) + 1)}
+        >
+          <div>{item.render()}</div>
+        </Profiler>
       ))}
     </>
   );
+}
+
+/** Fakes timers and the clock at `iso` until the test ends. */
+function pinClock(iso: string) {
+  vi.useFakeTimers({ now: Date.parse(iso) });
+  return { [Symbol.dispose]: () => vi.useRealTimers() };
 }
 
 const at = "2026-11-11T02:00:00.000Z";
@@ -142,6 +157,7 @@ afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = undefined;
   alert.mockClear();
+  commits.clear();
 });
 async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]> = {}) {
   const calls = {
@@ -156,6 +172,7 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
       <TaskList
         botName="GOAT Bot"
         chips={new Map()}
+        ticking
         canUpdate
         expanded={new Set()}
         details={() => []}
@@ -177,6 +194,7 @@ async function show(props: Partial<Parameters<typeof mobileBotTaskListItems>[0]>
 }
 
 it("a task marked done reads Done, whatever its worker still asks", async () => {
+  using _clock = pinClock("2026-11-11T04:00:00.000Z");
   const done = decode({
     kind: "task",
     task: { taskId: "task-done", title: "Ship", status: "running", updatedAt: at },
@@ -191,16 +209,19 @@ it("a task marked done reads Done, whatever its worker still asks", async () => 
     rows: [done],
     chips: new Map([[ChannelTaskId.make("task-done"), asks]]),
   });
-  expect(container.querySelector('[aria-label="Ship, Done"]')).not.toBeNull();
+  expect(container.querySelector('[aria-label="Ship, Done, 2 hours ago"]')).not.toBeNull();
 });
 
 it("lists a task with its status, unread and pinned state, and the actions the bot list had", async () => {
+  using _clock = pinClock("2026-11-11T04:00:00.000Z");
   const calls = await show({ work: work([listedTask]), rows: [task] });
-  const row = container.querySelector('[aria-label="Review, Waiting for you, unread, pinned"]');
+  const row = container.querySelector(
+    '[aria-label="Review, Waiting for you, 2 hours ago, unread, pinned"]',
+  );
   expect(row).not.toBeNull();
   // Assistive actions are the menu's own choices.
   expect(row?.getAttribute("data-actions")).toBe("Show work,Unpin,Mark done,Mark read");
-  expect(container.textContent).toContain("Waiting for you · Unread");
+  expect(container.textContent).toContain("Waiting for you · 2h · Unread");
   await act(async () =>
     row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
   );
@@ -229,8 +250,11 @@ it("lists a task with its status, unread and pinned state, and the actions the b
 });
 
 it("opens the same row actions on a long press of the task, as the bot list did", async () => {
+  using _clock = pinClock("2026-11-11T04:00:00.000Z");
   const calls = await show({ work: work([listedTask]), rows: [task] });
-  const row = container.querySelector('[aria-label="Review, Waiting for you, unread, pinned"]');
+  const row = container.querySelector(
+    '[aria-label="Review, Waiting for you, 2 hours ago, unread, pinned"]',
+  );
   await act(async () =>
     row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
   );
@@ -329,4 +353,171 @@ it("says a task's other threads are in Threads only while it is older work, not 
     history: { ...history, currentTaskIds: new Set([ChannelTaskId.make("task-1")]) },
   });
   expect(container.textContent).not.toContain("Some threads are listed in Threads.");
+});
+
+const withPullRequests = (
+  taskId: string,
+  title: string,
+  pullRequests: ReadonlyArray<{ repository: string; number: number; state?: string }>,
+  omitted?: number,
+) =>
+  decode({
+    kind: "task",
+    task: { taskId, title, status: "completed", updatedAt: at },
+    view: { taskId, pinnedAt: null, doneAt: null, readThrough: null },
+    lastActivityAt: at,
+    unread: false,
+    mainMessagesSinceQuiet: 0,
+    pullRequests: pullRequests.map((item) => ({ ...item, watching: false })),
+    ...(omitted === undefined ? {} : { pullRequestsOmitted: omitted }),
+  }) as Extract<BotThreadRow, { kind: "task" }>;
+const finishedWork = (...rows: ReadonlyArray<Extract<BotThreadRow, { kind: "task" }>>) => ({
+  running: [],
+  waiting: [],
+  finished: rows.map((row) => ({ ...listedTask, row })),
+});
+const rowNamed = (title: string) =>
+  [...container.querySelectorAll("button")].find((item) =>
+    item.getAttribute("aria-label")?.startsWith(`${title}, `),
+  );
+
+it("a work row names its pull requests and their state, two at most, and counts the rest", async () => {
+  using _clock = pinClock("2026-11-11T04:00:00.000Z");
+  const row = withPullRequests(
+    "task-pr",
+    "Fix the slow test",
+    [
+      { repository: "goat-si/goat", number: 9, state: "open" },
+      { repository: "goat-si/goat", number: 8 },
+      { repository: "goat-si/goat", number: 7, state: "merged" },
+      { repository: "goat-si/goat", number: 6, state: "merged" },
+      { repository: "goat-si/goat", number: 5, state: "closed" },
+    ],
+    2,
+  );
+  await show({ work: finishedWork(row), rows: [row] });
+  expect(container.textContent).toContain("#9 Open");
+  // A pull request whose state is not read shows its number alone, without a state word.
+  expect(container.textContent).toContain("#8+5 more");
+  expect(container.textContent).not.toContain("#7");
+  expect(rowNamed("Fix the slow test")?.getAttribute("aria-label")).toBe(
+    "Fix the slow test, Done, 2 hours ago, Pull request goat-si/goat#9, open, " +
+      "Pull request goat-si/goat#8, state unknown, 5 more pull requests",
+  );
+});
+
+it("pull requests across repositories name their repository, in full where short names match", async () => {
+  const spread = withPullRequests("task-a", "Spread", [
+    { repository: "goat-si/goat", number: 42, state: "merged" },
+    { repository: "goat-si/app", number: 7, state: "open" },
+  ]);
+  const twins = withPullRequests("task-b", "Twins", [
+    { repository: "alpha/app", number: 42, state: "open" },
+    { repository: "beta/app", number: 42, state: "closed" },
+  ]);
+  await show({ work: finishedWork(spread, twins), rows: [spread, twins] });
+  expect(container.textContent).toContain("goat#42 Merged");
+  expect(container.textContent).toContain("app#7 Open");
+  expect(container.textContent).toContain("alpha/app#42 Open");
+  expect(container.textContent).toContain("beta/app#42 Closed");
+  expect(rowNamed("Twins")?.getAttribute("aria-label")).toContain(
+    "Pull request alpha/app#42, open, Pull request beta/app#42, closed",
+  );
+});
+
+it("a row without pull requests has no chip line and names none", async () => {
+  await show({ work: work([listedTask]), rows: [task] });
+  expect(container.textContent).not.toContain("more");
+  expect(rowNamed("Review")?.getAttribute("aria-label")).not.toContain("Pull request");
+});
+
+it("a row only Show more holds shows its pull requests, and its press still opens the peek", async () => {
+  const older = withPullRequests("task-old", "Old fix", [
+    { repository: "goat-si/goat", number: 3, state: "merged" },
+  ]);
+  const calls = await show({
+    work: finishedWork(older),
+    rows: [older],
+    history: {
+      supported: true,
+      currentTaskIds: new Set(),
+      launchesTruncated: new Set(),
+      hasMore: false,
+      loading: false,
+      incomplete: false,
+      failed: false,
+      onLoadMore: () => {},
+    },
+  });
+  expect(container.textContent).toContain("#3 Merged");
+  const row = rowNamed("Old fix");
+  expect(row?.getAttribute("data-actions")).toContain("Open");
+  await act(async () => (row as HTMLButtonElement).click());
+  expect(calls.peek).toHaveBeenCalledWith("task-old");
+});
+
+it("a row says how long ago its task was active, and the words change when the time or the task does", async () => {
+  using _clock = pinClock("2026-11-11T02:05:00.000Z");
+  await show({ work: work([listedTask]), rows: [task] });
+  expect(container.textContent).toContain("Waiting for you · 5m");
+  expect(rowNamed("Review")?.getAttribute("aria-label")).toContain(", 5 minutes ago,");
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect(container.textContent).toContain("Waiting for you · 6m");
+  expect(rowNamed("Review")?.getAttribute("aria-label")).toContain(", 6 minutes ago,");
+  // The same row, active again just now: the text follows the new time.
+  const later = { ...task, lastActivityAt: "2026-11-11T02:06:00.000Z" };
+  await show({ work: work([{ ...listedTask, row: later }]), rows: [later] });
+  expect(container.textContent).toContain("Waiting for you · now");
+  expect(rowNamed("Review")?.getAttribute("aria-label")).toContain(", just now,");
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect(container.textContent).toContain("Waiting for you · 1m");
+  expect(rowNamed("Review")?.getAttribute("aria-label")).toContain(", 1 minute ago,");
+  await act(async () => root?.unmount());
+  root = undefined;
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps no clock while Home is hidden, and shows the right time again once it is shown", async () => {
+  using _clock = pinClock("2026-11-11T02:05:00.000Z");
+  await show({ work: work([listedTask]), rows: [task], ticking: false });
+  expect(container.textContent).toContain("Waiting for you · 5m");
+  expect(vi.getTimerCount()).toBe(0);
+  commits.clear();
+  await act(async () => vi.advanceTimersByTime(30 * 60_000));
+  expect(commits.size).toBe(0);
+  await show({ work: work([listedTask]), rows: [task], ticking: true });
+  expect(container.textContent).toContain("Waiting for you · 35m");
+  expect(vi.getTimerCount()).toBe(1);
+});
+
+it("a minute's tick re-renders only the row whose text changed", async () => {
+  using _clock = pinClock("2026-11-11T05:05:00.000Z");
+  const recent = { ...task, lastActivityAt: "2026-11-11T05:00:00.000Z" };
+  const old = withPullRequests("task-pr", "Fix the slow test", []);
+  await show({
+    work: {
+      running: [],
+      waiting: [{ ...listedTask, row: recent }],
+      finished: [{ ...listedTask, row: old }],
+    },
+    rows: [recent, old],
+  });
+  commits.clear();
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect([...commits.keys()]).toEqual([JSON.stringify(["task", "task-1"])]);
+});
+
+it("a row shown again reads the real time, even while another part of the app holds the minute clock", async () => {
+  using _clock = pinClock("2026-11-11T02:05:00.000Z");
+  // Another subscriber keeps the shared clock's cached minute; its tick is overdue after a suspension.
+  const other = minuteTick.subscribe(() => {});
+  try {
+    await show({ work: work([listedTask]), rows: [task], ticking: false });
+    expect(container.textContent).toContain("Waiting for you · 5m");
+    vi.setSystemTime(Date.parse("2026-11-11T02:40:00.000Z"));
+    await show({ work: work([listedTask]), rows: [task], ticking: true });
+    expect(container.textContent).toContain("Waiting for you · 40m");
+  } finally {
+    other();
+  }
 });

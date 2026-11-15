@@ -43,6 +43,7 @@ import {
   buildAntigravityAcpSpawnInput,
   isAntigravitySignInRequiredError,
   prepareAntigravityProfile,
+  prepareAntigravityRuntimeHome,
   resolveAntigravityInstanceDirectories,
   type AntigravityAuthConfig,
 } from "../antigravityAuthSupport.ts";
@@ -56,6 +57,7 @@ import {
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type { ServerProviderDraft } from "@goat/provider-core/server/snapshotProbe";
 import {
+  acquireAntigravityRuntimeTemp,
   retireAntigravityRuntimeTempDirs,
   removeAntigravitySessionFiles,
 } from "../acp/AntigravitySessionFiles.ts";
@@ -148,12 +150,20 @@ export const AntigravityDriver: ProviderDriver<
       gcpLocation: settings.gcpLocation,
     };
     const authConfigIssue = antigravityAuthConfigIssue(auth);
-    const processEnvironment = yield* mergeProviderInstanceEnvironment(environment);
-    const userHome = resolveAntigravityUserHome(
-      yield* HostProcess.Platform,
-      processEnvironment,
-      yield* HostProcess.HomeDirectory,
+    const baseEnvironment = yield* HostProcess.Environment;
+    const homeDirectory = yield* HostProcess.HomeDirectory;
+    const platform = yield* HostProcess.Platform;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, baseEnvironment),
+    ).pipe(
+      Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+      Effect.map((env) => ({ ...env })),
     );
+    const currentProfile = currentEnvironment.pipe(
+      Effect.map((env) => resolveAntigravityUserHome(platform, env, homeDirectory)),
+    );
+    const startedProfiles = new WeakMap<AcpSessionRuntime.AcpSessionRuntimeStartResult, string>();
+    const eventProfiles = new WeakMap<AcpSessionRuntime.AcpSessionRuntimeEvent, string>();
     const directories = yield* resolveAntigravityInstanceDirectories(
       host.paths.stateDir,
       instanceId,
@@ -197,13 +207,9 @@ export const AntigravityDriver: ProviderDriver<
         Effect.map((catalog) => stampIdentity(ModelCatalog.applyModelCatalog(draft, catalog))),
       );
 
-    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
-      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
-    ): Effect.fn.Return<
-      AcpSessionRuntime.AcpSessionRuntime["Service"],
-      AcpErrors.AcpError | ProviderSetupError,
-      Scope.Scope
-    > {
+    const resolveLaunch = Effect.fn("AntigravityDriver.resolveLaunch")(function* (
+      processEnvironment: NodeJS.ProcessEnv,
+    ) {
       if (authConfigIssue !== null) {
         return yield* new ProviderSetupError({
           instanceId,
@@ -211,7 +217,7 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
-      const executable = yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
+      return yield* installation.acquire(settings.binaryPath, processEnvironment).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderSetupError({
@@ -222,12 +228,27 @@ export const AntigravityDriver: ProviderDriver<
             }),
         ),
       );
+    });
+    const makeRuntime = Effect.fn("AntigravityDriver.makeRuntime")(function* (
+      input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
+    ): Effect.fn.Return<
+      AcpSessionRuntime.AcpSessionRuntime["Service"],
+      AcpErrors.AcpError | ProviderSetupError,
+      Scope.Scope
+    > {
+      const processEnvironment = input.sessionEnvironment ?? (yield* currentEnvironment);
+      const userHome = resolveAntigravityUserHome(platform, processEnvironment, homeDirectory);
+      const executable =
+        input.sessionLaunch === undefined
+          ? yield* resolveLaunch(processEnvironment)
+          : (input.sessionLaunch as AntigravityInstallation.AntigravityExecutable);
       const profile = yield* prepareAntigravityProfile({
         profileDirectory,
         baseEnv: processEnvironment,
         auth,
         userHome,
         tempDirectory: directories.runtimeTemp,
+        skipUserSkills: true,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -246,26 +267,27 @@ export const AntigravityDriver: ProviderDriver<
       // Use one directory per process; shared cleanup could delete files another session still reads.
       // Remove after the child dies, best-effort on Windows where handles may outlive the kill;
       // the next driver start sweeps leftovers.
-      const runtimeTempDirectory = yield* Effect.acquireRelease(
-        fileSystem.makeTempDirectory({ directory: profile.tempDirectory, prefix: "run-" }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderSetupError({
-                instanceId,
-                operation: "start",
-                detail: "Could not create an Antigravity runtime temp directory.",
-                cause,
-              }),
-          ),
+      const runtimeTempDirectory = yield* acquireAntigravityRuntimeTemp(profile.tempDirectory).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.mapError(
+          (cause) =>
+            new ProviderSetupError({
+              instanceId,
+              operation: "start",
+              detail:
+                (cause.reason._tag === "Busy" ? cause.reason.description : undefined) ??
+                "Could not create an Antigravity runtime temp directory.",
+              cause,
+            }),
         ),
-        (directory) =>
-          fileSystem
-            .remove(directory, { recursive: true, force: true })
-            .pipe(
-              Effect.catch(() =>
-                Effect.logWarning("Could not remove an Antigravity runtime temp directory."),
-              ),
-            ),
+      );
+      const runtimeProfile = yield* prepareAntigravityRuntimeHome({
+        directory: runtimeTempDirectory,
+        profile,
+        userHome,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
       );
       const runtime = yield* makeAntigravityAcpRuntime({
         ...input,
@@ -274,7 +296,7 @@ export const AntigravityDriver: ProviderDriver<
         childProcessSpawner: spawner,
         spawn: buildAntigravityAcpSpawnInput({
           installation: executable,
-          profile,
+          profile: runtimeProfile,
           cwd: input.cwd,
           baseEnv: mergeThreadEnvironment(
             withAgentDeviceEnvironment(processEnvironment, input),
@@ -286,19 +308,29 @@ export const AntigravityDriver: ProviderDriver<
       }).pipe(Effect.provideService(Crypto.Crypto, crypto));
       return {
         ...runtime,
+        getEvents: () =>
+          runtime.getEvents().pipe(
+            // Only the two catalog events read their session's profile; deltas pass untouched.
+            Stream.tap((event) =>
+              event._tag === "ConfigOptionsUpdated" || event._tag === "AvailableCommandsUpdated"
+                ? Effect.sync(() => {
+                    eventProfiles.set(event, userHome);
+                  })
+                : Effect.void,
+            ),
+          ),
         ...(executable.harnessPath === null
           ? { setMode: (modeId: string) => runtime.setMode(antigravityCliSessionMode(modeId)) }
           : {}),
         start: () =>
-          runtime
-            .start()
-            .pipe(
-              Effect.tapError((cause): Effect.Effect<void> =>
-                input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
-                  ? provider.onAuthRequired
-                  : Effect.void,
-              ),
+          runtime.start().pipe(
+            Effect.tap((started) => Effect.sync(() => startedProfiles.set(started, userHome))),
+            Effect.tapError((cause): Effect.Effect<void> =>
+              input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
+                ? provider.onAuthRequired(userHome)
+                : Effect.void,
             ),
+          ),
       };
     });
 
@@ -328,13 +360,16 @@ export const AntigravityDriver: ProviderDriver<
           Effect.provideService(Path.Path, path),
         ),
       );
+      const sessionEnvironment = yield* currentEnvironment;
       const runtime = yield* makeRuntime({
         cwd,
         mcpServers: [],
+        sessionEnvironment,
         ...(input.onAuthorizationUrl ? { onAuthorizationUrl: input.onAuthorizationUrl } : {}),
       });
       return {
         ...runtime,
+        userHome: resolveAntigravityUserHome(platform, sessionEnvironment, homeDirectory),
         start: () =>
           runtime.start().pipe(
             Effect.tap((started) =>
@@ -353,16 +388,20 @@ export const AntigravityDriver: ProviderDriver<
         "getEvents" | "drainEvents" | "setModel"
       >,
     ) {
-      yield* provider.onSessionStarted(started);
+      yield* provider.onSessionStarted(started, undefined, startedProfiles.get(started));
       yield* Stream.runForEach(runtime.getEvents(), (event) => {
         if (event._tag === "EventStreamBarrier") {
           return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
         }
         if (event._tag === "ConfigOptionsUpdated") {
-          return provider.onConfigOptionsUpdated(event.configOptions);
+          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(event.availableCommands)
+          ? provider.onAvailableCommands(
+              event.availableCommands,
+              undefined,
+              eventProfiles.get(event),
+            )
           : Effect.void;
       }).pipe(Effect.forkScoped);
       // Thinking levels differ per model and are reported only for the selected one.
@@ -384,7 +423,7 @@ export const AntigravityDriver: ProviderDriver<
         Effect.suspend(() => provider.onSignedIn).pipe(
           Effect.andThen(publishCatalog(started, runtime)),
         ),
-      onSignedOut: Effect.suspend(() => provider.onSignedOut),
+      onSignedOut: (runtime) => provider.onSignedOut(runtime.userHome),
       usesBrowser: antigravityAuthUsesBrowser(auth.authMethod),
     });
 
@@ -400,6 +439,7 @@ export const AntigravityDriver: ProviderDriver<
           detail: authConfigIssue,
         });
       }
+      const processEnvironment = yield* currentEnvironment;
       const executable = yield* installation.resolve(settings.binaryPath, processEnvironment).pipe(
         Effect.mapError(
           (cause) =>
@@ -442,6 +482,7 @@ export const AntigravityDriver: ProviderDriver<
       probeUsage: usage.probe,
       clearUsage: usage.clear,
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
+      currentProfile,
       supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -463,16 +504,28 @@ export const AntigravityDriver: ProviderDriver<
       instanceId,
       selfInvocation,
       makeRuntime,
+      currentEnvironment,
+      resolveSessionLaunch: (env) =>
+        resolveLaunch(env).pipe(
+          Effect.mapError(
+            (cause) => new AcpErrors.AcpTransportError({ detail: cause.detail, cause }),
+          ),
+        ),
       withProcess: authFlow.withProcess,
       defaultModel,
       profileDirectory,
-      onSessionStarted: provider.onSessionStarted,
+      onSessionStarted: (started, cwd) =>
+        provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
       onSessionEvent: (event) => {
         if (event._tag === "ConfigOptionsUpdated") {
-          return provider.onConfigOptionsUpdated(event.configOptions);
+          return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(event.availableCommands)
+          ? provider.onAvailableCommands(
+              event.availableCommands,
+              undefined,
+              eventProfiles.get(event),
+            )
           : Effect.void;
       },
       continuationRequests,
@@ -525,9 +578,6 @@ export const AntigravityDriver: ProviderDriver<
             }),
           ),
       }),
-      Effect.tapError((cause) =>
-        isAntigravitySignInRequiredError(cause) ? provider.onAuthRequired : Effect.void,
-      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderDriverError"
           ? cause
@@ -556,7 +606,13 @@ export const AntigravityDriver: ProviderDriver<
       snapshotForCwd: (cwd) =>
         !enabled
           ? provider.snapshot.getSnapshot
-          : discoverAntigravitySkills({ cwd, userHome }).pipe(
+          : currentEnvironment.pipe(
+              Effect.flatMap((environment) =>
+                discoverAntigravitySkills({
+                  cwd,
+                  userHome: resolveAntigravityUserHome(platform, environment, homeDirectory),
+                }),
+              ),
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
               Effect.flatMap((skills) => provider.snapshotForCwd(cwd, skills)),

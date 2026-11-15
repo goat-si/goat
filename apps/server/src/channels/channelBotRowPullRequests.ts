@@ -113,12 +113,26 @@ const shown = (
   state !== undefined && (refreshed || state !== "open") ? { ...item, state } : item;
 
 /**
- * Which duplicate of a pull request a row keeps, lowest first: a state from a thread that still
- * reads it (refreshed and not final, as the refresher judges both); a merged or closed state no
- * longer read; the stored copy's state; no state. A tie keeps the first source met.
+ * Which duplicate of a pull request a row keeps, lowest first: a merge final by its mergedAt,
+ * which cannot be undone; a state from a thread that still reads it (refreshed and not final, as
+ * the refresher judges both); a merged or closed state no longer read; the stored copy's state;
+ * no state. A tie keeps the first source met.
  */
-const precedence = (item: BotRowPullRequest, fromThread: boolean, refreshed: boolean) =>
-  item.state === undefined ? 3 : !fromThread ? 2 : refreshed ? 0 : 1;
+const precedence = (
+  item: BotRowPullRequest,
+  fromThread: boolean,
+  refreshed: boolean,
+  final: boolean,
+) =>
+  item.state === undefined
+    ? 4
+    : !fromThread
+      ? 3
+      : item.state === "merged" && final
+        ? 0
+        : refreshed
+          ? 1
+          : 2;
 
 /**
  * One row's pull requests by repository and number, capped before encoding, since shipped clients
@@ -137,7 +151,7 @@ export const botRowPullRequests = (
       const key = pullRequestKey(pullRequest);
       const refreshed = source.refreshed && source.final?.has(key) !== true;
       const item = shown(pullRequest, refreshed);
-      const rank = precedence(item, fromThread, refreshed);
+      const rank = precedence(item, fromThread, refreshed, source.final?.has(key) === true);
       if (rank < (byKey.get(key)?.rank ?? Number.POSITIVE_INFINITY)) byKey.set(key, { item, rank });
     }
   const all = [...byKey.values()]

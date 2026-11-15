@@ -293,6 +293,33 @@ const linkAntigravityUserSkills = Effect.fn("linkAntigravityUserSkills")(functio
   }
 });
 
+export const prepareAntigravityRuntimeHome = Effect.fn("prepareAntigravityRuntimeHome")(
+  function* (input: {
+    readonly directory: string;
+    readonly profile: AntigravityProfile;
+    readonly userHome: string;
+  }) {
+    const path = yield* Path.Path;
+    yield* Effect.tryPromise(() =>
+      NodeFSP.symlink(
+        input.profile.acpDirectory,
+        path.join(input.directory, "antigravity-acp"),
+        input.profile.platform === "win32" ? "junction" : "dir",
+      ),
+    ).pipe(
+      Effect.mapError(() =>
+        authSupportError("The Antigravity runtime profile could not be linked."),
+      ),
+    );
+    yield* linkAntigravityUserSkills({
+      profileDirectory: input.directory,
+      userHome: input.userHome,
+      platform: input.profile.platform,
+    });
+    return { ...input.profile, geminiHome: input.directory };
+  },
+);
+
 export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(function* (input: {
   readonly profileDirectory: string;
   readonly baseEnv?: NodeJS.ProcessEnv;
@@ -301,6 +328,7 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
   readonly auth?: AntigravityAuthConfig;
   readonly userHome?: string;
   readonly tempDirectory?: string;
+  readonly skipUserSkills?: boolean;
 }) {
   const auth = input.auth ?? ANTIGRAVITY_PERSONAL_AUTH;
   const fs = yield* FileSystem.FileSystem;
@@ -439,7 +467,9 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
         authSupportError("The Antigravity profile settings could not be written."),
       ),
     );
-  yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+  if (!input.skipUserSkills) {
+    yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+  }
   return profile;
 });
 

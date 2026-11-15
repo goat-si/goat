@@ -1,4 +1,5 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
 import type {
@@ -22,8 +23,6 @@ import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -50,7 +49,6 @@ import {
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
-  type TurnTokenUsage,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
@@ -181,6 +179,9 @@ import {
   type AcpMcpContext,
 } from "./mcpContext.ts";
 
+import { acpPerTurnPromptUsage } from "./promptUsage.ts";
+export { acpPerTurnPromptUsage } from "./promptUsage.ts";
+
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 // Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
@@ -234,50 +235,6 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
   override get message(): string {
     return `The agent did not accept the model "${this.model}". Choose another model for this provider, then retry.`;
   }
-}
-
-/**
- * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
- * directly onto TurnTokenUsage: the response's counters already cover exactly
- * this prompt.
- */
-export function acpPerTurnPromptUsage(
-  usage: EffectAcpSchema.Usage | null | undefined,
-  hasSubagents: boolean,
-  terminalStatus: OrchestrationV2ProviderTurn["status"],
-  geminiUsage = false,
-): TurnTokenUsage {
-  if (usage == null) {
-    return { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents };
-  }
-  const inputTokens = geminiUsage
-    ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
-    : usage.inputTokens;
-  const outputTokens = geminiUsage
-    ? usage.outputTokens + (usage.thoughtTokens ?? 0)
-    : usage.outputTokens;
-  // TurnTokenUsage contract: input includes cache read + write and reasoning
-  // is a subset of output, so clamp counters that exceed their parent and
-  // drop the ones the agent left unset. Cache writes are capped at whatever
-  // cache reads leave of input, so the pair cannot exceed it.
-  const clampSubset = (value: number | null | undefined, parent: number) =>
-    value == null ? undefined : Math.min(value, parent);
-  const cachedInputTokens = clampSubset(usage.cachedReadTokens, inputTokens);
-  const cacheCreationTokens = clampSubset(
-    usage.cachedWriteTokens,
-    inputTokens - (cachedInputTokens ?? 0),
-  );
-  const reasoningTokens = clampSubset(usage.thoughtTokens, outputTokens);
-  return {
-    usageScope: "main_agent",
-    usageStatus: terminalStatus === "completed" ? "complete" : "partial",
-    hasSubagents,
-    inputTokens,
-    outputTokens,
-    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-    ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-  };
 }
 
 function acpSupportsImagePrompts(input: {
@@ -863,13 +820,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
+        const sessionLaunch = yield* (
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
+          ) ?? Effect.void
+        );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: options.clientTerminals.environment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);
@@ -1450,6 +1416,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
+            sessionEnvironment,
+            sessionLaunch,
             ...(mcpContext.processEnvironment === undefined
               ? {}
               : { processEnvironment: mcpContext.processEnvironment }),
@@ -3837,7 +3805,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             for (const event of parseSessionUpdateEvent(notification).events) {
               if (event._tag !== "ToolCallUpdated") continue;
               const toolCall = flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall;
-              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall);
+              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall, {
+                environment: sessionEnvironment,
+                launch: sessionLaunch,
+              });
               if (proposedPlanMarkdown !== undefined && proposedPlanMarkdown.length > 0) {
                 yield* captureProposedPlan({ planMarkdown: proposedPlanMarkdown });
               }
@@ -7013,7 +6984,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.rewriteUserText === undefined
               ? turnInput.message.text
               : yield* flavor
-                  .rewriteUserText(turnInput.message.text, turnInput)
+                  .rewriteUserText(turnInput.message.text, turnInput, {
+                    environment: sessionEnvironment,
+                    launch: sessionLaunch,
+                  })
                   .pipe(
                     Effect.provideService(
                       ChildProcessSpawner.ChildProcessSpawner,

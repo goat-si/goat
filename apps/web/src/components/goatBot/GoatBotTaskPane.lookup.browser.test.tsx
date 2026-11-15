@@ -652,7 +652,10 @@ it("shows lookup loading and does not retry a permission refusal", async () => {
     }),
   );
   await using screen = await render(<Pane onClose={() => {}} />);
-  await expect.element(screen.getByRole("status")).toHaveTextContent("Loading task…");
+  // The pane also keeps an empty status for unsaved work behind the task; this one is the lookup's.
+  await expect
+    .element(screen.getByRole("status").filter({ hasText: "Loading task…" }))
+    .toBeInTheDocument();
   await act(() =>
     finish({
       _tag: "Failure",
@@ -660,8 +663,12 @@ it("shows lookup loading and does not retry a permission refusal", async () => {
     }),
   );
   await expect
-    .element(screen.getByRole("status"))
-    .toHaveTextContent("Permission to read this task is unavailable.");
+    .element(
+      screen
+        .getByRole("status")
+        .filter({ hasText: "Permission to read this task is unavailable." }),
+    )
+    .toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
 });
 
