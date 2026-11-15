@@ -233,3 +233,24 @@ it("a phone whose access was revoked shows no line, even from a fresh start with
     connection.failure = null;
   }
 });
+
+it("a refusal stays known after the next attempt fails some other way, until a read succeeds", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  try {
+    await using tile = mainTile();
+    await tile.show();
+    connection.failure = { kind: "blocked", reason: "authentication" };
+    await tile.show({ offline: true });
+    expect(tile.line).toBeNull();
+    // The network changed and the next attempt could not reach the computer: it never asked again.
+    connection.failure = { kind: "retrying", reason: "host-unreachable" };
+    await tile.show({ offline: true });
+    expect(tile.line).toBeNull();
+    // Connected again and the bot list answered: this phone may read the computer.
+    connection.failure = null;
+    await tile.show();
+    expect(tile.line).toBe("The build is waiting on you.");
+  } finally {
+    connection.failure = null;
+  }
+});
