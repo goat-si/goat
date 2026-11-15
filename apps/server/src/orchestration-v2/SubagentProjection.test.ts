@@ -134,9 +134,12 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   });
 });
 
-it.effect.each(["provider", "mcp"] as const)(
-  "a %s child does not inherit parent settlement protections and settles once idle",
-  (creationSource) =>
+it.effect.each([
+  ["provider", "settles once its parent settles"],
+  ["mcp", "settles once idle while its parent is live"],
+] as const)(
+  "a %s child does not inherit parent settlement protections and %s",
+  ([creationSource]) =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
       const parentThread = {
@@ -177,6 +180,23 @@ it.effect.each(["provider", "mcp"] as const)(
       assert.deepEqual(savedParent.pinnedAt, parentCreatedAt);
       assert.equal(savedParent.pinOrderKey, "a0");
       assert.deepEqual(savedParent.autoSettleDisabledAt, parentCreatedAt);
+      if (creationSource === "provider") {
+        // A provider-native child waits for its parent, so settle the pinned parent first.
+        assert.deepEqual(yield* store.getSettlementCandidates(), []);
+        yield* store.apply({
+          id: EventId.make(`event:${parentThreadId}:settled`),
+          type: "thread.settled",
+          threadId: parentThreadId,
+          occurredAt: childCreatedAt,
+          payload: {
+            ...savedParent,
+            settledOverride: "settled",
+            settledAt: childCreatedAt,
+            pinnedAt: null,
+            pinOrderKey: null,
+          },
+        });
+      }
       const candidates = yield* store.getSettlementCandidates();
       assert.deepEqual(
         candidates.map((candidate) => candidate.id),

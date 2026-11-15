@@ -53,6 +53,7 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import {
   failure,
   iso,
+  remoteReadArguments,
   withoutHost,
   remoteSendArguments,
   decodeRemote,
@@ -537,7 +538,10 @@ const make = Effect.gen(function* () {
                 host: input.host,
                 environmentId: watch?.sourceEnvironmentId ?? null,
                 tool: "goat_thread_read",
-                arguments: withoutHost(input),
+                arguments: remoteReadArguments(input),
+                ...(input.beforePosition === undefined
+                  ? {}
+                  : { optionalArguments: { beforePosition: input.beforePosition } }),
                 writes: false,
               },
               decodeRead,

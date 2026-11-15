@@ -50,7 +50,8 @@ import { MobileBotTaskSearch } from "./MobileBotTaskSearch";
 import { MobileBotHomeChip } from "./MobileBotHomeChip";
 import { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { MobileTaskHeader } from "./MobileTaskHeader";
-import { GOAT_BOT_NEW_ROUTINE_DRAFT, MobileBotRoutines } from "./MobileBotRoutines";
+import { GOAT_BOT_NEW_ROUTINE_DRAFT } from "./goatBotDraftRequests";
+import { MobileBotRoutines } from "./MobileBotRoutines";
 import type { MobileBotHomeFocus } from "./useGoatBotEventTargets";
 import { NO_TASK_CHIPS, type MobileTaskChips } from "./mobileBotTaskStatus";
 

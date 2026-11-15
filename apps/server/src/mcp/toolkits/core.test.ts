@@ -1129,7 +1129,7 @@ it.effect("discovers workflow stop targets and requires orchestration capability
               Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
             getThreadRecords: () =>
               Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
-            getTimelinePage: () => Effect.succeed({ items: [row], totalItems: 1, hasMore: false }),
+            getTimelinePage: () => Effect.succeed(McpToolAccessTestkit.timelinePage([row])),
             stopWorkflow: (input) =>
               Effect.sync(() => {
                 stopped.push(input);

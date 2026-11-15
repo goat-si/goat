@@ -1,5 +1,6 @@
 import "../../testing/decisionNativeHarness";
-import { Box, InputHost, PressHost, TextHost, type HostProps } from "./decisionInboxHosts";
+import { Box, InputHost, PressHost, TextHost } from "../../testing/decisionInboxHosts";
+import type { HostProps } from "../../testing/decisionInboxHosts";
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
@@ -236,7 +237,6 @@ vi.mock("../threads/QuestionAttachments", () => ({
     <InputHost {...props} accessibilityLabel={props.question.question} />
   ),
 }));
-
 import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 import { DecisionsRouteScreen } from "./DecisionsRouteScreen";
 import { PendingUserInputBody } from "../threads/PendingUserInputBody";
