@@ -1,3 +1,4 @@
+import { DATABASE_MIGRATION_PROGRESS_MESSAGE } from "@goat/shared/databaseMigrationLog";
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -341,7 +342,7 @@ export const reconcileGoatMigrationIds = Effect.fn("reconcileGoatMigrationIds")(
   ];
   const pending = displacedUpstreamMigrations(entries, (yield* readHistory) ?? []);
   for (const [index, [id, name]] of pending.entries()) {
-    yield* Effect.log("Upgrading database").pipe(
+    yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
       Effect.annotateLogs({
         migration: `${id}_${name}`,
         progress: `${index + 1} of ${pending.length}`,
