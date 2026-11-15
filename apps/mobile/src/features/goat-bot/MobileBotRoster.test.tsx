@@ -51,6 +51,7 @@ const state = vi.hoisted(() => ({
   },
   appState: "active",
   rosterError: null as string | null,
+  mainUnreadable: false,
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ getState: () => state.navState, getParent: () => undefined }),
@@ -77,9 +78,16 @@ vi.mock("react-native", () => ({
   },
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
-vi.mock("./useKeptPerComputer", () => ({ useComputerReadable: () => true }));
+// Which computers this phone may still read; the main bot's saved computer is "env" unless a test moves it.
+const readable = vi.hoisted(() => ({ ids: new Set(["env"]), botComputer: "env" }));
+vi.mock("./useKeptPerComputer", () => ({
+  useComputerReadable: (environmentId: string | null) =>
+    environmentId !== null && readable.ids.has(environmentId),
+}));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ botRef: null }),
+  useMobileGoatBotHomeMode: () => ({
+    botRef: { environmentId: readable.botComputer, threadId: "bot" },
+  }),
 }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
@@ -103,8 +111,10 @@ vi.mock("./MobileBotRosterView", () => ({
     members?: Record<string, unknown>;
     header?: React.ReactNode;
     newBotRow?: React.ReactNode;
+    mainUnreadable?: boolean;
   }) => {
     state.members = props.members ?? null;
+    state.mainUnreadable = props.mainUnreadable === true;
     return (
       <>
         {props.header}
@@ -500,4 +510,20 @@ it("opens nothing for a retried create that returns a bot already deleted", asyn
   expect(view.opened).not.toHaveBeenCalled();
   expect(view.container.textContent).toBe("");
   await view.unmount();
+});
+
+it("rests the main tile by the computer its saved bot lives on, not the one the roster lists", async () => {
+  // The saved bot is on a computer this phone may no longer read; the roster still lists "env".
+  readable.botComputer = "old";
+  try {
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(true);
+    readable.botComputer = "env";
+    await act(async () => root.render(<MobileBotRoster selectedKey={null} onOpenBot={() => {}} />));
+    expect(state.mainUnreadable).toBe(false);
+    await act(async () => root.unmount());
+  } finally {
+    readable.botComputer = "env";
+  }
 });

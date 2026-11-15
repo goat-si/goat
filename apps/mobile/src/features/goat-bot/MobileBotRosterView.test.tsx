@@ -742,12 +742,15 @@ it("once its computer may no longer be read here, the main tile rests and says n
         <MobileBotRosterView
           bots={[{ kind: "main", profile: null }]}
           mainUnreadable
+          offline
           slackEnabled={false}
           onOpenBot={() => {}}
         />,
       ),
     );
     expect(container.querySelector('[aria-label="GOAT Bot"]')).not.toBeNull();
+    // Nothing it read there shows, so nothing is marked out of date either.
+    expect(container.textContent).not.toContain("may be out of date");
   } finally {
     face.items = [];
   }

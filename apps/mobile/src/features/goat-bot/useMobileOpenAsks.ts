@@ -79,7 +79,8 @@ export function useMobileOpenAsks(
       offline: true,
     };
   }
-  const earlier = asks.data;
+  // The kept answer is the live one while connected, and nothing once access is refused.
+  const earlier = kept;
   const failed = asks.error !== null;
   if (failed && (earlier === null || (earlier.asks.length === 0 && earlier.total === 0)))
     return { state: "failed", retry: refresh };

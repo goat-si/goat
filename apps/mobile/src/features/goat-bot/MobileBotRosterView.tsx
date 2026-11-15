@@ -233,7 +233,7 @@ export function MobileBotRosterView(props: {
                   <Text className="text-xs text-foreground-muted">Also in Slack</Text>
                 ) : null}
               </Pressable>
-              {props.offline ? (
+              {props.offline && !props.mainUnreadable ? (
                 <Text className="px-4 pb-1 text-xs text-foreground-muted">
                   Offline · this may be out of date
                 </Text>

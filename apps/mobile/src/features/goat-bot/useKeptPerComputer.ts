@@ -1,11 +1,11 @@
 import { useAtomSet, useAtomValue, RegistryContext } from "@effect/atom-react";
 import { accessDenied } from "@goat/client-runtime/goatBot";
+import type { EnvironmentPresentation } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
 import { Atom, type AtomRegistry } from "effect/reactivity";
 import { useContext, useEffect } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
-import { useEnvironments } from "../../state/environments";
 import type { EnvironmentQueryView } from "../../state/query";
 
 // The last successful answer of a read, per computer, so the bot list, open asks and each member's
@@ -18,9 +18,9 @@ const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Ato
 const NO_KEPT = Atom.make<unknown>(null);
 const keyOf = (kind: Kind, environmentId: EnvironmentId, part?: string) =>
   `${generation}:${kind}:${environmentId}${part === undefined ? "" : `:${part}`}`;
-// Whether the computer last refused this phone, by its bot list or its connection. A refusal is
-// only the connection's last failure, which the next unreachable attempt replaces; this keeps it
-// until a read succeeds again, and until then nothing of that computer is shown, kept or live.
+// Whether the computer last refused this phone, by its connection or its bot list. The connection
+// keeps a refusal only as its last failure, which the next unreachable attempt replaces; this keeps
+// it until a bot-list read succeeds, and until then nothing of that computer shows, kept or live.
 const deniedAtom = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
 const NOT_DENIED = Atom.make(false);
 const deniedKeyOf = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
@@ -48,11 +48,14 @@ function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentI
  * Installed once with the app's registry: a computer that leaves the catalog loses what was kept
  * for it. Returns the way to stop following.
  */
-export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry): () => void {
+export function followKeptPerComputerCatalog(
+  registry: AtomRegistry.AtomRegistry,
+  connections?: Atom.Atom<ReadonlyMap<EnvironmentId, Pick<EnvironmentPresentation, "connection">>>,
+): () => void {
   const counts = new Map<EnvironmentId, number>();
   removals.set(registry, counts);
   let known = new Set<EnvironmentId>();
-  return registry.subscribe(
+  const stopCatalog = registry.subscribe(
     environmentCatalog.catalogValueAtom,
     (catalog) => {
       const now = new Set(catalog.entries.keys());
@@ -65,6 +68,26 @@ export function followKeptPerComputerCatalog(registry: AtomRegistry.AtomRegistry
     },
     { immediate: true },
   );
+  // A refusal is seen here whatever is on screen, so nothing from that computer shows afterwards.
+  const stopRefusals =
+    connections === undefined
+      ? () => {}
+      : registry.subscribe(
+          connections,
+          (presentations) => {
+            for (const [environmentId, presentation] of presentations) {
+              const denied = deniedAtom(deniedKeyOf(environmentId));
+              if (!refusedConnection(presentation.connection) || registry.get(denied)) continue;
+              forget(registry, environmentId);
+              registry.set(denied, true);
+            }
+          },
+          { immediate: true },
+        );
+  return () => {
+    stopCatalog();
+    stopRefusals();
+  };
 }
 
 /**
@@ -94,14 +117,13 @@ export function useKeptPerComputer<A>(
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const settled = live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
-  const refused = useConnectionRefused(environmentId);
   const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
     if (environmentId === null || key === null) return;
     // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds.
     if (kind === "bots") {
-      if (denied || refused) setComputerDenied(true);
+      if (denied) setComputerDenied(true);
       else if (settled !== null) setComputerDenied(false);
     }
     if (denied || !readable) {
@@ -129,7 +151,6 @@ export function useKeptPerComputer<A>(
     settled,
     stored,
     denied,
-    refused,
     readable,
     store,
     setComputerDenied,
@@ -142,25 +163,20 @@ export function useKeptPerComputer<A>(
 }
 
 /**
- * Whether this phone may still read the computer: it is in the app's catalog, its connection is not
- * refused for its credential or scope (a revoked phone only ever sees that), and its bot list was
- * not last refused. Kept answers and cached messages from it show only while this holds.
+ * Whether this phone may still read the computer: it is in the app's catalog and has not been
+ * refused since its last successful bot-list read, by its connection (a revoked phone only ever
+ * sees that) or by the bot list. Kept answers and cached messages from it show only while this holds.
  */
 export function useComputerReadable(environmentId: EnvironmentId | null): boolean {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const denied = useAtomValue(
     environmentId === null ? NOT_DENIED : deniedAtom(deniedKeyOf(environmentId)),
   );
-  const refused = useConnectionRefused(environmentId);
-  return environmentId !== null && catalog.entries.has(environmentId) && !denied && !refused;
+  return environmentId !== null && catalog.entries.has(environmentId) && !denied;
 }
 
-/** The computer's connection stopped because it refuses this phone's credential or scope. */
-function useConnectionRefused(environmentId: EnvironmentId | null): boolean {
-  const { presentationById } = useEnvironments();
-  const connection =
-    environmentId === null ? undefined : presentationById.get(environmentId)?.connection;
-  const reason =
-    connection !== undefined && "failure" in connection ? connection.failure?.reason : null;
+/** The connection stopped because the computer refuses this phone's credential or scope. */
+function refusedConnection(connection: EnvironmentPresentation["connection"]): boolean {
+  const reason = "failure" in connection ? connection.failure?.reason : null;
   return reason === "authentication" || reason === "permission";
 }

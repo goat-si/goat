@@ -168,23 +168,30 @@ function mainTile() {
   const view = (children: ReactNode) => (
     <RegistryContext value={registry}>{children}</RegistryContext>
   );
+  let listOpen = false;
+  const render = (botList: { cause?: unknown; offline?: boolean }) =>
+    root.render(
+      view(
+        <>
+          <BotList cause={botList.cause ?? null} offline={botList.offline ?? false} />
+          <Probe />
+        </>,
+      ),
+    );
   return {
     get line() {
       return preview?.text ?? null;
     },
     show: (botList: { cause?: unknown; offline?: boolean } = {}) =>
-      act(async () =>
-        root.render(
-          view(
-            <>
-              <BotList cause={botList.cause ?? null} offline={botList.offline ?? false} />
-              <Probe />
-            </>,
-          ),
-        ),
-      ),
+      act(async () => {
+        listOpen = true;
+        render(botList);
+      }),
     setComputers: (ids: string[]) => act(async () => registry.set(catalog.atom!, listed(ids))),
-    /** The computer's connection fails this way, whatever is on screen at the time. */
+    /**
+     * The computer's connection fails this way, whatever is on screen. As in the app, the same
+     * update takes an open bot list offline, so it reads nothing from then on.
+     */
     fail: (failure: { kind: string; reason: string } | null) =>
       act(async () => {
         connection.failure = failure;
@@ -199,9 +206,14 @@ function mainTile() {
             ],
           ]),
         );
+        if (listOpen && failure !== null) render({ offline: true });
       }),
     /** Only the main tile is on screen: no bot list, no member rows. */
-    showTileAlone: () => act(async () => root.render(view(<Probe />))),
+    showTileAlone: () =>
+      act(async () => {
+        listOpen = false;
+        root.render(view(<Probe />));
+      }),
     [Symbol.asyncDispose]: async () => {
       await act(async () => root.unmount());
       stop();
@@ -240,13 +252,13 @@ it("the main tile shows no line once its computer is removed from the app, thoug
 
 it("a phone whose access was revoked shows no line, even from a fresh start with the conversation only in its cache", async () => {
   state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
-  // The computer refuses this phone's credential: the connection stops there, and no read runs.
-  connection.failure = { kind: "blocked", reason: "authentication" };
   try {
     await using tile = mainTile();
+    // The computer refuses this phone's credential: the connection stops there, and no read runs.
+    await tile.fail({ kind: "blocked", reason: "authentication" });
     await tile.show({ offline: true });
     expect(tile.line).toBeNull();
-    connection.failure = { kind: "blocked", reason: "permission" };
+    await tile.fail({ kind: "blocked", reason: "permission" });
     await tile.show({ offline: true });
     expect(tile.line).toBeNull();
   } finally {
@@ -259,15 +271,15 @@ it("a refusal stays known after the next attempt fails some other way, until a r
   try {
     await using tile = mainTile();
     await tile.show();
-    connection.failure = { kind: "blocked", reason: "authentication" };
+    await tile.fail({ kind: "blocked", reason: "authentication" });
     await tile.show({ offline: true });
     expect(tile.line).toBeNull();
     // The network changed and the next attempt could not reach the computer: it never asked again.
-    connection.failure = { kind: "retrying", reason: "host-unreachable" };
+    await tile.fail({ kind: "retrying", reason: "host-unreachable" });
     await tile.show({ offline: true });
     expect(tile.line).toBeNull();
     // Connected again and the bot list answered: this phone may read the computer.
-    connection.failure = null;
+    await tile.fail(null);
     await tile.show();
     expect(tile.line).toBe("The build is waiting on you.");
   } finally {

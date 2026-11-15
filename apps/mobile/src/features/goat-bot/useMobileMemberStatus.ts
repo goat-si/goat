@@ -9,15 +9,15 @@ import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { useKeptPerComputer } from "./useKeptPerComputer";
 
+// The row shows one line; a kept message is cut well past what a phone row can show.
+const KEPT_LINE_LENGTH = 200;
+
 /**
  * How many of a member's tasks wait on a person, its conversation's newest message, and whether
  * that message is the bot's and arrived after the last visit. One cached read per member, read
  * again when its conversation changes or is visited; offline, the last answer kept for it, and
  * nothing once access is refused or the computer removed. \`status\` is what its row face reads.
  */
-// The row shows one line; a kept message is cut well past what a phone row can show.
-const KEPT_LINE_LENGTH = 200;
-
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
   /**
