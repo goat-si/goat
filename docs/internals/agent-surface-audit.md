@@ -203,7 +203,7 @@ Only 45% of input parameters carry a description. 112 tools describe none of the
 | `goat_ssh_thread_launch` | 399        | packages/contracts/src/agentSurface/entries/ssh.ts    |
 | `goat_describe`          | 396        | packages/contracts/src/agentSurface/surfaceEntries.ts |
 | `goat_hub_device_move`   | 393        | packages/contracts/src/agentSurface/entries/hub.ts    |
-| `goat_eval`              | 392        | packages/contracts/src/agentSurface/surfaceEntries.ts |
+| `task_cancel`            | 393        | packages/contracts/src/agentSurface/entries/task.ts   |
 
 Long descriptions carry routing policy (when to use another tool, what to tell the user) that every session pays for in context and no test checks.
 
