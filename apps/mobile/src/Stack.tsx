@@ -105,6 +105,7 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
+import { SettingsLanguageRouteScreen } from "./features/settings/SettingsLanguageRouteScreen";
 import {
   SettingsEnvironmentAgentBehaviorRouteScreen,
   SettingsEnvironmentMaintenanceRouteScreen,
@@ -371,6 +372,11 @@ const SETTINGS_SCREENS = {
       ...SETTINGS_PAGE_OPTIONS,
       title: "Organization",
     },
+  }),
+  SettingsLanguage: createNativeStackScreen({
+    screen: SettingsLanguageRouteScreen,
+    linking: "settings/language",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Language" },
   }),
   SettingsProjectOverview: createNativeStackScreen({
     screen: SettingsProjectOverviewRouteScreen,
