@@ -226,7 +226,7 @@ it("a row names its pull requests and their state on the control that opens it",
   await expect
     .element(
       screen.getByRole("button", {
-        name: /^Ship chips.*Pull request goat-si\/goat#42, open.*Pull request goat-si\/goat#41, merged.*\+3 more/,
+        name: /^Ship chips.*Pull request goat-si\/goat#42, open.*Pull request goat-si\/goat#41, merged.*3 more pull requests$/,
       }),
     )
     .toBeVisible();

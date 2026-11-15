@@ -12,7 +12,7 @@ const VISIBLE_PULL_REQUESTS = 2;
 export function GoatBotPullRequestChips(props: {
   readonly row: Parameters<typeof goatBotRowPullRequests>[0];
 }) {
-  const { chips, moreLabel } = goatBotRowPullRequests(props.row, VISIBLE_PULL_REQUESTS);
+  const { chips, more, moreLabel } = goatBotRowPullRequests(props.row, VISIBLE_PULL_REQUESTS);
   if (chips.length === 0 && moreLabel === null) return null;
   return (
     // Wraps instead of clipping, so a narrow row never cuts a chip or the count in half.
@@ -47,7 +47,12 @@ export function GoatBotPullRequestChips(props: {
         );
       })}
       {moreLabel === null ? null : (
-        <span className="shrink-0 text-muted-foreground">{moreLabel}</span>
+        <span className="shrink-0 text-muted-foreground">
+          <span aria-hidden>{moreLabel}</span>
+          <span className="sr-only">
+            {more === 1 ? "1 more pull request" : `${more} more pull requests`}
+          </span>
+        </span>
       )}
     </span>
   );
