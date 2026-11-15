@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  type OrchestrationV2DomainEvent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -97,12 +98,88 @@ const runForkWithFailingNativeSource = (forkFailures: number) => {
     const sourceThreadId = ThreadId.make("fork-missing-source");
     const targetThreadId = ThreadId.make("fork-missing-target");
     const parentThreadId = ThreadId.make("fork-missing-parent");
-    // A completed run whose native session no longer exists.
+    // A rewound run, then a completed run whose native session no longer exists.
+    const runEvents = (
+      threadId: ThreadId,
+      providerThreadId: ProviderThreadId,
+      key: string,
+      ordinal: number,
+      status: "completed" | "rolled_back",
+      text: string,
+    ) => {
+      const runId = RunId.make(`${threadId}-${key}`);
+      const userMessageId = MessageId.make(`${threadId}-${key}-message`);
+      const events: Array<OrchestrationV2DomainEvent> = [
+        {
+          id: EventId.make(`${threadId}-${key}`),
+          type: "run.created",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: {
+            id: runId,
+            threadId,
+            ordinal,
+            providerInstanceId: instanceId,
+            modelSelection,
+            providerThreadId,
+            userMessageId,
+            rootNodeId: null,
+            activeAttemptId: null,
+            status,
+            queuePosition: null,
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        },
+        {
+          id: EventId.make(`${threadId}-${key}-user-item`),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`${threadId}-${key}-user-item`),
+            threadId,
+            runId,
+            nodeId: null,
+            providerThreadId,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "user_message",
+            createdBy: "user",
+            creationSource: "web",
+            inputIntent: "turn_start",
+            messageId: userMessageId,
+            text,
+            attachments: [],
+          },
+        },
+      ];
+      return { runId, events };
+    };
     const seedRun = (threadId: ThreadId, marker: string) =>
       Effect.gen(function* () {
         const providerThreadId = ProviderThreadId.make(`${threadId}-native-thread`);
-        const runId = RunId.make(`${threadId}-run`);
-        const userMessageId = MessageId.make(`${threadId}-message`);
+        const rewound = runEvents(
+          threadId,
+          providerThreadId,
+          "rewound",
+          1,
+          "rolled_back",
+          `REWOUND_${marker}`,
+        );
+        const kept = runEvents(threadId, providerThreadId, "run", 2, "completed", marker);
         yield* eventSink.write({
           events: [
             {
@@ -121,71 +198,18 @@ const runForkWithFailingNativeSource = (forkFailures: number) => {
                 nativeConversationHeadRef: null,
                 status: "idle",
                 firstRunOrdinal: 1,
-                lastRunOrdinal: 1,
+                lastRunOrdinal: 2,
                 handoffIds: [],
                 forkedFrom: null,
                 createdAt: now,
                 updatedAt: now,
               },
             },
-            {
-              id: EventId.make(`${threadId}-run`),
-              type: "run.created",
-              threadId,
-              runId: runId,
-              occurredAt: now,
-              payload: {
-                id: runId,
-                threadId,
-                ordinal: 1,
-                providerInstanceId: instanceId,
-                modelSelection,
-                providerThreadId,
-                userMessageId,
-                rootNodeId: null,
-                activeAttemptId: null,
-                status: "completed",
-                queuePosition: null,
-                requestedAt: now,
-                startedAt: now,
-                completedAt: now,
-                checkpointId: null,
-                contextHandoffId: null,
-              },
-            },
-            {
-              id: EventId.make(`${threadId}-user-item`),
-              type: "turn-item.updated",
-              threadId,
-              runId: runId,
-              occurredAt: now,
-              payload: {
-                id: TurnItemId.make(`${threadId}-user-item`),
-                threadId,
-                runId: runId,
-                nodeId: null,
-                providerThreadId,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 1,
-                status: "completed",
-                title: null,
-                startedAt: now,
-                completedAt: now,
-                updatedAt: now,
-                type: "user_message",
-                createdBy: "user",
-                creationSource: "web",
-                inputIntent: "turn_start",
-                messageId: userMessageId,
-                text: marker,
-                attachments: [],
-              },
-            },
+            ...rewound.events,
+            ...kept.events,
           ],
         });
-        return runId;
+        return kept.runId;
       });
 
     yield* orchestrator.dispatch({
@@ -277,6 +301,8 @@ it.effect("a native fork whose source session is gone starts fresh with the sour
       history.indexOf("INHERITED_PARENT_MARKER"),
     );
     assert.isAtLeast(history.indexOf("INHERITED_PARENT_MARKER"), 0);
+    // Rewound turns are not part of either conversation, as in the fork's own timeline.
+    assert.notInclude(history, "REWOUND_");
     // Omitted items live in the source thread, so recovery reads point there.
     assert.include(handoff?.history?.coverage ?? "", 'threadId:"fork-missing-source"');
     assert.notInclude(handoff?.history?.coverage ?? "", "fork-missing-target");
