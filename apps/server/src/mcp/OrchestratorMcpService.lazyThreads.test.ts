@@ -386,6 +386,17 @@ describe("goat_thread_list lineage", () => {
       assert.equal(error.code, "invalid_request");
     }).pipe(Effect.provide(layer)),
   );
+
+  it.effect("points a caller outside any thread at allProjects when it omits projectId", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service
+        .listThreads({ ...scope, thread: undefined }, {})
+        .pipe(Effect.flip);
+      assert.equal(error.code, "target_required");
+      assert.include(error.message, "allProjects");
+    }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("goat_thread_read summary and tail", () => {

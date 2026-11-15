@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -102,6 +103,13 @@ export const layerTest = ProviderReplayHarness.layerWithRegistry(
 );
 // The same database layer reference, so goatclaw lanes share the projection tables.
 export const layerTestWithSql = Layer.merge(layerTest, SqlitePersistence.layerMemory);
+// Continuation requests queue instead of dropping, so a test can take the wakes it caused.
+const continuationRequests = ProviderContinuationRequests.layer;
+export const layerTestWithContinuations = ProviderReplayHarness.layerWithRegistry(
+  { name: "review-continuation" },
+  ProviderAdapterRegistry.layerFromAdapters([adapter]),
+  { databaseLayer: SqlitePersistence.layerMemory, runEffectWorker: false, continuationRequests },
+).pipe(Layer.provideMerge(continuationRequests));
 
 /** The value, or a defect naming what the fixture expected to find. */
 const required = <A>(value: A | null | undefined, what: string): Effect.Effect<A> =>

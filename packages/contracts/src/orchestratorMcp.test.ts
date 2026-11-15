@@ -760,3 +760,29 @@ it("rejects a nonboolean schedule binding and advertises the cross-project defau
     "true in own project, else false",
   );
 });
+
+it("decodes a running-task next written by another version", () => {
+  const next = "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
+});
+
+it("decodes a running-task next in a newer host's wording", () => {
+  const next = "Completion wakes this thread. Wording a newer host sends.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
+});

@@ -1132,7 +1132,7 @@ export const layer = Layer.effect(EnvironmentAuth, make).pipe(
   Layer.provideMerge(HubConnectAccess.layer),
   Layer.provideMerge(EnvironmentAuthPolicy.layer),
 );
-const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerConfig);
+const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerCliConfig);
 export const layerRuntime = layer.pipe(
   Layer.provideMerge(layerStorage),
   Layer.provideMerge(ServerEnvironment.layerIdentity),
