@@ -99,6 +99,7 @@ Contracts: no wire schema change this round. ProviderContinuationRequest gains a
 - While a provider update waits for in-flight work, new sessions, Claude query opens and text generation for that installation queue behind it with no visible reason except the provider's update status ("Waiting for running provider work to finish.").
 - The interrupted badge is web only (mobile row in #3176).
 - goat#3445: work that queued behind an OpenCode update can start in the gap after the gate releases and before afterUpdate restarts the OpenCode service, borrow the service about to be replaced, and then reconnect. Upstream behaves the same; the suggested fix runs afterUpdate inside gate.update.
+- Coverage gap: the settled-retry stall test (ProviderRetryStall.testkit.ts, "leaves a turn alone once its provider retry settles") still passes when only the timer stop for a settled retry is removed from ProviderRetryStallWatch.ts, because stopStalledRetry separately skips a retry that is no longer running. It catches a watch that does not recognise the settled row, not the loss of that one guard.
 
 ## Fix round (fresh review of 9ed11e8829: BLOCK, findings L01R2-*)
 
