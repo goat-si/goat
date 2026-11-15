@@ -443,7 +443,7 @@ patchedDependencies:
   micromark-extension-gfm-table@2.1.1: 9ad23a530e45d9f83cba1da8654fe16d5af8b59d5c73d5c7a7c91fd25b9be1d8
   micromark-extension-llm-math@3.1.0: 4eeb9d9e27ebc75e98795e21c0719005483dad7d233055698257f7d10e91603b
   micromark@4.0.2: cb79edde7eca83bbcaaafb6ceb7b044b81b987314cde4910823b15257ecada67
-  node-pty@1.2.0-beta.18: 72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801
+  node-pty@1.2.0-beta.18: 4ed7fa9da6644f7d969b8e8afa4352ae64da718caa513b6404e371e0c3e2f7db
   playwright-core@1.60.0: 9012d60f1e6503eff1e0c799bdc0e21c530688d68bd45158be40d82cfed6369b
   react-native-gesture-handler@3.3.0: abe20e1d1c23549297cbbc818e14fe479b41455930d9663135d6b40fe359b626
   react-native-image-viewing@0.2.2: 4aa038d541c7ddcc8f1437eb3e7b4f769f61de78e7f91b53f9805dfca608474d
@@ -1071,7 +1071,7 @@ importers:
         version: 6.2.2
       node-pty:
         specifier: 1.2.0-beta.18
-        version: 1.2.0-beta.18(patch_hash=72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801)
+        version: 1.2.0-beta.18(patch_hash=4ed7fa9da6644f7d969b8e8afa4352ae64da718caa513b6404e371e0c3e2f7db)
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0(patch_hash=9012d60f1e6503eff1e0c799bdc0e21c530688d68bd45158be40d82cfed6369b)
@@ -21861,7 +21861,7 @@ snapshots:
 
   node-mock-http@1.0.5: {}
 
-  node-pty@1.2.0-beta.18(patch_hash=72dfe9970b485752c9f0ded954dfcc3299a17d33cf74bafcfc0929558222c801):
+  node-pty@1.2.0-beta.18(patch_hash=4ed7fa9da6644f7d969b8e8afa4352ae64da718caa513b6404e371e0c3e2f7db):
     dependencies:
       node-addon-api: 7.1.1
 
