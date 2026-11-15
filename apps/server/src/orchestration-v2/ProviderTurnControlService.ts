@@ -298,7 +298,7 @@ export const layer: Layer.Layer<
             yield* Effect.gen(function* () {
               if (yield* isSettled) return;
               const settled = yield* eventSink
-                .stream({ threadId: input.threadId, afterSequence, bounded: true })
+                .stream({ threadId: input.threadId, afterSequence })
                 .pipe(
                   Stream.filter(
                     ({ event }) =>
