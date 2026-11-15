@@ -1,3 +1,4 @@
+import { carrySavedAntigravityAccount } from "./ProviderSavedAccount.ts";
 import { loadBootProviderSnapshots } from "./ProviderRegistryBoot.ts";
 import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -91,6 +92,8 @@ export class ProviderRegistry extends Context.Service<
     readonly refreshWorkspaceSnapshot: (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
+      /** Directory the driver scans; the snapshot stays keyed by `cwd`. Defaults to `cwd`. */
+      readonly scanCwd?: string;
       readonly fresh?: boolean;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
@@ -141,29 +144,6 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
     provider,
     packageName: null,
   });
-
-/** Antigravity health checks only initialize; preserve previously verified Google auth across restarts. */
-const carrySavedAntigravityAccount = (
-  previousProvider: ServerProvider,
-  nextProvider: ServerProvider,
-): Pick<ServerProvider, "auth" | "status"> | undefined => {
-  const antigravity = ProviderDriverKind.make("antigravity");
-  if (
-    nextProvider.driver !== antigravity ||
-    previousProvider.driver !== antigravity ||
-    !nextProvider.enabled ||
-    nextProvider.auth.status !== "unknown" ||
-    previousProvider.auth.status !== "authenticated" ||
-    (nextProvider.auth.type !== undefined &&
-      nextProvider.auth.type !== previousProvider.auth.type) ||
-    (!nextProvider.installed && nextProvider.status !== "warning")
-  ) {
-    return undefined;
-  }
-  const status =
-    nextProvider.installed && nextProvider.status === "warning" ? "ready" : nextProvider.status;
-  return { auth: previousProvider.auth, status };
-};
 
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
@@ -840,6 +820,7 @@ export const layer = Layer.effect(
     const refreshWorkspaceSnapshot = Effect.fn("refreshWorkspaceSnapshot")(function* (input: {
       readonly instanceId: ProviderInstanceId;
       readonly cwd: string;
+      readonly scanCwd?: string;
       readonly fresh?: boolean;
     }) {
       if (input.fresh) {
@@ -887,7 +868,7 @@ export const layer = Layer.effect(
         : Effect.succeed(scannedFrom);
       const runScan = refreshMachineSnapshot.pipe(
         Effect.flatMap((scanBase) =>
-          snapshotForCwd(input.cwd).pipe(
+          snapshotForCwd(input.scanCwd ?? input.cwd).pipe(
             Effect.flatMap(globalSkills.workspace(provider)),
             Effect.map((scopedSnapshot) => ({ scanBase, scopedSnapshot })),
           ),

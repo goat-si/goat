@@ -29,6 +29,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type ThreadId,
 } from "@goat/contracts";
 
 import * as GitManager from "./GitManager.ts";
@@ -40,6 +41,7 @@ import {
   withWorkspaceLease,
   type WorkspaceLeaseUnavailableError,
 } from "../workspace/workspaceLease.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 
 const leaseUnavailable =
   (operation: string, command: string, cwd: string) => (error: WorkspaceLeaseUnavailableError) =>
@@ -603,3 +605,39 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(GitWorkflowService, make);
+
+/**
+ * Worktree reads and removals clients ask for. A thread's worktreePath can name a checkout GOAT
+ * never made (an imported session's own worktree, an existing_worktree launch), and the client's
+ * "Delete the worktree too?" runs a forced removal, so the server removes only GOAT-managed folders
+ * whatever the client's version.
+ */
+export const makeClientWorktrees = Effect.gen(function* () {
+  const gitWorkflow = yield* GitWorkflowService;
+  const path = yield* Path.Path;
+  const isManaged = yield* makeIsManagedWorktreePath;
+
+  const remove = Effect.fn("ClientWorktrees.remove")(function* (input: VcsRemoveWorktreeInput) {
+    const target = path.resolve(input.cwd, input.path);
+    if (!(yield* isManaged(target)))
+      return yield* new GitCommandError({
+        operation: "ClientWorktrees.remove",
+        command: "git worktree remove",
+        cwd: input.cwd,
+        detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
+      });
+    return yield* gitWorkflow.removeWorktree(input);
+  });
+
+  /** Threads using a worktree, and whether GOAT made it, which decides whether a client offers its removal. */
+  const withManaged =
+    (worktreePath: string) =>
+    <E, R>(
+      rows: Effect.Effect<{ readonly threads: ReadonlyArray<{ readonly id: ThreadId }> }, E, R>,
+    ) =>
+      Effect.all([rows, isManaged(worktreePath)]).pipe(
+        Effect.map(([{ threads }, managed]) => ({ threadIds: threads.map((t) => t.id), managed })),
+      );
+
+  return { remove, withManaged };
+});

@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import { project, hostedChangeRequest } from "./pullRequestTestFixtures.ts";
 
 function registerInteractiveRateLimitTest(
-  makeService: typeof import("./PullRequestService.test.ts").makeService,
+  makeService: typeof import("./pullRequestTestFixtures.ts").makeService,
 ) {
   it.effect(
     "opening a pull request during a rate-limit pause still reads its detail and activity",
@@ -76,7 +76,7 @@ function registerInteractiveRateLimitTest(
 }
 
 function registerFinishedTurnListingTest(
-  makeService: typeof import("./PullRequestService.test.ts").makeService,
+  makeService: typeof import("./pullRequestTestFixtures.ts").makeService,
 ) {
   it.effect("a finished turn leaves another project's cached listing in place", () =>
     Effect.gen(function* () {
@@ -114,7 +114,7 @@ function registerFinishedTurnListingTest(
 }
 
 export function registerPullRequestBehaviorTests(
-  makeService: typeof import("./PullRequestService.test.ts").makeService,
+  makeService: typeof import("./pullRequestTestFixtures.ts").makeService,
 ) {
   registerInteractiveRateLimitTest(makeService);
   registerFinishedTurnListingTest(makeService);

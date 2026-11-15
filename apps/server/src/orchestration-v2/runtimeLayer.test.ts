@@ -89,111 +89,15 @@ import {
   alternateInstanceId,
   layerCheckpointStoreTest,
   layerGitWorkflowTest,
+  layerLegacyImportTest,
   layerProjectServiceTest,
   layerTestProviderInstanceRegistry,
+  moveProject,
+  seedProject,
+  watchedPullRequestDetail,
 } from "./runtimeLayer.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
-
-const watchedPullRequestDetail = (input: {
-  readonly projectId: ProjectId;
-  readonly number: number;
-  readonly at: string;
-}): PullRequestDetail => ({
-  provider: SourceControlProviderKind.make("github"),
-  capabilities: {
-    diff: true,
-    comment: true,
-    actions: [],
-    mergeMethods: [],
-    search: false,
-    checksAlwaysReport: true,
-    review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
-    reviewers: { request: false, listCandidates: false },
-  },
-  viewerPermissions: {
-    actions: [],
-    comment: true,
-    resolve: true,
-    verdicts: [],
-    requestReviewers: false,
-  },
-  projectId: input.projectId,
-  projectTitle: "Watch wake",
-  workspaceRoot: "/workspace/watch",
-  repository: "goat-si/goat",
-  number: input.number,
-  title: "Watched pull request",
-  body: "",
-  url: `https://github.com/goat-si/goat/pull/${input.number}`,
-  author: { login: "agent-user", name: null, avatarUrl: null },
-  state: "open",
-  isDraft: false,
-  mergeability: "mergeable",
-  additions: 1,
-  deletions: 0,
-  changedFiles: 1,
-  headBranch: "feature",
-  headSha: "abc1234def",
-  baseBranch: "main",
-  createdAt: input.at,
-  updatedAt: input.at,
-  mergedAt: null,
-  closedAt: null,
-  reviewers: [],
-  labels: [],
-  checks: [{ name: "lint", status: "failure", description: null, url: null }],
-  mergeCapabilities: { merge: true, squash: true, rebase: true },
-  viewer: "agent-user",
-});
-
-const seedProject = (input: {
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly workspaceRoot: string;
-  readonly defaultModelSelection: ModelSelection | null;
-  readonly createdAt: string;
-}) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`seed:${input.projectId}`),
-      aggregateKind: "project",
-      aggregateId: input.projectId,
-      occurredAt: input.createdAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.created",
-      payload: {
-        projectId: input.projectId,
-        title: input.title,
-        workspaceRoot: input.workspaceRoot,
-        defaultModelSelection: input.defaultModelSelection,
-        scripts: [],
-        createdAt: input.createdAt,
-        updatedAt: input.createdAt,
-      },
-    }),
-  );
-
-const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`move:${projectId}:${workspaceRoot}`),
-      aggregateKind: "project",
-      aggregateId: projectId,
-      occurredAt: updatedAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.meta-updated",
-      payload: { projectId, workspaceRoot, updatedAt },
-    }),
-  );
 
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
@@ -221,18 +125,6 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
 );
 
-const layerLegacyImportTest = RuntimeLayer.layer.pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
 const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
@@ -4783,6 +4675,110 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(again?.headSha, "abc1234def");
       assert.isTrue(again?.passed);
       yield* watching(false, "end");
+    }),
+  );
+
+  it.effect("persists each merge queue removal wake across reactor restarts", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("queue-removal-watch");
+      const projectId = ProjectId.make("queue-removal-project");
+      yield* seedProject({
+        projectId,
+        title: "Queue removal",
+        workspaceRoot: "/workspace/watch",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("queue-removal-create"),
+        threadId,
+        projectId,
+        title: "Queue removal",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("queue-removal-start"),
+        threadId,
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 7,
+        watching: true,
+        link: { url: "https://github.com/goat-si/goat/pull/7", source: "agent" },
+      });
+      let removal: PullRequestDetail["mergeQueueRemoval"];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          watchFingerprint: () =>
+            Effect.succeed({ status: removal?.id ?? "green", remarks: "none" }),
+          invalidate: () => Effect.void,
+          detail: () =>
+            Effect.succeed({
+              ...watchedPullRequestDetail({ projectId, number: 7, at: "2026-10-02T12:00:00.000Z" }),
+              checks: [{ name: "lint", status: "success", description: null, url: null }],
+              ...(removal === undefined ? {} : { mergeQueueRemoval: removal }),
+            }),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      yield* TestClock.adjust("10 minutes");
+      yield* reactor.sweep;
+      yield* worker.drain();
+      removal = {
+        id: "first",
+        removedAt: "2000-01-01T00:00:00Z",
+        reason: "Required checks failed",
+      };
+      yield* TestClock.adjust("10 minutes");
+      yield* reactor.sweep;
+      yield* worker.drain();
+      const persisted = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.equal(persisted?.mergeQueueRemovalId, "first");
+      const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      removal = { ...removal, id: "second" };
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      const told = messages.flatMap(
+        (message) => message.text.match(/removed from the merge queue[^\n]*/g) ?? [],
+      );
+      assert.deepEqual(
+        told,
+        Array(2).fill("removed from the merge queue without merging: Required checks failed."),
+      );
+      const digest = messages.find((message) => message.notification?.outcome === "failed");
+      assert.equal(digest?.notification?.summary, "2 notices · #7: removed from merge queue");
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch
+          ?.mergeQueueRemovalId,
+        "second",
+      );
     }),
   );
 

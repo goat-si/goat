@@ -3,10 +3,12 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  PullRequestActionInput,
   PullRequestDetail,
   PullRequestLabel,
   PullRequestListResult,
   PullRequestFilterOptions,
+  PullRequestMergeCapabilities,
   resolvePullRequestAuthorFilter,
 } from "./pullRequest.ts";
 
@@ -107,7 +109,7 @@ describe("PullRequestCapabilities", () => {
       capabilities: {
         ...base,
         actions: options.actions,
-        mergeMethods: ["squash", "fast-forward", "merge"],
+        mergeMethods: ["squash", "semi-linear", "merge"],
         updateMethods: options.updateMethods,
         review: { ...base.review, verdicts: options.verdicts },
       },
@@ -131,6 +133,102 @@ describe("PullRequestCapabilities", () => {
       requestReviewers: true,
     });
     expect(decoded.title).toBe(detail.title);
+  });
+});
+
+describe("PullRequestDetail merge queue removal", () => {
+  const detail = {
+    ...LIST_RESULT.entries[0],
+    workspaceRoot: "/workspace/sample-repo",
+    body: "",
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    reviewers: [],
+    checks: [],
+    mergeCapabilities: { merge: true, squash: true, rebase: true },
+    capabilities: {
+      diff: true,
+      comment: true,
+      actions: [],
+      mergeMethods: [],
+      search: true,
+      review: { inlineComment: true, reply: true, resolve: true, verdicts: [] },
+      reviewers: { request: true, listCandidates: true },
+    },
+    viewerPermissions: {
+      actions: [],
+      verdicts: [],
+      comment: true,
+      resolve: true,
+      requestReviewers: true,
+    },
+  };
+  const removal = { id: "RMQE_1", removedAt: "2026-07-02T00:00:00Z", reason: "CI failed" };
+  // A peer built from dev before merge queue removals: the same contract minus that one field.
+  const { mergeQueueRemoval: _addedField, ...fieldsBeforeRemovals } = PullRequestDetail.fields;
+  const decodeWithPeerBeforeRemovals = Schema.decodeUnknownSync(
+    Schema.toCodecJson(Schema.Struct(fieldsBeforeRemovals)),
+  );
+
+  it("reads an older server's detail, which reports no removal", () => {
+    const decoded = decodeDetail(detail);
+    expect(Object.hasOwn(decoded, "mergeQueueRemoval")).toBe(false);
+  });
+
+  it("an older peer accepts a detail that reports a removal and drops the unknown key", () => {
+    const encoded = JSON.parse(JSON.stringify({ ...detail, mergeQueueRemoval: removal }));
+    expect(decodeDetail(encoded).mergeQueueRemoval).toEqual(removal);
+    const decoded = decodeWithPeerBeforeRemovals(encoded);
+    expect(Object.hasOwn(decoded, "mergeQueueRemoval")).toBe(false);
+    expect(decoded.title).toBe(detail.title);
+  });
+
+  it("rejects a removal without an id or with a reason that is not text", () => {
+    expect(() => decodeDetail({ ...detail, mergeQueueRemoval: { ...removal, id: " " } })).toThrow();
+    expect(() =>
+      decodeDetail({ ...detail, mergeQueueRemoval: { ...removal, reason: 5 } }),
+    ).toThrow();
+  });
+
+  it("a client reads a detail whose auto-merge method a newer host added, dropping only that method", () => {
+    // fast-forward joined the merge methods this way; the next one must not break older clients.
+    const decoded = decodeDetail({ ...detail, autoMergeEnabled: true, autoMergeMethod: "train" });
+    expect(Object.hasOwn(decoded, "autoMergeMethod")).toBe(false);
+    expect(decoded.autoMergeEnabled).toBe(true);
+    expect(decodeDetail({ ...detail, autoMergeMethod: "fast-forward" }).autoMergeMethod).toBe(
+      "fast-forward",
+    );
+  });
+});
+
+describe("fast-forward merges", () => {
+  const decodeMergeCapabilities = Schema.decodeUnknownSync(PullRequestMergeCapabilities);
+  // Peers built from dev before fast-forward: the same contracts minus that method.
+  const { "fast-forward": _added, ...capabilityFieldsBefore } = PullRequestMergeCapabilities.fields;
+  const decodeCapabilitiesBefore = Schema.decodeUnknownSync(Schema.Struct(capabilityFieldsBefore));
+  const decodeActionBefore = Schema.decodeUnknownSync(
+    Schema.Struct({
+      ...PullRequestActionInput.fields,
+      mergeMethod: Schema.optional(Schema.Literals(["merge", "squash", "rebase"])),
+    }),
+  );
+  const merge = { projectId: "p1", repository: "acme/web", number: 1, action: "merge" };
+
+  it("reads an older server's merge capabilities as not allowing fast-forward", () => {
+    const decoded = decodeMergeCapabilities({ merge: true, squash: true, rebase: true });
+    expect(decoded["fast-forward"]).toBeUndefined();
+  });
+
+  it("an older peer drops a fast-forward capability it does not know", () => {
+    const sent = { merge: false, squash: false, rebase: false, "fast-forward": true };
+    expect(decodeMergeCapabilities(sent)["fast-forward"]).toBe(true);
+    expect(Object.hasOwn(decodeCapabilitiesBefore(sent), "fast-forward")).toBe(false);
+  });
+
+  it("an older server refuses a fast-forward merge request instead of merging another way", () => {
+    expect(() => decodeActionBefore({ ...merge, mergeMethod: "fast-forward" })).toThrow();
+    expect(decodeActionBefore({ ...merge, mergeMethod: "rebase" }).mergeMethod).toBe("rebase");
   });
 });
 
