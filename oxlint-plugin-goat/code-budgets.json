@@ -775,7 +775,6 @@
   "packages/provider-opencode/src/server/adapter.test.ts": { "lines": 2998 },
   "packages/provider-opencode/src/server/adapter.ts": { "lines": 3761, "nonNull": 7 },
   "packages/provider-opencode/src/server/memoryIsolation.ts": { "nonNull": 2 },
-  "packages/provider-opencode/src/server/status.test.ts": { "lines": 1087 },
   "packages/provider-opencode/src/server/usage.ts": { "nonNull": 3 },
   "packages/provider-opencode/src/server/v2/adapter.ts": { "lines": 4237, "nonNull": 2 },
   "packages/provider-pi/src/server/adapter.test.ts": { "lines": 4784 },
