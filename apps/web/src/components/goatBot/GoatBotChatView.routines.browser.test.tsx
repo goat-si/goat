@@ -97,28 +97,34 @@ vi.mock("~/state/use-atom-command", async (original) => ({
 }));
 vi.mock("~/state/query", async (original) => {
   const { routine } = await import("./GoatBotChatView.routines.fixtures");
+  // One answer per query, kept between renders as the real atoms keep theirs.
+  const answers = new Map<unknown, unknown>();
+  const answerFor = (atom: unknown) => ({
+    data:
+      atom === null
+        ? null
+        : atom === "routines"
+          ? { tasks: [routine] }
+          : atom === "input:in-1"
+            ? { reply: { text: "Morning digest: all green." } }
+            : atom === "artifacts"
+              ? { artifacts: [], truncated: false }
+              : atom === "slack"
+                ? []
+                : { tasks: [] },
+    failure: null,
+    error: null,
+    isPending: false,
+    isSuccess: true,
+    refresh: () => {},
+  });
   return {
     ...(await original<typeof import("~/state/query")>()),
     useEnvironmentQuerySelector: () => ({ _tag: "Success", waiting: false }),
-    useEnvironmentQuery: (atom: unknown) => ({
-      data:
-        atom === null
-          ? null
-          : atom === "routines"
-            ? { tasks: [routine] }
-            : atom === "input:in-1"
-              ? { reply: { text: "Morning digest: all green." } }
-              : atom === "artifacts"
-                ? { artifacts: [], truncated: false }
-                : atom === "slack"
-                  ? []
-                  : { tasks: [] },
-      failure: null,
-      error: null,
-      isPending: false,
-      isSuccess: true,
-      refresh: () => {},
-    }),
+    useEnvironmentQuery: (atom: unknown) => {
+      if (!answers.has(atom)) answers.set(atom, answerFor(atom));
+      return answers.get(atom);
+    },
   };
 });
 
