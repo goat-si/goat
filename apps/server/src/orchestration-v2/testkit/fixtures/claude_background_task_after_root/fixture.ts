@@ -11,6 +11,7 @@ export const claudeBackgroundTaskAfterRootFixture: OrchestratorReplayFixture = {
       driver: ProviderDriverKind.make("claudeAgent"),
       transcriptFile: new URL("./claude_transcript.ndjson", import.meta.url),
       modelSelection: CLAUDE_MODEL_SELECTION,
+      runContinuationWorker: true,
       assertOutput: assertClaudeBackgroundTaskAfterRootOutput,
     },
   ],
