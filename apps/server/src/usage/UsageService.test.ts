@@ -3,6 +3,7 @@ import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
 import { registerPiHistoryTest } from "./usagePiHistory.testkit.ts";
 import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
 import { registerCacheUpgradeTest } from "./usageCacheUpgrade.testkit.ts";
+import { registerClaudeCopiesTests } from "./usageClaudeCopies.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -2512,6 +2513,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
+  registerClaudeCopiesTests(setup, layerService, claudeLine);
   it.effect(
     "keeps large-record totals and costs exact through append, dedupe, restart and cleanup",
     () =>
