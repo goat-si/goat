@@ -360,7 +360,8 @@ const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 // The SDK has no control-request deadline; the CLI waits up to 30 s per MCP server.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
-// A consumed subagent result can leave its notification without a native wake turn.
+// Claude can consume a subagent result before the launching turn ends, leaving
+// its notification with no native wake turn to answer the continuation.
 const CLAUDE_WAKE_TURN_START_DEADLINE = "2 minutes";
 // Claude Code flushes transcript writes every 100 ms, so a workflow member's
 // reply can land after the progress frame that settles it. Its transcript
@@ -9315,6 +9316,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (message.terminal_reason == null ||
                 message.terminal_reason === "api_error" ||
                 message.terminal_reason === "blocking_limit");
+            // The CLI also labels 403 authentication_failed; show its text because login cannot grant access.
             const permissionDenied =
               message.subtype === "success" && message.api_error_status === 403;
             const rewrittenVersionError = yield* claudeVersionError(

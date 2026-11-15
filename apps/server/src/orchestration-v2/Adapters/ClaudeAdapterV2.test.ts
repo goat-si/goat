@@ -41,7 +41,6 @@ import type {
   TaskUpdateInput,
   TaskUpdateOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
   type ChatAttachment,
@@ -75,7 +74,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -108,6 +106,7 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
+import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
 import {
@@ -155,21 +154,7 @@ beforeEach(() => {
     sources: [],
   });
 });
-const layerAdapterTest = Layer.mergeAll(
-  MemoryDerivedCache.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  NodeServices.layer,
-  Layer.effectContext(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "claude-adapter-test-" });
-      return Context.make(HostProcess.HomeDirectory, home).pipe(
-        Context.add(HostProcess.Environment, { HOME: home, PATH: "/usr/bin:/bin" }),
-      );
-    }),
-  ).pipe(Layer.provide(NodeServices.layer)),
-);
+const layerAdapterTest = layerClaudeAdapterTest;
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
