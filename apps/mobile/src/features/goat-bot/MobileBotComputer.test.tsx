@@ -180,6 +180,7 @@ it("the main bot's card asks for nothing until the computer's config is known, t
   };
   await render();
   expect(state.requested).not.toHaveBeenCalled();
+  expect(state.refresh).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Machines can't be listed from this server right now.");
   expect(container.textContent).not.toContain("Pick the release branch");
   state.members = { env: true };
@@ -188,6 +189,7 @@ it("the main bot's card asks for nothing until the computer's config is known, t
     environmentId,
     input: expect.objectContaining({ botId: "main" }),
   });
+  expect(state.refresh).toHaveBeenCalledTimes(1);
   expect(container.textContent).toContain("Move the build to Node 24");
   expect(container.textContent).not.toContain("Pick the release branch");
 });
