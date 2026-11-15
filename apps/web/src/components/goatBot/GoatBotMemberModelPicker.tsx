@@ -11,6 +11,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { toastManager } from "../ui/toast";
 import { useGoatBotMemberModelEditable } from "./GoatBotEditBotDialog";
 import { useGoatBotMainName } from "./goatBotMemberContext";
+import { useGoatBotChatPopupOpen } from "./goatBotLayout";
 import { useGoatBotModel } from "./useGoatBotModel";
 
 const NO_PERMISSION = Atom.make(false);
@@ -24,6 +25,7 @@ export function GoatBotMemberModelPicker({ member }: { readonly member: BotProfi
     editable ? channelEnvironment.updateBot.permissionAtom(member.environmentId) : NO_PERMISSION,
   );
   const update = useAtomCommand(channelEnvironment.updateBot, { reportFailure: false });
+  const [open, setOpen] = useGoatBotChatPopupOpen();
   const shown = member.defaultModelSelection ?? selection;
   const modelName =
     entries
@@ -38,6 +40,8 @@ export function GoatBotMemberModelPicker({ member }: { readonly member: BotProfi
       instanceEntries={entries}
       modelOptionsByInstance={options}
       popupAlign="end"
+      open={open}
+      onOpenChange={setOpen}
       triggerAriaLabel={`${member.name} model: ${modelName}${
         member.defaultModelSelection === null ? ` (same as ${mainName})` : ""
       }`}
