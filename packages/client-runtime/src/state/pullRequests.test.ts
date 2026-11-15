@@ -18,34 +18,22 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import {
-  AVAILABLE_CONNECTION_STATE,
-  ConnectionTransientError,
-  PrimaryConnectionTarget,
-  SshConnectionTarget,
-  type PreparedConnection,
-  type SupervisorConnectionState,
-} from "../connection/model.ts";
+import { ConnectionTransientError, SshConnectionTarget } from "../connection/model.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import { SshConnectionProfile, type ConnectionCatalogEntry } from "../connection/catalog.ts";
+import { SshConnectionProfile } from "../connection/catalog.ts";
 import * as ConnectionProfileStore from "../connection/profileStore.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import type { RpcSession } from "../rpc/session.ts";
-import {
-  createLinkedPullRequestSummaryAtomFamily,
-  createPullRequestEnvironmentAtoms,
-} from "./pullRequests.ts";
-import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
+import { createLinkedPullRequestSummaryAtomFamily } from "./pullRequests.ts";
 import { executeAtomQuery } from "./runtime.ts";
 import { createPullRequestRouter } from "./pullRequestRouting.ts";
 import { PullRequestRoutingPermissions } from "../connection/pullRequestRoutingPermissions.ts";
+import { makeTestRuntime, session, TARGET } from "./pullRequests.testkit.ts";
 
 class MutationRefused extends Data.TaggedError("MutationRefused") {}
 
@@ -488,113 +476,6 @@ it.effect("forgets routed viewed marks when a viewed-files batch fails", () =>
     }),
   ),
 );
-
-const TARGET = new PrimaryConnectionTarget({
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Test environment",
-  httpBaseUrl: "https://environment.example.test",
-  wsBaseUrl: "wss://environment.example.test",
-});
-
-function session(client: WsRpcProtocolClient): RpcSession {
-  return {
-    client: {
-      ...client,
-      [WS_METHODS.pullRequestsInvalidate]:
-        client[WS_METHODS.pullRequestsInvalidate] ?? (() => Effect.void),
-    },
-    initialConfig: client[WS_METHODS.serverGetConfig]?.({}).pipe(Effect.orDie) ?? Effect.never,
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
-    ready: Effect.void,
-    probe: Effect.void,
-    inboundFrames: Effect.succeed(0),
-    closed: Effect.never,
-  };
-}
-
-const makeTestRuntime = Effect.fn("makeTestRuntime")(function* (
-  client: WsRpcProtocolClient,
-  localClient?: WsRpcProtocolClient,
-  localOrigin = false,
-) {
-  const originTarget = localOrigin
-    ? new PrimaryConnectionTarget({
-        ...TARGET,
-        httpBaseUrl: "http://localhost:3774",
-        wsBaseUrl: "ws://localhost:3774",
-      })
-    : TARGET;
-  const connectionState: SupervisorConnectionState = {
-    ...AVAILABLE_CONNECTION_STATE,
-    desired: true,
-    network: "online",
-    phase: "connected",
-    attempt: 1,
-    generation: 1,
-  };
-  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-    target: originTarget,
-    state: yield* SubscriptionRef.make(connectionState),
-    session: yield* SubscriptionRef.make(Option.some(session(client))),
-    prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
-    connect: Effect.void,
-    disconnect: Effect.void,
-    retryNow: Effect.void,
-  } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
-  const localTarget = new PrimaryConnectionTarget({
-    environmentId: EnvironmentId.make("local-environment"),
-    label: "Local environment",
-    httpBaseUrl: "http://localhost:3773",
-    wsBaseUrl: "ws://localhost:3773",
-  });
-  const localSupervisor = {
-    ...supervisor,
-    target: localTarget,
-    session: yield* SubscriptionRef.make(Option.some(session(localClient ?? client))),
-  };
-  const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
-    entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
-      new Map([
-        [
-          originTarget.environmentId,
-          { target: originTarget, profile: Option.none(), enabled: true },
-        ],
-        ...(localClient === undefined
-          ? []
-          : [
-              [
-                localTarget.environmentId,
-                { target: localTarget, profile: Option.none(), enabled: true },
-              ] as const,
-            ]),
-      ]),
-    ),
-    run: (environmentId, effect) =>
-      Effect.provideService(
-        effect,
-        EnvironmentSupervisor.EnvironmentSupervisor,
-        environmentId === localTarget.environmentId ? localSupervisor : supervisor,
-      ),
-    runStream: (_environmentId, stream) =>
-      Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-    followStream: (_environmentId, stream) =>
-      Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-  } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-  const runtime = Atom.runtime(
-    Layer.merge(
-      Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
-      Layer.succeed(
-        PullRequestDiffLoader.PullRequestDiffLoader,
-        PullRequestDiffLoader.PullRequestDiffLoader.of({ load: () => Effect.die("unused") }),
-      ),
-    ),
-  );
-  const atoms = createPullRequestEnvironmentAtoms(runtime);
-  const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
-    Effect.sync(() => registry.dispose()),
-  );
-  return { runtime, atoms, registry, environmentRegistry, supervisor, localSupervisor };
-});
 
 it.effect.each([
   "default",
