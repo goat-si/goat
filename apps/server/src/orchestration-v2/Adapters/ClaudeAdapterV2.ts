@@ -212,6 +212,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import { type ClaudeLaunch, makeClaudeLaunchResolver } from "./claudeLaunch.ts";
 import {
   planClaudeSkillDispatch,
@@ -2772,6 +2773,7 @@ export interface ClaudeAdapterV2Options {
       request: ProviderContinuationRequests.ProviderContinuationRequest,
     ) => Effect.Effect<void>;
   };
+  readonly installationGate?: ProviderInstallationGate.ProviderInstallationGate["Service"];
 }
 
 export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
@@ -9135,24 +9137,28 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const resolvedTurnCwd = yield* fileSystem
             .realPath(turnInput.runtimePolicy.cwd ?? ".")
             .pipe(Effect.orElseSucceed(() => turnInput.runtimePolicy.cwd));
-          const querySession = yield* queryRunner
-            .open({
-              threadId: turnInput.threadId,
-              providerSessionId: input.providerSessionId,
-              options: pinClaudeHomeSettings(queryOptions),
-            })
-            .pipe(
-              Effect.onError(() =>
-                closedExistingNativeThreadId === nativeThreadId
-                  ? Effect.gen(function* () {
-                      yield* clearWakeStateForNativeThread(nativeThreadId);
-                      yield* resetBackgroundTaskStateForNativeThreadProcess(nativeThreadId, {
-                        status: "idle",
-                      });
-                    })
-                  : Effect.void,
-              ),
-            );
+          const openQueryRuntime = queryRunner.open({
+            threadId: turnInput.threadId,
+            providerSessionId: input.providerSessionId,
+            options: pinClaudeHomeSettings(queryOptions),
+          });
+          // The SDK spawns the CLI per turn, so only the open waits for a provider update.
+          const querySession = yield* (
+            adapterOptions.installationGate === undefined
+              ? openQueryRuntime
+              : adapterOptions.installationGate.execute(adapterOptions.instanceId, openQueryRuntime)
+          ).pipe(
+            Effect.onError(() =>
+              closedExistingNativeThreadId === nativeThreadId
+                ? Effect.gen(function* () {
+                    yield* clearWakeStateForNativeThread(nativeThreadId);
+                    yield* resetBackgroundTaskStateForNativeThreadProcess(nativeThreadId, {
+                      status: "idle",
+                    });
+                  })
+                : Effect.void,
+            ),
+          );
           // Mark only successful opens; retries must not resume sessions that failed to create.
           yield* Ref.update(openedNativeThreads, (current) => {
             if (current.has(nativeThreadId)) {
@@ -10588,6 +10594,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     const hostEnvironment = yield* HostProcess.Environment;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const queryRunner = yield* ClaudeAgentSdkQueryRunner;
+    const installationGate = yield* ProviderInstallationGate.current;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const path = yield* Path.Path;
@@ -10606,6 +10613,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       idAllocator,
       queryRunner,
       continuationRequests,
+      ...(installationGate === undefined ? {} : { installationGate }),
       ...hooks,
     });
   },

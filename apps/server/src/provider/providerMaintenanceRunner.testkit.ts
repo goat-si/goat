@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as ProviderInstallationGate from "./ProviderInstallationGate.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
@@ -238,6 +239,8 @@ const makeTestRunner = (
               refreshInBackground: Effect.void,
             }),
             latestVersions,
+            // Layers memoize by reference, so a test that provides the gate shares it.
+            ProviderInstallationGate.layer,
           ),
         ),
       ),
@@ -264,6 +267,7 @@ export {
   CODEX_DRIVER,
   CODEX_INSTANCE_ID,
   NATIVE_CLI_DRIVER,
+  OPENCODE_INSTANCE_ID,
   OPENCODE_DRIVER,
   baseNativeCliProvider,
   baseOpenCodeProvider,

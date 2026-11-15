@@ -56,6 +56,7 @@ import {
   withMetrics,
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -359,6 +360,7 @@ export const layerWithOptions = (
       const commandOutput = yield* CommandOutputHub.CommandOutputHub;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const installationGate = yield* ProviderInstallationGate.current;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
@@ -2665,55 +2667,54 @@ export const layerWithOptions = (
                     // The previous session's agent scope must not explain this
                     // session's failures, even when this provider runs without one.
                     yield* agentScope.clear(input.threadId);
-                    const runtime = yield* adapter
-                      .openSession({
-                        threadId: input.threadId,
-                        providerSessionId: input.providerSessionId,
-                        modelSelection: input.modelSelection,
-                        runtimePolicy: input.runtimePolicy,
-                        ...(input.resumeFromSession === undefined
-                          ? {}
-                          : { resumeFromSession: input.resumeFromSession }),
-                        ...(input.initialNativeThreadId === undefined
-                          ? {}
-                          : { initialNativeThreadId: input.initialNativeThreadId }),
-                        ...(input.initialProviderItemIdentityVersion === undefined
-                          ? {}
-                          : {
-                              initialProviderItemIdentityVersion:
-                                input.initialProviderItemIdentityVersion,
-                            }),
-                      })
-                      .pipe(
-                        Effect.provideService(Scope.Scope, sessionScope),
-                        // Any failure, including a Stop that interrupts a slow
-                        // handshake, stops the provider process this open started.
-                        // The session cleanup runs first, and the close is
-                        // time-boxed: this runs under the session's open lock, so an
-                        // adapter finalizer that never finishes must not hold the
-                        // interrupter, the lock, or later opens.
-                        Effect.onError(() =>
-                          dropReservation.pipe(
-                            // Clear only a session this open freshly set up: a reused
-                            // one is held by another live provider process and must
-                            // survive this open's failure.
-                            Effect.andThen(
-                              prepared.issued
-                                ? clearMcpSession(
-                                    input.threadId,
-                                    mcpCredentialId,
-                                    admission ?? null,
-                                  )
-                                : Effect.void,
-                            ),
+                    const openSession = adapter.openSession({
+                      threadId: input.threadId,
+                      providerSessionId: input.providerSessionId,
+                      modelSelection: input.modelSelection,
+                      runtimePolicy: input.runtimePolicy,
+                      ...(input.resumeFromSession === undefined
+                        ? {}
+                        : { resumeFromSession: input.resumeFromSession }),
+                      ...(input.initialNativeThreadId === undefined
+                        ? {}
+                        : { initialNativeThreadId: input.initialNativeThreadId }),
+                      ...(input.initialProviderItemIdentityVersion === undefined
+                        ? {}
+                        : {
+                            initialProviderItemIdentityVersion:
+                              input.initialProviderItemIdentityVersion,
+                          }),
+                    });
+                    const runtime = yield* (
+                      installationGate === undefined
+                        ? openSession
+                        : installationGate.execute(input.modelSelection.instanceId, openSession)
+                    ).pipe(
+                      Effect.provideService(Scope.Scope, sessionScope),
+                      // Any failure, including a Stop that interrupts a slow
+                      // handshake, stops the provider process this open started.
+                      // The session cleanup runs first, and the close is
+                      // time-boxed: this runs under the session's open lock, so an
+                      // adapter finalizer that never finishes must not hold the
+                      // interrupter, the lock, or later opens.
+                      Effect.onError(() =>
+                        dropReservation.pipe(
+                          // Clear only a session this open freshly set up: a reused
+                          // one is held by another live provider process and must
+                          // survive this open's failure.
+                          Effect.andThen(
+                            prepared.issued
+                              ? clearMcpSession(input.threadId, mcpCredentialId, admission ?? null)
+                              : Effect.void,
                           ),
                         ),
-                        Effect.mapError(openError),
-                        withMetrics({
-                          counter: providerSessionsTotal,
-                          attributes: { provider: adapter.driver, operation: "open" },
-                        }),
-                      );
+                      ),
+                      Effect.mapError(openError),
+                      withMetrics({
+                        counter: providerSessionsTotal,
+                        attributes: { provider: adapter.driver, operation: "open" },
+                      }),
+                    );
                     const eventSubscribers = yield* Ref.make<
                       ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
                     >(new Map());

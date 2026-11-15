@@ -5,6 +5,7 @@ import type { ProviderInstanceId } from "@goat/contracts";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -73,6 +74,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const settingsService = yield* ServerSettings.ServerSettingsService;
+  const installationGate = yield* ProviderInstallationGate.current;
   const resolveText = Effect.fn("TextGeneration.resolveText")(
     (operation: TextGenerationOp, instanceId: ProviderInstanceId) =>
       settingsService.getSettings.pipe(
@@ -121,7 +123,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
   );
-  return TextGeneration.of({
+  const ungated = {
     resolveMemoryConflict: (input) =>
       resolveAgent("resolveMemoryConflict", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
@@ -198,6 +200,25 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+  } satisfies TextGeneration["Service"];
+  // A provider update replaces the binary these calls run, so each one waits for it.
+  const gated =
+    <I extends { readonly modelSelection: { readonly instanceId: ProviderInstanceId } }, A, E>(
+      run: (input: I) => Effect.Effect<A, E>,
+    ) =>
+    (input: I) =>
+      installationGate === undefined
+        ? run(input)
+        : installationGate.execute(input.modelSelection.instanceId, run(input));
+  return TextGeneration.of({
+    resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
+    generateMemorySummary: gated(ungated.generateMemorySummary),
+    generateCommitMessage: gated(ungated.generateCommitMessage),
+    generatePrContent: gated(ungated.generatePrContent),
+    generateBranchName: gated(ungated.generateBranchName),
+    generateChannelReception: gated(ungated.generateChannelReception),
+    generateReviewGuide: gated(ungated.generateReviewGuide),
+    generateThreadTitle: gated(ungated.generateThreadTitle),
   });
 });
 

@@ -61,6 +61,7 @@ describe("providerMaintenanceRunner", () => {
         [
           ["queued", "Waiting for another provider update to finish."],
           ["running", "Checking for the latest version"],
+          ["running", "Waiting for running provider work to finish."],
           ["running", "Running native-agent update"],
           ["running", "Verifying the installed version"],
           ["succeeded", "Provider updated."],
