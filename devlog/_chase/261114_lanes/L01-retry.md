@@ -1,6 +1,6 @@
 # L01 retry (Claude), cycle 261114
 
-Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over f882ef3daa as a delta on 637128e173 (fresh review of 9ed11e8829: BLOCK; the fix round is on top of 2c79a05944). The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body).
+Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: APPROVE WITH NITS, merged into chase/t3-261114-all at 24c7a4e0da). Round 2 hands over f882ef3daa as a delta on 637128e173 (fresh review of 9ed11e8829: BLOCK; the fix round is on top of 2c79a05944). The original L01 PR #3222 is merged; this file is the full record for the retry (no PR body). Follow-up after the merge: head b3d58344c1 on top of the tip 17af62cba1.
 
 Merged into #3397 at c9ce9682e9 (2026-11-16): round 2 lane head 47f97c627c, after the fix round below.
 
@@ -57,7 +57,7 @@ An earlier attempt to move the attachment block was reverted before commit: its 
 | `ccc9aaf10b` | adapt (r2)                   | `35fef98550` | The latch carries the wake's end frame and retired state; claudeWakeNotice.ts gains peekWakeReports and dropWakeReports; tests in ClaudeWakeRetirement.test.ts and ClaudeAutomaticDelivery.integration.test.ts                                                                                                                                                                                                                                                                                                                                         |
 | `7462f234e8` | adapt (r2)                   | `18db0e21d4` | recoverDelegatedTask takes completedRunId or sourceRunId and reports errors. GOAT's replay projection store keeps no delivery state, so its hasPendingDelegatedCompletion never skips a recovery. Tests in DelegatedCompletionDelivery.checkpointRetry.test.ts and ClaudeWakeDispatch.test.ts                                                                                                                                                                                                                                                          |
 | `d4b77d2448` | not completed in round 2     |              | Not a deferral. Next step: add nativeItemId to PendingBackgroundTaskFields with a decode test for an older server payload (no field, banner falls back to taskId) and a blank-id negative case, the adapter's bounded tool-use map, and the ThreadActivityBanners key with before/after captures. packages/contracts/src/orchestrationV2.ts:1038                                                                                                                                                                                                       |
-| `d6e5f2e06f` | needs decision               |              | Options below. Not ported this round                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `d6e5f2e06f` | option C ruled, later round | | Coordinator ruling: option C (no new persisted outbox effect type); ported in a later round. Options below |
 | `5984bbb36e` | real defer: predecessor      |              | Needs d6e5f2e06f                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `86e2cb21c9` | real defer: C4 negative case |              | SDK initialization rejection is swallowed upstream without negative coverage                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `fdd54b942d` | real defer: C4 negative case |              | Process-kill safety; the upstream fixture sleeps and kills a PID read from a file                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -66,6 +66,8 @@ An earlier attempt to move the attachment block was reverted before commit: its 
 Counts: 15 ported over two rounds (10 in round 1, 5 in round 2), all adapt; all 10 effort rows are ported. 1 not completed (d4b77d2448), 1 needs decision (d6e5f2e06f), 4 real defers. 1a5d3737b7 (#3222) keeps one remainder: upstream's timed updates inside a long line; its steer cut-off case is now ported as c7618f6c10.
 
 ## d6e5f2e06f: an older server and an unknown persisted effect
+
+Ruling (coordinator): option C, no new persisted outbox effect type; the port lands in a later round.
 
 The port adds an outbox effect type. An older build claims a row of that type with UPDATE … RETURNING, then rowToEffect fails to decode it (apps/server/src/orchestration-v2/EffectOutbox.ts:303, claim at :817), so the claim fails with EffectOutboxError while the row stays leased; once the lease expires the next claim picks it again. Read from source, not reproduced: whether this starves other effects depends on the claim order and the worker's effect type filter.
 
@@ -96,6 +98,7 @@ Contracts: no wire schema change this round. ProviderContinuationRequest gains a
 - d4b77d2448 is not ported: background commands do not show their running time.
 - While a provider update waits for in-flight work, new sessions, Claude query opens and text generation for that installation queue behind it with no visible reason except the provider's update status ("Waiting for running provider work to finish.").
 - The interrupted badge is web only (mobile row in #3176).
+- goat#3445: work that queued behind an OpenCode update can start in the gap after the gate releases and before afterUpdate restarts the OpenCode service, borrow the service about to be replaced, and then reconnect. Upstream behaves the same; the suggested fix runs afterUpdate inside gate.update.
 
 ## Fix round (fresh review of 9ed11e8829: BLOCK, findings L01R2-*)
 
@@ -106,7 +109,7 @@ On top of 2c79a05944. The review found the five ports, the gate's locking, the m
 - **L01R2 P2-1** (coordinator decision): ProviderSessionManagerErrors.ts (`feea042f19`) is the one home of the release reason and the five session-manager error classes; L02 keeps only the service shape in ProviderSessionManagerTypes.ts and imports the errors.
 - **L01R2 P3-5** (`6d57d10bdf`): text generation resolves the provider instance before it takes the gate, so an unregistered id never adds an entry to the gate's per-instance map (bounded by configured instances). Fail-first (TextGeneration.installationGate.test.ts): `expected [ 'never-registered' ] to deeply equal []`.
 - **L01R2 P3-1:** the interrupted badge is web only; mobile does not render the interrupted item status (apps/mobile ThreadFeed.tsx:1296-1315). #3176 has a row for it.
-- **L01R2 P3-3:** handoff to L10 (#3176 and L10-retry.md): the gate releases before "Verifying the installed version" (providerMaintenanceRunner.ts:587 to :613); when b68aedfdb7 is ported, its afterUpdate must run inside gate.update.
+- **L01R2 P3-3 / L01R2F P2-1:** the installation gate releases before "Verifying the installed version" (providerMaintenanceRunner.ts:587 to :613), and refreshAfterUpdate then runs OpenCode's afterUpdate (b68aedfdb7, already in the tip as ad5bcb62a9). Coordinator decision: keep upstream's order, no code; the gap is a known limit (goat#3445). The earlier "when it is ported" handoff was wrong.
 - **L01R2 P3-4:** the optional gate read stays as disclosed in the 9ce9b1fd41 row.
 - **L01R2 P3-6:** provider-pi adapter.ts is 3475/3476 on the merged tree.
 
@@ -144,5 +147,34 @@ An earlier gate on afa50306cf (tip 1f34e35e42, alone on the host 23:08 to 23:45)
 Budget entries touched on the merged tree (none raised): ClaudeAdapterV2.ts 10941/11224, ClaudeAdapterV2.test.ts 16510/16924, ProviderSessionManager.ts 3021/3128, ProviderSessionManager.test.ts 6149/6326, Orchestrator.ts 13901/13908 (with L04; with L02 run 6 it would reach 13931, so whichever of L01 and L02 lands second frees about 25 lines), ProjectionStore.ts 8148/8836, EffectWorker.ts 985/1005, DelegatedCompletionDelivery.test.ts 2200/2332, testkit/fixtures/index.ts 1829/1844, server.ts 1327/1339, providerMaintenanceRunner.test.ts 1004/1246, provider-pi adapter.ts 3475/3476, provider-pi adapter.test.ts 4712/4784, OrchestratorMcpToolkit.integration.test.ts 1326/1326, provider-cursor cloud adapter.test.ts unchanged.
 
 NOT RUN: a real-client pass of the interrupted badge, the steer badge and the notice; CI (runs once on #3397); the narrow fresh review of the fix round.
+
+
+## Follow-up (fresh review of 47f97c627c: APPROVE WITH NITS, findings L01R2F-*)
+
+Round 2 merged into chase/t3-261114-all as c9ce9682e9. This follow-up is on top of the tip 17af62cba1.
+
+- **L01R2F P2-1** (coordinator decision, no code): the gate keeps upstream's order; see the corrected P3-3 line above and goat#3445.
+- **L01R2F P3-1** (`f00f74550c`, after the byte-identical move `0f69bbfc7b` of the Cursor Cloud progress helpers, 80 lines, zero mismatches): retryOnce bounds Cursor's resume and send to two minutes. A retry Cursor never answers now fails into the observer's catch (task "unknown", turn failed) instead of staying "submitting" forever. Fail-first: adapter.retry.test.ts "ends the turn when Cursor never answers the retry": `expected [] to deeply equal [ ObjectContaining{…} ]`.
+- **L01R2F P3-2** (`4538ab1335`): ProviderRetryStall.testkit.ts covers a running retry row followed by its completed row: after 16 minutes the turn is not interrupted. A watch that re-arms on any non-interrupted row fails it (`expected 1 to equal +0`); removing only the timer stop does not, because stopStalledRetry also skips a retry that is no longer running. The cancelRun assertion in the Cursor Cloud retry test is dropped (that harness has no watch).
+- **L01R2F P3-4** (`4538ab1335`): the ClaudeBackgroundDetails.test.ts comment no longer names a commit.
+- **L01R2F P3-3:** the record rows above; goat#3446 filed for the ProviderInstanceRegistry.test.ts flake.
+
+Surfaces, Cursor Cloud: the retry row reads "Provider recovered" once Cursor accepts the retry (failure.ts:365, the completed retry item) and becomes "Provider error" if the retried run later fails, because the terminal failure item shares the row's id (failure.ts:335; the adapter gives both the ordinal providerTurnOrdinal × 100 + 2).
+
+## Gate (follow-up, head b3d58344c1, after merging origin/chase/t3-261114-all at 17af62cba1)
+
+Host: macbookpro2 (pen-macbookpro2, hostname gimbyeongjun-ui-MacBookPro-2.local). `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 VITEST_MAX_WORKERS=4 vp run check:changed` started 03:30:23 with no other check:changed or vitest run on the host (load 3.6). Format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, and typecheck (42 packages) pass. Tests: 1908 files, 21 failed, 27527 passed, 33 skipped.
+
+| failed tests | triage |
+|---|---|
+| 4 in apps/server/src/cli/app.test.ts (relative cwd fixtures) | goat#3238. The hung serverCwd.fixture.ts processes stopped (38890, 37653, 59307) were each the child of vitest worker 20703, a process of this gate's own command running in this worktree (parent PID and command line checked before each stop) |
+| 16 in apps/server/src/textGeneration/GrokTextGeneration.test.ts | goat#3425 (fake grok launcher needs node on PATH); fail on the tip alone |
+| 1 in packages/ssh runtimeFactsScripts.test.ts | goat#3363 (macOS /bin/bash 3.2) |
+
+The earlier fix-round gate on f882ef3daa also had one ProviderInstanceRegistry.test.ts failure (makeTempDirectoryScoped PlatformError, passes alone), now goat#3446; it did not recur here. `node scripts/goat-rename.ts --check`: 0 lines with T3 residue.
+
+Budget entries this lane touches, merged tree (none raised; code-budgets.json has no diff against the tip): ProjectionStore.ts 8799/8836, ProviderSessionManager.test.ts 6151/6326, ProviderSessionManager.ts 3021/3128, Orchestrator.ts 13901/13908 here (13897/13908 with adapters-retry, per the coordinator), ClaudeAdapterV2.ts 10941/11224, provider-pi adapter.ts 3475/3476, provider-cursor cloud/adapter.ts 926/1000 after the move (998/1000 before it), OrchestratorMcpToolkit.integration.test.ts 1326/1326.
+
+NOT RUN: a real-client pass of the interrupted badge, the steer badge and the notice; CI; a fresh review of the follow-up.
 
 Model: claude-opus-5-5 (anthropic) through the Codex harness in GOAT.
