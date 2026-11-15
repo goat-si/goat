@@ -289,6 +289,36 @@ it("a typed answer still answers its question after a reconnect whose saved refe
   }
 });
 
+it("a question that closed during a reconnect keeps its chip while nothing can send, then ends answering and the words stay", async () => {
+  setup(main);
+  const chat = await open(<GoatBotScreen visible />);
+  screenSession.rows = [asked];
+  await chat.view.rerender(<GoatBotScreen visible />);
+  const chip = () => chat.view.container.querySelector('[aria-label^="Answering: "]');
+  try {
+    await act(async () =>
+      chat.view.container
+        .querySelector('button[aria-label="Something else"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    await typeInto(chat.view.container, "Keep it");
+    unconfirmed({ environmentId: "env", threadId: "older-main-thread" });
+    screenSession.rows = [];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    move(main);
+    screenSession.rows = [{ ...asked, options: [], choices: [] }];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chip()).toBeNull();
+    expect(chat.typed()).toBe("Keep it");
+    await chat.press("Send message");
+    expect(screenSession.answer).not.toHaveBeenCalled();
+    expect(screenSession.send).toHaveBeenCalledWith("Keep it", []);
+  } finally {
+    await chat.close();
+  }
+});
+
 it("answering ends and its typed answer clears when the destination changes, even with the same question still listed", async () => {
   setup(main);
   const chat = await open(<GoatBotScreen visible />);
