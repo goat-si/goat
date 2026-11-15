@@ -2380,10 +2380,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly long_turn: number;
       }>`
                 ${eligible}, live_run AS (
-                  -- The oldest live run is the one at work; queued runs follow it.
+                  -- The oldest live run is the one at work. A queued run has no visible rows
+                  -- (its input stays hidden until it starts), so it never counts here.
                   SELECT live.run_id FROM orchestration_v2_projection_runs AS live
                   WHERE live.thread_id = ${threadId}
-                    AND live.status IN ('queued','preparing','starting','running','waiting')
+                    AND live.status IN ('preparing','starting','running','waiting')
                     AND ${window.requiredRunId ?? null} IS NULL
                     AND NOT EXISTS (
                       SELECT 1 FROM orchestration_v2_projection_run_attempts
