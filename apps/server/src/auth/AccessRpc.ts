@@ -1,6 +1,10 @@
 import {
   AuthAccessMutationError,
+  AuthAccessStreamError,
+  type AuthAccessStreamEvent,
   AuthHubProxyScope,
+  type AuthSessionId,
+  authScopeResponse,
   AuthStandardClientScopes,
   type AuthCreatePairingCredentialInput,
   type AuthRevokeClientSessionInput,
@@ -8,8 +12,13 @@ import {
   WS_METHODS,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as PairingGrantStore from "./PairingGrantStore.ts";
+import * as SessionStore from "./SessionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { rpcInitialItems } from "../rpcInitialItems.ts";
 import { hubProxyDelegationRefusal } from "./hubProxyDelegation.ts";
 import { rpcAuthorizationError } from "./RpcAuthorization.ts";
 
@@ -72,5 +81,100 @@ export const make = Effect.fn("AuthAccessRpc.make")(function* (
         );
       return { revoked };
     }),
+  };
+});
+
+function toAuthAccessStreamEvent(
+  change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
+  revision: number,
+  currentSessionId: AuthSessionId,
+): AuthAccessStreamEvent {
+  switch (change.type) {
+    case "pairingLinkUpserted":
+      return {
+        version: 1,
+        revision,
+        type: "pairingLinkUpserted",
+        payload: { ...change.pairingLink, ...authScopeResponse(change.pairingLink.scopes) },
+      };
+    case "pairingLinkRemoved":
+      return {
+        version: 1,
+        revision,
+        type: "pairingLinkRemoved",
+        payload: { id: change.id },
+      };
+    case "clientUpserted":
+      return {
+        version: 1,
+        revision,
+        type: "clientUpserted",
+        payload: {
+          ...change.clientSession,
+          ...authScopeResponse(change.clientSession.scopes),
+          current: change.clientSession.sessionId === currentSessionId,
+        },
+      };
+    case "clientRemoved":
+      return {
+        version: 1,
+        revision,
+        type: "clientRemoved",
+        payload: { sessionId: change.sessionId },
+      };
+  }
+}
+
+export const makeStream = Effect.fn("AuthAccessRpc.makeStream")(function* (
+  currentSessionId: AuthSessionId,
+) {
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+  const sessions = yield* SessionStore.SessionStore;
+  const loadAuthAccessSnapshot = () =>
+    Effect.all({
+      pairingLinks: serverAuth.listPairingLinks(),
+      clientSessions: serverAuth.listClientSessions(currentSessionId),
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new AuthAccessStreamError({
+            message: error.message,
+          }),
+      ),
+    );
+  return {
+    [WS_METHODS.subscribeAuthAccess]: (_input: unknown) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const initialSnapshot = yield* loadAuthAccessSnapshot();
+          const revisionRef = yield* Ref.make(1);
+          const accessChanges: Stream.Stream<
+            PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
+          > = Stream.merge(bootstrapCredentials.streamChanges, sessions.streamChanges);
+
+          const liveEvents: Stream.Stream<AuthAccessStreamEvent> = accessChanges.pipe(
+            Stream.mapEffect((change) =>
+              Ref.updateAndGet(revisionRef, (revision) => revision + 1).pipe(
+                Effect.map((revision) =>
+                  toAuthAccessStreamEvent(change, revision, currentSessionId),
+                ),
+              ),
+            ),
+          );
+
+          return Stream.concat(
+            rpcInitialItems([
+              {
+                version: 1 as const,
+                revision: 1,
+                type: "snapshot" as const,
+                payload: initialSnapshot,
+              },
+            ]),
+            liveEvents,
+          );
+        }),
+      ),
   };
 });

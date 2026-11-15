@@ -40,11 +40,8 @@ import {
   AcpRegistryOperationError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
-  AuthAccessStreamError,
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
-  authScopeResponse,
-  AuthSessionId,
   type HubDeviceOperationInput,
   ChatAttachmentId,
   ClientConnectionMethod,
@@ -91,7 +88,6 @@ import {
   type AcpRegistryDisableProviderInput,
   type AcpRegistryListProvidersInput,
   type AcpRegistrySetProviderInput,
-  type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   type DiscoveredLocalServerList,
   type ServerProvider,
@@ -156,7 +152,6 @@ import {
   createDeterministicAttachmentId,
 } from "./attachmentStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
@@ -597,47 +592,6 @@ const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation)
 const SHELL_RESUME_MAX_GAP = 1_000;
 // Row counts do not bound large tool payloads; sum stored JSON bytes in SQL and snapshot above budget.
 const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
-
-function toAuthAccessStreamEvent(
-  change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
-  revision: number,
-  currentSessionId: AuthSessionId,
-): AuthAccessStreamEvent {
-  switch (change.type) {
-    case "pairingLinkUpserted":
-      return {
-        version: 1,
-        revision,
-        type: "pairingLinkUpserted",
-        payload: { ...change.pairingLink, ...authScopeResponse(change.pairingLink.scopes) },
-      };
-    case "pairingLinkRemoved":
-      return {
-        version: 1,
-        revision,
-        type: "pairingLinkRemoved",
-        payload: { id: change.id },
-      };
-    case "clientUpserted":
-      return {
-        version: 1,
-        revision,
-        type: "clientUpserted",
-        payload: {
-          ...change.clientSession,
-          ...authScopeResponse(change.clientSession.scopes),
-          current: change.clientSession.sessionId === currentSessionId,
-        },
-      };
-    case "clientRemoved":
-      return {
-        version: 1,
-        revision,
-        type: "clientRemoved",
-        payload: { sessionId: change.sessionId },
-      };
-  }
-}
 
 const isClientSurface = Schema.is(ClientSurface);
 const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
@@ -1455,6 +1409,7 @@ export const layerWsRpc = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const accessRpc = yield* AccessRpc.make(currentSession);
+      const accessStreamRpc = yield* AccessRpc.makeStream(currentSessionId);
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
@@ -1463,7 +1418,6 @@ export const layerWsRpc = (
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       // The panel's reads for a pull request the user opened go out during a rate-limit pause.
       const openedPullRequestRead = Effect.provideService(SourceControlRateLimit.Interactive, true);
-      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const updateSettings = yield* SettingsRpc.make(currentSession);
       const authorizeSettings = yield* SettingsSessionPermit.make(currentSession);
@@ -1762,19 +1716,6 @@ export const layerWsRpc = (
         yield* providerRegistry.refreshInstance(input.instanceId);
         return { disabled: true } as const;
       });
-      const loadAuthAccessSnapshot = () =>
-        Effect.all({
-          pairingLinks: serverAuth.listPairingLinks(),
-          clientSessions: serverAuth.listClientSessions(currentSessionId),
-        }).pipe(
-          Effect.mapError(
-            (error) =>
-              new AuthAccessStreamError({
-                message: error.message,
-              }),
-          ),
-        );
-
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
         readonly usageLimitsCommand: boolean;
         readonly workspaceSnapshotsOnDemand: boolean;
@@ -3522,38 +3463,7 @@ export const layerWsRpc = (
             Stream.filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true),
           ),
         ...accessRpc,
-        [WS_METHODS.subscribeAuthAccess]: (_input) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const initialSnapshot = yield* loadAuthAccessSnapshot();
-              const revisionRef = yield* Ref.make(1);
-              const accessChanges: Stream.Stream<
-                PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange
-              > = Stream.merge(bootstrapCredentials.streamChanges, sessions.streamChanges);
-
-              const liveEvents: Stream.Stream<AuthAccessStreamEvent> = accessChanges.pipe(
-                Stream.mapEffect((change) =>
-                  Ref.updateAndGet(revisionRef, (revision) => revision + 1).pipe(
-                    Effect.map((revision) =>
-                      toAuthAccessStreamEvent(change, revision, currentSessionId),
-                    ),
-                  ),
-                ),
-              );
-
-              return Stream.concat(
-                rpcInitialItems([
-                  {
-                    version: 1 as const,
-                    revision: 1,
-                    type: "snapshot" as const,
-                    payload: initialSnapshot,
-                  },
-                ]),
-                liveEvents,
-              );
-            }),
-          ),
+        ...accessStreamRpc,
         [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
           Stream.unwrap(
             Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>
