@@ -107,7 +107,7 @@ export const parentWithTask = (name: string, stop: "none" | "requested" | "unans
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const parentThreadId = ThreadId.make(`thread:${name}`);
-    yield* createWatchingThread(parentThreadId, 40);
+    yield* createWatchingThread(parentThreadId, 40, `${name} parent`);
     yield* send(parentThreadId, "plan", "start_immediately");
     const childThreadId = yield* delegate(parentThreadId, `${name} task`);
     if (stop !== "none") yield* stopRequested(childThreadId, stop === "unanswered");

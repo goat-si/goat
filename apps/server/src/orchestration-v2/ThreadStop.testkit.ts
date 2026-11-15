@@ -86,7 +86,7 @@ export const pullRequest = (number: number) => ({
   number,
 });
 
-export const createWatchingThread = (threadId: ThreadId, number: number) =>
+export const createWatchingThread = (threadId: ThreadId, number: number, title?: string) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     yield* orchestrator.dispatch({
@@ -94,7 +94,7 @@ export const createWatchingThread = (threadId: ThreadId, number: number) =>
       commandId: CommandId.make(`create:${threadId}`),
       threadId,
       projectId: ProjectId.make("project:thread-stop"),
-      title: threadId,
+      title: title ?? threadId,
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",

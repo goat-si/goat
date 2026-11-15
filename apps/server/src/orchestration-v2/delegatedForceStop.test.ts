@@ -40,10 +40,10 @@ it.effect("the parent's Force stop ends its task's child after Stop went unanswe
     const result = (yield* orchestrator.getThreadProjection(childThreadId)).turnItems.find(
       (item) => item.type === "run_interrupt_result",
     );
-    // The child's timeline names who force stopped it.
+    // The child's timeline names who force stopped it by title, never by raw id.
     assert.equal(
       result?.type === "run_interrupt_result" ? result.message : undefined,
-      `Force stopped by parent thread "${parentThreadId}" (${parentThreadId})`,
+      'Force stopped by parent thread "force-ok parent"',
     );
   }).pipe(Effect.provide(layerTest)),
 );
@@ -126,7 +126,7 @@ it.effect(
         }).pipe(Effect.provide(server));
         assert.deepEqual(after, {
           runs: ["interrupted"],
-          reason: `Force stopped by parent thread "${task.parentThreadId}" (${task.parentThreadId})`,
+          reason: 'Force stopped by parent thread "force-restart parent"',
           again: "not_unresponsive",
         });
       }),

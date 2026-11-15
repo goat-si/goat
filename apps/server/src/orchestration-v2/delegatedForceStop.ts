@@ -108,9 +108,8 @@ export const forceStopDelegatedTask = Effect.fn("ThreadManagementService.forceSt
       });
     const childThreadId = task.childThreadId;
     const parent = yield* deps.getThreadShell(input.parentThreadId);
-    const parentName = parent?.title
-      ? `"${parent.title}" (${input.parentThreadId})`
-      : input.parentThreadId;
+    // A person reads this; the id stands in only for a parent without a title.
+    const parentName = parent?.title ? `"${parent.title}"` : input.parentThreadId;
     const result = yield* forceStopUnresponsiveRun(deps, {
       threadId: childThreadId,
       reason: `Force stopped by parent thread ${parentName}`,
