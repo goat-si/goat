@@ -409,6 +409,7 @@ export function GoatBotWorkPanel({
                 focusRoutineId={routineFocus}
                 onRoutineFocused={() => setRoutineFocus(null)}
                 routineMayFocus={landingMayFocus}
+                docked={onShowChat === undefined}
               />
             </GoatBotSectionCard>
             <GoatBotSectionCard title="Machines">

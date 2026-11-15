@@ -34,6 +34,7 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
+import { focusGoatBotRow } from "./goatBotRunRow";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
@@ -387,13 +388,7 @@ export function GoatBotTimeline({
                     <button
                       type="button"
                       className={style}
-                      onClick={() => {
-                        const element = Array.from(
-                          listRef.current?.querySelectorAll<HTMLElement>("[data-bot-row]") ?? [],
-                        ).find((node) => node.dataset.botRow === source.id);
-                        element?.scrollIntoView({ block: "center" });
-                        element?.focus({ preventScroll: true });
-                      }}
+                      onClick={() => focusGoatBotRow(listRef.current, source.id)}
                     >
                       {goatBotPreviewText(row.quote)}
                     </button>
