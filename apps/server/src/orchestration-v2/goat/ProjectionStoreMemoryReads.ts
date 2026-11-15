@@ -33,7 +33,7 @@ const activeRunStatuses: ReadonlySet<ProjectionRun["status"]> = new Set([
 ]);
 
 // In-memory twin of the omitSettledLeafNodes SQL clause in readCanonicalProjection.
-export const isSettledLeafNode = (node: ProjectionNode, runs: ReadonlyArray<ProjectionRun>) =>
+const isSettledLeafNode = (node: ProjectionNode, runs: ReadonlyArray<ProjectionRun>) =>
   settledLeafNodeKinds.has(node.kind) &&
   settledNodeStatuses.has(node.status) &&
   node.runId !== null &&
