@@ -508,6 +508,29 @@ it("preserves lastRun in MCP JSON and keeps legacy and future nested outcomes re
   expect(decode({ ...task, lastRun: { status: "future" } }).lastRun).toBeUndefined();
 });
 
+it("adds lastRunError to MCP task output without breaking an older reader", () => {
+  const task = {
+    scheduledTaskId: "task",
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: true,
+    projectId: "project",
+    boundThreadId: null,
+    schedule: { type: "interval", everyMs: 60000 },
+    nextRunAt: null,
+    lastRunStatus: "failed",
+  };
+  const codec = Schema.fromJsonString(OrchestratorMcpScheduledTask);
+  const old = OrchestratorMcpScheduledTask.mapFields(
+    ({ lastRunError: _lastRunError, ...fields }) => fields,
+  );
+  const decode = Schema.decodeUnknownSync(codec);
+  const output = JSON.stringify({ ...task, lastRunError: "Weekly usage limit reached" });
+  expect(decode(output).lastRunError).toBe("Weekly usage limit reached");
+  expect(decode(JSON.stringify(task)).lastRunError).toBeUndefined();
+  expect(Schema.decodeUnknownSync(Schema.fromJsonString(old))(output).lastRunStatus).toBe("failed");
+});
+
 it("retains notification policy in MCP writes and future-policy task output", () => {
   const create = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
   const update = Schema.decodeUnknownSync(OrchestratorMcpUpdateScheduledTaskInput);
