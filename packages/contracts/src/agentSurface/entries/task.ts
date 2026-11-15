@@ -115,7 +115,7 @@ export const taskEntries = {
       taskId: "The taskId goat_task_create returned.",
       reason: "Why it stops, recorded as the stop reason; up to 2000 characters.",
       force:
-        "Only after a cancel left the child stop=unresponsive (task.read): kill its agent and end the run. Parent only.",
+        "Only after a cancel left the child stop=unresponsive (task.read; for a remote task, thread.status with host): kill its agent and end the run. Parent only.",
     },
     examples: [
       {

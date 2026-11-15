@@ -460,7 +460,7 @@ Stop ends the thread's current turn. Subagents it delegated in the background ke
 working and report back when they finish; a subagent the turn was waiting on stops
 with it. To stop a background subagent, use its stop button under **Lineage** in the
 thread details, or ask the agent to cancel it. Before archiving the parent, wait for its local delegated tasks to finish or cancel them.
-When a delegated task on this machine does not answer that cancel, its parent agent may force stop it the way you would with Force stop; the subagent's thread then shows which parent stopped it.
+When a delegated task does not answer that cancel, its parent agent may force stop it the way you would with Force stop; the subagent's thread then shows who stopped it. A task on an SSH host can be force stopped this way only when that host runs a GOAT version that supports it.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
