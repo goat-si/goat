@@ -8,12 +8,14 @@ import {
   goatBotForgetNoteMessage,
   ThreadId,
 } from "@goat/contracts";
+import { AsyncResult } from "effect/reactivity";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { dismissContextMenu } from "~/contextMenuFallback";
+import { observeResize } from "~/lib/observeResize";
 
 import "~/index.css";
 
@@ -23,6 +25,8 @@ const state = vi.hoisted(() => ({
   toasts: [] as string[],
   notes: [] as Array<{ index: number; date: string | null; text: string }>,
   refresh: vi.fn(),
+  routines: { tasks: [] as unknown[] },
+  runNow: vi.fn(),
 }));
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
@@ -59,9 +63,25 @@ vi.mock("./useBotRoster", () => ({
 }));
 vi.mock("~/state/server", async (original) => {
   const real = await original<typeof import("~/state/server")>();
+  const { Atom } = await import("effect/reactivity");
   return {
     ...real,
-    serverEnvironment: { ...real.serverEnvironment, scheduledTasksLive: () => "routines" },
+    serverEnvironment: {
+      ...real.serverEnvironment,
+      scheduledTasksLive: () => "routines",
+      runScheduledTaskNow: {
+        permissionAtom: () => Atom.make(true),
+        testExecute: (...args: unknown[]) => state.runNow(...args),
+      },
+    },
+  };
+});
+// Commands this file drives carry the mock they run; every other command answers success.
+vi.mock("~/state/use-atom-command", async () => {
+  const { AsyncResult } = await import("effect/reactivity");
+  return {
+    useAtomCommand: (command: { testExecute?: unknown }) =>
+      command.testExecute ?? (async () => AsyncResult.success({})),
   };
 });
 vi.mock("~/state/channels", async (original) => {
@@ -111,7 +131,7 @@ vi.mock("~/state/query", async (original) => ({
               refresh: () => {},
             }
           : {
-              data: { tasks: [] },
+              data: state.routines,
               failure: null,
               error: null,
               isPending: false,
@@ -121,6 +141,7 @@ vi.mock("~/state/query", async (original) => ({
 }));
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotChatCanHide, GoatBotChatHidden } from "./goatBotLayout";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
 import { goatBotHomeKey } from "./goatBotHomeRequest";
 
@@ -133,25 +154,37 @@ function setup(narrow = false) {
   state.toasts = [];
   state.notes = [note];
   state.refresh.mockReset();
+  state.routines = { tasks: [] };
+  state.runNow.mockReset();
   const onSend = vi.fn<(text: string) => void>();
   const view = (
     rows: GoatBotRow[] = [],
     peek = false,
     openHome: { key: string; entry: string; taskId?: ChannelTaskId } | null = null,
     onHomeHandled?: () => void,
+    hidden = false,
+    taskRoute = false,
   ) => (
-    <GoatBotChatView
-      openHome={openHome}
-      onHomeHandled={onHomeHandled}
-      availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
-      canOperate
-      rows={rows}
-      onSend={onSend}
-      onRetryInput={() => {}}
-      legacyAgentRoute={null}
-      attachmentSupport={{ maxUploadBytes: 1_000_000 }}
-      rowsForTask={peek ? () => [] : undefined}
-    />
+    // Home docks only in a chat view of 752px or more; the 980px window gate is faked above. The
+    // route hides the chat this way while a task replaces it.
+    <div style={{ width: 1200 }} hidden={hidden}>
+      <GoatBotChatHidden value={hidden}>
+        <GoatBotChatCanHide value={taskRoute}>
+          <GoatBotChatView
+            openHome={openHome}
+            onHomeHandled={onHomeHandled}
+            availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+            canOperate
+            rows={rows}
+            onSend={onSend}
+            onRetryInput={() => {}}
+            legacyAgentRoute={null}
+            attachmentSupport={{ maxUploadBytes: 1_000_000 }}
+            rowsForTask={peek ? () => [] : undefined}
+          />
+        </GoatBotChatCanHide>
+      </GoatBotChatHidden>
+    </div>
   );
   return { view, onSend };
 }
@@ -577,4 +610,259 @@ it("opens the named member's Home for that member's task-origin request", async 
   expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
     "true",
   );
+});
+
+const dockedHome = (screen: Awaited<ReturnType<typeof render>>) =>
+  screen.getByRole("complementary", { name: "GOAT Bot work" });
+/** The frame view() renders the chat view in; its width is the chat view's width. */
+const chatFrame = (screen: Awaited<ReturnType<typeof render>>) =>
+  screen.container.firstElementChild as HTMLElement;
+
+/** Resolves once the shared resize observer delivered the frame's new width to every subscriber. */
+async function resizeFrame(frame: HTMLElement, width: number) {
+  let resized = () => {};
+  const delivered = new Promise<void>((resolve) => (resized = resolve));
+  const stop = observeResize(frame, () => resized());
+  try {
+    // A new subscription first receives the current size; the width change comes after it.
+    await delivered;
+    const changed = new Promise<void>((resolve) => (resized = resolve));
+    frame.style.width = `${width}px`;
+    await changed;
+  } finally {
+    stop();
+  }
+}
+
+it("Home opened in a 751px chat view stays the sheet while the view widens, and docks when reopened", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await resizeFrame(chatFrame(screen), 751);
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await userEvent.click(chip);
+  await expect.element(homeSheet()).toBeVisible();
+  expect(dockedHome(screen).query()).toBeNull();
+  await resizeFrame(chatFrame(screen), 1200);
+  await expect.element(homeSheet()).toBeVisible();
+  expect(dockedHome(screen).query()).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+  await userEvent.click(chip);
+  await expect.element(dockedHome(screen)).toBeVisible();
+  expect(homeSheet().query()).toBeNull();
+});
+
+it("a chat hidden behind a task presents an open Home nowhere, and docks it again when shown", async () => {
+  const { view } = setup();
+  const request = { key: goatBotHomeKey(environmentId, null), entry: "hidden-entry" };
+  await using screen = await render(view([], false, request, undefined, true));
+  // The chat is hidden, so its chip is read from the page, not by role.
+  await vi.waitFor(() =>
+    expect(
+      screen.container
+        .querySelector('button[aria-label="GOAT Bot home"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true"),
+  );
+  expect(dockedHome(screen).query()).toBeNull();
+  expect(homeSheet().query()).toBeNull();
+  await screen.rerender(view([], false, request, undefined, false));
+  await expect.element(dockedHome(screen)).toBeVisible();
+  expect(homeSheet().query()).toBeNull();
+});
+
+it("Home reopened by Back at a wide width is docked by the first paint and never mounts the sheet", async () => {
+  const { view } = setup();
+  const at = "2026-11-09T00:00:00.000Z";
+  state.threads = [
+    {
+      kind: "task",
+      task: { taskId: "task-a", title: "Returned task", status: "running", updatedAt: at },
+      view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    },
+  ];
+  const sheets: Element[] = [];
+  const collect = (records: MutationRecord[]) => {
+    for (const record of records)
+      for (const node of record.addedNodes)
+        if (
+          node instanceof Element &&
+          node.matches('[data-slot="sheet-popup"], :has([data-slot="sheet-popup"])')
+        )
+          sheets.push(node);
+  };
+  const watcher = new MutationObserver(collect);
+  watcher.observe(document.body, { childList: true, subtree: true });
+  using _watcher = { [Symbol.dispose]: () => watcher.disconnect() };
+  const request = {
+    key: goatBotHomeKey(environmentId, null),
+    entry: "back-entry",
+    taskId: ChannelTaskId.make("task-a"),
+  };
+  await using screen = await render(view([], false, request));
+  // Read at once, not retried: render() returns after React committed, before the next frame.
+  expect(screen.container.querySelector('aside[aria-label="GOAT Bot work"]')).not.toBeNull();
+  const row = screen.getByRole("link", { name: /^Returned task/ });
+  await expect.element(row).toBeVisible();
+  expect(row.element().closest("[data-home-return]")?.getAttribute("data-home-return")).toBe(
+    "true",
+  );
+  collect(watcher.takeRecords());
+  expect(sheets).toEqual([]);
+});
+
+it("an open Home keeps the presentation it opened in while the chat view narrows and widens", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await userEvent.click(chip);
+  await expect.element(dockedHome(screen)).toBeVisible();
+  const shown: string[] = [];
+  for (const width of [1000, 800, 760, 752, 751, 740, 600, 751, 752, 900]) {
+    await resizeFrame(chatFrame(screen), width);
+    const docked = screen.container.querySelector('aside[aria-label="GOAT Bot work"]') !== null;
+    const sheet = document.querySelector('[data-slot="sheet-popup"]') !== null;
+    shown.push(`${width}:${docked ? "docked" : sheet ? "sheet" : "none"}`);
+  }
+  expect(chip.element().isConnected).toBe(true);
+  expect(shown).toEqual([
+    "1000:docked",
+    "800:docked",
+    "760:docked",
+    "752:docked",
+    "751:docked",
+    "740:docked",
+    "600:docked",
+    "751:docked",
+    "752:docked",
+    "900:docked",
+  ]);
+});
+
+const failedRoutine = {
+  id: "r1",
+  title: "Daily digest",
+  prompt: "Summarize my day",
+  enabled: true,
+  schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [] },
+  threadId: "bot",
+  nextRunAt: null,
+  lastRunAt: "2026-11-09T00:00:00.000Z",
+  lastRunStatus: "failed",
+  lastRunError: "The provider was offline",
+};
+
+it("a docked Home stays mounted while a task hides the chat, keeping a typed wording and a pending Run now", async () => {
+  const { view } = setup();
+  state.routines = { tasks: [failedRoutine] };
+  let finish = (_result: unknown) => {};
+  state.runNow.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+  await using screen = await render(view());
+  await openMemory(screen);
+  await userEvent.click(screen.getByRole("button", { name: "Ask to change" }));
+  await userEvent.fill(screen.getByRole("textbox", { name: "New wording" }), "Reply in English");
+  await screen.rerender(view([], false, null, undefined, true));
+  await screen.rerender(view());
+  await expect
+    .element(screen.getByRole("textbox", { name: "New wording" }))
+    .toHaveValue("Reply in English");
+  await userEvent.click(screen.getByRole("tab", { name: "Home" }));
+  await userEvent.click(screen.getByRole("button", { name: "Run now" }));
+  await screen.rerender(view([], false, null, undefined, true));
+  await screen.rerender(view());
+  await expect.element(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+  expect(state.runNow).toHaveBeenCalledTimes(1);
+  await act(() => finish(AsyncResult.success({})));
+  await expect.element(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+});
+
+it("crossing the 980px window gate while the chat is hidden opens no sheet over the task", async () => {
+  const { view } = setup();
+  await using screen = await render(view([], false, null, undefined, false, true));
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(dockedHome(screen)).toBeVisible();
+  // The window query flips in the same render as the task route hides the chat.
+  state.narrow = true;
+  await screen.rerender(view([], false, null, undefined, true, true));
+  expect(homeSheet().query()).toBeNull();
+  // Docked Home is still there, hidden with the chat, holding what it had.
+  expect(screen.container.querySelector('aside[aria-label="GOAT Bot work"]')).not.toBeNull();
+});
+
+it("on the bot's own chat, crossing the 980px window gate moves an open Home to its sheet, as before (guard)", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(dockedHome(screen)).toBeVisible();
+  state.narrow = true;
+  await screen.rerender(view());
+  await expect.element(homeSheet()).toBeVisible();
+  expect(dockedHome(screen).query()).toBeNull();
+});
+
+it("Home in its sheet over the task asks nothing of the hidden composer: its draft actions are off", async () => {
+  const { view } = setup();
+  await using screen = await render(view([], false, null, undefined, false, true));
+  await resizeFrame(chatFrame(screen), 751);
+  await openMemory(screen);
+  await expect.element(page.getByRole("button", { name: "Ask to change" })).toBeEnabled();
+  await screen.rerender(view([], false, null, undefined, true, true));
+  // The sheet stays open over the task; what it would put in the message box cannot be seen.
+  await expect.element(homeSheet()).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Ask to change" })).toBeDisabled();
+  await expect.element(page.getByRole("button", { name: "Ask to forget" })).toBeDisabled();
+  await screen.rerender(view([], false, null, undefined, false, true));
+  await expect.element(page.getByRole("button", { name: "Ask to change" })).toBeEnabled();
+});
+
+/** The interface font size, as Settings > Appearance sets it on the root; restored on dispose. */
+function interfaceFontSize(px: number): Disposable {
+  const before = document.documentElement.style.fontSize;
+  document.documentElement.style.fontSize = `${px}px`;
+  return {
+    [Symbol.dispose]: () => {
+      document.documentElement.style.fontSize = before;
+    },
+  };
+}
+
+it("at a 20px interface size Home docks only in a 940px chat view, where it is 440px and the chat keeps 500px", async () => {
+  using _font = interfaceFontSize(20);
+  const { view } = setup();
+  await using screen = await render(view());
+  const chip = screen.getByRole("button", { name: "GOAT Bot home" });
+  await resizeFrame(chatFrame(screen), 939);
+  await userEvent.click(chip);
+  await expect.element(homeSheet()).toBeVisible();
+  expect(dockedHome(screen).query()).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(homeSheet()).not.toBeInTheDocument();
+  await resizeFrame(chatFrame(screen), 940);
+  await userEvent.click(chip);
+  await expect.element(dockedHome(screen)).toBeVisible();
+  const home = dockedHome(screen).element().getBoundingClientRect().width;
+  expect(home).toBe(440);
+  expect(940 - home).toBe(500);
+});
+
+it("a change of the interface size is measured again before Home next opens", async () => {
+  const { view } = setup();
+  await using screen = await render(view());
+  await resizeFrame(chatFrame(screen), 900);
+  const before = document.documentElement.style.fontSize;
+  using _restore = {
+    [Symbol.dispose]: () => {
+      document.documentElement.style.fontSize = before;
+    },
+  };
+  // Docks at 16px (900 >= 752); at 20px Home needs 940.
+  await act(() => {
+    document.documentElement.style.fontSize = "20px";
+  });
+  await userEvent.click(screen.getByRole("button", { name: "GOAT Bot home" }));
+  await expect.element(homeSheet()).toBeVisible();
+  expect(dockedHome(screen).query()).toBeNull();
 });

@@ -188,6 +188,7 @@ import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { HoldsNavigation, NavigationHoldsPaused } from "~/lib/navigationHolds";
 
 function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: string }) {
   const session = useGoatBotSession();
@@ -811,4 +812,32 @@ it("says in the header that a running task waits for your answer when its worker
   await expect.element(screen.getByText("Review work")).toBeVisible();
   await expect.element(screen.getByText("Waiting for your answer")).toBeVisible();
   expect(screen.getByText("Working", { exact: true }).query()).toBeNull();
+});
+
+it("while open or unsaved work sits in the chat behind it, Back to Tasks says so and is described by it", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const text =
+    "The chat behind this task has open or unsaved work. Leaving this task closes it and discards unsaved changes.";
+  await using screen = await render(
+    <>
+      {/* A draft in the chat the task replaced: its hold pauses there. */}
+      <NavigationHoldsPaused value>
+        <HoldsNavigation />
+      </NavigationHoldsPaused>
+      <GoatBotTaskPane
+        environmentId={EnvironmentId.make("env")}
+        session={session}
+        taskId={ChannelTaskId.make("task-1")}
+        taskTitle="Older task"
+        narrow
+        onClose={() => {}}
+      />
+    </>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Tasks" }))
+    .toHaveAccessibleDescription(text);
+  await expect.element(screen.getByRole("status")).toHaveTextContent(text);
 });

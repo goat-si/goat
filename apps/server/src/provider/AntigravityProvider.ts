@@ -153,6 +153,7 @@ function isMissingInstallation(error: EffectAcpErrors.AcpError | ProviderSetupEr
 interface AntigravityProviderState {
   readonly draft: ServerProviderDraft;
   readonly authRevision: number;
+  readonly authProfile?: string;
 }
 
 interface AntigravityProviderOptions {
@@ -167,6 +168,7 @@ interface AntigravityProviderOptions {
   readonly clearUsage?: Effect.Effect<void>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
+  readonly currentProfile?: Effect.Effect<string>;
 }
 
 export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(function* (
@@ -225,7 +227,36 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       thinkingLevels.set(model.currentValue, antigravityThinkingConfig(configOptions) ?? null);
     }
   };
-  const getSnapshot = SubscriptionRef.get(metadata).pipe(
+  const reconcileProfile = Effect.fn("AntigravityProvider.reconcileProfile")(function* () {
+    if (!options.currentProfile) return;
+    const profile = yield* options.currentProfile;
+    const previous = yield* SubscriptionRef.get(metadata);
+    if (previous.authProfile === undefined || previous.authProfile === profile) return;
+    yield* resetUsage;
+    discoveredSkills.clear();
+    thinkingLevels.clear();
+    yield* SubscriptionRef.update(metadata, (state) =>
+      state.authProfile === undefined || state.authProfile === profile
+        ? state
+        : ({
+            authRevision: state.authRevision + 1,
+            draft: {
+              ...state.draft,
+              auth: { status: "unknown", ...(options.auth ? { type: options.auth.type } : {}) },
+              status: "warning",
+              message: authUncheckedMessage,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [],
+              supportsTextGeneration: false,
+              usageLimits: undefined,
+            },
+          } satisfies AntigravityProviderState),
+    );
+  });
+  const getSnapshot = reconcileProfile().pipe(
+    Effect.andThen(SubscriptionRef.get(metadata)),
     Effect.flatMap((state) => options.stampIdentity(state.draft)),
   );
 
@@ -272,6 +303,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const checkProvider = Effect.fn("checkAntigravityProvider")(function* () {
     if (!settings.enabled) return yield* getSnapshot;
+    yield* reconcileProfile();
     const before = yield* SubscriptionRef.get(metadata);
     const timeoutMs = resolveProviderProbeTimeoutMs(
       "antigravity",
@@ -297,6 +329,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const supportsTextGeneration =
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
+    yield* reconcileProfile();
     const next = yield* SubscriptionRef.updateAndGet(metadata, (state) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
@@ -337,7 +370,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         },
       } satisfies AntigravityProviderState;
     });
-    if (initialized !== undefined) yield* refreshUsage();
+    if (
+      initialized !== undefined &&
+      (!options.currentProfile || next.draft.auth.status === "authenticated")
+    ) {
+      yield* refreshUsage();
+    }
     return yield* options.stampIdentity(next.draft);
   });
 
@@ -366,8 +404,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const onSessionStarted = Effect.fn("AntigravityProvider.onSessionStarted")(function* (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     cwd?: string,
+    profile?: string,
   ) {
     if (!settings.enabled) return;
+    yield* reconcileProfile();
+    const currentProfile = options.currentProfile ? yield* options.currentProfile : undefined;
+    if (options.currentProfile && profile !== currentProfile) return;
     observeThinkingLevels(started.sessionSetupResult.configOptions);
     const before = yield* SubscriptionRef.get(metadata);
     const supportsTextGeneration = yield* options.supportsTextGeneration;
@@ -384,6 +426,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       const workspace = cwd ? workspaces.find((entry) => entry.cwd === cwd) : undefined;
       return {
         authRevision: state.authRevision + 1,
+        ...(currentProfile === undefined ? {} : { authProfile: currentProfile }),
         draft: {
           ...draft,
           installed: true,
@@ -418,11 +461,17 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const onConfigOptionsUpdated = Effect.fn("AntigravityProvider.onConfigOptionsUpdated")(function* (
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    profile?: string,
   ) {
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     observeThinkingLevels(configOptions);
     const models = buildAntigravityModelsFromSession({ configOptions }, thinkingLevels);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status !== "authenticated") return state;
+      if (
+        state.draft.auth.status !== "authenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return { ...state, draft: { ...state.draft, models } };
     });
   });
@@ -430,12 +479,18 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const onAvailableCommands = Effect.fn("AntigravityProvider.onAvailableCommands")(function* (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     cwd?: string,
+    profile?: string,
   ) {
     if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     const slashCommands = nativeCommands(commands);
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status === "unauthenticated") return state;
+      if (
+        state.draft.auth.status === "unauthenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return {
         ...state,
         draft: {
@@ -462,35 +517,51 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     });
   });
 
-  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
-    yield* resetUsage;
-    if (!settings.enabled) return;
-    const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* SubscriptionRef.update(
-      metadata,
-      (state) =>
-        ({
-          authRevision: state.authRevision + 1,
-          draft: {
-            ...state.draft,
-            auth: {
-              status: "unauthenticated",
-              ...(usesCredentials ? options.auth : {}),
+  /** Without a profile it applies to every profile and forgets which one was confirmed. */
+  const markSignedOut = (updatedAt: string, profile?: string) =>
+    SubscriptionRef.update(metadata, (state) =>
+      profile !== undefined && state.authProfile !== undefined && state.authProfile !== profile
+        ? state
+        : ({
+            authRevision: state.authRevision + 1,
+            ...(profile === undefined ? {} : { authProfile: profile }),
+            draft: {
+              ...state.draft,
+              auth: {
+                status: "unauthenticated",
+                ...(usesCredentials ? options.auth : {}),
+              },
+              status: "warning",
+              message: signInMessage,
+              checkedAt: updatedAt,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [],
+              supportsTextGeneration: false,
+              usageLimits: undefined,
             },
-            status: "warning",
-            message: signInMessage,
-            checkedAt: updatedAt,
-            models: [],
-            slashCommands: [],
-            skills: [],
-            workspaceSnapshots: [],
-            supportsTextGeneration: false,
-            usageLimits: undefined,
-          },
-        }) satisfies AntigravityProviderState,
+          } satisfies AntigravityProviderState),
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          discoveredSkills.clear();
+          thinkingLevels.clear();
+        }),
+      ),
     );
-    discoveredSkills.clear();
-    thinkingLevels.clear();
+
+  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* (
+    profile?: string,
+  ) {
+    if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* reconcileProfile();
+    yield* resetUsage;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    const updatedAt = DateTime.formatIso(yield* DateTime.now);
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* markSignedOut(updatedAt, profile);
   });
 
   const snapshotForCwd = Effect.fn("AntigravityProvider.snapshotForCwd")(function* (
@@ -543,8 +614,14 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       ),
       Effect.asVoid,
     ),
-    onSignedOut: clearAccountMetadata(),
-    onAuthRequired: clearAccountMetadata(),
+    // Every runtime home links the same credential profile, so a sign-out from any home
+    // removes the credentials of every profile, whatever the home reads meanwhile.
+    onSignedOut: Effect.fn("AntigravityProvider.onSignedOut")(function* (_profile?: string) {
+      if (!settings.enabled) return;
+      yield* resetUsage;
+      yield* markSignedOut(DateTime.formatIso(yield* DateTime.now));
+    }),
+    onAuthRequired: clearAccountMetadata,
     snapshotForCwd,
   };
 });

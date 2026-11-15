@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import { createModelSelection } from "@goat/shared/model";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { expect } from "vite-plus/test";
 import { ProviderInstanceId, ProviderSetupError } from "@goat/contracts";
 import * as ServerConfig from "../config.ts";
@@ -707,5 +708,60 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
         );
         expect(yield* fs.readFileString(path.join(userHome, "AGENTS.md"))).toBe("Reply in Korean.");
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("an empty CODEX_HOME runs reception with the default home's sign-in", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-user-home-" });
+      const auth = path.join(userHome, ".codex", "auth.json");
+      yield* fs.makeDirectory(path.dirname(auth));
+      yield* fs.writeFileString(auth, '{"refresh":"refresh-1"}');
+      yield* withFakeCodexEnv(
+        { output: receptionOutput, refreshAuth: "in-place", environment: { CODEX_HOME: "" } },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const generate = textGeneration.generateChannelReception;
+            if (generate === undefined) return yield* Effect.die("reception missing");
+            yield* generate({
+              cwd: process.cwd(),
+              input: receptionInput,
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            });
+          }),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, userHome));
+      expect(yield* fs.readFileString(auth)).toBe('{"refresh":"refresh-2"}');
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reception keeps a CODEX_HOME whose name ends in a space", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-user-home-" });
+      const codexHome = path.join(userHome, "account ");
+      const auth = path.join(codexHome, "auth.json");
+      yield* fs.makeDirectory(codexHome);
+      yield* fs.writeFileString(auth, '{"refresh":"refresh-1"}');
+      yield* withFakeCodexEnv(
+        {
+          output: receptionOutput,
+          refreshAuth: "in-place",
+          environment: { CODEX_HOME: codexHome },
+        },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const generate = textGeneration.generateChannelReception;
+            if (generate === undefined) return yield* Effect.die("reception missing");
+            yield* generate({
+              cwd: process.cwd(),
+              input: receptionInput,
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            });
+          }),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, userHome));
+      expect(yield* fs.readFileString(auth)).toBe('{"refresh":"refresh-2"}');
+    }).pipe(Effect.scoped),
   );
 });

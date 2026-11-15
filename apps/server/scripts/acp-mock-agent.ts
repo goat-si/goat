@@ -15,6 +15,7 @@ import { mockSessionNotices } from "./acpMockNotices.ts";
 import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 import { emitGrokKillTaskScenario, writeJsonRpcNotification } from "./acpMockGrokScenarios.ts";
+import { antigravityCommands } from "./acpMockAntigravityCommands.ts";
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
@@ -495,15 +496,12 @@ const program = Effect.gen(function* () {
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
-  const publishAntigravityCommands = (targetSessionId: string) =>
+  const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
     agent.client.sessionUpdate({
       sessionId: targetSessionId,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: [
-          { name: "plan", description: "Plan a task", input: { hint: "task" } },
-          { name: "logout", description: "Sign out" },
-        ],
+        availableCommands: antigravityCommands(command),
       },
     });
 
@@ -945,6 +943,8 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
       promptCount += 1;
+      if (process.env.GOAT_ACP_PROMPT_COMMAND)
+        yield* publishAntigravityCommands(requestedSessionId, process.env.GOAT_ACP_PROMPT_COMMAND);
       const idleError = process.env.GOAT_ACP_IDLE_ERROR;
       if (idleError === "grok-background" && promptCount === 1) {
         // The structured completion lands before the prompt settles, so it is buffered.

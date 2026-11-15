@@ -39,6 +39,7 @@ import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import * as WindowsTaskkill from "@goat/provider-core/server/windowsTaskkill";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
 import { forkRuntimeScope } from "./runtimeScope.ts";
+import { acpSpawnEnvironment } from "./sessionLaunchEnvironment.ts";
 import {
   AcpProcessGroupTerminationError,
   makeLinuxCgroupController,
@@ -119,9 +120,9 @@ export interface AcpSpawnInput {
   readonly extendEnv?: boolean;
   readonly shell?: false;
 }
-
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
+  readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly resumeMethod?: "load" | "resume";
@@ -991,7 +992,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 
   const logRequest = (event: AcpSessionRequestLogEvent) =>
     options.requestLogger ? options.requestLogger(event) : Effect.void;
-
   const runLoggedRequest = yield* makeAcpRequestRunner({
     scope: runtimeScope,
     onStderr: options.onStderr !== undefined,
@@ -1001,13 +1001,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     enrich: enrichProcessExitWithStderr,
     log: logRequest,
   });
-
+  const spawned = acpSpawnEnvironment(options.sessionEnvironment, options.spawn);
   const spawnCommand =
     options.spawn.shell === false
       ? { command: options.spawn.command, args: options.spawn.args, shell: false }
       : yield* resolveSpawnCommand(options.spawn.command, options.spawn.args, {
           ...(options.spawn.env ? { env: options.spawn.env } : {}),
-          extendEnv: options.spawn.extendEnv ?? true,
+          extendEnv: spawned.extendEnv,
         });
   const linuxCgroupLease =
     options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
@@ -1037,7 +1037,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const resolved = resolveLinuxCgroupTargetCommand(
             spawnCommand.command,
             options.spawn.cwd ?? options.cwd,
-            { ...process.env, ...options.spawn.env },
+            spawned.environment,
           );
           if (resolved !== undefined) return resolved;
           return yield* new EffectAcpErrors.AcpSpawnError({
@@ -1054,7 +1054,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           args: spawnCommand.args,
           name: "acp",
           threadId: yield* AgentScopeThreadId,
-          env: { ...process.env, ...options.spawn.env },
+          env: spawned.environment,
         });
   const scopedSpawnCommand =
     scopedLaunch === undefined ? spawnCommand : { ...scopedLaunch, shell: false };
@@ -1083,7 +1083,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
         ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
         ...(spawnEnvironment ? { env: spawnEnvironment } : {}),
-        extendEnv: options.spawn.extendEnv ?? true,
+        extendEnv: spawned.extendEnv,
         ...(options.ownDetachedProcessGroup === undefined
           ? {}
           : { detached: options.ownDetachedProcessGroup }),
