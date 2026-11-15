@@ -156,8 +156,15 @@ function threadsAtomFor(scope: string) {
   }
   return atom;
 }
-const rowsOf = (ids: ReadonlyArray<string>) =>
-  AsyncResult.success({ rows: ids.map((taskId) => ({ kind: "task", task: { taskId } })) });
+// One answer per list, as the query keeps its value until the list changes.
+const answers = new WeakMap<ReadonlyArray<string>, unknown>();
+function rowsOf(ids: ReadonlyArray<string>) {
+  const answer =
+    answers.get(ids) ??
+    AsyncResult.success({ rows: ids.map((taskId) => ({ kind: "task", task: { taskId } })) });
+  answers.set(ids, answer);
+  return answer;
+}
 /** A scope's own list when a test sets one; otherwise listedTaskIds, unread while empty. */
 function listAnswer(scope: string | undefined) {
   if (scope === undefined) return AsyncResult.initial();
@@ -207,12 +214,19 @@ export function setupSession() {
   view.taskId = undefined;
   view.member = null;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  threadsAtoms.clear();
+  threadsByScope.clear();
   harness.environments = [];
   harness.botRef = null;
   harness.loaded = true;
   harness.supportsTaskThreads = harness.openAsks = false;
   harness.listedTaskIds = [];
   harness.lists = {};
+  harness.items = [];
+  harness.itemReads.length = 0;
+  harness.shellReads.length = 0;
+  harness.workerShell = null;
+  harness.refresh.mockReset();
   harness.save.mockReset();
   harness.release.mockReset().mockResolvedValue(undefined);
   harness.key.mockReset().mockReturnValue("request");

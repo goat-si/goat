@@ -80,3 +80,39 @@ it("a task's own screen shows its card offline as it does online", async () => {
   expect(hasTaskCard()).toBe(true);
   await botSessions.disposeMobileGoatBotEnvironment(a);
 });
+
+it("offline, a card the kept list never named still shows beside the hidden one, and a render that changes nothing keeps the rows", async () => {
+  const a = EnvironmentId.make("env");
+  harness.supportsTaskThreads = true;
+  const [input, ack, card] = conversation({ environmentId: "env", threadId: "worker-1" });
+  const cardItem = card!.item as Extract<
+    NonNullable<typeof card>["item"],
+    { type: "notification" }
+  >;
+  const other = {
+    ...card!,
+    position: 3,
+    sourceItemId: "card-2",
+    item: {
+      ...cardItem,
+      id: "card-2",
+      ordinal: 3,
+      ledgerTask: { ...cardItem.ledgerTask!, taskId: "task-2", title: "Tidy the logs" },
+    },
+  };
+  harness.items = [input!, ack!, card!, other];
+  harness.botRef = bot(a);
+  harness.environments = [environment("env")];
+  harness.lists = { "env/main": ["task-1"] };
+  await render();
+  harness.environments = [environment("env", false)];
+  await render();
+  const cards = () =>
+    view.session.rows.flatMap((row) => (row.kind === "task" ? [row.card.key] : []));
+  expect(cards()).toEqual(["task-2"]);
+  // Nothing changed: the kept ids, and so the rows, are the same objects as before.
+  const rows = view.session.rows;
+  await render();
+  expect(view.session.rows).toBe(rows);
+  await botSessions.disposeMobileGoatBotEnvironment(a);
+});
