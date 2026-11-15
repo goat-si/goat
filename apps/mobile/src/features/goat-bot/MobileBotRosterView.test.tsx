@@ -116,6 +116,7 @@ const members = vi.hoisted(() => ({
       latest?: { text: string; at: string; author: "bot" | "person" };
       unread: boolean;
       waitingState?: "ready" | "pending" | "unavailable";
+      kept?: boolean;
     }
   >,
 }));
@@ -664,4 +665,60 @@ it("while the computer is offline, New bot stays New bot, unavailable, and says 
   expect(add?.getAttribute("aria-description")).toBe("Unavailable while Studio Mac is offline");
   // A sighted person reads the reason too, under the button and in the deleted bots' section.
   expect(container.textContent).toContain("Unavailable while Studio Mac is offline");
+});
+
+it("offline, rows that show what this phone read before say it may be out of date, on screen and in their names", async () => {
+  const scout = decodeProfile({
+    botId: "scout",
+    role: "member",
+    name: "Scout",
+    avatar: null,
+    purpose: "",
+    defaultModelSelection: null,
+    defaultProjectId: null,
+    environmentId: "env",
+    sessionThreadId: "thread-scout",
+    createdAt: at,
+    updatedAt: at,
+  });
+  // Scout's status is the one read before its computer dropped.
+  members.status = {
+    scout: {
+      waitingCount: 1,
+      latest: { text: "Which branch should I use?", at, author: "bot" },
+      unread: false,
+      waitingState: "pending",
+      kept: true,
+    },
+  };
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[
+            { kind: "main", profile: null },
+            { kind: "member", profile: scout },
+          ]}
+          preview="The build is waiting on you."
+          offline
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    const label = (name: string) =>
+      [...container.querySelectorAll("button")]
+        .find((element) => element.getAttribute("aria-label")?.split(", ").includes(name))
+        ?.getAttribute("aria-label");
+    expect(container.textContent).toContain("Offline · this may be out of date");
+    expect(label("Scout")).toBe(
+      "1 waiting for you, Scout, Which branch should I use?, offline, may be out of date",
+    );
+    expect(label("GOAT Bot")).toBe(
+      "GOAT Bot, The build is waiting on you., offline, may be out of date",
+    );
+  } finally {
+    members.status = {};
+  }
 });

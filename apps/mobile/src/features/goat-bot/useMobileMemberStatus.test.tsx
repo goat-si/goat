@@ -1,6 +1,8 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BotProfile } from "@goat/contracts";
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
+import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -11,6 +13,10 @@ const member = vi.hoisted(() => ({
   // A refresh that failed after an earlier answer: the query keeps that answer beside the error.
   error: null as string | null,
   capabilities: {} as Record<string, boolean>,
+  connected: true,
+  // What the status read answers; offline it reads nothing.
+  answer: null as null | object,
+  cause: null as unknown,
 }));
 const visitAware = {
   goatBotMembers: true,
@@ -24,7 +30,7 @@ vi.mock("../../state/environments", () => ({
       [
         "env",
         {
-          connection: { phase: "connected" },
+          connection: { phase: member.connected ? "connected" : "disconnected" },
           serverConfig: {
             environment: { capabilities: { ...visitAware, ...member.capabilities } },
           },
@@ -35,15 +41,38 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("../../state/channels", () => ({ channelEnvironment: { botStatus: () => "status" } }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({
-    data: { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) },
-    error: member.error,
-    refresh: member.refresh,
-  }),
+  useEnvironmentQuery: (query: string | null) => {
+    // Like a real read, an answer keeps its identity; a refused one keeps the earlier answer beside it.
+    member.answer ??= { waitingCount: 0, ...(member.latest ? { latest: member.latest } : {}) };
+    const data = query === null ? null : member.answer;
+    return {
+      data,
+      successResult: data !== null && member.cause === null ? { value: data } : null,
+      cause: query === null ? null : member.cause,
+      error: member.error,
+      isPending: false,
+      isSuccess: data !== null && member.cause === null,
+      refresh: member.refresh,
+    };
+  },
 }));
+// The app's computers; "env" is listed unless a test removes it.
+const catalog = vi.hoisted(() => ({
+  atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
+}));
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  catalog.atom = Atom.make<unknown>({ isReady: true, entries: new Map([["env", {}]]) });
+  return { environmentCatalog: { catalogValueAtom: catalog.atom } };
+});
 vi.mock("../../state/entities", () => ({ useThreadShell: () => member.shell }));
 
 import { useMobileMemberStatus } from "./useMobileMemberStatus";
+import {
+  followKeptPerComputerCatalog,
+  resetKeptPerComputerForTests,
+  useKeptPerComputer,
+} from "./useKeptPerComputer";
 
 const scout = Schema.decodeUnknownSync(BotProfile)({
   botId: "scout",
@@ -65,6 +94,10 @@ function setup() {
   member.refresh.mockClear();
   member.error = null;
   member.capabilities = {};
+  member.connected = true;
+  member.answer = null;
+  member.cause = null;
+  resetKeptPerComputerForTests();
 }
 
 async function unread() {
@@ -136,4 +169,138 @@ it("a waiting count from a server that cannot count by visit is unavailable", as
     await act(async () => root.unmount());
     expect(value?.waitingState, missing).toBe("unavailable");
   }
+});
+
+const refused = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+const listed = (ids: string[]) => ({
+  isReady: true,
+  entries: new Map(ids.map((id) => [id, { enabled: true }])),
+});
+
+/** Renders Scout's row status in one registry that follows the app's computers, as the app does. */
+function rosterRow(bot = scout) {
+  const registry = AtomRegistry.make();
+  const stop = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, listed(["env"]));
+  let value: ReturnType<typeof useMobileMemberStatus> | undefined;
+  function Probe() {
+    value = useMobileMemberStatus(bot);
+    return null;
+  }
+  // The roster's own bot-list read, which says whether this phone may still read the computer.
+  function BotList(props: { readonly cause: unknown }) {
+    useKeptPerComputer(
+      "bots",
+      EnvironmentId.make("env"),
+      {
+        data: props.cause === null ? botList : null,
+        successResult: null,
+        cause: props.cause,
+        error: null,
+        isPending: false,
+        isSuccess: props.cause === null,
+        refresh: () => {},
+      },
+      !member.connected,
+    );
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  const view = (children: ReactNode) => (
+    <RegistryContext value={registry}>{children}</RegistryContext>
+  );
+  return {
+    get value() {
+      return value;
+    },
+    show: (botListCause: unknown = null) =>
+      act(async () =>
+        root.render(
+          view(
+            <>
+              <BotList cause={botListCause} />
+              <Probe />
+            </>,
+          ),
+        ),
+      ),
+    setComputers: (ids: string[]) => act(async () => registry.set(catalog.atom!, listed(ids))),
+    [Symbol.asyncDispose]: async () => {
+      await act(async () => root.unmount());
+      stop();
+    },
+  };
+}
+const botList = { bots: [] };
+const reply = {
+  text: "Which machine should I check?",
+  at: "2026-11-11T10:05:00.000Z",
+  author: "bot" as const,
+};
+
+it("keeps a member's last line and waiting count while its computer is offline, without its running work", async () => {
+  setup();
+  member.answer = { waitingCount: 2, latest: reply, tasks: { active: true } };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toEqual(reply);
+  expect(row.value?.waitingCount).toBe(2);
+  expect(row.value?.kept).toBe(true);
+  // An old count is not a fresh one, and the work it saw going may have stopped since.
+  expect(row.value?.waitingState).toBe("pending");
+  expect(row.value?.status?.tasks).toBeUndefined();
+});
+
+it("a member's status read refused for access shows nothing of the earlier answer it still holds", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  expect(row.value?.latest).toEqual(reply);
+  member.cause = refused;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+});
+
+it("a refused bot list leaves no member status kept, offline or after", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  await row.show(refused);
+  member.connected = false;
+  await row.show(refused);
+  expect(row.value?.latest).toBeUndefined();
+  expect(row.value?.waitingCount).toBe(0);
+});
+
+it("a member's kept status goes with its computer, and adding the computer again starts empty", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  await row.setComputers([]);
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+  await row.setComputers(["env"]);
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
+});
+
+it("keeps nothing for a deleted member", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  const deleted = { ...scout, state: "deleted" } as typeof scout;
+  await using row = rosterRow(deleted);
+  await row.show();
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest).toBeUndefined();
 });
