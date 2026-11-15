@@ -1,3 +1,4 @@
+import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 /** The native-account-command harness for ProviderTurnStartService tests. */
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -78,6 +79,7 @@ export function makeLocalCommandHarness(input: {
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
   readonly failReadsAfterRunning?: boolean;
+  readonly recoveryReadFailure?: string;
   readonly memory?: {
     readonly policy: () => Effect.Effect<MemorySnapshot.MemorySnapshotPolicy>;
     readonly select: MemorySnapshot.MemorySnapshot["Service"]["forThread"];
@@ -539,14 +541,21 @@ export function makeLocalCommandHarness(input: {
   const getRuntimeRecoveryProjection = vi.fn<
     ProjectionStore.ProjectionStoreV2Shape["getRuntimeRecoveryProjection"]
   >(() =>
-    Effect.as(failReadIfRunning, {
-      ...projection,
-      hasConversation: projection.messages.some(
-        (m) =>
-          m.role === "user" &&
-          (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
-      ),
-    }),
+    input.recoveryReadFailure !== undefined
+      ? Effect.fail(
+          new ProjectionStore.ProjectionStoreReadError({
+            threadId,
+            cause: input.recoveryReadFailure,
+          }),
+        )
+      : Effect.as(failReadIfRunning, {
+          ...projection,
+          hasConversation: projection.messages.some(
+            (m) =>
+              m.role === "user" &&
+              (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
+          ),
+        }),
   );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
@@ -567,6 +576,7 @@ export function makeLocalCommandHarness(input: {
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         input.providerCliGate ?? Layer.empty,
         IdAllocator.layer,
+        Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         layerWorktreeLocation(input.worktreesDir),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })

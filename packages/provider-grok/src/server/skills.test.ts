@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
@@ -7,6 +8,13 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { discoverGrokSkills, leadingGrokSkillMention } from "./skills.ts";
+import { makeGrokAcpAdapterFlavor, GROK_DEFAULT_INSTANCE_ID } from "./adapter.ts";
+import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
+import * as Schema from "effect/Schema";
+import { GrokSettings } from "../settings.ts";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+
+const decodeGrokSettings = Schema.decodeEffect(GrokSettings);
 
 const inspectPayload = (skills: ReadonlyArray<unknown>) => JSON.stringify({ skills });
 
@@ -14,9 +22,11 @@ const makeInspectSpawner = (
   stdout: string,
   exitCode = 0,
   spawnOptions?: Array<ChildProcess.CommandOptions | undefined>,
+  commands?: string[],
 ) =>
   lazyChildProcessSpawner((command) => {
     spawnOptions?.push(command._tag === "StandardCommand" ? command.options : undefined);
+    if (command._tag === "StandardCommand") commands?.push(command.command);
     return Effect.succeed(
       ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
@@ -216,3 +226,36 @@ describe("leadingGrokSkillMention", () => {
     assert.deepEqual(leadingGrokSkillMention(text), mention);
   });
 });
+
+it.effect("rewrites a skill using the environment captured when its session opened", () =>
+  Effect.gen(function* () {
+    const host = { PATH: "/new", XAI_API_KEY: "new-key" };
+    const seen: Array<ChildProcess.CommandOptions | undefined> = [];
+    const commands: string[] = [];
+    const flavor = makeGrokAcpAdapterFlavor(
+      {
+        instanceId: GROK_DEFAULT_INSTANCE_ID,
+        settings: yield* decodeGrokSettings({}),
+        environment: host,
+        currentEnvironment: Effect.succeed(host),
+        hostPlatform: "darwin",
+        selfInvocation: yield* resolveSelfInvocation(),
+      },
+      "/tmp",
+    );
+    const turn = { runtimePolicy: { cwd: "/tmp" } } as ProviderAdapter.ProviderAdapterV2TurnInput;
+    const rewrite = flavor.rewriteUserText!;
+    yield* rewrite("$deploy now", turn, {
+      environment: { PATH: "/old" },
+      launch: { environment: { PATH: "/old", XAI_API_KEY: "old-key" }, executable: "/old/grok" },
+    }).pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        makeInspectSpawner(inspectPayload([]), 0, seen, commands),
+      ),
+    );
+    expect(commands[0]).toBe("/old/grok");
+    expect(seen[0]?.env?.PATH).toBe("/old");
+    expect(seen[0]?.env?.XAI_API_KEY).toBe("old-key");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

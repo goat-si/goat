@@ -35,7 +35,6 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@goat/shared/AgentScope";
 import { isCommandActions, parseCommandActions } from "@goat/shared/commandActions";
-import { isTemporaryWorktreeBranch } from "@goat/shared/git";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -868,12 +867,7 @@ export const layer: Layer.Layer<
                   );
                   if (created?.event.type !== "thread.created") return storedEvents;
                   const child = created.event.payload;
-                  if (
-                    child.worktreePath === null ||
-                    child.branch === null ||
-                    !isTemporaryWorktreeBranch(child.branch)
-                  )
-                    return storedEvents;
+                  if (child.worktreePath === null || child.branch === null) return storedEvents;
                   // Git renames before scanning committed threads. If that scan missed this
                   // creation, HEAD already has the new name, even if the parent moved away.
                   const branch = yield* git.resolveBranchName(child.worktreePath, "HEAD");
