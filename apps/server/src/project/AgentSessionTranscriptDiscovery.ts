@@ -4,6 +4,7 @@ import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 
+import { isCompressedTranscript } from "./AgentSessionTranscriptChunks.ts";
 import { transcriptIdentity, type TranscriptIdentity } from "./AgentSessionTranscriptIdentity.ts";
 
 export interface TranscriptCandidate {
@@ -114,7 +115,12 @@ export function makeTranscriptDiscovery(input: {
             }
             const directory = path.join(sessionsDir, year, month, day);
             for (const entry of (yield* readDirectory(directory)).toSorted().toReversed()) {
-              if (!entry.startsWith("rollout-") || !entry.endsWith(".jsonl")) continue;
+              if (
+                !entry.startsWith("rollout-") ||
+                !(entry.endsWith(".jsonl") || isCompressedTranscript(entry))
+              ) {
+                continue;
+              }
               if (operationsRemaining <= 0) {
                 truncated = true;
                 break;
