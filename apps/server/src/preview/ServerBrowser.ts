@@ -1831,6 +1831,7 @@ const make = Effect.gen(function* () {
         throw new ServerBrowserPage.ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
           "This tab has no agent owner. Ask the user to close it in the browser panel.",
+          { beforeInput: true },
         );
       if (tab.control.agentId !== request.agentSessionId)
         throw new BrowserControlInterrupted(
