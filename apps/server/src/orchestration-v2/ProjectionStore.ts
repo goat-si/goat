@@ -47,7 +47,7 @@ import {
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
-import { pendingGuestMessageCount } from "@goat/contracts";
+import { isProviderNativeSubagentThread, pendingGuestMessageCount } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import { readOnReader } from "./readerOverloadFallback.ts";
@@ -300,6 +300,7 @@ export type ProjectionSettlementCandidate = Pick<
   OrchestrationV2ThreadShell,
   | "id"
   | "projectId"
+  | "creationSource"
   | "branch"
   | "worktreePath"
   | "pullRequests"
@@ -5927,6 +5928,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
+              AND (
+                json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+                OR json_extract(t.payload_json, '$.creationSource') IS NOT 'provider'
+                OR NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_threads parent
+                  WHERE parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+                    AND parent.deleted_at IS NULL
+                    AND json_extract(parent.payload_json, '$.archivedAt') IS NULL
+                    AND json_extract(parent.payload_json, '$.settledOverride') IS NOT 'settled'
+                )
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runs active
                 WHERE active.thread_id = t.thread_id
@@ -7065,6 +7077,13 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
       getSettlementCandidates: Effect.fn("ProjectionStore.getSettlementCandidates")(
         function* (threadId) {
           const projections = (yield* Ref.get(replayState)).projections;
+          // A provider-native child settles with its parent: it waits while the parent is live.
+          const waitsForParent = (thread: OrchestrationV2AppThread) => {
+            const parentId = thread.lineage.parentThreadId;
+            if (!isProviderNativeSubagentThread(thread) || parentId === null) return false;
+            const parent = projections.get(parentId)?.thread;
+            return parent !== undefined && !parentClosed(parent);
+          };
           return [...projections.values()]
             .filter(
               ({ thread, runs, runtimeRequests }) =>
@@ -7074,6 +7093,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.settledOverride === null &&
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
+                !waitsForParent(thread) &&
                 !runs.some(isActivityRunForShell) &&
                 !runtimeRequests.some((request) => request.status === "pending"),
             )
