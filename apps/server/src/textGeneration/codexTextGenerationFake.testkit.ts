@@ -46,7 +46,7 @@ export interface FakeCodexInput {
   schemaCopyPath?: string;
 }
 
-export function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
+function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
   const check = JSON.stringify({
     isolated: input.isolated ?? false,
     requireImage: input.requireImage ?? false,
