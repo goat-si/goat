@@ -1838,7 +1838,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       }
       assert.deepEqual(yield* readMessageIds({ messageIds: [] }), []);
       assert.deepEqual(yield* readMessageIds({ messageIds: [firstMessageId] }), [firstMessageId]);
-      // User-only reads must stay on the partial index instead of scanning every turn item.
+      // User-only reads must stay on a type-bounded index instead of scanning every turn item.
       const { statements, tracer } = traceSqlStatements();
       yield* projectionStore
         .getThreadRecords(threadId, ["messages"], { messageRoles: ["user"] })
@@ -1850,7 +1850,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         [threadId, "[]"],
       )).map((row) => row.detail);
       assert.isTrue(
-        plan.some((detail) => detail.includes("turn_items_user_message_idx")),
+        plan.some((detail) => /turn_items_(user_message|thread_type)_idx/.test(detail)),
         plan.join("\n"),
       );
       yield* sql`
