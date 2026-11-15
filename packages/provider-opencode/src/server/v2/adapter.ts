@@ -91,7 +91,7 @@ import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
 import * as OpenCode2Server from "./OpenCode2Server.ts";
-import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
+import { borrowConnection } from "./borrowConnection.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
@@ -448,27 +448,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const cuaServerNameFor = (threadId: string) =>
     cuaMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
-  const borrow = Effect.gen(function* () {
-    const lent = yield* Deferred.make<
-      OpenCode2Server.OpenCode2Connection,
-      OpenCodeRuntime.OpenCodeRuntimeError
-    >();
-    yield* server
-      .withConnection((connection) =>
-        Deferred.succeed(lent, connection).pipe(Effect.andThen(Effect.never)),
-      )
-      .pipe(
-        Effect.catch((error) => Deferred.fail(lent, error)),
-        Effect.forkScoped,
-      );
-    return yield* Deferred.await(lent);
-  });
-
   const openSession = Effect.fn("OpenCode2Adapter.openSession")(function* (
     input: Parameters<ProviderAdapter.ProviderAdapterV2["Service"]["openSession"]>[0],
     initial: {
       readonly connection: OpenCode2Server.OpenCode2Connection;
       readonly scope: Scope.Closeable;
+      readonly launch?: import("../OpenCodeServerOwner.ts").OpenCodeServerLaunch;
     },
   ) {
     let connection = initial.connection;
@@ -2617,7 +2602,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       // Release the borrow on every failure, including reconnect interruption, so spawned servers can idle-stop.
       const scope = yield* Scope.make();
       const { next, stream } = yield* Effect.gen(function* () {
-        const next = yield* borrow.pipe(Effect.provideService(Scope.Scope, scope));
+        const next = yield* borrowConnection(server, initial.launch).pipe(
+          Effect.provideService(Scope.Scope, scope),
+        );
         return { next, stream: yield* next.events };
       }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
       const previous = currentScope;
@@ -4259,8 +4246,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       function* (input) {
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
-        const connection = yield* borrow.pipe(Effect.provideService(Scope.Scope, scope));
-        return yield* openSession(input, { connection, scope });
+        const launch = server.captureLaunch ? yield* server.captureLaunch : undefined;
+        const connection = yield* borrowConnection(server, launch).pipe(
+          Effect.provideService(Scope.Scope, scope),
+        );
+        return yield* openSession(input, {
+          connection,
+          scope,
+          ...(launch === undefined ? {} : { launch }),
+        });
       },
       (effect, input) =>
         effect.pipe(

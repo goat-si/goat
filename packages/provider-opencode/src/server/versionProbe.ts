@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import { parseSemver } from "@goat/shared/semver";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
@@ -9,6 +11,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { LaunchEnvironment } from "./launchEnvironment.ts";
 import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
 
 export interface ProbedOpenCode {
@@ -172,19 +175,51 @@ export const probeOpenCodeRuntime = (
     ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
     : probeOpenCodeBinary(settings.binaryPath, environment);
 
-// Only 2.x is kept: 1.x can be upgraded in place while GOAT runs, and 2.x converts the shared
-// database, so going back is unsupported.
-export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode, E>) =>
-  Effect.map(
-    Cache.makeWith(() => probe, {
+// Keep only the successful probe for the selected executable and environment.
+export const makeOpenCodeRuntimeProbe = <E>(
+  probe: Effect.Effect<ProbedOpenCode, E>,
+  environment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed({}),
+  executableIdentity: (environment: NodeJS.ProcessEnv) => Effect.Effect<unknown> = () =>
+    Effect.succeed(null),
+) => {
+  const identityFor = (env: NodeJS.ProcessEnv) =>
+    executableIdentity(env).pipe(
+      Effect.map((executable) =>
+        NodeCrypto.createHash("sha256")
+          .update(
+            JSON.stringify({
+              environment: Object.fromEntries(
+                Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
+              ),
+              executable,
+            }),
+          )
+          .digest("hex"),
+      ),
+    );
+  const key = Effect.flatMap(environment, identityFor);
+  return Effect.map(
+    Cache.makeWith((_identity: string) => probe, {
       capacity: 1,
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit) && exit.value.generation === "v2" ? Duration.infinity : Duration.zero,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     }),
     (cache) => ({
-      get: Cache.get(cache, undefined),
-      refresh: Cache.refresh(cache, undefined),
-      lastSuccess: Cache.getSuccess(cache, undefined),
-      record: (probed: ProbedOpenCode) => Cache.set(cache, undefined, probed),
+      identity: key,
+      lastSuccessAt: (identity: string) => Cache.getSuccess(cache, identity),
+      recordAt: (identity: string, probed: ProbedOpenCode) => Cache.set(cache, identity, probed),
+      get: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.get(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
+      refresh: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.refresh(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
+      lastSuccess: Effect.flatMap(key, (identity) => Cache.getSuccess(cache, identity)),
+      record: (probed: ProbedOpenCode) =>
+        Effect.flatMap(key, (identity) => Cache.set(cache, identity, probed)),
     }),
   );
+};

@@ -218,3 +218,94 @@ describe("OpenCode2Server spawned server", () => {
     ),
   );
 });
+
+it.live("starts an isolated memory server with the current selected credential", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode2-memory-" });
+    const isWindows = platform === "win32";
+    const binaryPath = path.join(directory, isWindows ? "opencode.cmd" : "opencode");
+    const scriptPath = path.join(directory, "opencode.mjs");
+    yield* fs.writeFileString(
+      scriptPath,
+      FAKE_SERVER.replace('version: "2.0.18"', "version: process.env.OPENAI_API_KEY"),
+    );
+    yield* fs.writeFileString(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\n"${yield* HostProcess.ExecutablePath}" "${scriptPath}" %*\r\n`
+        : `#!/bin/sh\nexec "${yield* HostProcess.ExecutablePath}" "${scriptPath}" "$@"\n`,
+    );
+    if (!isWindows) yield* fs.chmod(binaryPath, 0o755);
+    const host = { ...(yield* HostProcess.Environment), OPENAI_API_KEY: "old-fixture-key" };
+    const server = yield* OpenCode2Server.make({
+      binaryPath,
+      serverUrl: "",
+      serverPassword: "",
+      directory,
+      environment: { ...host },
+      currentEnvironment: Effect.sync(() => ({ ...host })),
+    });
+    host.OPENAI_API_KEY = "new-fixture-key";
+    const version = yield* server.withMemoryConnection!(
+      "generateMemorySummary",
+      "openai",
+      (connection) => Effect.succeed(connection.version),
+    );
+    assert.strictEqual(version, "new-fixture-key");
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        OpenCode2Client.layer,
+        OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
+      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+    ),
+  ),
+);
+
+it.live("keeps both environment-specific shared connections available to their sessions", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode2-shared-" });
+    const isWindows = platform === "win32";
+    const binaryPath = path.join(directory, isWindows ? "opencode.cmd" : "opencode");
+    const scriptPath = path.join(directory, "opencode.mjs");
+    yield* fs.writeFileString(scriptPath, FAKE_SERVER);
+    yield* fs.writeFileString(
+      binaryPath,
+      isWindows
+        ? `@echo off\r\n"${yield* HostProcess.ExecutablePath}" "${scriptPath}" %*\r\n`
+        : `#!/bin/sh\nexec "${yield* HostProcess.ExecutablePath}" "${scriptPath}" "$@"\n`,
+    );
+    if (!isWindows) yield* fs.chmod(binaryPath, 0o755);
+    const host = { ...(yield* HostProcess.Environment), OPENCODE_TEST_PROFILE: "one" };
+    const server = yield* OpenCode2Server.make({
+      binaryPath,
+      serverUrl: "",
+      serverPassword: "",
+      directory,
+      environment: { ...host },
+      currentEnvironment: Effect.sync(() => host),
+    });
+    const launch = yield* server.captureLaunch!;
+    const first = yield* server.withConnection((connection) => Effect.succeed(connection), launch);
+    host.OPENCODE_TEST_PROFILE = "two";
+    const second = yield* server.withConnection((connection) => Effect.succeed(connection));
+    const reused = yield* server.withConnection((connection) => Effect.succeed(connection), launch);
+    assert.notStrictEqual(first.url, second.url);
+    assert.strictEqual(reused.client, first.client);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        OpenCode2Client.layer,
+        OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
+      ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+    ),
+  ),
+);

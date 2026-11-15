@@ -178,6 +178,8 @@ export interface AcpRegistryLiveConfiguration {
   readonly currentModelId: string | null;
   readonly configOptions: AcpRegistryProbeResult["configOptions"];
   readonly modelOptionIds?: NonNullable<AcpRegistryProbeResult["modelOptionIds"]>;
+  /** The environment of the session that reported it, when a session did. */
+  readonly environmentKey?: string;
 }
 
 export function normalizeAcpRegistryLiveConfiguration(
