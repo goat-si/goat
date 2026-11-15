@@ -741,3 +741,47 @@ it.effect.each([
       assert.deepEqual(yield* ids(), new Set([child, lane, orphan]));
     }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect.each([
+  ["sql", layerSql],
+  ["memory", ProjectionStore.layerMemory],
+] as const)(
+  "%s: the provider-native read returns only provider-native subagents, still after their parent",
+  ([, testLayer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const parent = yield* createThread("native-only-parent");
+      const lineage = {
+        parentThreadId: parent,
+        relationshipToParent: "subagent",
+        rootThreadId: parent,
+      } as const;
+      const child = yield* createThread("native-only-child", {
+        creationSource: "provider",
+        lineage,
+      });
+      yield* createThread("native-only-lane", { creationSource: "mcp", lineage });
+      yield* createThread("native-only-root", { creationSource: "provider" });
+      const ids = () =>
+        store
+          .getSettlementCandidates(undefined, { providerNativeSubagentsOnly: true })
+          .pipe(Effect.map((rows) => rows.map((row) => row.id)));
+      assert.deepEqual(yield* ids(), []);
+
+      const parentThread = yield* store.getThread(parent);
+      yield* store.apply({
+        id: EventId.make("event:settlement:native-only-parent:settled"),
+        type: "thread.settled",
+        threadId: parent,
+        occurredAt: now,
+        payload: { ...parentThread, settledOverride: "settled", settledAt: now, updatedAt: now },
+      });
+      assert.deepEqual(yield* ids(), [child]);
+      assert.deepEqual(
+        (yield* store.getSettlementCandidates(child, { providerNativeSubagentsOnly: true })).map(
+          (row) => row.id,
+        ),
+        [child],
+      );
+    }).pipe(Effect.provide(testLayer)),
+);
