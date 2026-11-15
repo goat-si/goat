@@ -3562,6 +3562,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.isNotEmpty(countQueries);
       for (const countQuery of countQueries) {
         for (const detail of yield* planOf(countQuery)) {
+          // A thread's counts read only each run's status, never its row and payload.
+          if (/^SEARCH (r|run) /.test(detail)) {
+            assert.include(detail, "COVERING INDEX", detail);
+          }
           if (detail.includes("orchestration_v2_projection_turn_items")) {
             // Only held input is read from the sparse index; transcript history stays unread.
             assert.include(

@@ -6517,6 +6517,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHEN EXISTS (
               SELECT 1
               FROM orchestration_v2_projection_runs AS run
+                INDEXED BY orchestration_v2_projection_runs_run_status_idx
               WHERE run.run_id = per_run.run_key
                 AND (
                   run.status IN ('queued', 'cancelled')
@@ -6563,7 +6564,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           SUM(CASE WHEN counts.run_key = '' THEN counts.item_count ELSE 0 END)
             AS runless_item_count
         FROM orchestration_v2_projection_turn_item_counts counts
-        LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = counts.run_key
+        -- The primary key would load each run's whole row just for its status.
+        LEFT JOIN orchestration_v2_projection_runs r
+          INDEXED BY orchestration_v2_projection_runs_run_status_idx
+          ON r.run_id = counts.run_key
         WHERE counts.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
         GROUP BY counts.thread_id
       `;
