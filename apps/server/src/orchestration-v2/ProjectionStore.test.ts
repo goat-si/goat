@@ -1850,7 +1850,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         [threadId, "[]"],
       )).map((row) => row.detail);
       assert.isTrue(
-        plan.some((detail) => /turn_items_(user_message|thread_type)_idx/.test(detail)),
+        // 088's thread_type_idx is not partial, so the plan must bind the type on it too.
+        plan.some(
+          (detail) =>
+            detail.includes("turn_items_user_message_idx") ||
+            detail.includes("turn_items_thread_type_idx (thread_id=? AND type=?)"),
+        ),
         plan.join("\n"),
       );
       yield* sql`
