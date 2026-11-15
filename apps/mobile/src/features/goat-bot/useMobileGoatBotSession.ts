@@ -813,6 +813,8 @@ export function useMobileGoatBotSession(
       (target ? configs.get(target.environmentId) : undefined)?.environment.capabilities
         .goatBotOpenAsks === true,
     supportsTaskThreads,
+    /** The bot's computer that Home and task screens read, for the main bot and members, is up. */
+    homeConnected: connected,
     /** Changes when a task record in the conversation changes; null while the chat is hidden. */
     workRevision,
     /** The newest chip of each task in the conversation, kept across streamed tokens. */
