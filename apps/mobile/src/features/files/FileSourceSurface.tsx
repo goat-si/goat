@@ -19,7 +19,7 @@ export function FileSourceSurface(props: ComponentProps<typeof SourceFileSurface
     <SourceFileSurface
       {...props}
       initialLine={selection?.line ?? props.initialLine}
-      selectable={selection?.active === true}
+      selectable={props.selectable === true || selection?.active === true}
       onLongPressLine={
         Platform.OS === "android" ? (line) => setSelection({ line, active: true }) : undefined
       }

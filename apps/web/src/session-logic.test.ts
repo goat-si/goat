@@ -1412,19 +1412,19 @@ describe("HTML renders in the timeline", () => {
     ]);
   });
 
-  it("hosts a captured MCP app in place, from any provider's tool", () => {
+  it("hosts a captured MCP app after its tool row, from any provider's tool", () => {
     const mcpApp = {
       attachmentId: "render-thread-app-html",
       server: "weather",
       tool: "get_weather",
       resourceUri: "ui://weather/dashboard",
     };
-    const call = renderCall("completed", { t3McpApp: mcpApp, result: { content: [] } });
+    const call = renderCall("completed", { goatMcpApp: mcpApp, result: { content: [] } });
     const entries = turn(
       call.type === "dynamic_tool" ? { ...call, toolName: "weather.get_weather" } : call,
     );
     expect(entries.find((entry) => entry.kind === "mcp-app")).toMatchObject({
-      id: "render",
+      id: "mcp-app:render",
       itemId: "render",
       mcpApp,
     });
@@ -1439,7 +1439,7 @@ describe("HTML renders in the timeline", () => {
       resourceUri: "ui://github-mcp-server/pr-create",
     };
     const call = renderCall("failed", {
-      t3McpApp: mcpApp,
+      goatMcpApp: mcpApp,
       result: { content: [], isError: true },
     });
     const entries = turn(

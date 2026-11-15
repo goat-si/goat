@@ -11,6 +11,7 @@ import {
 import { Platform } from "react-native";
 import { androidWorkspaceSettingsOpen } from "./android-workspace-tabs";
 import { WorkspaceTabsProvider } from "./WorkspaceTabsContext";
+import { workspaceTabOf } from "./workspace-tabs-state";
 
 interface AndroidWorkspaceRoot {
   /**
@@ -43,7 +44,10 @@ export function AndroidWorkspaceTabsProvider(props: {
   const settingsOpen = Platform.OS === "android" && androidWorkspaceSettingsOpen(props.state);
   const root = useMemo(() => ({ key, getState, settingsOpen }), [key, getState, settingsOpen]);
   return Platform.OS === "android" ? (
-    <WorkspaceTabsProvider>
+    // A cold-start link lands on a page with no list selection; start on that page's list.
+    <WorkspaceTabsProvider
+      initialTab={workspaceTabOf(props.state.routes.find((route) => route.name !== "Home")?.name)}
+    >
       <AndroidWorkspaceRootContext value={root}>{props.children}</AndroidWorkspaceRootContext>
     </WorkspaceTabsProvider>
   ) : (

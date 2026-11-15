@@ -104,15 +104,18 @@ function setup(routines: { tasks: unknown[] } | null) {
 
 function view(rows: ReadonlyArray<GoatBotRow>) {
   return (
-    <GoatBotChatView
-      availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
-      canOperate
-      rows={rows}
-      rowsForTask={() => []}
-      onSend={() => {}}
-      onRetryInput={() => {}}
-      legacyAgentRoute={null}
-    />
+    <div style={{ width: 1200 }}>
+      {/* Home docks only in a chat view of 752px or more; the 980px window gate is faked above. */}
+      <GoatBotChatView
+        availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make("bot") } }}
+        canOperate
+        rows={rows}
+        rowsForTask={() => []}
+        onSend={() => {}}
+        onRetryInput={() => {}}
+        legacyAgentRoute={null}
+      />
+    </div>
   );
 }
 
