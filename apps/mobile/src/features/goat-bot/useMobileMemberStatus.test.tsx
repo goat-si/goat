@@ -200,12 +200,13 @@ function rosterRow(bot = scout) {
       "bots",
       EnvironmentId.make("env"),
       {
-        data: props.cause === null ? botList : null,
+        // As in the app, a bot list reads nothing while its computer is offline or refuses it.
+        data: props.cause === null && member.connected ? botList : null,
         successResult: null,
         cause: props.cause,
         error: null,
         isPending: false,
-        isSuccess: props.cause === null,
+        isSuccess: props.cause === null && member.connected,
         refresh: () => {},
       },
       !member.connected,
