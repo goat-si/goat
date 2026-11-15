@@ -728,6 +728,7 @@ export interface ProjectionStoreV2Shape
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
+    read?: { readonly providerNativeSubagentsOnly?: boolean },
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
@@ -5895,10 +5896,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
       return { providerThreadsByThreadId, pendingTurnItemsByThreadId };
     });
-    const getSettlementCandidates: ProjectionStoreV2Shape["getSettlementCandidates"] = (threadId) =>
+    const getSettlementCandidates: ProjectionStoreV2Shape["getSettlementCandidates"] = (
+      threadId,
+      read,
+    ) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
+            // With automatic settlement off, only provider-native children can still settle.
+            const nativeSubagentsOnly =
+              read?.providerNativeSubagentsOnly === true
+                ? sql` AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(t.payload_json, '$.creationSource') = 'provider'`
+                : sql``;
             const rows = yield* sql<SettlementThreadRow>`
             SELECT t.thread_id, t.payload_json,
               r.run_id AS latest_run_id,
@@ -5930,7 +5940,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ORDER BY latest.ordinal DESC, latest.run_id DESC
               LIMIT 1
             )
-            WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}
+            WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}${nativeSubagentsOnly}
               AND json_extract(t.payload_json, '$.archivedAt') IS NULL
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
@@ -7083,7 +7093,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         return projection.thread;
       }),
       getSettlementCandidates: Effect.fn("ProjectionStore.getSettlementCandidates")(
-        function* (threadId) {
+        function* (threadId, read) {
           const projections = (yield* Ref.get(replayState)).projections;
           // A provider-native child settles with its parent: it waits while the parent is live.
           const waitsForParent = (thread: OrchestrationV2AppThread) => {
@@ -7096,6 +7106,8 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .filter(
               ({ thread, runs, runtimeRequests }) =>
                 (threadId === undefined || thread.id === threadId) &&
+                (read?.providerNativeSubagentsOnly !== true ||
+                  isProviderNativeSubagentThread(thread)) &&
                 thread.deletedAt === null &&
                 thread.archivedAt === null &&
                 thread.settledOverride === null &&
