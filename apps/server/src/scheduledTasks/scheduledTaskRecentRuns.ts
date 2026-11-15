@@ -31,14 +31,14 @@ interface RecentRunRow {
  * whole value, NULs included. A run this server writes is about 430. A routine with a larger run
  * carries no history, so at most 350 of these reach the server; SQLite still reads one to measure it.
  */
-export const MAX_STORED_RUN_BYTES = 1024;
+const MAX_STORED_RUN_BYTES = 1024;
 
 /**
  * The longest routine task id, in bytes, the history read takes. Ids this server creates for a
  * routine are under 100 bytes (`goat-bot-check-in:` and a bot thread id, or `scheduled-task:` and a
  * UUID), but ids are not limited at creation. A routine over it is not read and carries no history.
  */
-export const MAX_ROUTINE_ID_BYTES = 256;
+const MAX_ROUTINE_ID_BYTES = 256;
 /** Creation times are 24-byte ISO strings the server writes; a stored one over this is not read. */
 const MAX_CREATED_AT_BYTES = 64;
 
