@@ -48,7 +48,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -61,6 +60,7 @@ import {
   withMetrics,
 } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
@@ -83,6 +83,7 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
+import { makeRetryStallWatch } from "./ProviderRetryStallWatch.ts";
 import * as Retirement from "./ProviderSessionRetirement.ts";
 import {
   providerThreadLoadKey,
@@ -90,6 +91,15 @@ import {
   releaseStatusFor,
   sessionKey,
 } from "./ProviderSessionKeys.ts";
+import {
+  ProviderSessionActivityError,
+  ProviderSessionCloseError,
+  ProviderSessionLookupError,
+  ProviderSessionManagerV2Error,
+  ProviderSessionOpenError,
+  ProviderSessionReleaseError,
+  ProviderSessionReleaseReason,
+} from "./ProviderSessionManagerErrors.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
@@ -110,85 +120,15 @@ const WORKING_RUN_STATUSES: ReadonlySet<string> = new Set([
   "waiting",
 ]);
 
-export const ProviderSessionReleaseReason = Schema.Literals([
-  "idle_timeout",
-  "runtime_error",
-  "manual_shutdown",
-  "server_shutdown",
-]);
-export type ProviderSessionReleaseReason = typeof ProviderSessionReleaseReason.Type;
-
-export class ProviderSessionOpenError extends Schema.TaggedError<ProviderSessionOpenError>()(
-  "ProviderSessionOpenError",
-  {
-    instanceId: ProviderInstanceId,
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to open provider instance ${this.instanceId} session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionLookupError extends Schema.TaggedError<ProviderSessionLookupError>()(
-  "ProviderSessionLookupError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to look up provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionCloseError extends Schema.TaggedError<ProviderSessionCloseError>()(
-  "ProviderSessionCloseError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to close provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionReleaseError extends Schema.TaggedError<ProviderSessionReleaseError>()(
-  "ProviderSessionReleaseError",
-  {
-    providerSessionId: ProviderSessionId,
-    reason: ProviderSessionReleaseReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to release provider session ${this.providerSessionId}.`;
-  }
-}
-
-export class ProviderSessionActivityError extends Schema.TaggedError<ProviderSessionActivityError>()(
-  "ProviderSessionActivityError",
-  {
-    providerSessionId: ProviderSessionId,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to update provider session activity for ${this.providerSessionId}.`;
-  }
-}
-
-export const ProviderSessionManagerV2Error = Schema.Union([
-  ProviderSessionOpenError,
-  ProviderWorkspaceMissingError,
-  ProviderSessionLookupError,
-  ProviderSessionCloseError,
-  ProviderSessionReleaseError,
+export {
   ProviderSessionActivityError,
-]);
-export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error.Type;
+  ProviderSessionCloseError,
+  ProviderSessionLookupError,
+  ProviderSessionManagerV2Error,
+  ProviderSessionOpenError,
+  ProviderSessionReleaseError,
+  ProviderSessionReleaseReason,
+} from "./ProviderSessionManagerErrors.ts";
 
 export interface ProviderMemoryPrepareInput {
   readonly runId?: RunId;
@@ -424,6 +364,7 @@ export const layerWithOptions = (
       const commandOutput = yield* CommandOutputHub.CommandOutputHub;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const installationGate = yield* ProviderInstallationGate.current;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
@@ -2304,13 +2245,26 @@ export const layerWithOptions = (
       const startEventPump = (entry: LiveSessionEntry) => {
         let stoppedByProvider = false;
         let lastSessionStatus = entry.runtime.providerSession.status;
+        const retryStalls = makeRetryStallWatch({
+          providerSessionId: entry.runtime.providerSessionId,
+          isCurrent: Ref.get(sessions).pipe(
+            Effect.map(
+              (current) =>
+                current.get(sessionKey(entry.runtime.providerSessionId))?.runtime === entry.runtime,
+            ),
+          ),
+          projectionStore,
+          runtime: entry.exposedRuntime,
+        });
         return entry.runtime.events.pipe(
-          Stream.runForEach((event) => {
+          Stream.runForEach((nativeEvent) => {
             if (shutdownSignal.received) return Effect.void;
             // Live output bypasses persistence and subscribers so floods cannot delay domain events.
-            if (event.type === "command_output.delta") {
-              return commandOutput.append(event);
+            if (nativeEvent.type === "command_output.delta") {
+              return commandOutput.append(nativeEvent);
             }
+            const tracked = retryStalls.track(nativeEvent);
+            const event = tracked.event;
             const releaseLiveOutput =
               event.type === "turn_item.updated" &&
               event.turnItem.type === "command_execution" &&
@@ -2340,6 +2294,7 @@ export const layerWithOptions = (
                   ? Effect.void
                   : touchActivity(entry.runtime.providerSessionId, { providerActivity: true }),
             ).pipe(
+              Effect.andThen(retryStalls.update(tracked)),
               Effect.andThen(
                 event.type === "provider_session.updated"
                   ? persistProviderSessionUpdate(entry, event)
@@ -2651,55 +2606,54 @@ export const layerWithOptions = (
                     // The previous session's agent scope must not explain this
                     // session's failures, even when this provider runs without one.
                     yield* agentScope.clear(input.threadId);
-                    const runtime = yield* adapter
-                      .openSession({
-                        threadId: input.threadId,
-                        providerSessionId: input.providerSessionId,
-                        modelSelection: input.modelSelection,
-                        runtimePolicy: input.runtimePolicy,
-                        ...(input.resumeFromSession === undefined
-                          ? {}
-                          : { resumeFromSession: input.resumeFromSession }),
-                        ...(input.initialNativeThreadId === undefined
-                          ? {}
-                          : { initialNativeThreadId: input.initialNativeThreadId }),
-                        ...(input.initialProviderItemIdentityVersion === undefined
-                          ? {}
-                          : {
-                              initialProviderItemIdentityVersion:
-                                input.initialProviderItemIdentityVersion,
-                            }),
-                      })
-                      .pipe(
-                        Effect.provideService(Scope.Scope, sessionScope),
-                        // Any failure, including a Stop that interrupts a slow
-                        // handshake, stops the provider process this open started.
-                        // The session cleanup runs first, and the close is
-                        // time-boxed: this runs under the session's open lock, so an
-                        // adapter finalizer that never finishes must not hold the
-                        // interrupter, the lock, or later opens.
-                        Effect.onError(() =>
-                          dropReservation.pipe(
-                            // Clear only a session this open freshly set up: a reused
-                            // one is held by another live provider process and must
-                            // survive this open's failure.
-                            Effect.andThen(
-                              prepared.issued
-                                ? clearMcpSession(
-                                    input.threadId,
-                                    mcpCredentialId,
-                                    admission ?? null,
-                                  )
-                                : Effect.void,
-                            ),
+                    const openSession = adapter.openSession({
+                      threadId: input.threadId,
+                      providerSessionId: input.providerSessionId,
+                      modelSelection: input.modelSelection,
+                      runtimePolicy: input.runtimePolicy,
+                      ...(input.resumeFromSession === undefined
+                        ? {}
+                        : { resumeFromSession: input.resumeFromSession }),
+                      ...(input.initialNativeThreadId === undefined
+                        ? {}
+                        : { initialNativeThreadId: input.initialNativeThreadId }),
+                      ...(input.initialProviderItemIdentityVersion === undefined
+                        ? {}
+                        : {
+                            initialProviderItemIdentityVersion:
+                              input.initialProviderItemIdentityVersion,
+                          }),
+                    });
+                    const runtime = yield* (
+                      installationGate === undefined
+                        ? openSession
+                        : installationGate.execute(input.modelSelection.instanceId, openSession)
+                    ).pipe(
+                      Effect.provideService(Scope.Scope, sessionScope),
+                      // Any failure, including a Stop that interrupts a slow
+                      // handshake, stops the provider process this open started.
+                      // The session cleanup runs first, and the close is
+                      // time-boxed: this runs under the session's open lock, so an
+                      // adapter finalizer that never finishes must not hold the
+                      // interrupter, the lock, or later opens.
+                      Effect.onError(() =>
+                        dropReservation.pipe(
+                          // Clear only a session this open freshly set up: a reused
+                          // one is held by another live provider process and must
+                          // survive this open's failure.
+                          Effect.andThen(
+                            prepared.issued
+                              ? clearMcpSession(input.threadId, mcpCredentialId, admission ?? null)
+                              : Effect.void,
                           ),
                         ),
-                        Effect.mapError(openError),
-                        withMetrics({
-                          counter: providerSessionsTotal,
-                          attributes: { provider: adapter.driver, operation: "open" },
-                        }),
-                      );
+                      ),
+                      Effect.mapError(openError),
+                      withMetrics({
+                        counter: providerSessionsTotal,
+                        attributes: { provider: adapter.driver, operation: "open" },
+                      }),
+                    );
                     const eventSubscribers = yield* Ref.make<
                       ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
                     >(new Map());

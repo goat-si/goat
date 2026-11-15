@@ -401,6 +401,8 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               status: "running",
               tracking: "polled",
             });
+            // Polling emits nothing, so a row left running would read as a stalled retry.
+            yield* retryItem(ctx, "completed", yield* DateTime.now);
           });
         const finalize = (ctx: Active, result: RunResult) =>
           Effect.gen(function* () {
@@ -424,9 +426,6 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               completedAt: timestamp,
             } satisfies OrchestrationV2ProviderTurn;
             yield* commit(ctx, task, turn);
-            // A failed retry is reported by the terminal failure item, which shares this item's id.
-            if (status === "completed" && task.autoRetriedFromTaskId !== undefined)
-              yield* retryItem(ctx, "completed", timestamp);
             yield* emit(
               status === "failed"
                 ? {
