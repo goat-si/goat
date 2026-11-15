@@ -1,3 +1,4 @@
+import { usePendingListGroups } from "./usePendingListEntries";
 import { pullRequestLinkRevealProps, useLinkedPullRequest } from "./pullRequestLinkedSelection";
 import { PullRequestPanelControls } from "./PullRequestPanelControls";
 import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
@@ -101,7 +102,7 @@ import {
 } from "~/rightPanelStore";
 import {
   pullRequestEnvironment,
-  usePullRequestList,
+  usePullRequestHostList,
   usePullRequestListStats,
   restoredPullRequestList,
   usePullRequestTurnRefreshes,
@@ -302,7 +303,7 @@ export function PullRequestsPage() {
       { sent: sentCursors, regrown: sentRegrown },
     );
   const listTargets = listTargetsFor(environmentQueries);
-  const listQuery = usePullRequestList(listTargets);
+  const listQuery = usePullRequestHostList(listTargets);
 
   /**
    * Kept as its own read rather than remembered from an earlier answer because an answer cannot
@@ -318,7 +319,7 @@ export function PullRequestsPage() {
       ...(menuFiltered ? { filters: menuFilters } : {}),
     });
   const baselineTargets = baselineTargetsFor(baselineEnvironmentQueries);
-  const baselineQuery = usePullRequestList(baselineTargets);
+  const baselineQuery = usePullRequestHostList(baselineTargets);
   hostReads.observe(baselineQuery.observations, listQuery.observations);
   const baselineEmpty =
     baselineQuery.data?.entries.length === 0 &&
@@ -338,7 +339,7 @@ export function PullRequestsPage() {
       } satisfies PullRequestListInput,
     }));
   })();
-  const facetQuery = usePullRequestList(facetTargets);
+  const facetQuery = usePullRequestHostList(facetTargets);
   const filterOptionScope = environmentQueries.map(({ environmentId, projectIds }) => ({
     environmentId,
     input: {
@@ -369,8 +370,8 @@ export function PullRequestsPage() {
       reviewing: partitionTargetsFor("reviewing"),
     };
   })();
-  const authoredQuery = usePullRequestList(partitionTargets.authored);
-  const reviewingQuery = usePullRequestList(partitionTargets.reviewing);
+  const authoredQuery = usePullRequestHostList(partitionTargets.authored);
+  const reviewingQuery = usePullRequestHostList(partitionTargets.reviewing);
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [invalidating, setInvalidating] = useState(false);
@@ -657,9 +658,14 @@ export function PullRequestsPage() {
     entriesByStatsKey,
     heldPullRequestsBySurface,
   } = pullRequestGroups({
-    known: ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
-    // The baseline was read without typed qualifiers, and rows cannot be checked for `checks:`.
-    baseline: typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+    ...usePendingListGroups(
+      { state: search.state, filters },
+      ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []),
+      typedParsed.filters.checks === undefined ? baselineQuery.data?.entries : undefined,
+      partitionsWanted ? authoredQuery.data?.entries : undefined,
+      partitionsWanted ? reviewingQuery.data?.entries : undefined,
+      heldPartitions,
+    ),
     providers: baselineQuery.data?.providers ?? listData?.providers ?? [],
     viewers,
     involvement: search.involvement,
@@ -668,12 +674,6 @@ export function PullRequestsPage() {
     text: typedParsed.text,
     answeredLocally: querySettled && !showingCarried,
     baselineEmpty,
-    held:
-      loaded !== null && loaded.environmentKey === environmentKey && loaded.scope === scopeKey
-        ? loaded.partitions
-        : undefined,
-    authored: partitionsWanted ? authoredQuery.data?.entries : undefined,
-    reviewing: partitionsWanted ? reviewingQuery.data?.entries : undefined,
     partitionsWanted,
     isPreferredEntry: preferredPullRequestEntries(preferredEnvironmentQueries),
   });

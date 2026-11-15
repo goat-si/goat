@@ -1,3 +1,8 @@
+import {
+  editHeldPullRequestListEntries,
+  pullRequestHostAnswer,
+  pullRequestPendingEditsFor,
+} from "@goat/client-runtime/state/pull-requests";
 import { RegistryContext, useAtomMount, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { executeAtomQuery, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestListInput } from "@goat/contracts";
@@ -31,12 +36,24 @@ const sourcesFamily = Atom.family((key: string) => {
   return Atom.make((get) =>
     targets.map((target) => {
       const result = get(composerPullRequests.list(target));
-      const head = Option.getOrNull(AsyncResult.value(result));
+      const head = Option.getOrNull(
+        AsyncResult.value(get(pullRequestHostAnswer(composerPullRequests.list(target)))),
+      );
       const cached = get(pagesFamily(JSON.stringify(target)));
       return {
         target,
         result,
-        pages: head ? pullRequestListHead(cached, head) : cached,
+        pages: (() => {
+          const pages = head ? pullRequestListHead(cached, head) : cached;
+          return pages === null
+            ? null
+            : {
+                ...pages,
+                entries: editHeldPullRequestListEntries(target.input, pages.entries, (entry) =>
+                  get(pullRequestPendingEditsFor(target.environmentId, entry)),
+                ),
+              };
+        })(),
         stats: get(statsFamily(target.environmentId)),
       };
     }),
