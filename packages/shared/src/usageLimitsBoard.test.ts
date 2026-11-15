@@ -366,4 +366,20 @@ describe("Usage limits board", () => {
       "Signed in on Laptop",
     );
   });
+
+  it("shows a notice once when environments with one label report the same source failure", () => {
+    const host = {
+      entry: { target: { label: "Host" } },
+      serverConfig: { providers: [], usageLimitSources: [hub([], "it could not be reached")] },
+    };
+    const { notices } = limitBoard(
+      new Map([
+        [EnvironmentId.make("a"), host],
+        [EnvironmentId.make("b"), host],
+        [EnvironmentId.make("c"), host],
+      ]),
+      now,
+    );
+    expect(notices).toEqual([`Host · via OpenCodex Home ${HOME}: it could not be reached`]);
+  });
 });

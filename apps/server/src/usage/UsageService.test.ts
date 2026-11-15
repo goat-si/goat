@@ -1,8 +1,11 @@
 import { cursorSource, cursorSources, totalOutputTokens } from "./UsageAssertions.testkit.ts";
 import { WINDOW, registerUnpricedTest } from "./usageUnpriced.testkit.ts";
+import { registerPiHistoryTest } from "./usagePiHistory.testkit.ts";
+import { registerMusePendingTest } from "./usageMusePending.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real transcript trees on disk, outside the service's Effect FileSystem
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import {
   EnvironmentId,
   ProviderDriverKind,
@@ -68,7 +71,7 @@ const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unkno
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonString = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 
-function claudeLine(
+export function claudeLine(
   id: number,
   outputTokens: number,
   model = "claude-fable-5",
@@ -1077,7 +1080,7 @@ describe("UsageService", () => {
           };
           const muse = (summary: UsageSummary) =>
             summary.buckets.filter((bucket) => bucket.provider === "muse");
-          const first = yield* service.readSummary(window);
+          const first = yield* service.readSummary({ ...window, awaitRefresh: true });
           const buckets = muse(first);
           assert.strictEqual(
             buckets.reduce((sum, b) => sum + b.records, 0),
@@ -1159,6 +1162,7 @@ describe("UsageService", () => {
           assert.closeTo(repriced?.costUsd ?? NaN, 0.000486, 1e-12);
         }).pipe(
           Effect.scoped,
+          Effect.provideService(SpawnExecutableResolution, (command: string) => command),
           Effect.provide(
             layerService({
               prefix: "usage-muse",
@@ -1191,6 +1195,8 @@ describe("UsageService", () => {
         );
       }).pipe(Effect.scoped),
   );
+
+  registerMusePendingTest(setup, layerService, claudeLine);
 
   it.effect(
     "reports missing Pi history and skips malformed records without losing valid usage",
@@ -1257,64 +1263,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("discovers Pi history in its default home and directory overrides", () =>
-    Effect.gen(function* () {
-      const { home, settings } = yield* setup;
-      for (const [agentDir, sessionDir, relativeDir] of [
-        [undefined, undefined, ".pi/agent/sessions"],
-        ["~/custom-pi", undefined, "custom-pi/sessions"],
-        ["~/ignored-pi", "~/custom-sessions", "custom-sessions"],
-        ["~/ignored-pi", NodePath.join(home, "absolute-sessions"), "absolute-sessions"],
-      ] as const) {
-        const dir = NodePath.join(home, relativeDir);
-        yield* Effect.promise(async () => {
-          await NodeFSP.mkdir(dir, { recursive: true });
-          await NodeFSP.writeFile(
-            NodePath.join(dir, "session.jsonl"),
-            [
-              { type: "session", id: relativeDir },
-              {
-                type: "usage",
-                id: "warm",
-                timestamp: "2026-08-01T10:00:00Z",
-                provider: "openai",
-                model: "model",
-                usage: { input: 7 },
-              },
-            ]
-              .map((line) => encodeUnknownJsonString(line))
-              .join("\n") + "\n",
-          );
-        });
-        yield* Effect.gen(function* () {
-          const service = yield* UsageService.make;
-          const summary = yield* service.readSummary(WINDOW);
-          const pi = summary.buckets.filter((bucket) => bucket.provider === "pi");
-          assert.strictEqual(pi.length, 1);
-          assert.strictEqual(pi[0]?.totals.uncachedInputTokens, 7);
-          assert.strictEqual(
-            summary.sources.find((source) => source.fingerprint.provider === "pi")?.fingerprint
-              .resolvedHomePath,
-            dir,
-          );
-        }).pipe(
-          Effect.scoped,
-          Effect.provide(
-            layerService({
-              prefix: "usage-pi-" + relativeDir.replaceAll("/", "-"),
-              home,
-              settings,
-              environment: {
-                PI_CODING_AGENT_DIR: agentDir,
-                PI_CODING_AGENT_SESSION_DIR: sessionDir,
-              },
-            }),
-          ),
-          Effect.provideService(HostProcess.HomeDirectory, home),
-        );
-      }
-    }).pipe(Effect.scoped),
-  );
+  registerPiHistoryTest(setup, layerService);
 
   it.effect("reads shared managed default and disabled extra account history once", () =>
     Effect.gen(function* () {

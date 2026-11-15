@@ -128,6 +128,36 @@ const decodeWithPeerBeforeNativeGoals = Schema.decodeUnknownSync(
   }),
 );
 
+// A peer built from dev before activeSteeringDuringCompaction: the same contract minus that field.
+const { activeSteeringDuringCompaction: _steerField, ...turnFieldsBeforeCompactionSteering } =
+  OrchestrationV2TurnCapabilities.fields;
+const decodeWithPeerBeforeCompactionSteering = Schema.decodeUnknownSync(
+  Schema.Struct({
+    ...OrchestrationV2ProviderCapabilities.fields,
+    turns: Schema.Struct(turnFieldsBeforeCompactionSteering),
+  }),
+);
+
+it("steering during compaction is absent from older servers and dropped by older clients", () => {
+  expect(
+    decodeOrchestrationV2ProviderCapabilities(legacyCapabilities).turns
+      .activeSteeringDuringCompaction,
+  ).toBeUndefined();
+  for (const activeSteeringDuringCompaction of [true, false]) {
+    const snapshot = JSON.parse(
+      JSON.stringify({
+        ...legacyCapabilities,
+        turns: { ...legacyCapabilities.turns, activeSteeringDuringCompaction },
+      }),
+    );
+    const older = decodeWithPeerBeforeCompactionSteering(snapshot);
+    expect(Object.hasOwn(older.turns, "activeSteeringDuringCompaction")).toBe(false);
+    expect(
+      decodeOrchestrationV2ProviderCapabilities(snapshot).turns.activeSteeringDuringCompaction,
+    ).toBe(activeSteeringDuringCompaction);
+  }
+});
+
 it("an older peer accepts a snapshot that advertises supportsNativeGoals and drops the unknown key", () => {
   expect(Object.keys(turnFieldsBeforeNativeGoals)).not.toContain("supportsNativeGoals");
 

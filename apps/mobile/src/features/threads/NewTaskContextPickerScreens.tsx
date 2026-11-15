@@ -41,9 +41,10 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_CONTENT_INSET,
 } from "../layout/native-mail-search-toolbar";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
+import { branchBadgeLabel } from "./new-task-branch-badge";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
-import { branchBadgeLabel, filterNewTaskBranches } from "./new-task-context-presentation";
+import { filterNewTaskBranches } from "./new-task-context-presentation";
 import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
 

@@ -9,6 +9,8 @@ export * from "./orchestrationV2Attribution.ts";
 import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import { OrchestrationV2ProviderThreadNativeMetadata } from "./orchestrationV2NativeMetadata.ts";
+export * from "./orchestrationV2NativeMetadata.ts";
 import {
   kindUnionWithFallback,
   OrchestrationV2Notification,
@@ -352,6 +354,8 @@ export const OrchestrationV2TurnCapabilities = Schema.Struct({
   supportsActiveSteering: Schema.Boolean,
   // Some native steering mechanisms cancel pending tools before consuming the message.
   activeSteeringInterruptsTools: Schema.optional(Schema.Boolean),
+  // Only where a steer leaves a running automatic compaction intact; otherwise clients queue.
+  activeSteeringDuringCompaction: Schema.optional(Schema.Boolean),
   supportsSteeringByInterruptRestart: Schema.Boolean,
   supportsQueuedMessages: Schema.Boolean,
   terminalStatusQuality: Schema.Literals(["strong", "weak", "none"]),
@@ -1050,19 +1054,6 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
   }),
 );
 export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2PendingBackgroundTask.Type;
-
-export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
-  modelSelection: Schema.optional(ModelSelection),
-  title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  itemIdentityVersion: Schema.optional(Schema.Literal(2)),
-  forkHeadMessageId: Schema.optional(TrimmedNonEmptyString),
-  claudeAttachmentBudget: Schema.optional(
-    Schema.Struct({ bytesUsed: NonNegativeInt, pagesUsed: NonNegativeInt }),
-  ),
-});
-export type OrchestrationV2ProviderThreadNativeMetadata =
-  typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
 
 export const OrchestrationV2ProviderGoalStatus = Schema.Literals([
   "active",

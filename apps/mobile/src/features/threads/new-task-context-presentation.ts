@@ -2,8 +2,6 @@ import { sanitizeNewRefName } from "@goat/shared/git";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { resolveSendEnvMode } from "@goat/shared/projectSettings";
 import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
-import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
-import type { VcsRef } from "@goat/client-runtime/state/vcs";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -184,23 +182,4 @@ export function resolveNewTaskDraftWorkspace(input: {
     projectCwd: input.projectCwd,
     worktreeDefaultSettled: selection?.mode !== undefined || input.defaultModeSettled,
   });
-}
-
-export function branchBadgeLabel(input: {
-  readonly branch: VcsRef;
-  readonly project: EnvironmentProject | null;
-}): string | null {
-  if (input.branch.current) {
-    return "current";
-  }
-  if (input.branch.worktreePath && input.branch.worktreePath !== input.project?.workspaceRoot) {
-    return "worktree";
-  }
-  if (input.branch.isRemote) {
-    return "remote";
-  }
-  if (input.branch.isDefault) {
-    return "default";
-  }
-  return null;
 }

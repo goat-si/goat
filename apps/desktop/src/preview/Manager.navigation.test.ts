@@ -41,6 +41,7 @@ const layer = PreviewManager.layer.pipe(
         isPartition: () => true,
         getSession: () => Effect.succeed({ on: () => {} } as unknown as Electron.Session),
         clearCookies: () => Effect.void,
+        cookiesCleared: () => Effect.void,
         clearCache: () => Effect.void,
       }),
     ),

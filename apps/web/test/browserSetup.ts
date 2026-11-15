@@ -11,6 +11,24 @@ declare module "vite-plus/test/browser" {
 
 installMockFactoryFailureReport();
 
+// Test files in one browser session share the origin's storage, and persisted stores such as the
+// composer drafts hydrate from it when the test file imports them. Setup files run before that
+// import in each file's fresh frame, so every file starts from what it seeds itself.
+localStorage.clear();
+sessionStorage.clear();
+// The connection runtime caches shells, threads and server config in IndexedDB under the
+// environment id every app-render test shares, and loads them at boot.
+await Promise.all(
+  (await indexedDB.databases()).map(({ name }) =>
+    name === undefined
+      ? undefined
+      : new Promise<void>((resolve) => {
+          const request = indexedDB.deleteDatabase(name);
+          request.onsuccess = request.onerror = request.onblocked = () => resolve();
+        }),
+  ),
+);
+
 // Playwright's mouse outlives each test and each file, so whatever the next test mounts
 // under its last position starts hovered. Registered here rather than in render() so tests
 // that mount without it are covered too. Before each test, not after: a timed-out test keeps

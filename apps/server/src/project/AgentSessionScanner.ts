@@ -54,7 +54,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { resolvePiSessionsDir } from "@goat/provider-pi/server/usage";
+import { piHome, resolvePiSessionsDir } from "@goat/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   createTranscriptJsonReader,
@@ -694,7 +694,8 @@ export const make = Effect.gen(function* () {
   const realWorktreesDir = yield* fileSystem
     .realPath(worktreesDir)
     .pipe(Effect.orElseSucceed(() => worktreesDir));
-  const isWindows = (yield* HostProcess.Platform) === "win32";
+  const platform = yield* HostProcess.Platform;
+  const isWindows = platform === "win32";
   const foldWorktreeCase = isWindows;
   const hostEnvironment = yield* HostProcess.Environment;
   const homeDir = yield* HostProcess.HomeDirectory;
@@ -1237,7 +1238,11 @@ export const make = Effect.gen(function* () {
             instance.environment,
             hostEnvironment,
           ).pipe(Effect.provideService(HostProcess.HomeDirectory, homeDir));
-          homePath = resolvePiSessionsDir(environment, homeDir, path);
+          homePath = resolvePiSessionsDir(
+            environment,
+            piHome(environment, homeDir, platform),
+            path,
+          );
         } else if (source === "claudeAgent") {
           const config = decodeClaudeSettings(instance.config ?? {});
           if (Option.isNone(config)) continue;

@@ -213,6 +213,7 @@ export const CursorDriver: ProviderDriver<
         providerInstanceId: instanceId,
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
+      () => catalogModels,
     );
 
     const checkProvider = auth.readApiKey.pipe(

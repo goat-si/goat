@@ -21,7 +21,7 @@ import {
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
-import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
+import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -65,12 +65,14 @@ export function HomeRouteScreen() {
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const { visible: routeVisible, runWhenCovered } = useHomeRouteVisibility();
   const visible = routeVisible && tabActive;
-  const threads = useAtomValueWhileVisible(
-    environmentThreadShells.navigationThreadShellsAtom,
-    tabActive &&
-      (layout.usesSplitView
-        ? nativePrimaryColumn !== null && panes.primarySidebarVisible
-        : visible && !compactBot),
+  const threads = useLaunchingThreads(
+    useAtomValueWhileVisible(
+      environmentThreadShells.navigationThreadShellsAtom,
+      tabActive &&
+        (layout.usesSplitView
+          ? nativePrimaryColumn !== null && panes.primarySidebarVisible
+          : visible && !compactBot),
+    ),
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();

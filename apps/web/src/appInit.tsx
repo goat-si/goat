@@ -1,3 +1,4 @@
+import { startDocumentTitle } from "./documentTitle";
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ClientSettings } from "@goat/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
@@ -21,8 +22,6 @@ import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { startDesktopUpdateLaunchNotice } from "./components/sidebar/updateEverythingRun";
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
-import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "./branding";
-import { resolveServerBackedAppDisplayName } from "./branding.logic";
 import { isElectron } from "./env";
 import { isHostedStaticApp } from "./hostedPairing";
 import { openLaunchRoute } from "./launchRoute";
@@ -44,7 +43,6 @@ import { startDesktopTray } from "./desktopTray";
 import { getRouter, type AppRouter } from "./router";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
 import { appAtomRegistry } from "./rpc/atomRegistry";
-import { primaryServerConfigAtom } from "./state/server";
 import { resolveThreadRouteTarget } from "./threadRoutes";
 
 /** Writes appearance settings onto the document, touching only the groups that changed. */
@@ -114,21 +112,6 @@ function startClientAppearance(): void {
   apply();
 }
 
-function startDocumentTitle(): void {
-  appAtomRegistry.subscribe(
-    primaryServerConfigAtom,
-    (config) => {
-      document.title = resolveServerBackedAppDisplayName({
-        baseName: APP_BASE_NAME,
-        fallbackDisplayName: APP_DISPLAY_NAME,
-        fallbackStageLabel: APP_STAGE_LABEL,
-        primaryServerVersion: config?.environment.serverVersion ?? null,
-      });
-    },
-    { immediate: true },
-  );
-}
-
 /** Chat overlays belong to the thread they were opened in, so leaving its route drops them. */
 function startThreadOverlayRetention(router: AppRouter): void {
   router.subscribe("onResolved", () => {
@@ -168,7 +151,7 @@ export function startAppServices(): AppRouter {
   }
 
   startClientAppearance();
-  startDocumentTitle();
+  startDocumentTitle(router);
   startDefaultThemeAdoption();
   startModelPreferencesMigration();
   startAgentOpenedPreviews();

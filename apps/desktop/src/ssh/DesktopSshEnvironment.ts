@@ -87,6 +87,7 @@ export class DesktopSshEnvironment extends Context.Service<
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
     /** Closes open SSH forwards that stopped answering, for example after sleep. */
     readonly revalidateTunnels: Effect.Effect<void>;
+    readonly closeAllTunnels: Effect.Effect<void>;
   }
 >()("@goat/desktop/ssh/DesktopSshEnvironment") {}
 
@@ -316,6 +317,7 @@ export const make = Effect.gen(function* () {
         Effect.provide(runtimeContext),
         Effect.withSpan("desktop.ssh.revalidateTunnels"),
       ),
+    closeAllTunnels: manager.closeAllTunnels,
   });
 });
 

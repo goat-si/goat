@@ -85,6 +85,7 @@ async function mountSession(
         <ThreadSettingsSessionProvider
           environmentId={EnvironmentId.make("env-a")}
           projectId={null}
+          cwd={null}
           providerGroups={[{ providerKey: "claudeAgent", providerLabel: "Claude", models: [opus] }]}
           selectedModel={{ instanceId: claude, model: "sonnet" }}
           prompt="Fix the build"

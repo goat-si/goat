@@ -1,4 +1,4 @@
-import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { parseScopedThreadKey, scopedThreadKey } from "@goat/client-runtime/environment";
 import { shellSyncMessage } from "@goat/client-runtime/state/presentation";
 import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { useAtomRefresh } from "@effect/atom-react";
@@ -26,13 +26,27 @@ import { useGlobalAgentStore } from "../globalAgentStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useThreadRefs, useQuietThreadShell } from "../state/entities";
 import { environmentShell, useEnvironmentShellStatus } from "../state/shell";
-import { useEnvironmentThread } from "../state/threads";
+import { threadFamilies, useEnvironmentThread } from "../state/threads";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   buildThreadRouteParams,
   isThreadRouteSnapshotAuthoritative,
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
+
+function useOpenThreadFamily(threadRef: ScopedThreadRef | null, missing: boolean) {
+  const key = threadRef === null ? null : scopedThreadKey(threadRef);
+  const [mountedKey, setMountedKey] = useState<string | null>(null);
+  const nextKey = missing || mountedKey === key ? key : null;
+  if (nextKey !== mountedKey) setMountedKey(nextKey);
+  // oxlint-disable-next-line goat/react-effect-budget -- keeps the open thread family mounted until the route changes
+  useEffect(() => {
+    const ref = mountedKey === null ? null : parseScopedThreadKey(mountedKey);
+    if (ref === null) return;
+    return threadFamilies.mount(appAtomRegistry, ref.environmentId, ref.threadId);
+  }, [mountedKey]);
+}
 
 /**
  * Render in the shared layout to retain ChatView across route swaps; plain server threads remain unkeyed.
@@ -131,6 +145,7 @@ export function ThreadRouteView({
     unlistedThreadRef?.environmentId ?? null,
     unlistedThreadRef?.threadId ?? null,
   );
+  useOpenThreadFamily(serverThreadRef, bootstrapComplete && unlistedThreadRef !== null);
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,

@@ -44,7 +44,6 @@ import {
   scoreQueryMatch,
 } from "@goat/shared/searchRanking";
 import {
-  createProviderWorkspaceSnapshotRefreshAtomFamily,
   dedupeProviderSkillsByName,
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
@@ -61,6 +60,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
 import {
   useComposerPathSearch,
   useComposerPullRequestSearch,
@@ -72,11 +72,6 @@ import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import { buildComposerModelItems } from "./composerModelMentions";
 import { formatComposerModelMention } from "@goat/client-runtime/composer-model-mentions";
 import type { ModelOption } from "../../lib/modelOptions";
-
-const providerWorkspaceSnapshotRefresh = createProviderWorkspaceSnapshotRefreshAtomFamily({
-  providers: serverEnvironment.providersValueAtom,
-  refreshProviders: serverEnvironment.refreshProviders,
-});
 
 const idleWorkspaceSnapshotRefreshAtom: Atom.Atom<unknown> = Atom.make<void>(undefined).pipe(
   Atom.withLabel("mobile:provider-workspace-snapshot-refresh:idle"),

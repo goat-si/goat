@@ -52,6 +52,7 @@ const withDispatch = <A, E>(
       forgetEnvironment: unused,
       disconnectEnvironment: unused,
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: unused,
       issueMcpClientSession: unused,
       runRemoteScript: unused,

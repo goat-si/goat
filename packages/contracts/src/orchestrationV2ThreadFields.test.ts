@@ -1,7 +1,10 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { OrchestrationV2ThreadShellJson } from "./orchestrationV2.ts";
+import {
+  OrchestrationV2ProviderThreadNativeMetadata,
+  OrchestrationV2ThreadShellJson,
+} from "./orchestrationV2.ts";
 
 const shell = {
   id: "thread-test",
@@ -66,4 +69,23 @@ it("reads background wake state across older clients and servers", () => {
     id: "thread-test",
   });
   expect(() => decode({ ...shell, latestRunBackgroundWake: "true" })).toThrow();
+});
+
+it("decodes Cursor's session store directory beside older native metadata", () => {
+  const decode = Schema.decodeUnknownSync(OrchestrationV2ProviderThreadNativeMetadata);
+  expect(decode({ title: "Thread" }).cursorStoreCwd).toBeUndefined();
+  expect(decode({ cursorStoreCwd: "/repo" }).cursorStoreCwd).toBe("/repo");
+  const { cursorStoreCwd: _ignored, ...oldFields } =
+    OrchestrationV2ProviderThreadNativeMetadata.fields;
+  const olderClient = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+  expect(olderClient({ cursorStoreCwd: "/repo", title: "Thread" })).toEqual({ title: "Thread" });
+});
+
+it("refuses a Cursor session store directory that is not an absolute path", () => {
+  const decode = Schema.decodeUnknownSync(OrchestrationV2ProviderThreadNativeMetadata);
+  expect(() => decode({ cursorStoreCwd: "repo" })).toThrow();
+  expect(() => decode({ cursorStoreCwd: "../other-project" })).toThrow();
+  expect(() => decode({ cursorStoreCwd: "~/repo" })).toThrow();
+  expect(decode({ cursorStoreCwd: "C:\\work\\repo" }).cursorStoreCwd).toBe("C:\\work\\repo");
+  expect(decode({ cursorStoreCwd: "\\\\server\\share" }).cursorStoreCwd).toBe("\\\\server\\share");
 });

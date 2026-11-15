@@ -53,7 +53,7 @@ vi.mock("../../state/use-composer-drafts", () => ({
 vi.mock("../../state/use-remote-environment-registry", () => ({
   setPendingConnectionError: vi.fn(),
 }));
-vi.mock("../../state/use-thread-composer-state", () => ({ appendReviewCommentToDraft: vi.fn() }));
+vi.mock("../../state/thread-draft-review", () => ({ appendReviewCommentToDraft: vi.fn() }));
 vi.mock("./reviewCommentSelection", () => ({
   clearReviewCommentTarget: vi.fn(),
   formatReviewCommentContext: vi.fn(),

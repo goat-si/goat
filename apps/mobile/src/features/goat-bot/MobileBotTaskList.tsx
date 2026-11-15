@@ -11,13 +11,13 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text } from "react-native";
 
-import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
-import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
+import type { MobileTaskChips } from "./mobileBotTaskStatus";
+import { MobileBotWorkRow } from "./MobileBotWorkRow";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -27,12 +27,6 @@ export interface MobileBotHomeItem {
   readonly card?: "only" | "first" | "middle" | "last";
   /** Builds the entry when the list mounts it, so off-screen entries cost nothing. */
   readonly render: () => ReactNode;
-}
-
-/** The words a task row says and VoiceOver reads: title, status, then unread and pinned. */
-export function mobileBotTaskLabel(row: TaskRow, chips: MobileTaskChips): string {
-  const status = mobileBotTaskStatus(row, chips);
-  return `${row.task.title}, ${status}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`;
 }
 
 /**
@@ -45,6 +39,8 @@ export function mobileBotTaskListItems(props: {
   readonly work: BotHomeWork;
   /** The conversation's newest task chips, which say what a running task's worker asks. */
   readonly chips: MobileTaskChips;
+  /** Home is shown and the app active: rows' times follow the clock only then. */
+  readonly ticking: boolean;
   readonly showAllFinished: boolean;
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
@@ -157,61 +153,20 @@ export function mobileBotTaskListItems(props: {
             actions={actions(row)}
             onSelect={(id) => choose(row, id)}
             row={
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={mobileBotTaskLabel(row, props.chips)}
-                accessibilityActions={actions(row)
+              <MobileBotWorkRow
+                row={row}
+                section={section}
+                chips={props.chips}
+                ticking={props.ticking}
+                openable={openable}
+                actions={actions(row)
                   .filter(
                     (action) => !("attributes" in action && action.attributes?.disabled === true),
                   )
                   .map((action) => ({ name: action.id, label: action.title }))}
-                onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
-                accessibilityState={{ disabled: !openable }}
-                disabled={!openable}
-                className="min-h-[44px] flex-1 flex-row items-center gap-2"
+                onAction={(name) => choose(row, name)}
                 onPress={() => props.onPeekTask(row.task.taskId)}
-              >
-                {section === "running" ? (
-                  <View className="h-2 w-2 rounded-full bg-adaptive-blue-500-400" />
-                ) : (
-                  <SymbolView
-                    name={section === "waiting" ? "questionmark.bubble" : "checkmark"}
-                    size={14}
-                    tintColorClassName={
-                      section === "waiting"
-                        ? "accent-warning-foreground"
-                        : "accent-foreground-muted"
-                    }
-                  />
-                )}
-                <View className="flex-1">
-                  <Text className="text-foreground">{row.task.title}</Text>
-                  <View className="flex-row items-center gap-1">
-                    {row.view.pinnedAt ? (
-                      <SymbolView
-                        name="pin"
-                        size={12}
-                        tintColorClassName="accent-foreground-muted"
-                      />
-                    ) : null}
-                    {row.unread ? (
-                      <View
-                        accessibilityElementsHidden
-                        className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                      />
-                    ) : null}
-                    <Text className="text-xs text-foreground-muted">
-                      {mobileBotTaskStatus(row, props.chips)}
-                      {row.unread ? " · Unread" : ""}
-                    </Text>
-                  </View>
-                </View>
-                <SymbolView
-                  name="chevron.right"
-                  size={14}
-                  tintColorClassName="accent-foreground-muted"
-                />
-              </Pressable>
+              />
             }
           />
         ),

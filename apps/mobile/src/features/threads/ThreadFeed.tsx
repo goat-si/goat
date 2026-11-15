@@ -1370,9 +1370,13 @@ function renderFeedEntry(
       const foldRowId = presentation.attribution === "agent" ? `agent:${message.id}` : null;
       const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
-      // A message from another thread names its sender; how it arrived adds nothing.
       const intentBadge =
-        foldRowId === null ? resolveUserMessageIntentBadge(message.inputIntent) : null;
+        foldRowId !== null
+          ? null
+          : resolveUserMessageIntentBadge(
+              message.inputIntent,
+              message.projectedItem?.item.status === "pending",
+            );
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );

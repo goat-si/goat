@@ -13,12 +13,15 @@ import {
   ProviderInstanceId,
   RunId,
   ServerConfig,
+  ServerProvider,
   ThreadId,
   TurnItemId,
   WS_METHODS,
   WsRpcGroup,
+  type ModelSelection,
   type OrchestrationProjectShell,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadProjection,
@@ -69,6 +72,33 @@ const auth = {
   sessionCookieName: "goat_session",
 };
 
+const readyProvider = (
+  instanceId: string,
+  driver: string,
+  models: ReadonlyArray<{ readonly slug: string; readonly name: string }>,
+) => ({
+  instanceId,
+  driver,
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-03-17T19:12:28.000Z",
+  models: models.map((model) => ({ ...model, isCustom: false, capabilities: null })),
+});
+export const CODEX_PROVIDER = readyProvider(CODEX, "codex", [
+  { slug: "gpt-5.4", name: "GPT-5.4" },
+  { slug: "gpt-5.5", name: "GPT-5.5" },
+]);
+export const CLAUDE_PROVIDER = {
+  ...readyProvider("claudeAgent", "claudeAgent", [
+    { slug: "claude-opus-4-6", name: "Claude Opus 4.6" },
+  ]),
+  slashCommands: [{ name: "compact" }],
+};
+
+const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const serverConfig: ServerConfig = {
   ...Schema.decodeUnknownSync(ServerConfig)({
     environment: descriptor,
@@ -165,13 +195,19 @@ export function assistantItem(
   } satisfies OrchestrationV2TurnItem;
 }
 
-function run(threadId: ThreadId, id: RunId, ordinal: number, userMessageId: string) {
+function run(
+  threadId: ThreadId,
+  id: RunId,
+  ordinal: number,
+  userMessageId: string,
+  modelSelection: ModelSelection = MODEL,
+) {
   return {
     id,
     threadId,
     ordinal,
-    providerInstanceId: CODEX,
-    modelSelection: MODEL,
+    providerInstanceId: modelSelection.instanceId,
+    modelSelection,
     providerThreadId: null,
     userMessageId: MessageId.make(userMessageId),
     rootNodeId: null,
@@ -186,8 +222,13 @@ function run(threadId: ThreadId, id: RunId, ordinal: number, userMessageId: stri
 }
 
 export interface FakeThread {
+  readonly olderSettled?: true;
   readonly id: ThreadId;
   readonly title: string;
+  /** Defaults to GPT-5.4 on Codex. */
+  readonly modelSelection?: ModelSelection;
+  /** The first is the thread's active provider thread. */
+  readonly providerThreads?: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly shell?: Partial<OrchestrationV2ThreadShell>;
@@ -195,13 +236,17 @@ export interface FakeThread {
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
-export function threadWithHistory(name: string, turns: number): FakeThread {
+export function threadWithHistory(
+  name: string,
+  turns: number,
+  modelSelection: ModelSelection = MODEL,
+): FakeThread {
   const id = ThreadId.make(name);
   const runs: OrchestrationV2Run[] = [];
   const items: OrchestrationV2TurnItem[] = [];
   for (let turn = 0; turn < turns; turn++) {
     const runId = RunId.make(`${name}-run-${turn}`);
-    runs.push(run(id, runId, turn + 1, `${name}-user-${turn}`));
+    runs.push(run(id, runId, turn + 1, `${name}-user-${turn}`, modelSelection));
     items.push(
       userItem(id, runId, `${name}-user-${turn}`, turn * 2, `${name}: question ${turn}`),
       assistantItem(
@@ -214,22 +259,23 @@ export function threadWithHistory(name: string, turns: number): FakeThread {
       ),
     );
   }
-  return { id, title: `Thread ${name}`, runs, items };
+  return { id, title: `Thread ${name}`, modelSelection, runs, items };
 }
 
 function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
   const latest = thread.runs.at(-1);
+  const modelSelection = thread.modelSelection ?? MODEL;
   return {
     id: thread.id,
     projectId: PROJECT_ID,
     title: thread.title,
-    providerInstanceId: CODEX,
-    modelSelection: MODEL,
+    providerInstanceId: modelSelection.instanceId,
+    modelSelection,
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: "main",
     worktreePath: null,
-    activeProviderThreadId: null,
+    activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     lineage: { rootThreadId: thread.id, parentThreadId: null, relationshipToParent: null },
     forkedFrom: null,
     createdBy: "user",
@@ -247,8 +293,8 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     createdAt: AT,
     updatedAt: AT,
     archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
+    settledOverride: thread.olderSettled ? "settled" : null,
+    settledAt: thread.olderSettled ? AT : null,
     lastVisitedAt: AT,
     deletedAt: null,
     ...thread.shell,
@@ -277,7 +323,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
       interactionMode: shell.interactionMode,
       branch: shell.branch,
       worktreePath: shell.worktreePath,
-      activeProviderThreadId: null,
+      activeProviderThreadId: shell.activeProviderThreadId,
       lineage: shell.lineage,
       forkedFrom: null,
       createdBy: "user",
@@ -285,8 +331,8 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
       createdAt: AT,
       updatedAt: AT,
       archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
+      settledOverride: shell.settledOverride,
+      settledAt: shell.settledAt,
       lastVisitedAt: AT,
       deletedAt: null,
     },
@@ -295,7 +341,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
     nodes: [],
     subagents: [],
     providerSessions: [],
-    providerThreads: [],
+    providerThreads: [...(thread.providerThreads ?? [])],
     providerTurns: [],
     runtimeRequests: [],
     messages: [],
@@ -356,7 +402,7 @@ const handlers: Record<string, (input: never) => unknown> = {
           schemaVersion: 1,
           snapshotSequence: sequence,
           projects: [project],
-          threads: threads.map(shellOf),
+          threads: threads.filter((thread) => !thread.olderSettled).map(shellOf),
           archivedThreads: [],
         },
       },
@@ -380,6 +426,11 @@ const handlers: Record<string, (input: never) => unknown> = {
       },
     );
   },
+  [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input: { readonly threadId: ThreadId }) =>
+    Effect.succeed({
+      snapshotSequence: sequence,
+      threads: threads.filter((thread) => thread.id === input.threadId).map(shellOf),
+    }),
   [WS_METHODS.subscribeVcsStatus]: () =>
     subscribe<VcsStatusStreamEvent>([], (queue) => {
       vcsStatusSubscriber = queue;
@@ -457,6 +508,7 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
   options?: {
+    providers?: ReadonlyArray<unknown>;
     capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
     onCommand?: (command: OrchestrationV2Command) => Promise<{ sequence: number }>;
     models?: ServerConfig["providers"][number]["models"];
@@ -470,12 +522,15 @@ export function installFakeEnvironment(
   requests = [];
   currentServerConfig = {
     ...serverConfig,
-    providers: options?.models
-      ? serverConfig.providers.map((provider) => ({
-          ...provider,
-          models: options.models ?? provider.models,
-        }))
-      : serverConfig.providers,
+    ...(threads.some((thread) => thread.olderSettled) ? { shellThreadFamilies: true } : {}),
+    providers: options?.providers
+      ? options.providers.map((provider) => decodeServerProvider(provider))
+      : options?.models
+        ? serverConfig.providers.map((provider) => ({
+            ...provider,
+            models: options.models ?? provider.models,
+          }))
+        : serverConfig.providers,
     environment: {
       ...serverConfig.environment,
       capabilities: { ...serverConfig.environment.capabilities, ...options?.capabilities },

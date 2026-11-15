@@ -105,6 +105,30 @@ const advanceIdleClock = Effect.gen(function* () {
 });
 
 it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
+  it.effect("omits stale reasoning variants when generating commit messages", () =>
+    withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
+      Effect.gen(function* () {
+        yield* textGeneration.generateCommitMessage({
+          ...DEFAULT_COMMIT_MESSAGE_INPUT,
+          modelSelection: {
+            ...DEFAULT_TEST_MODEL_SELECTION,
+            options: [
+              { id: "variant", value: "medium" },
+              { id: "agent", value: "plan" },
+            ],
+          },
+        });
+
+        expect(runtimeMock.state.promptInputs).toHaveLength(1);
+        expect(runtimeMock.state.promptInputs[0]).toMatchObject({
+          model: { providerID: "openai", modelID: "gpt-5" },
+          agent: "plan",
+        });
+        expect(runtimeMock.state.promptInputs[0]).not.toHaveProperty("variant");
+      }),
+    ),
+  );
+
   it.effect("cancels an in-flight session creation before prompting", () =>
     withOpenCodeTextGeneration(EXISTING_SERVER_OPENCODE_SETTINGS, (textGeneration) =>
       Effect.gen(function* () {
@@ -721,6 +745,38 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCode v1 memory generation", (it) 
         undefined,
         memoryContext,
       ),
+  );
+  it.effect("drops a memory variant the isolated server's catalog lacks, asking that server", () =>
+    withOpenCodeTextGeneration(
+      DEFAULT_OPENCODE_SETTINGS,
+      (generation) =>
+        Effect.gen(function* () {
+          setOutput("generateMemorySummary");
+          // OpenCode confirms the variant it ran; none was sent.
+          runtimeMock.state.promptResult = {
+            data: {
+              ...runtimeMock.state.promptResult?.data,
+              info: { providerID: "openai", modelID: "gpt-5" },
+            },
+          };
+          yield* generation.generateMemorySummary!(
+            M.GenerateMemorySummaryInput.make({
+              ...memorySummary,
+              modelSelection: M.MemoryModelSelection.make({
+                ...memorySelection,
+                options: [{ id: "variant", value: "xhigh" }],
+              }),
+            }),
+          );
+          expect(runtimeMock.state.promptInputs).toHaveLength(1);
+          expect(runtimeMock.state.promptInputs[0]).not.toHaveProperty("variant");
+          expect(runtimeMock.state.providerListUrls).toHaveLength(1);
+          expect(runtimeMock.state.providerListUrls).toEqual(runtimeMock.state.promptUrls);
+          expect(runtimeMock.state.startCalls).toHaveLength(1);
+        }),
+      undefined,
+      memoryContext,
+    ),
   );
   it.effect.each(operations)(
     "%s pauses memory when OpenCode cannot start, but not for a held database lock",

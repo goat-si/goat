@@ -1,3 +1,4 @@
+import type { ListRunsOptions } from "@cursor/sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -15,6 +16,7 @@ import {
   MemorySpaceId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
@@ -23,7 +25,6 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import * as CursorSdk from "./CursorSdk.ts";
 import * as DateTime from "effect/DateTime";
-import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
@@ -42,7 +43,8 @@ const cursorSdkMock = vi.hoisted(() => {
   const runOperations: Array<string> = [];
   const sentMessages: Array<string> = [];
   let agentCloseFailure: unknown;
-  let staleRunActive = false;
+  // The local store lists runs oldest first, like the real SDK.
+  let storedRuns: Array<{ readonly id: string; readonly status: string }> = [];
   const runWait = vi.fn(async () => ({
     id: "run-cursor-agent-sdk-test",
     requestId: "request-cursor-agent-sdk-test",
@@ -68,7 +70,7 @@ const cursorSdkMock = vi.hoisted(() => {
     ) => {
       runOperations.push("run.start");
       sentMessages.push(typeof message === "string" ? message : message.text);
-      if (staleRunActive) {
+      if (storedRuns.some((run) => run.status === "running")) {
         throw new Error("Agent agent-cursor-agent-sdk-test already has active run");
       }
       await options.onDelta?.({
@@ -95,15 +97,21 @@ const cursorSdkMock = vi.hoisted(() => {
     send,
     close: agentClose,
   }));
-  const listRuns = vi.fn(async () => {
+  const listRuns = vi.fn(async (_agentId: string, options?: ListRunsOptions) => {
     runOperations.push("agent.listRuns");
+    // Mirrors the SDK's opaque cursor pagination with its default page size of 50.
+    const offset = options?.cursor === undefined ? 0 : Number(options.cursor);
+    const end = offset + (options?.limit ?? 50);
     return {
-      items: staleRunActive ? [{ id: "run-stale", status: "running" }] : [],
+      items: storedRuns.slice(offset, end),
+      ...(end < storedRuns.length ? { nextCursor: String(end) } : {}),
     };
   });
-  const cancelRun = vi.fn(async () => {
+  const cancelRun = vi.fn(async (runId: string) => {
     runOperations.push("agent.cancelRun");
-    staleRunActive = false;
+    storedRuns = storedRuns.map((run) =>
+      run.id === runId ? { ...run, status: "cancelled" } : run,
+    );
   });
 
   return {
@@ -121,8 +129,8 @@ const cursorSdkMock = vi.hoisted(() => {
     setAgentCloseFailure: (failure: unknown) => {
       agentCloseFailure = failure;
     },
-    setStaleRunActive: (active: boolean) => {
-      staleRunActive = active;
+    setStoredRuns: (runs: Array<{ readonly id: string; readonly status: string }>) => {
+      storedRuns = runs;
     },
   };
 });
@@ -169,6 +177,44 @@ const layerTest = CursorAgentSdk.layer.pipe(
 );
 
 describe("CursorAgentSdkRunner", () => {
+  it.effect("resumes from the original store after the working directory changes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-resume-" });
+      const loaders = yield* Effect.promise(() =>
+        vi.importActual<typeof import("./sdk.ts")>("./sdk.ts"),
+      );
+      const sdk = loaders.loadCursorSdk();
+      const store = new sdk.JsonlLocalAgentStore(workspace);
+      const storeCwd = `${workspace}/checkout`;
+      const cwd = `${workspace}/worktree`;
+      const platform = yield* Effect.promise(() =>
+        sdk.createAgentPlatform({ localStore: store, workspaceRef: storeCwd }),
+      );
+      const { agent } = yield* Effect.promise(() =>
+        platform.store.createAgent({ agentId: "agent-moved", workspaceRef: storeCwd }),
+      );
+      const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
+        Effect.provideService(CursorSdk.CursorSdk, {
+          load: loaders.loadCursorSdk,
+          loadSqlite: loaders.loadCursorSqlite,
+        }),
+      );
+      const session = yield* runner.open({
+        operation: "resume",
+        agentId: agent.agentId,
+        storeCwd,
+        options: { apiKey: "synthetic-cursor-key", local: { cwd, store } },
+        threadId: ThreadId.make("moved-workspace"),
+        providerSessionId: ProviderSessionId.make("moved-workspace"),
+      });
+      assert.equal(session.agentId, agent.agentId);
+      assert.deepStrictEqual(yield* session.listMessages, []);
+      assert.strictEqual(yield* session.readContextUsage!, undefined);
+      yield* session.close;
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("constructs without loading and reports first-use load failures as runner errors", () =>
     Effect.gen(function* () {
       const failure = new Error("missing SDK chunk");
@@ -209,7 +255,13 @@ describe("CursorAgentSdkRunner", () => {
       cursorSdkMock.runOperations.length = 0;
       cursorSdkMock.listRuns.mockClear();
       cursorSdkMock.cancelRun.mockClear();
-      cursorSdkMock.setStaleRunActive(true);
+      cursorSdkMock.setStoredRuns([
+        ...Array.from({ length: 50 }, (_, index) => ({
+          id: `run-terminal-${index}`,
+          status: index === 0 ? "cancelled" : "finished",
+        })),
+        { id: "run-stale", status: "running" },
+      ]);
 
       const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
       const session = yield* runner.open({
@@ -228,12 +280,18 @@ describe("CursorAgentSdkRunner", () => {
       assert.deepStrictEqual(cursorSdkMock.runOperations, [
         "run.start",
         "agent.listRuns",
+        "agent.listRuns",
         "agent.cancelRun",
         "run.start",
       ]);
       assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[0], [
         "agent-cursor-agent-sdk-test",
-        { runtime: "local", cwd: process.cwd(), limit: 1 },
+        { runtime: "local", cwd: process.cwd() },
+      ]);
+      assert.strictEqual(cursorSdkMock.listRuns.mock.calls.length, 2);
+      assert.deepStrictEqual(cursorSdkMock.listRuns.mock.calls[1], [
+        "agent-cursor-agent-sdk-test",
+        { runtime: "local", cwd: process.cwd(), cursor: "50" },
       ]);
       assert.deepStrictEqual(cursorSdkMock.cancelRun.mock.calls[0], [
         "run-stale",
@@ -252,7 +310,7 @@ describe("CursorAgentSdkRunner", () => {
         cursorSdkMock.runOperations.length = 0;
         cursorSdkMock.sentMessages.length = 0;
         cursorSdkMock.resume.mockClear();
-        cursorSdkMock.setStaleRunActive(false);
+        cursorSdkMock.setStoredRuns([]);
         const fileSystem = yield* FileSystem.FileSystem;
         const workspace = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "cursor-memory-recovery-",
@@ -392,7 +450,7 @@ describe("CursorAgentSdkRunner", () => {
           cursorSdkMock.runOperations.push("agent.cancelRun");
           cancelled.resolve();
           await releaseCancel.promise;
-          cursorSdkMock.setStaleRunActive(false);
+          cursorSdkMock.setStoredRuns([]);
         });
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => cancelled.promise);
@@ -400,7 +458,7 @@ describe("CursorAgentSdkRunner", () => {
           else yield* sessions.clear(threadId);
           releaseCancel.resolve();
         }).pipe(Effect.forkScoped);
-        cursorSdkMock.setStaleRunActive(true);
+        cursorSdkMock.setStoredRuns([{ id: "run-stale", status: "running" }]);
         cursorSdkMock.runOperations.length = 0;
         yield* finishTurn(2);
         assert.deepStrictEqual(cursorSdkMock.runOperations, [
