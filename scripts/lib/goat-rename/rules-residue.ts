@@ -54,7 +54,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
       "patches/dbus-next@0.10.2.patch",
       "scripts/lib/release-notices.ts",
     ],
-    /patched in T3 Code|T3 Code builds Windows installers|T3 Code never passes Unix descriptors|based on T3 Code/g,
+    /[Pp]atched in T3 Code|T3 Code builds Windows installers|T3 Code never passes Unix descriptors|based on T3 Code/g,
     "#99/R6: license provenance and vendor patch notes attribute upstream authorship.",
   ),
   keep(
@@ -271,6 +271,12 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     ["patches/@legendapp__list@3.3.5.patch"],
     /\bReact3(?:__namespace)?\b/g,
     "R6: generated third-party symbol, unrelated to product branding.",
+  ),
+  keep(
+    "unrelated-cursor-sdk-symbols",
+    ["patches/@cursor__sdk@1.2.0.patch"],
+    /\blpt3\b|\.T3\(/g,
+    "R6: the Windows LPT3 device name and a minified identifier in the Cursor SDK bundle, unrelated to product branding.",
   ),
   keep(
     "unrelated-result-variable",

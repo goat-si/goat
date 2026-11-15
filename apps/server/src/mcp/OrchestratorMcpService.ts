@@ -1035,17 +1035,13 @@ const make = Effect.gen(function* () {
   const resolveProjectTarget = (
     parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
     projectId: ProjectId | undefined,
+    missingMessage = "Pass projectId: this MCP client is not running inside a GOAT thread.",
   ) =>
     projectId !== undefined
       ? Effect.succeed(projectId)
       : parent !== undefined
         ? Effect.succeed(parent.thread.projectId)
-        : Effect.fail(
-            failure(
-              "target_required",
-              "Pass projectId: this MCP client is not running inside a GOAT thread.",
-            ),
-          );
+        : Effect.fail(failure("target_required", missingMessage));
 
   const targetShell = Effect.fn("OrchestratorMcpService.targetShell")(function* (
     threadId: ThreadId,
@@ -3416,7 +3412,11 @@ const make = Effect.gen(function* () {
         input.allProjects === true ||
         (View.hasLineageFilter(lineage) && input.projectId === undefined)
           ? undefined
-          : yield* resolveProjectTarget(parent, input.projectId);
+          : yield* resolveProjectTarget(
+              parent,
+              input.projectId,
+              "Pass projectId, or allProjects: true for every project. This MCP client is not running inside a GOAT thread.",
+            );
       if (!input.allProjects && input.projectId !== undefined)
         yield* requireProject(input.projectId);
       const listFailure = (error: unknown) =>

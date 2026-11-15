@@ -7,7 +7,12 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
-import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
+import {
+  hasPendingMigrations,
+  migrationEntries,
+  migrationManifest,
+  runMigrations,
+} from "./Migrations.ts";
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 
 // Builds before cycle 261114 recorded GOAT's migrations at 80-147. Upstream took 080-089, so GOAT's
@@ -257,5 +262,44 @@ describe("GOAT migrations after upstream 080-089", () => {
       yield* migrationEntries.find(([id]) => id === 80)![2];
       assert.deepStrictEqual(yield* mode, [{ task_id: "task", thread_mode: "new_thread" }]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
+describe("hasPendingMigrations", () => {
+  it.effect("a fresh database is pending, and nothing is once it migrated", () =>
+    Effect.gen(function* () {
+      assert.isTrue(yield* hasPendingMigrations());
+      yield* runMigrations();
+      assert.isFalse(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("a ledger from before GOAT's id shift (max 147) is pending until it upgrades", () =>
+    Effect.gen(function* () {
+      yield* seedOldGoatLedger(147);
+      assert.deepStrictEqual((yield* history).at(-1)?.[0], 147);
+      assert.isTrue(yield* hasPendingMigrations());
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      assert.isFalse(yield* hasPendingMigrations());
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "GOAT rows recorded above their ids are pending although the newest id is past this build's",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const sql = yield* SqlClient.SqlClient;
+        // Negate first so no row collides with another while the block moves up by ten.
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${sql.in(goatNames)}`;
+        yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
+        assert.deepStrictEqual((yield* history).at(-1), [167, "DisposableMachineEnrollment"]);
+        assert.isTrue(yield* hasPendingMigrations());
+        // reconcileGoatMigrationIds moves them back: a write the CLI must not make under a server.
+        assert.deepStrictEqual(yield* runMigrations(), []);
+        assert.deepStrictEqual(yield* history, migrationManifest);
+        assert.isFalse(yield* hasPendingMigrations());
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

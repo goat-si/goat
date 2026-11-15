@@ -3,15 +3,17 @@ import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
-import { runMigrations } from "./Migrations.ts";
+import { hasPendingMigrations, runMigrations } from "./Migrations.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { initializeHistorySequence } from "../cua/ComputerUseHistoryStamp.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerOwnership from "../serverOwnership.ts";
 import { PersistenceRecoveryOwner } from "./PersistenceRecoveryOwner.ts";
 
 const WAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
@@ -42,71 +44,105 @@ const damagedDatabaseError = (dbPath: string, cause: SqlError.SqlError) =>
     }),
   });
 
-const layerSetup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
-    yield* sql`PRAGMA busy_timeout = 5000;`;
-    yield* sql`PRAGMA foreign_keys = ON;`;
-    // Existing databases need doctor's offline VACUUM to add pointer maps for this mode.
-    const tables = yield* sql<{
-      readonly count: number;
-    }>`SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table'`;
-    if (tables[0]?.count === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
-    yield* sql`PRAGMA journal_mode = WAL;`;
-    // NORMAL syncs at WAL checkpoints; FULL syncs every event commit.
-    // App crashes lose nothing; OS crashes or power loss can roll back post-checkpoint commits without corruption.
-    yield* sql`PRAGMA synchronous = NORMAL;`;
-    // macOS fsync misses drive caches; F_FULLFSYNC flushes them at checkpoints and is ignored elsewhere.
-    yield* sql`PRAGMA checkpoint_fullfsync = ON;`;
-    // PASSIVE checkpoints retain peak WAL size until the last connection closes.
-    yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
-    yield* runMigrations();
-    yield* initializeHistorySequence();
-    yield* (yield* makeComputerUseHistory).prune;
-    // Collecting stats scans every page, and stale small-table stats cause scans after growth; use indexes by default.
-    // Connections cache stats; reload after deleting them.
-    const statTables = yield* sql`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'`;
-    if (statTables.length > 0) {
-      yield* sql`DELETE FROM sqlite_stat1;`;
-      yield* sql`ANALYZE sqlite_schema;`;
-    }
-  }),
-);
+export class ServerOwnsDatabaseError extends Schema.TaggedError<ServerOwnsDatabaseError>()(
+  "ServerOwnsDatabaseError",
+  { stateDir: Schema.String },
+) {
+  override get message(): string {
+    return `Another GOAT process, usually a running server, owns ${this.stateDir}, and this CLI would change its database schema. Use the \`goat\` that matches the running server, or stop that server, then retry. The database was not changed.`;
+  }
+}
 
-export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const owner = yield* PersistenceRecoveryOwner;
-  yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-
-  return Layer.provideMerge(
-    layerSetup,
-    NodeSqliteClient.layer({
-      filename: dbPath,
-      readerWorker: true,
-      writerWorker: true,
-      onFatalPersistence: owner?.report,
-      // The owned writer performs checkpoint work on its connection.
-      checkpointWorker: true,
-      spanAttributes: {
-        "db.name": path.basename(dbPath),
-        "service.name": "goat-server",
-      },
+// CLI commands open the server's database from another process; migrating behind its owner changes the schema it runs on.
+const runMigrationsAsOwner = Effect.fn("SqlitePersistence.runMigrationsAsOwner")(function* (
+  serverRuntimeStatePath: string,
+) {
+  // With nothing pending, runMigrations only validates the recorded history and writes nothing.
+  if (!(yield* hasPendingMigrations())) return yield* runMigrations();
+  yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath).pipe(
+    Effect.catchTags({
+      ServerAlreadyRunningError: ({ stateDir }) =>
+        Effect.fail(new ServerOwnsDatabaseError({ stateDir })),
     }),
-  ).pipe(
-    Layer.catchTag("SqlError", (error) =>
-      Layer.effect(
-        SqlClient.SqlClient,
-        Effect.fail(
-          SqlError.isSqlError(error) && isDamagedDatabase(error)
-            ? damagedDatabaseError(dbPath, error)
-            : error,
+  );
+  yield* runMigrations();
+}, Effect.scoped);
+
+const makeLayerSetup = <E, R>(migrate: Effect.Effect<unknown, E, R>) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
+      yield* sql`PRAGMA busy_timeout = 5000;`;
+      yield* sql`PRAGMA foreign_keys = ON;`;
+      // Existing databases need doctor's offline VACUUM to add pointer maps for this mode.
+      const tables = yield* sql<{
+        readonly count: number;
+      }>`SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table'`;
+      if (tables[0]?.count === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
+      yield* sql`PRAGMA journal_mode = WAL;`;
+      // NORMAL syncs at WAL checkpoints; FULL syncs every event commit.
+      // App crashes lose nothing; OS crashes or power loss can roll back post-checkpoint commits without corruption.
+      yield* sql`PRAGMA synchronous = NORMAL;`;
+      // macOS fsync misses drive caches; F_FULLFSYNC flushes them at checkpoints and is ignored elsewhere.
+      yield* sql`PRAGMA checkpoint_fullfsync = ON;`;
+      // PASSIVE checkpoints retain peak WAL size until the last connection closes.
+      yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
+      yield* migrate;
+      yield* initializeHistorySequence();
+      yield* (yield* makeComputerUseHistory).prune;
+      // Collecting stats scans every page, and stale small-table stats cause scans after growth; use indexes by default.
+      // Connections cache stats; reload after deleting them.
+      const statTables = yield* sql`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'`;
+      if (statTables.length > 0) {
+        yield* sql`DELETE FROM sqlite_stat1;`;
+        yield* sql`ANALYZE sqlite_schema;`;
+      }
+    }),
+  );
+
+const layerSetup = makeLayerSetup(runMigrations());
+
+const makeLayerFromPath = <E, R>(setup: Layer.Layer<never, E, R>) =>
+  Effect.fn("makeSqlitePersistenceLive")(function* (dbPath: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const owner = yield* PersistenceRecoveryOwner;
+    yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+
+    return Layer.provideMerge(
+      setup,
+      NodeSqliteClient.layer({
+        filename: dbPath,
+        readerWorker: true,
+        writerWorker: true,
+        onFatalPersistence: owner?.report,
+        // The owned writer performs checkpoint work on its connection.
+        checkpointWorker: true,
+        spanAttributes: {
+          "db.name": path.basename(dbPath),
+          "service.name": "goat-server",
+        },
+      }),
+    ).pipe(
+      Layer.catchTag("SqlError", (error) =>
+        Layer.effect(
+          SqlClient.SqlClient,
+          Effect.fail(
+            SqlError.isSqlError(error) && isDamagedDatabase(error)
+              ? damagedDatabaseError(dbPath, error)
+              : error,
+          ),
         ),
       ),
-    ),
-  );
-}, Layer.unwrap);
+    );
+  }, Layer.unwrap);
+
+export const layerFromPath = makeLayerFromPath(layerSetup);
+
+/** For CLI commands on a server's database: pending migrations run only while no server owns its home. */
+export const layerCliFromPath = (dbPath: string, serverRuntimeStatePath: string) =>
+  makeLayerFromPath(makeLayerSetup(runMigrationsAsOwner(serverRuntimeStatePath)))(dbPath);
 
 export const layerMemory = Layer.provideMerge(
   layerSetup,
@@ -118,5 +154,14 @@ export const layerConfig = Layer.unwrap(
     const { dbPath } = yield* ServerConfig.ServerConfig;
     yield* initializeV2Database(dbPath);
     return layerFromPath(dbPath);
+  }),
+);
+
+/** For CLI commands: pending migrations run only while no server owns the GOAT home. */
+export const layerCliConfig = Layer.unwrap(
+  Effect.gen(function* () {
+    const { dbPath, serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
+    yield* initializeV2Database(dbPath);
+    return layerCliFromPath(dbPath, serverRuntimeStatePath);
   }),
 );

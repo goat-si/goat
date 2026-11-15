@@ -55,6 +55,17 @@ Then choose what the agent may do:
   threads in every project. A thread it starts or steers cannot run with more
   permissions than the mode you chose.
 
+## What outside agents can call
+
+Some tools act as the calling GOAT thread and require an agent running inside one,
+including subagent delegation, secret requests, browser preview, devices, and
+worktree handoff. An outside agent can start work with `goat_thread_launch` and
+follow it with `goat_thread_wait` or `goat_thread_read`.
+
+Tools that default to the calling project or thread need an explicit `projectId`
+or `threadId`. To list threads across projects, pass `allProjects: true` to
+`goat_thread_list`, or use `goat_thread_search`.
+
 ## Work with files and terminals
 
 In **Settings → Integrations → Agent tools**, choose workspace and terminal access for the

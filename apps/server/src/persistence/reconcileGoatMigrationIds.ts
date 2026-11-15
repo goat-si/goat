@@ -83,6 +83,17 @@ type MigrationEntry<E> = readonly [
   migration: Effect.Effect<unknown, E, SqlClient.SqlClient>,
 ];
 
+/** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
+export const goatMigrationIdsMove = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+): boolean => {
+  const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+  return history.some(
+    (row) => GOAT_MIGRATION_NAMES.has(row.name) && currentIds.get(row.name) !== row.migration_id,
+  );
+};
+
 /**
  * Read-only preflight: preview reconciliation must not mutate incompatible memory sandboxes.
  *
@@ -167,7 +178,7 @@ export const reconcileGoatMigrationIds = Effect.fn("reconcileGoatMigrationIds")(
       `;
       const currentIds = new Map(entries.map(([id, name]) => [name, id]));
       const goatRows = history.filter((row) => GOAT_MIGRATION_NAMES.has(row.name));
-      if (goatRows.every((row) => currentIds.get(row.name) === row.migration_id)) return [];
+      if (!goatMigrationIdsMove(entries, history)) return [];
 
       const upstreamRows = new Map(
         history
