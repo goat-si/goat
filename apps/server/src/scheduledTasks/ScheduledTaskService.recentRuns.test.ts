@@ -342,7 +342,8 @@ it.effect("only the first fifty GOAT Bot routines carry a history", () =>
 it.effect("history stops at its byte budget: later routines carry none, however small", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {
-      // Task ids have no maximum length, and every firing id and input id repeats the task id.
+      // Task ids have no maximum length, and every firing id repeats the task id. The helper's
+      // input ids repeat it too, which real ones (a digest) do not, so this reaches the budget sooner.
       const long = (letter: string) => `goat-bot-check-in:${letter}-${"x".repeat(9_000)}`;
       const routines = [
         yield* saveRoutine(fixture, long("a")),
