@@ -123,6 +123,12 @@ it.effect.each(["complete", "stop-before-decline", "stop-after-decline", "queued
           }
           assert.equal(queued?.status, "queued");
           assert.equal(queued?.userMessageId, messageId);
+          assert.isFalse(
+            pending.visibleTurnItems.some(
+              ({ item }) => item.type === "user_message" && item.messageId === messageId,
+            ),
+            "a declined steer waiting in the queue must not appear delivered",
+          );
           if (timing === "queued-model") {
             assert.deepEqual(queued?.modelSelection, steerSelection);
             assert.deepEqual(
