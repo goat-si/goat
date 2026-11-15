@@ -525,30 +525,33 @@ export const CodexDriver: ProviderDriver<
         ? snapshot.getSnapshot
         : Effect.all([
             snapshot.getSnapshot,
-            Effect.gen(function* () {
-              const processEnv = yield* currentEnvironment;
-              const route = yield* HomeRoute.resolveCodexRouteContext({
-                settings: effectiveConfig,
-                binaryPath: effectiveConfig.binaryPath,
-                home: effectiveConfig.homePath,
-                cwd,
-                environment: processEnv,
-                configArgv: [],
-              });
-              return yield* probeCodexSkillsForCwd({
-                binaryPath: effectiveConfig.binaryPath,
-                homePath: effectiveConfig.homePath,
-                launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-                cwd,
-                environment: route.execution.environment,
-                route,
-              });
-            }).pipe(
-              provideHomeRoute,
-              Effect.provideService(Path.Path, pathService),
-              Effect.scoped,
-              Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv)),
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            currentEnvironment.pipe(
+              Effect.flatMap((processEnv) =>
+                Effect.gen(function* () {
+                  const route = yield* HomeRoute.resolveCodexRouteContext({
+                    settings: effectiveConfig,
+                    binaryPath: effectiveConfig.binaryPath,
+                    home: effectiveConfig.homePath,
+                    cwd,
+                    environment: processEnv,
+                    configArgv: [],
+                  });
+                  return yield* probeCodexSkillsForCwd({
+                    binaryPath: effectiveConfig.binaryPath,
+                    homePath: effectiveConfig.homePath,
+                    launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+                    cwd,
+                    environment: route.execution.environment,
+                    route,
+                  });
+                }).pipe(
+                  provideHomeRoute,
+                  Effect.provideService(Path.Path, pathService),
+                  Effect.scoped,
+                  Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv)),
+                  Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                ),
+              ),
             ),
           ]).pipe(
             Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),

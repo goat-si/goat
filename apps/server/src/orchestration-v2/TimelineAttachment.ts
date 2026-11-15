@@ -42,25 +42,51 @@ export function matchingTimelineRows<
     );
 }
 
+/**
+ * Bounds rows in view (any position) to a page. A backward page (\`beforePosition\` or \`tail\`)
+ * keeps the newest matches before its end.
+ */
+export function boundedTimelinePage<T extends { readonly position: number }>(
+  inView: ReadonlyArray<T>,
+  options: ProjectionTimelinePageOptions,
+) {
+  const after = options.afterPosition ?? -1;
+  const before = options.beforePosition ?? Number.POSITIVE_INFINITY;
+  const matching =
+    options.itemId === undefined
+      ? inView.filter((row) => row.position > after && row.position < before)
+      : inView;
+  const backward = options.tail === true || options.beforePosition !== undefined;
+  const page = backward
+    ? matching.slice(Math.max(0, matching.length - options.limit))
+    : matching.slice(0, options.limit);
+  const pageStart = page[0]?.position ?? after + 1;
+  return {
+    page,
+    hasMore: backward ? (inView.at(-1)?.position ?? -1) >= before : matching.length > page.length,
+    hasEarlier: (inView[0]?.position ?? Number.POSITIVE_INFINITY) < pageStart,
+  };
+}
+
 export function memoryTimelinePage(
   projection: OrchestrationV2ThreadProjection,
   options: ProjectionTimelinePageOptions,
 ) {
-  const matching = projection.visibleTurnItems.filter(
+  const inView = projection.visibleTurnItems.filter(
     (row) =>
       (options.attachmentId === undefined ||
         (row.item.type === "user_message" &&
           row.item.attachments.some((attachment) => attachment.id === options.attachmentId))) &&
       (options.itemId === undefined
-        ? row.position > (options.afterPosition ?? -1) &&
-          (options.view === "activity" ||
-            ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
+        ? options.view === "activity" ||
+          ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type)
         : row.sourceItemId === options.itemId),
   );
-  const start = options.tail === true ? Math.max(0, matching.length - options.limit) : 0;
+  const { page, hasMore, hasEarlier } = boundedTimelinePage(inView, options);
   return {
-    items: matching.slice(start, start + options.limit),
+    items: page,
     totalItems: projection.visibleTurnItems.length,
-    hasMore: start + options.limit < matching.length,
+    hasMore,
+    hasEarlier,
   };
 }

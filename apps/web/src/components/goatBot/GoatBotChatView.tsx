@@ -372,6 +372,19 @@ function GoatBotChatViewContent({
       }),
   });
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
+  // A draft belongs to the bot it was written for: another bot, or this one on another computer,
+  // gets an empty box. A bot that is only briefly unavailable keeps it.
+  const destination = member
+    ? `${member.environmentId}:${member.sessionThreadId}`
+    : bot
+      ? `${bot.environmentId}:${bot.threadId}`
+      : null;
+  const [draftFor, setDraftFor] = useState({ destination, generation: 0 });
+  if (destination !== null && destination !== draftFor.destination) {
+    const changed = draftFor.destination !== null;
+    setDraftFor({ destination, generation: draftFor.generation + (changed ? 1 : 0) });
+    if (changed) setSeed(null);
+  }
   const working = useContext(GoatBotActivityContext);
   const reading = useGoatBotReading(replyingSince);
   const headerStatus =
@@ -588,7 +601,7 @@ function GoatBotChatViewContent({
           ) : null}
           <GoatBotComposer
             ref={composerRef}
-            key={seed?.nonce ?? 0}
+            key={`${draftFor.generation}:${seed?.nonce ?? 0}`}
             initialText={seed?.text ?? ""}
             disabled={!canSend}
             botName={title}

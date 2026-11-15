@@ -169,6 +169,7 @@ vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
+vi.mock("./GoatBotComposerMenu", () => ({ GoatBotComposerMenu: () => null }));
 // The header chip opens the home; it renders as a button here.
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("./GoatBotFace", () => ({
@@ -187,6 +188,7 @@ vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => nul
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
+  goatBotAttachmentPick: () => async () => {},
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: () => {},
 }));

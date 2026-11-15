@@ -14,20 +14,16 @@ import type {
 } from "./ProjectionStore.ts";
 import type { ShellSubscriberOptions } from "./ProjectionShellThreadRows.ts";
 import {
-  type ChatAttachment,
   CommandId,
-  MessageId,
   OrchestrationV2StopWorkflowError,
   type OrchestrationV2StopWorkflowInput,
   OrchestrationV2ForceStopThreadError,
   type OrchestrationV2ForceStopThreadInput,
   type OrchestrationV2ForceStopThreadResult,
-  type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
   type OrchestrationV2ServerCommand,
-  type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
@@ -40,7 +36,6 @@ import {
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
   RunId,
-  type ScheduledTaskId,
   type RuntimeRequestId,
   ThreadId,
   type TurnItemId,
@@ -73,6 +68,23 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
+import {
+  ThreadManagementThreadNotFoundError,
+  ThreadTranscriptTooLargeError,
+  ThreadManagementRunNotFoundError,
+  ThreadManagementThreadArchivedError,
+  ThreadManagementNoSteerableRunError,
+  ThreadManagementReviewTaskFinishedError,
+  ThreadManagementTargetStoppedError,
+  ThreadManagementThreadNotInterruptibleError,
+  ThreadManagementProjectionLoadError,
+  ThreadManagementProjectThreadsListError,
+  ThreadManagementDurableRunProjectionError,
+  ThreadManagementProviderInstanceDisabledError,
+  ThreadManagementBackgroundWaitError,
+  ThreadManagementError,
+} from "./ThreadManagementErrors.ts";
+export * from "./ThreadManagementErrors.ts";
 
 /**
  * "steer_when_ready" is how another thread's agent talks to a thread: like steering, whatever
@@ -160,252 +172,25 @@ export function existingThreadIdsForCommand(
   }
 }
 
-export type ThreadManagementTerminalRunStatus = Extract<
-  OrchestrationV2Run["status"],
-  "completed" | "failed" | "cancelled" | "interrupted" | "rolled_back"
->;
+import type {
+  ThreadManagementTerminalRunStatus,
+  ThreadManagementSendInput,
+  ThreadManagementSendResult,
+  ThreadManagementWaitInput,
+  ThreadManagementWaitResult,
+  ThreadManagementInterruptInput,
+  ThreadManagementInterruptResult,
+} from "./threadManagementTypes.ts";
 
-export interface ThreadManagementSendInput {
-  readonly projectId: ProjectId;
-  readonly commandId: CommandId;
-  readonly threadId: ThreadId;
-  readonly messageId: MessageId;
-  readonly scheduledTaskId?: ScheduledTaskId;
-  readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
-  readonly senderThreadId?: ThreadId;
-  readonly text: string;
-  readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly modelSelection?: ModelSelection;
-  readonly mode: ThreadManagementSendMode;
-  readonly targetRunId?: RunId;
-  readonly createdBy: OrchestrationV2Actor;
-  readonly creationSource: OrchestrationV2CreationSource;
-}
-
-export interface ThreadManagementSendResult {
-  readonly dispatch: Orchestrator.OrchestratorV2DispatchResult;
-  readonly projection: Pick<
-    OrchestrationV2ThreadProjection,
-    "thread" | "runs" | "messages" | "turnItems"
-  >;
-  readonly message: OrchestrationV2ConversationMessage;
-  readonly run: OrchestrationV2Run;
-  readonly turnItem: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> | null;
-  readonly delivery: "started" | "queued" | "steered" | "restarted";
-}
-
-export interface ThreadManagementWaitInput {
-  readonly projectId: ProjectId;
-  readonly threadId: ThreadId;
-  readonly runId?: RunId;
-  readonly timeoutMs: number;
-  readonly ignoreRequestIds?: ReadonlyArray<RuntimeRequestId>;
-  /** Internal settling still waits for the run to finish. */
-  readonly releaseOnPendingQuestion?: boolean;
-}
-
-export interface ThreadManagementWaitResult {
-  readonly threadId: ThreadId;
-  readonly run: OrchestrationV2Run | null;
-  readonly timedOut: boolean;
-  readonly pendingRequestIds?: ReadonlyArray<RuntimeRequestId>;
-}
-
-export interface ThreadManagementInterruptInput {
-  readonly projectId: ProjectId;
-  readonly commandId: CommandId;
-  readonly threadId: ThreadId;
-  readonly runId?: RunId;
-  readonly reason?: string;
-}
-
-export type ThreadManagementInterruptResult =
-  | {
-      readonly type: "interrupt_requested";
-      readonly run: OrchestrationV2Run;
-      readonly dispatch: Orchestrator.OrchestratorV2DispatchResult;
-    }
-  | { readonly type: "no_active_run" }
-  | {
-      readonly type: "already_terminal";
-      readonly run: OrchestrationV2Run & { readonly status: ThreadManagementTerminalRunStatus };
-    };
-
-export class ThreadManagementThreadNotFoundError extends Schema.TaggedError<ThreadManagementThreadNotFoundError>()(
-  "ThreadManagementThreadNotFoundError",
-  {
-    projectId: ProjectId,
-    threadId: ThreadId,
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} was not found in project ${this.projectId}.`;
-  }
-}
-
-export class ThreadTranscriptTooLargeError extends Schema.TaggedError<ThreadTranscriptTooLargeError>()(
-  "ThreadTranscriptTooLargeError",
-  { threadId: ThreadId },
-) {
-  override get message(): string {
-    return "The thread transcript exceeds the file attachment limit.";
-  }
-}
-
-export class ThreadManagementRunNotFoundError extends Schema.TaggedError<ThreadManagementRunNotFoundError>()(
-  "ThreadManagementRunNotFoundError",
-  {
-    threadId: ThreadId,
-    runId: RunId,
-  },
-) {
-  override get message(): string {
-    return `Run ${this.runId} does not belong to thread ${this.threadId}.`;
-  }
-}
-
-export class ThreadManagementThreadArchivedError extends Schema.TaggedError<ThreadManagementThreadArchivedError>()(
-  "ThreadManagementThreadArchivedError",
-  {
-    threadId: ThreadId,
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} is archived and cannot receive messages.`;
-  }
-}
-
-export class ThreadManagementNoSteerableRunError extends Schema.TaggedError<ThreadManagementNoSteerableRunError>()(
-  "ThreadManagementNoSteerableRunError",
-  {
-    threadId: ThreadId,
-    mode: Schema.Literals(["steer", "restart"]),
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} has no running turn that can be ${this.mode === "steer" ? "steered" : "restarted"}.`;
-  }
-}
-
-export class ThreadManagementReviewTaskFinishedError extends Schema.TaggedError<ThreadManagementReviewTaskFinishedError>()(
-  "ThreadManagementReviewTaskFinishedError",
-  { threadId: ThreadId },
-) {
-  override get message(): string {
-    return `Review task on thread ${this.threadId} has finished. Start the next round with goat_task_create role='review': continueFrom=<its taskId> keeps this reviewer; omit it for a fresh one.`;
-  }
-}
-
-export class ThreadManagementTargetStoppedError extends Schema.TaggedError<ThreadManagementTargetStoppedError>()(
-  "ThreadManagementTargetStoppedError",
-  {
-    threadId: ThreadId,
-  },
-) {
-  override get message(): string {
-    return `The turn on thread ${this.threadId} was stopped before it could take the message. Send it again to start a new turn.`;
-  }
-}
-
-export class ThreadManagementThreadNotInterruptibleError extends Schema.TaggedError<ThreadManagementThreadNotInterruptibleError>()(
-  "ThreadManagementThreadNotInterruptibleError",
-  {
-    threadId: ThreadId,
-    runId: RunId,
-  },
-) {
-  override get message(): string {
-    return `Run ${this.runId} is not currently interruptible.`;
-  }
-}
-
-export class ThreadManagementProjectionLoadError extends Schema.TaggedError<ThreadManagementProjectionLoadError>()(
-  "ThreadManagementProjectionLoadError",
-  {
-    projectId: ProjectId,
-    threadId: ThreadId,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Unable to load thread ${this.threadId} in project ${this.projectId}.`;
-  }
-}
-
-export class ThreadManagementProjectThreadsListError extends Schema.TaggedError<ThreadManagementProjectThreadsListError>()(
-  "ThreadManagementProjectThreadsListError",
-  {
-    /** Absent when every project was listed. */
-    projectId: Schema.optional(ProjectId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return this.projectId === undefined
-      ? "Unable to list threads."
-      : `Unable to list threads in project ${this.projectId}.`;
-  }
-}
-
-export class ThreadManagementDurableRunProjectionError extends Schema.TaggedError<ThreadManagementDurableRunProjectionError>()(
-  "ThreadManagementDurableRunProjectionError",
-  {
-    threadId: ThreadId,
-    messageId: MessageId,
-  },
-) {
-  override get message(): string {
-    return `Message ${this.messageId} was accepted on thread ${this.threadId} without a durable run projection.`;
-  }
-}
-
-export class ThreadManagementProviderInstanceDisabledError extends Schema.TaggedError<ThreadManagementProviderInstanceDisabledError>()(
-  "ThreadManagementProviderInstanceDisabledError",
-  {
-    projectId: ProjectId,
-    instanceId: ProviderInstanceId,
-  },
-) {
-  override get message(): string {
-    return `Provider instance "${this.instanceId}" is disabled for project ${this.projectId}.`;
-  }
-}
-
-export class ThreadManagementBackgroundWaitError extends Schema.TaggedError<ThreadManagementBackgroundWaitError>()(
-  "ThreadManagementBackgroundWaitError",
-  {
-    threadId: ThreadId,
-    reason: Schema.Literals(["unsupported", "unavailable", "failed"]),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    switch (this.reason) {
-      case "unsupported":
-        return "This provider cannot mark background work as awaited.";
-      case "unavailable":
-        return "This thread has no live provider session.";
-      case "failed":
-        return "Failed to update the awaited background work.";
-    }
-  }
-}
-
-export const ThreadManagementError = Schema.Union([
-  ThreadManagementThreadNotFoundError,
-  ThreadManagementRunNotFoundError,
-  ThreadManagementThreadArchivedError,
-  ThreadManagementNoSteerableRunError,
-  ThreadManagementTargetStoppedError,
-  ThreadManagementReviewTaskFinishedError,
-  ThreadManagementThreadNotInterruptibleError,
-  ThreadManagementProjectionLoadError,
-  ThreadManagementProjectThreadsListError,
-  ThreadManagementDurableRunProjectionError,
-  ThreadManagementProviderInstanceDisabledError,
-]);
-export type ThreadManagementError = typeof ThreadManagementError.Type;
+export type {
+  ThreadManagementTerminalRunStatus,
+  ThreadManagementSendInput,
+  ThreadManagementSendResult,
+  ThreadManagementWaitInput,
+  ThreadManagementWaitResult,
+  ThreadManagementInterruptInput,
+  ThreadManagementInterruptResult,
+} from "./threadManagementTypes.ts";
 
 type ThreadManagementFailure = ThreadManagementError | Orchestrator.OrchestratorV2Error;
 
@@ -473,6 +258,7 @@ export interface ThreadManagementServiceShape {
     Orchestrator.OrchestratorV2Error
   >;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
+  readonly getThreadNewestRun: Orchestrator.OrchestratorV2["Service"]["getThreadNewestRun"];
   readonly listAppOwnedChildThreadIds: Orchestrator.OrchestratorV2["Service"]["listAppOwnedChildThreadIds"];
   /** Omit `projectId` to list every project's threads. Side chats are never listed. */
   readonly listProjectThreads: (input: {
@@ -952,7 +738,15 @@ const make = Effect.gen(function* () {
   const transcriptExportPermits = yield* Semaphore.make(2);
   const getThreadTranscript = Effect.fn("orchestrationV2.threadManagement.getThreadTranscript")(
     function* (threadId: ThreadId) {
-      const { projection } = yield* getThreadSnapshot(threadId);
+      yield* ensureProjectionTranscript(threadId);
+      const byteFloor = yield* orchestrator.getTranscriptByteFloor(
+        threadId,
+        PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+      );
+      if (byteFloor > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+        return yield* new ThreadTranscriptTooLargeError({ threadId });
+      }
+      const { projection } = yield* orchestrator.getThreadSnapshot(threadId);
       const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
       const transcript = {
         threadId: projection.thread.id,
@@ -2134,6 +1928,7 @@ const make = Effect.gen(function* () {
     listOlderSettledThreads: orchestrator.listOlderSettledThreads,
     readShellSnapshot: orchestrator.readShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
+    getThreadNewestRun: orchestrator.getThreadNewestRun,
     getReviewLedgerEntries: orchestrator.getReviewLedgerEntries,
     listAppOwnedChildThreadIds: Effect.fn("ThreadManagementService.listAppOwnedChildThreadIds")(
       function (threadId) {

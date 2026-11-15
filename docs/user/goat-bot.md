@@ -71,6 +71,8 @@ bot** changes its name, face, purpose and model. **Home** is one page: a status 
 something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
 a task shows its conversation right there, beside the chat, and marks it read; **Go to thread**
 opens it in full. A task's menu pins it, marks it done or marks it read.
+A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
+open its thread to see where it stands.
 
 With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
 bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
@@ -102,9 +104,11 @@ bot's tasks, and a task opens in its own view.
   run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
   hours you choose: the bot looks over its tasks and writes only when something needs you. A
   routine whose last run failed shows **Run now**. **New routine** starts a routine request in the
-  message box for you to finish and send.
-- **New routine**, **Ask to change** and **Ask to forget** fill only an empty message box. If it
-  already holds your text or files, they stay as they are: send or clear them first.
+  message box for you to finish and send. On the phone, the **+** beside the chat's message box
+  offers it too, with your photos and files.
+- **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or
+  files in it; blank space counts as empty. If it holds your words or files, they stay as they
+  are: send or clear them first.
 - A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not

@@ -310,6 +310,20 @@
         "apps/desktop/src/cua/notices/THIRD_PARTY_NOTICES.md",
         "apps/desktop/src/cua/notices/node-runtime-NOTICE.md"
       ]
+    },
+    {
+      "bundles": ["mobile"],
+      "license": "Unicode-3.0",
+      "name": "Unicode CLDR data in FormatJS Intl polyfills",
+      "sourceUrl": "https://github.com/unicode-org/cldr-json",
+      "generatedNotices": [
+        {
+          "licenseId": "Unicode-3.0",
+          "preamble": [
+            "The mobile app bundles locale data that FormatJS generates from the Unicode Common Locale Data Repository: likely subtags and aliases (@formatjs/intl-getcanonicallocales), language matching and region containment (@formatjs/intl-localematcher), calendar, hour-cycle, week, numbering-system and time-zone data (@formatjs/intl-locale, @formatjs/intl-enumerator, @formatjs/ecma402-abstract), and English display names (@formatjs/intl-displaynames)."
+          ]
+        }
+      ]
     }
   ],
   "packageOverrides": [
@@ -331,6 +345,12 @@
       "version": "8.1.0",
       "license": "BSD-2-Clause",
       "sourceUrl": "https://github.com/fb55/entities"
+    },
+    {
+      "name": "@generaltranslation/icu",
+      "version": "0.1.2",
+      "license": "MIT AND BSD-3-Clause",
+      "noticeFile": "apps/web/src/i18n/GENERALTRANSLATION-ICU-NOTICES"
     },
     {
       "name": "@nodable/entities",
