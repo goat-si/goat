@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 
 import { gitLabReviewPositionLines } from "./gitLabInput.ts";
 
-export function gitLabDiffHeader(oldPath: string, newPath: string): string {
+function gitLabDiffHeader(oldPath: string, newPath: string): string {
   return `diff --git ${quoteGitPatchPath(`a/${oldPath}`)} ${quoteGitPatchPath(`b/${newPath}`)}\n`;
 }
 

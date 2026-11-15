@@ -147,7 +147,7 @@ export const keyedByCanonicalKey = {
 };
 
 /** A host whose SSH remotes name an alias, so discovery says which server serves them. */
-export const sshAliasHost = {
+const sshAliasHost = {
   resolveRemoteWebHost: ({ cwd, context, resolveContext }) =>
     isSshRemoteUrl(context.remoteUrl)
       ? resolveContext({

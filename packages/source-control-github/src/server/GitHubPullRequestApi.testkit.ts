@@ -352,8 +352,6 @@ export function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false) {
   );
 }
 
-export const searchQueryOfCall = searchOfCall;
-
 export function matches(call: ApiCall, needle: string): boolean {
   return call.kind === "graphql"
     ? call.operationName === needle || call.query.includes(needle)

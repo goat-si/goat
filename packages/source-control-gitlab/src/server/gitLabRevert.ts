@@ -25,7 +25,7 @@ export interface GitLabRevertTarget {
   readonly commitSha: string | null;
 }
 
-export function decodeRevertTargetJson(raw: string) {
+function decodeRevertTargetJson(raw: string) {
   const decoded = decodeRevertTarget(raw);
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
   const mr = decoded.success;

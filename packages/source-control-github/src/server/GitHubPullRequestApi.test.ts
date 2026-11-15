@@ -55,7 +55,6 @@ import {
   searchItem,
   searchOfCall,
   searchPage,
-  searchQueryOfCall,
   SUBJECT_SCOPE_QUERY,
   subjectScope,
   thread,
@@ -796,7 +795,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
 
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
       assert.strictEqual(
-        searchQueryOfCall(0),
+        searchOfCall(0),
         'is:pr is:closed is:unmerged review-requested:bilal "pull requests page" ' +
           "updated:<=2026-07-02T00:00:00Z sort:updated-desc repo:acme/web repo:goat-si/goat",
       );
@@ -820,7 +819,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
       });
 
       assert.strictEqual(
-        searchQueryOfCall(0),
+        searchOfCall(0),
         'is:pr is:open "x\\" is:merged repo:evil/repo" sort:updated-desc repo:acme/web',
       );
     }),
