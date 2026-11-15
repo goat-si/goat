@@ -123,6 +123,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly onSelectTask?: (taskId: ChannelTaskId) => void;
+  /** The bot's computer is offline: a card's Open task stays listed but closed. */
+  readonly taskOffline?: boolean;
   /** Where an event line's routine or task opens; undefined leaves the line plain. */
   readonly onOpenEvent?: ((subject: GoatBotEventSubject) => (() => void) | undefined) | undefined;
   /** The environment whose bot history is shown; thread links in bot text open there. */
@@ -180,6 +182,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
           onOpenTask={
             onSelectTask ? () => onSelectTask(ChannelTaskId.make(row.card.key)) : undefined
           }
+          offline={props.taskOffline}
         />
         <GoatBotBotCaption at={row.createdAt} groupPosition={row.groupPosition} />
       </View>
@@ -498,9 +501,10 @@ export function GoatBotScreen(props: {
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const eventsKey = events.key;
   const focusDivider = unread.focusDivider;
+  const taskOffline = !session.homeConnected;
   const listExtraData = useMemo(
-    () => ({ accent, eventsKey, focusDivider, placement, opened }),
-    [accent, eventsKey, focusDivider, placement, opened],
+    () => ({ accent, eventsKey, focusDivider, placement, opened, taskOffline }),
+    [accent, eventsKey, focusDivider, placement, opened, taskOffline],
   );
   const renderItem = useCallback(
     ({ item }: { item: GoatBotChatItem }) => {
@@ -523,6 +527,7 @@ export function GoatBotScreen(props: {
             onDiscard={session.onDiscardInput}
             onSelectThread={onSelectThread}
             onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
+            taskOffline={taskOffline}
             onOpenEvent={onOpenEvent}
             environmentId={session.historyEnvironmentId}
             botName={title}
@@ -546,6 +551,7 @@ export function GoatBotScreen(props: {
       onSelectThread,
       onSelectTask,
       taskId,
+      taskOffline,
       onOpenEvent,
       session.supportsTaskThreads,
       session.historyEnvironmentId,
@@ -789,7 +795,7 @@ export function GoatBotScreen(props: {
             renderItem={renderItem}
             // Rows are memoized by key, data and this: a new accent must reach the pills already shown,
             // the "New" line must learn when to take VoiceOver focus, and an event line where its
-            // routine or task now opens.
+            // routine or task now opens, and a card's Open task as the bot's computer comes and goes.
             extraData={listExtraData}
             initialScrollAtEnd
             maintainScrollAtEnd

@@ -34,6 +34,8 @@ export function GoatBotTaskRow(props: {
   readonly onOpenTask?: (() => void) | undefined;
   /** Listed but closed, as when the bot's computer is offline. */
   readonly disabled?: boolean;
+  /** The bot's computer is offline, so Open task stays listed but closed; a thread still opens. */
+  readonly offline?: boolean;
   /** Leaves the status out, for older work whose status is on the bot's Home. */
   readonly statusHidden?: boolean;
 }) {
@@ -53,6 +55,7 @@ export function GoatBotTaskRow(props: {
       ? target.host
       : null;
   const opensThread = target.kind === "thread" && unreachableHost === null;
+  const taskClosed = props.onOpenTask !== undefined && props.offline === true;
   const action = props.onOpenTask
     ? "Open task"
     : target.kind !== "thread"
@@ -64,12 +67,12 @@ export function GoatBotTaskRow(props: {
     .filter(Boolean)
     .join(" · ");
   const detailed = !props.onOpenTask;
-  const closed = props.disabled === true || (!props.onOpenTask && !opensThread);
+  const closed = props.disabled === true || taskClosed || (!props.onOpenTask && !opensThread);
   const spokenStatus = props.statusHidden ? "" : ` ${status}.`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${card.title}.${spokenStatus}${detailed && card.continuationLabel ? ` ${card.continuationLabel}.` : ""}${detailed ? ` ${(card.evidenceLabels ?? []).join(". ")}` : ""} ${action}`}
+      accessibilityLabel={`${card.title}.${spokenStatus}${detailed && card.continuationLabel ? ` ${card.continuationLabel}.` : ""}${detailed ? ` ${(card.evidenceLabels ?? []).join(". ")}` : ""} ${action}${taskClosed ? ", unavailable while offline" : ""}`}
       accessibilityState={{ disabled: closed }}
       disabled={closed}
       onPress={() => {

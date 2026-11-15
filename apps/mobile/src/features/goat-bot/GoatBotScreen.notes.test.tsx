@@ -257,6 +257,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    homeConnected: true,
     streamingReplyIds: new Set<string>(),
     visibleTurnItems: [],
     boundedSnapshots: false,

@@ -106,6 +106,7 @@ const reactTests = [
   "src/features/goat-bot/GoatBotScreen.answering.test.tsx",
   "src/features/goat-bot/GoatBotScreen.composerMenu.test.tsx",
   "src/features/goat-bot/GoatBotScreen.draftOwner.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.offlineTask.test.tsx",
   "src/features/goat-bot/useGoatBotDraftAttachments.test.tsx",
   "src/features/goat-bot/GoatBotScreen.activity.test.tsx",
   "src/features/goat-bot/GoatBotTimelineRow.links.test.tsx",
