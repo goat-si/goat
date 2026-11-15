@@ -158,6 +158,16 @@ GOAT refuses the route when Claude Code's managed settings on that machine would
 override it, including a managed policy helper that runs at startup. Keep the
 instance on its own route, or ask your administrator to remove that setting.
 
+## Claude in Chrome
+
+Claude threads can use the Claude in Chrome extension in your own signed-in
+Chrome. Set up the extension using [Claude Code's Chrome guide](https://code.claude.com/docs/en/chrome),
+then add `--chrome` to **Launch arguments** for the Claude instance in **Settings > Providers**.
+The setting applies to sessions started after you save it.
+
+Sign in with `/login` on a direct Anthropic plan. API keys, setup tokens,
+third-party providers, and WSL do not support Claude in Chrome.
+
 ## OpenRouter
 
 Create a Claude instance with its own config directory, such as

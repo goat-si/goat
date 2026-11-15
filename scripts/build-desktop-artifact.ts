@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
 import { MAC_COMMAND_USAGE_DESCRIPTIONS } from "./lib/mac-command-usage-descriptions.ts";
+import {
+  LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
+  LINUX_CAPTURE_EXTRA_RESOURCES,
+  makeLinuxPackagedPayloadValidator,
+} from "./desktop-artifact-linux.ts";
 import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
 import { countWindowsPayloadFiles } from "./desktop-artifact-windows-payload.ts";
 
@@ -85,6 +90,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { resolveTaggedSourceVersion } from "./lib/tagged-source-version.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1131,6 +1137,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
+export { LINUX_BROWSER_SECRET_EXTRA_RESOURCES, LINUX_CAPTURE_EXTRA_RESOURCES };
 export const DESKTOP_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/screen-code/quickjs.wasm", to: "screen-code/quickjs.wasm" },
   // electron-builder treats apps/desktop/resources as buildResources and leaves it out of the app.
@@ -1149,24 +1156,6 @@ export const DESKTOP_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
     to: "LICENSE-T3CODE.txt",
   },
-] as const;
-export const LINUX_CAPTURE_EXTRA_RESOURCES = [
-  {
-    from: "apps/desktop/prod-resources/hyprland-capture",
-    to: "hyprland-capture",
-  },
-  {
-    from: "apps/desktop/prod-resources/kde-capture",
-    to: "kde-capture",
-  },
-  {
-    from: "apps/desktop/gnome-extension",
-    to: "gnome-extension",
-    filter: gnomeCaptureBundle.files,
-  },
-] as const;
-export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
-  { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
 ] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -1812,7 +1801,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const version = yield* resolveDesktopBuildVersion({
     explicitVersion: mergeOptions(input.buildVersion, env.version, undefined),
-    packageVersion: serverPackageJson.version,
+    packageVersion: resolveTaggedSourceVersion(repoRoot, serverPackageJson.version),
     ci: env.ci,
     skipBuild,
     repoRoot,
@@ -3206,7 +3195,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
+          StartupWMClass: "com.t3tools.T3Code",
         },
       },
     };
@@ -4631,6 +4621,17 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         platform: options.platform,
         runtimeArchivePath: options.wslRuntime,
       }),
+      verbose: options.verbose,
+    });
+  }
+  // The probe runs on the host Node, so a cross-arch build skips it.
+  if (
+    options.platform === "linux" &&
+    hostPlatform === "linux" &&
+    options.arch === (yield* HostProcess.Architecture)
+  ) {
+    yield* makeLinuxPackagedPayloadValidator(verifyPackagedBundleIsSelfContained)({
+      stageDistDir,
       verbose: options.verbose,
     });
   }

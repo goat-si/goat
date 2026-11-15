@@ -188,7 +188,7 @@ const toastUpdateError: ReportLocalUpdateError = (title, description) => {
   toastManager.add(stackedThreadToast({ type: "error", title, description }));
 };
 
-async function downloadLocalUpdate(
+export async function downloadLocalUpdate(
   bridge: DesktopBridge,
   {
     notifyDownloaded,

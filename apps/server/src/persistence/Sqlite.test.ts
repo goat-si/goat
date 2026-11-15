@@ -6,7 +6,7 @@ import * as NodeSqlite from "node:sqlite";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
-import { migrationManifest } from "./Migrations.ts";
+import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -23,7 +23,10 @@ import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import { makeCommandGate } from "../serverRuntimeStartup.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerOwnership from "../serverOwnership.ts";
 import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
+import { GOAT_MIGRATION_NAMES } from "./reconcileGoatMigrationIds.ts";
 
 import * as SqlitePersistence from "./Sqlite.ts";
 
@@ -471,5 +474,85 @@ it.effect("names a database file that is not SQLite", () => {
     }
   }).pipe(
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+const ownGoatHome = Effect.fn(function* () {
+  const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
+  // The lock a running server holds for as long as it runs.
+  yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath);
+});
+
+const onServerDatabase = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    return yield* effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+  });
+
+const recordedMigrations = onServerDatabase(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+    `;
+  }),
+);
+
+const layerGoatHome = ServerConfig.layerTest(process.cwd(), { prefix: "goat-sqlite-cli-" });
+
+it.layer(NodeServices.layer)("layerCliConfig", (it) => {
+  it.effect("does not migrate a GOAT home a running server owns", () =>
+    Effect.gen(function* () {
+      const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
+      yield* onServerDatabase(runMigrations({ toMigrationInclusive: recorded }));
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.equal((yield* recordedMigrations).at(-1)?.migration_id, recorded);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("does not move GOAT's migration ids in a home a running server owns", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          // GOAT's block ten ids above this build's: reconcileGoatMigrationIds would move it down.
+          const goat = sql.in([...GOAT_MIGRATION_NAMES]);
+          yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${goat}`;
+          yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
+        }),
+      );
+      const before = yield* recordedMigrations;
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.deepEqual(yield* recordedMigrations, before);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("opens a current GOAT home while a running server owns it", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(runMigrations());
+      yield* ownGoatHome();
+
+      yield* Effect.void.pipe(Effect.provide(SqlitePersistence.layerCliConfig));
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
   );
 });

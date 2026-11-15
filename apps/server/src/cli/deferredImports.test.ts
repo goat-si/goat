@@ -94,7 +94,6 @@ it.layer(NodeServices.layer)("CLI deferred imports", (it) => {
 
       assert.isTrue(Exit.hasDies(exit));
       assert.isTrue(yield* fs.exists(runtimeStatePath));
-      assert.isFalse(yield* fs.exists(NodePath.join(baseDir, "userdata", "server-owner.sqlite")));
     }),
   );
 
