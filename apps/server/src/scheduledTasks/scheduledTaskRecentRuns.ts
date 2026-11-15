@@ -27,12 +27,11 @@ interface RecentRunRow {
 }
 
 /**
- * The most characters one stored run may return to the server: its snapshot plus its input id. A
- * run this server writes is about 430; task ids have no length limit, and every firing id repeats
- * one. A routine with a larger run carries no history, so at most 350 of these (plus each row's task
- * id) reach the server; SQLite still reads an oversized value to measure it.
+ * The most bytes one stored run may return to the server: its snapshot plus its input id, measured
+ * over the whole value, NULs included. A run this server writes is about 430; task ids have no length
+ * limit, and every firing id repeats one. A routine with a larger run carries no history.
  */
-export const MAX_STORED_RUN_CHARS = 1024;
+export const MAX_STORED_RUN_BYTES = 1024;
 
 /**
  * The longest routine task id, in bytes, the history read takes. Ids this server creates for a
@@ -95,7 +94,7 @@ function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
 
 /**
  * Each routine's newest runs, newest first; a run whose snapshot cannot be read is left out. The
- * routines with a stored run over MAX_STORED_RUN_CHARS come back in `oversized`, without runs.
+ * routines with a stored run over MAX_STORED_RUN_BYTES come back in `oversized`, without runs.
  */
 export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function* (
   sql: SqlClient.SqlClient,
@@ -109,7 +108,8 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
     SELECT task_id, CASE WHEN NOT oversized THEN snapshot_json END AS snapshot_json,
       CASE WHEN NOT oversized THEN input_id END AS input_id, quiet, oversized FROM (
       SELECT c.task_id, r.snapshot_json, l.input_id, r.requested_at, r.firing_id,
-        length(r.snapshot_json) + coalesce(length(l.input_id), 0) > ${MAX_STORED_RUN_CHARS} AS oversized,
+        length(CAST(r.snapshot_json AS BLOB)) + coalesce(length(CAST(l.input_id AS BLOB)), 0)
+          > ${MAX_STORED_RUN_BYTES} AS oversized,
         CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
           = 'no_update' AS quiet
       FROM chosen c

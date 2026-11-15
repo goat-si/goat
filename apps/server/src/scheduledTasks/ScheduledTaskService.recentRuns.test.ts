@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
-import { MAX_ROUTINE_ID_BYTES, MAX_STORED_RUN_CHARS } from "./scheduledTaskRecentRuns.ts";
+import { MAX_ROUTINE_ID_BYTES, MAX_STORED_RUN_BYTES } from "./scheduledTaskRecentRuns.ts";
 
 type Fixture = Parameters<Parameters<typeof withWebhookService>[0]>[0];
 
@@ -410,7 +410,7 @@ it.effect(
   () =>
     withWebhookService((fixture) =>
       Effect.gen(function* () {
-        // Each run stays under MAX_STORED_RUN_CHARS (about 840 stored characters with a 600-character
+        // Each run stays under MAX_STORED_RUN_BYTES (about 840 stored bytes with a 600-byte ASCII
         // task id), so only the byte budget can omit a routine: about 24 of them fill 128 KB. Every
         // full routine has the same id length, run count and statuses, so all histories are one size.
         const full = (index: number) =>
@@ -488,32 +488,41 @@ it.effect(
     ),
 );
 
-it.effect("a stored run over the size cap leaves only its own routine without history", () =>
-  withWebhookService((fixture) =>
-    Effect.gen(function* () {
-      const oversized = yield* saveRoutine(fixture, "goat-bot-check-in:a");
-      const other = yield* saveRoutine(fixture, "goat-bot-check-in:b");
-      const older = yield* fire(fixture, oversized);
-      yield* refuse(fixture, older);
-      const newer = yield* fire(fixture, oversized);
-      yield* refuse(fixture, newer);
-      const kept = yield* fire(fixture, other);
-      yield* refuse(fixture, kept);
-      // A stored row larger than any run this server writes: the read leaves it in the database.
-      const padding = "x".repeat(MAX_STORED_RUN_CHARS);
-      yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = json_set(snapshot_json, '$.padding', ${padding})
+it.effect(
+  "a stored run over the byte cap leaves only its own routine without history, NULs included",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const oversized = yield* saveRoutine(fixture, "goat-bot-check-in:a");
+        const other = yield* saveRoutine(fixture, "goat-bot-check-in:b");
+        const nulInput = yield* saveRoutine(fixture, "goat-bot-check-in:c");
+        const older = yield* fire(fixture, oversized);
+        yield* refuse(fixture, older);
+        const newer = yield* fire(fixture, oversized);
+        yield* refuse(fixture, newer);
+        const kept = yield* fire(fixture, other);
+        yield* refuse(fixture, kept);
+        const withNul = yield* fire(fixture, nulInput);
+        yield* refuse(fixture, withNul);
+        // A stored row larger than any run this server writes: the read leaves it in the database.
+        const padding = "x".repeat(MAX_STORED_RUN_BYTES);
+        yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = json_set(snapshot_json, '$.padding', ${padding})
         WHERE firing_id = ${older}`;
-      const listed = yield* fixture.service.list();
-      assert.notProperty(
-        listed.tasks.find((task) => task.id === oversized.id),
-        "recentRuns",
-      );
-      assert.deepStrictEqual(
-        historyOf(listed, other.id)?.map((run) => run.firingId),
-        [kept],
-      );
-    }),
-  ),
+        // A short prefix, a NUL, then the bulk: SQLite's length() on text stops at the NUL.
+        const nulInputId = "x\u0000" + "y".repeat(MAX_STORED_RUN_BYTES);
+        yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ${nulInputId} WHERE firing_id = ${withNul}`;
+        const listed = yield* fixture.service.list();
+        for (const routine of [oversized, nulInput])
+          assert.notProperty(
+            listed.tasks.find((task) => task.id === routine.id),
+            "recentRuns",
+          );
+        assert.deepStrictEqual(
+          historyOf(listed, other.id)?.map((run) => run.firingId),
+          [kept],
+        );
+      }),
+    ),
 );
 
 /** Every list the subscription pushes, in order. */
