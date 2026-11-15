@@ -340,7 +340,9 @@ on the environment's machine. An unlisted version is unverified.
 When a provider CLI is behind its latest release, its provider card shows the
 available version. **Update now** runs the installer that owns the CLI
 (Homebrew, or a global npm, pnpm, Yarn, Bun, Volta, or Vite+ install), or the
-CLI's own update command when GOAT cannot tell. Update a CLI installed with
+CLI's own update command when GOAT cannot tell. Claude, Codex, and OpenCode
+installs GOAT cannot identify stay manual: update them through the installer you
+used. Update a CLI installed with
 mise through mise, and one installed with Nix through Nix. Cursor and
 Antigravity update with GOAT. Homebrew and Chocolatey installs compare against
 the version their package manager offers, which can trail the npm release;

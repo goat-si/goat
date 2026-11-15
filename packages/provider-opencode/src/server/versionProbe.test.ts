@@ -5,6 +5,7 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { LaunchEnvironment } from "./launchEnvironment.ts";
 import {
   classifyOpenCodeCliVersion,
   makeOpenCodeRuntimeProbe,
@@ -28,6 +29,47 @@ const probeServer = (serverUrl: string, serverPassword: string, http: HttpClient
 const SERVER_URL = "http://127.0.0.1:4096/";
 
 describe("OpenCode version probe", () => {
+  it.effect("fingerprints the environment and executable without exposing secrets", () =>
+    Effect.gen(function* () {
+      let env = { PATH: "/first", API_KEY: "secret-one" };
+      let executable = "/first/opencode";
+      const probe = yield* makeOpenCodeRuntimeProbe(
+        Effect.succeed({ generation: "v1" as const, version: "1.0.0" }),
+        Effect.sync(() => env),
+        () => Effect.sync(() => executable),
+      );
+      const first = yield* probe.identity;
+      assert.notInclude(first, env.API_KEY);
+      env = { ...env, API_KEY: "secret-two" };
+      const second = yield* probe.identity;
+      assert.notInclude(second, env.API_KEY);
+      assert.notStrictEqual(first, second);
+      env = { ...env, PATH: "/second" };
+      const third = yield* probe.identity;
+      assert.notStrictEqual(second, third);
+      executable = "/second/other";
+      assert.notStrictEqual(third, yield* probe.identity);
+    }),
+  );
+
+  it.effect("provides the matching environment to the cached probe", () =>
+    Effect.gen(function* () {
+      let path = "/first";
+      const seen: Array<string | undefined> = [];
+      const probe = yield* makeOpenCodeRuntimeProbe(
+        LaunchEnvironment.pipe(
+          Effect.tap((env) => Effect.sync(() => seen.push(env?.PATH))),
+          Effect.as({ generation: "v1" as const, version: "1.0.0" }),
+        ),
+        Effect.sync(() => ({ PATH: path })),
+      );
+      yield* probe.get;
+      yield* probe.get;
+      path = "/second";
+      yield* probe.get;
+      assert.deepStrictEqual(seen, ["/first", "/second"]);
+    }),
+  );
   it("classifies the recorded `opencode --version` output of both versions", () => {
     assert.deepStrictEqual(classifyOpenCodeCliVersion("1.18.32\n"), {
       generation: "v1",
@@ -160,7 +202,30 @@ describe("OpenCode version probe", () => {
     }),
   );
 
-  it.effect("remembers a probed 2.x runtime but re-probes 1.x and failures", () =>
+  it.effect("reprobes when the executable on PATH changes", () =>
+    Effect.gen(function* () {
+      let path = "/v2";
+      let calls = 0;
+      const probe = yield* makeOpenCodeRuntimeProbe(
+        Effect.sync(() => {
+          calls++;
+          return path === "/v2"
+            ? { generation: "v2" as const, version: "2.0.18" }
+            : { generation: "v1" as const, version: "1.18.32" };
+        }),
+        Effect.sync(() => ({ PATH: path })),
+      );
+      assert.strictEqual((yield* probe.get).generation, "v2");
+      assert.strictEqual((yield* probe.get).generation, "v2");
+      assert.strictEqual(calls, 1);
+      path = "/v1";
+      assert.strictEqual((yield* probe.get).generation, "v1");
+      assert.strictEqual((yield* probe.get).generation, "v1");
+      assert.strictEqual(calls, 2);
+    }),
+  );
+
+  it.effect("remembers a successful runtime but re-probes failures", () =>
     Effect.gen(function* () {
       const outputs = ["", "opencode v2.0.18\n", "1.18.32\n", "1.18.32\n"];
       let calls = 0;
@@ -192,7 +257,7 @@ describe("OpenCode version probe", () => {
       assert.strictEqual((yield* probe.refresh).generation, "v1");
       assert.strictEqual(calls, 3);
       assert.strictEqual((yield* probe.get).generation, "v1");
-      assert.strictEqual(calls, 4);
+      assert.strictEqual(calls, 3);
     }),
   );
 });
