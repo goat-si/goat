@@ -1,5 +1,13 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, EventId, NodeId, ProjectId, RunId, ThreadId } from "@goat/contracts";
+import {
+  CommandId,
+  EventId,
+  NodeId,
+  ProjectId,
+  RunAttemptId,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,10 +17,12 @@ import * as ProviderContinuationRequests from "@goat/provider-core/server/Provid
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   layerTest,
   seedParentWithTerminalTask,
   modelSelection,
+  parentProviderThreadId,
   runEvent,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 
@@ -265,6 +275,153 @@ it.layer(layerContinuationWorkerTest)("interrupted completion wakes", (it) => {
         delivered.subagents.find((task) => task.id === sibling.id)?.completionDelivery?.state,
         "claimed",
       );
+    }),
+  );
+});
+
+// Stop ends a run whose provider turn has not started in the same command, with the same time,
+// as it cancels the queued completion wake; the run that ran presents either way (d76e06679b).
+it.layer(layerTest)("Stop before the provider turn starts", (it) => {
+  it.effect.each([
+    { name: "with a completion wake cancelled at the same time", wake: true },
+    { name: "with no queued wake", wake: false },
+  ])("the stopped thread presents its interrupted run $name", ({ wake }) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const key = wake ? "stop-tie-wake" : "stop-tie-alone";
+      const threadId = ThreadId.make(`thread:${key}`);
+      const runId = RunId.make(`${key}-origin`);
+      const rootNodeId = NodeId.make(`${key}-origin-root`);
+      const taskId = NodeId.make(`${key}-task`);
+      const attemptId = RunAttemptId.make(`${key}-attempt`);
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId: ProjectId.make(`${key}-project`),
+        runId,
+        rootNodeId,
+        taskId,
+        deliveryState: wake ? "claimed" : "acknowledged",
+        ...(wake ? { deliveryTaskIds: [taskId] } : {}),
+        completionWake: "always",
+        now,
+      });
+      const origin = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (run) => run.id === runId,
+      )!;
+      // A running attempt with no provider turn: Stop ends the run itself.
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make(`event:${key}-root`),
+            type: "node.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            occurredAt: now,
+            payload: {
+              id: rootNodeId,
+              threadId,
+              runId,
+              parentNodeId: null,
+              rootNodeId,
+              kind: "root_turn",
+              status: "running",
+              countsForRun: true,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: now,
+              completedAt: null,
+            },
+          },
+          {
+            id: EventId.make(`event:${key}-attempt`),
+            type: "run-attempt.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: attemptId,
+              runId,
+              attemptOrdinal: 1,
+              rootNodeId,
+              providerInstanceId: modelSelection.instanceId,
+              providerThreadId: parentProviderThreadId(threadId),
+              providerTurnId: null,
+              reason: "initial",
+              status: "running",
+              startedAt: now,
+              completedAt: null,
+            },
+          },
+          {
+            id: EventId.make(`event:${key}-attempt-run`),
+            type: "run.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: { ...origin, activeAttemptId: attemptId },
+          },
+        ],
+      });
+      const delivery = origin.delegatedCompletion?.delivery ?? null;
+      if (delivery !== null) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "server",
+          commandId: CommandId.make(`${key}-wake`),
+          threadId,
+          messageId: delivery.messageId,
+          text: "Delegated task completed",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "queue_after_active" },
+          delegatedCompletion: {
+            parentRunId: runId,
+            generation: delivery.generation,
+            taskIds: delivery.taskIds,
+          },
+        });
+      }
+      const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.filter(
+        (run) => run.status === "queued",
+      );
+      assert.equal(queued.length, wake ? 1 : 0);
+      const stopped = yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make(`${key}-stop`),
+        threadId,
+      });
+      const written = new Map(
+        stopped.storedEvents.flatMap(({ event }) =>
+          event.type === "run.updated" ? [[event.payload.id, event.payload] as const] : [],
+        ),
+      );
+      const ended = written.get(runId)!;
+      assert.equal(ended.status, "interrupted");
+      if (wake) {
+        const cancelled = written.get(queued[0]!.id)!;
+        assert.equal(cancelled.status, "cancelled");
+        assert.isNull(cancelled.startedAt);
+        assert.deepEqual(cancelled.completedAt, ended.completedAt);
+      }
+      const sqlShell = (yield* orchestrator.getThreadShell(threadId))!;
+      const memoryShell = ProjectionStore.threadShellFromProjection(
+        yield* orchestrator.getThreadProjection(threadId),
+      );
+      for (const shell of [sqlShell, memoryShell]) {
+        assert.equal(shell.status, "interrupted");
+        assert.equal(shell.latestRunId, runId);
+      }
     }),
   );
 });
