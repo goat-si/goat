@@ -19,7 +19,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { webhookTaskInput, withWebhookService } from "./ScheduledRunFixture.testkit.ts";
-import { MAX_ROUTINE_ID_BYTES, MAX_STORED_RUN_BYTES } from "./scheduledTaskRecentRuns.ts";
 
 type Fixture = Parameters<Parameters<typeof withWebhookService>[0]>[0];
 
@@ -498,7 +497,8 @@ it.effect(
         const kept = yield* fire(fixture, after);
         yield* refuse(fixture, kept);
         const listed = yield* fixture.service.list();
-        assert.isAbove(Buffer.byteLength(longId), MAX_ROUTINE_ID_BYTES);
+        // MAX_ROUTINE_ID_BYTES, as a literal so an older module can be swapped in to see this fail.
+        assert.isAbove(Buffer.byteLength(longId), 256);
         assert.notProperty(
           listed.tasks.find((task) => task.id === overCap.id),
           "recentRuns",
@@ -528,21 +528,28 @@ it.effect(
         const withNul = yield* fire(fixture, nulInput);
         yield* refuse(fixture, withNul);
         // A stored row larger than any run this server writes: the read leaves it in the database.
-        const padding = "x".repeat(MAX_STORED_RUN_BYTES);
+        // 1,024 is MAX_STORED_RUN_BYTES, a literal so an older module can be swapped in.
+        const padding = "x".repeat(1024);
         yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = json_set(snapshot_json, '$.padding', ${padding})
         WHERE firing_id = ${older}`;
         // A short prefix, a NUL, then the bulk: SQLite's length() on text stops at the NUL.
-        const nulInputId = "x\u0000" + "y".repeat(MAX_STORED_RUN_BYTES);
+        const nulInputId = "x\u0000" + "y".repeat(1024);
         yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ${nulInputId} WHERE firing_id = ${withNul}`;
         const listed = yield* fixture.service.list();
-        for (const routine of [oversized, nulInput])
-          assert.notProperty(
-            listed.tasks.find((task) => task.id === routine.id),
-            "recentRuns",
-          );
+        assert.notProperty(
+          listed.tasks.find((task) => task.id === oversized.id),
+          "recentRuns",
+          "routine a, whose stored snapshot is over the cap, still carries recentRuns",
+        );
+        assert.notProperty(
+          listed.tasks.find((task) => task.id === nulInput.id),
+          "recentRuns",
+          "routine c, whose stored input id hides its bytes past a NUL, still carries recentRuns",
+        );
         assert.deepStrictEqual(
           historyOf(listed, other.id)?.map((run) => run.firingId),
           [kept],
+          "routine b, under the cap, lost its history",
         );
       }),
     ),
