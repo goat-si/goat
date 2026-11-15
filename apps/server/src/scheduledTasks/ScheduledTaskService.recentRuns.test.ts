@@ -148,6 +148,38 @@ it.effect("a GOAT Bot routine lists its newest seven runs, newest first, with wh
   ),
 );
 
+it.effect(
+  "at the eighth firing's admission a routine keeps its seven most recent firings: six finished and the one in flight",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        const finished: Array<CommandId> = [];
+        for (let index = 0; index < SCHEDULED_TASK_RECENT_RUNS; index++) {
+          const firingId = yield* fire(fixture, routine);
+          yield* refuse(fixture, firingId);
+          finished.unshift(firingId);
+        }
+        const inFlight = yield* fire(fixture, routine);
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.status,
+          ]),
+          [
+            [inFlight, "dispatching"],
+            ...finished.slice(0, SCHEDULED_TASK_RECENT_RUNS - 1).map((id) => [id, "failed"]),
+          ],
+        );
+        const oldest = finished.at(-1) ?? "";
+        assert.lengthOf(
+          yield* fixture.sql`SELECT 1 FROM scheduled_task_runs WHERE firing_id = ${oldest}`,
+          0,
+        );
+      }),
+    ),
+);
+
 it.effect("a run that cannot be read is left out, and the rest of the list stays", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {
