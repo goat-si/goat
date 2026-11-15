@@ -50,7 +50,7 @@ Pi's status.ts and Registry's probe.ts merged cleanly and already read the per-c
 
 ## Tests changed
 
-- status.openCode2Profile.test.ts:25 (dev's test) advances the clock 2 minutes instead of 5 seconds: with L10's loader a first read may wait out a cold server's plugin activation for up to 2 minutes, and only the settling shares the 5 s budget. The assertion is unchanged (the new profile's never-answering read returns `[]`, not the earlier profile's models). The window this leaves, where after a host environment change the old profile's status and models stay shown for up to 2 minutes while a cold server activates its plugins, is goat#3415.
+- status.openCode2Profile.test.ts:25 (dev's test) advances the clock 2 minutes instead of 5 seconds: with L10's loader a first read may wait out a cold server's plugin activation for up to 2 minutes, and only the settling shares the 5 s budget. The assertion is unchanged (the new profile's never-answering read returns `[]`, not the earlier profile's models). The window this leaves, where after a host environment change the old profile's status and models stay shown for up to 2 minutes while a cold server activates its plugins, is goat#3415. Follow-up 6ed6661718 on chase/t3-261114-opencode-retry-2 caps a lent server's hung model read at 20 seconds (or a larger GOAT_OPENCODE_PROBE_TIMEOUT_MS read per check), so this test now advances 20 seconds, and only the plugin-loading 503 keeps the 2-minute retry; the window that remains is in L10-retry.md Known limits.
 
 ## Budgets
 
