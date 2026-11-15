@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
+export const FIRST_V2_MIGRATION_ID = 55;
+
 /**
  * GOAT's own migrations, which sit after upstream's in `migrationEntries`. An upstream sync that
  * adds ids GOAT already used moves these up; the names stay stable.
@@ -95,9 +97,9 @@ export const goatMigrationIdsMove = <E>(
 };
 
 /**
- * Upstream migrations whose ids the ledger does not record, below a recorded GOAT migration. GOAT's
- * run after upstream's, so only an id shift leaves these, and the migrator, which runs only ids
- * above the highest recorded, never would. An id recorded under another name is another history's.
+ * The upstream migrations an id shift displaced: the unrecorded tail above the highest upstream id
+ * the ledger records below GOAT's block, up to its highest GOAT row. A gap below that tail is a
+ * lost ledger row, which keeps the migrator's rules (`skippedV2Migrations`).
  */
 export const displacedUpstreamMigrations = <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
@@ -110,10 +112,54 @@ export const displacedUpstreamMigrations = <E>(
       GOAT_MIGRATION_NAMES.has(row.name) ? (currentIds.get(row.name) ?? 0) : 0,
     ),
   );
+  const highestUpstream = highestUpstreamBelowGoat(entries, history);
   const recordedIds = new Set(history.map((row) => row.migration_id));
   return entries.filter(
-    ([id, name]) => !GOAT_MIGRATION_NAMES.has(name) && id < highestGoat && !recordedIds.has(id),
+    ([id, name]) =>
+      !GOAT_MIGRATION_NAMES.has(name) &&
+      id > highestUpstream &&
+      id < highestGoat &&
+      !recordedIds.has(id),
   );
+};
+
+const highestUpstreamBelowGoat = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+) => {
+  const firstGoatId = Math.min(
+    ...entries.flatMap(([id, name]) => (GOAT_MIGRATION_NAMES.has(name) ? [id] : [])),
+  );
+  return Math.max(
+    0,
+    ...history.flatMap((row) =>
+      !GOAT_MIGRATION_NAMES.has(row.name) && row.migration_id < firstGoatId
+        ? [row.migration_id]
+        : [],
+    ),
+  );
+};
+
+/** V2 migrations up to `upTo` that the ledger does not record under their name: the migrator skips them. */
+export const skippedV2Migrations = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+  upTo: number,
+  throughId?: number,
+) => {
+  const recordedNames = new Map(history.map((row) => [row.migration_id, row.name]));
+  const skipped = entries.flatMap(([id, name]) => {
+    if (id < FIRST_V2_MIGRATION_ID || id > upTo || (throughId !== undefined && id > throughId))
+      return [];
+    const recordedName = recordedNames.get(id);
+    return recordedName === name ? [] : [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+  });
+  return skipped.length === 0
+    ? undefined
+    : new Migrator.MigrationError({
+        kind: "BadState",
+        message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${upTo}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
+      });
 };
 
 /**
@@ -245,7 +291,9 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   const highestMoved = Math.max(0, ...goatRows.map((row) => row.migration_id));
   for (const [id, name] of entries) {
     const recorded = upstreamRows.get(id);
-    if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved || recorded === undefined) continue;
+    // Below V2, other histories (v1 cutovers, site-local migrations) keep their own names.
+    if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved || id < FIRST_V2_MIGRATION_ID) continue;
+    if (recorded === undefined) continue;
     if (recorded !== name) {
       return yield* new Migrator.MigrationError({
         kind: "BadState",
@@ -253,11 +301,13 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
       });
     }
   }
+  const moved = [...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)), ...goatRows];
+  const skipped = skippedV2Migrations(entries, moved, highestUpstreamBelowGoat(entries, moved));
+  if (skipped !== undefined) return yield* skipped;
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;
   }
-  const moved = [...history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)), ...goatRows];
   const first = yield* runNextDisplaced(entries, moved);
   return first === undefined ? [] : [first];
 });

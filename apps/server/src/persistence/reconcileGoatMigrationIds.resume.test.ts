@@ -7,7 +7,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
+import * as References from "effect/References";
 import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
 
 import { hasPendingMigrations, migrationEntries, runMigrations } from "./Migrations.ts";
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
@@ -25,20 +28,43 @@ import {
   userData,
 } from "./reconcileGoatMigrationIds.testkit.ts";
 
-/** A database per test: an in-memory one, or a file that a restart reopens on a new connection. */
-const databases = [
-  ["in-memory", () => ({ open: NodeSqliteClient.layer({ filename: ":memory:" }), reopen: null })],
+/**
+ * A database per test: an in-memory one, or a file that a restart reopens on a new connection and
+ * that is removed once the test's connection closes.
+ */
+interface TestDatabase {
+  readonly provide: <A, E>(
+    test: Effect.Effect<A, E, SqlClient.SqlClient>,
+  ) => Effect.Effect<A, E | SqlError.SqlError>;
+  readonly reopen: string | null;
+}
+const databases: ReadonlyArray<readonly [string, () => TestDatabase]> = [
+  [
+    "in-memory",
+    () => ({
+      provide: <A, E>(test: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+        test.pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+      reopen: null,
+    }),
+  ],
   [
     "file",
     () => {
-      const filename = NodePath.join(
-        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-shift-resume-")),
-        "state.sqlite",
-      );
-      return { open: NodeSqliteClient.layer({ filename }), reopen: filename };
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-shift-resume-"));
+      const filename = NodePath.join(directory, "state.sqlite");
+      return {
+        provide: <A, E>(test: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+          test.pipe(
+            Effect.provide(NodeSqliteClient.layer({ filename })),
+            Effect.ensuring(
+              Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
+            ),
+          ),
+        reopen: filename,
+      };
     },
   ],
-] as const;
+];
 
 /** Runs `restart` on the same database: a new connection for a file, the same one in memory. */
 const onRestart = <A, E>(
@@ -120,7 +146,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     ],
     ["with GOAT's rows moved and upstream 080-089 unrecorded", seedMovedLedgerOnly],
   ] as const)("upgrades a database %s to what a fresh database records", ([, seed]) => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       yield* seed;
       assert.isTrue(yield* hasPendingMigrations());
@@ -128,11 +154,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), []);
       assert.isFalse(yield* onRestart(reopen, hasPendingMigrations()));
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("refuses a T3 ledger with a newer row at 90 and leaves it unchanged", () => {
-    const { open } = database();
+    const { provide } = database();
     return Effect.gen(function* () {
       yield* runMigrations({ toMigrationInclusive: 89 });
       const sql = yield* SqlClient.SqlClient;
@@ -145,11 +171,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       );
       assert.deepStrictEqual(yield* history, before);
       assert.deepStrictEqual(yield* schema, tables);
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("a kill inside the ledger move leaves the old ledger whole", () => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       const before = yield* history;
@@ -159,11 +185,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* reviveAfterKill;
       yield* onRestart(reopen, runMigrations());
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("a kill after the ledger move keeps the move with 080 and resumes with 081", () => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       yield* seedUserData;
@@ -179,11 +205,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
       assert.isFalse(yield* onRestart(reopen, hasPendingMigrations()));
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("a kill between two upstream migrations keeps the ones that finished", () => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       yield* killWhenRecording("CommandReadIndexes");
@@ -194,11 +220,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(3));
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("a kill inside 085 rolls back its work and keeps 080-084", () => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       const sql = yield* SqlClient.SqlClient;
@@ -215,11 +241,11 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(5));
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
   });
 
   it.effect("a kill in the later GOAT migrations keeps those that finished", () => {
-    const { open, reopen } = database();
+    const { provide, reopen } = database();
     return Effect.gen(function* () {
       // Old max 85: GOAT's first six move to 90-95; 96-157 run after upstream 080-089.
       yield* seedOldGoatLedger(85);
@@ -234,6 +260,103 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       yield* onRestart(reopen, runMigrations());
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
-    }).pipe(Effect.provide(open));
+    }).pipe(provide);
+  });
+
+  it.effect.each([
+    [41, "ThreadSummaryTimeline", "AuthSessionClientConnection"],
+    [51, "SiteLocalMigration", "ProjectionThreadMessageContext"],
+  ] as const)(
+    "upgrades a ledger from before the shift that records %s under another name below 55, warning about that id only",
+    ([id, name, expectedName]) => {
+      const { provide, reopen } = database();
+      return Effect.gen(function* () {
+        yield* seedOldGoatLedger(147);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE effect_sql_migrations SET name = ${name} WHERE migration_id = ${id}`;
+        const divergent: Array<unknown> = [];
+        const warnings = Logger.make(({ logLevel, fiber }) => {
+          if (logLevel === "Warn") {
+            divergent.push(fiber.getRef(References.CurrentLogAnnotations).divergent);
+          }
+        });
+        yield* onRestart(
+          reopen,
+          runMigrations().pipe(
+            Effect.provide(Logger.layer([warnings], { mergeWithExisting: false })),
+          ),
+        );
+        const expected = yield* fresh;
+        const upgraded = yield* onRestart(reopen, snapshot);
+        assert.deepStrictEqual(upgraded, {
+          ...expected,
+          ledger: expected.ledger.map((row) => (row[0] === id ? ([id, name] as const) : row)),
+        });
+        assert.deepStrictEqual(divergent, [[`${id}:${name} (this build: ${expectedName})`]]);
+      }).pipe(provide);
+    },
+  );
+
+  it.effect("a ledger from before the shift that lost row 30 commits the move with 080", () => {
+    const { provide, reopen } = database();
+    return Effect.gen(function* () {
+      yield* seedOldGoatLedger(147);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 30`;
+      yield* killWhenRecording("ProjectionMessageSearchText");
+      assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
+      assert.deepStrictEqual(yield* goatRows, goatNames.map(currentRow));
+      assert.deepStrictEqual(yield* recordedUpstream80s, UPSTREAM_80S.slice(0, 1));
+      assert.isFalse((yield* history).some(([recordedId]) => recordedId === 30));
+      yield* reviveAfterKill;
+      yield* previousBuildRefuses;
+      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(1));
+    }).pipe(provide);
+  });
+
+  it.effect.each([
+    [
+      "a shifted ledger that lost row 61",
+      Effect.asVoid(runMigrations()),
+      61,
+      "PullRequestReviewGuides",
+    ],
+    [
+      "a ledger from before the shift that lost row 72",
+      seedOldGoatLedger(147),
+      72,
+      "WaitingLinkRequestIndex",
+    ],
+  ] as const)(
+    "refuses %s before writing anything, as a skipped migration",
+    ([, seed, lost, lostName]) => {
+      const { provide } = database();
+      return Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${lost}`;
+        const before = yield* history;
+        const tables = yield* schema;
+        const exit = yield* Effect.exit(runMigrations());
+        const failure = exit._tag === "Failure" ? String(Cause.squash(exit.cause)) : "started";
+        assert.include(failure, "would skip required schema migrations");
+        assert.include(failure, `${lost}_${lostName} (recorded: nothing)`);
+        assert.deepStrictEqual(yield* history, before);
+        assert.deepStrictEqual(yield* schema, tables);
+      }).pipe(provide);
+    },
+  );
+
+  it.effect("starts a shifted ledger that lost row 7 and leaves the gap, as before", () => {
+    const { provide } = database();
+    return Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 7`;
+      const before = yield* history;
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* history, before);
+      assert.isFalse(yield* hasPendingMigrations());
+    }).pipe(provide);
   });
 });

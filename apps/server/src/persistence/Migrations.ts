@@ -4,8 +4,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import {
   assertMemoryMigrationsCompatible,
   displacedUpstreamMigrations,
+  FIRST_V2_MIGRATION_ID,
   goatMigrationIdsMove,
   reconcileGoatMigrationIds,
+  skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
@@ -344,8 +346,6 @@ const makeMigrationLoader = (throughId?: number) =>
     ),
   );
 
-const FIRST_V2_MIGRATION_ID = 55;
-
 // Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
@@ -360,23 +360,8 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
     readonly name: string;
   }>`SELECT migration_id, name FROM effect_sql_migrations`;
   const latestRecordedId = Math.max(0, ...recorded.map((row) => row.migration_id));
-  const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name]));
-  const skipped = migrationEntries.flatMap(([id, name]) => {
-    if (
-      id < FIRST_V2_MIGRATION_ID ||
-      id > latestRecordedId ||
-      (throughId !== undefined && id > throughId)
-    )
-      return [];
-    const recordedName = recordedNames.get(id);
-    if (recordedName === name) return [];
-    return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
-  });
-  if (skipped.length === 0) return;
-  return yield* new Migrator.MigrationError({
-    kind: "BadState",
-    message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${latestRecordedId}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
-  });
+  const skipped = skippedV2Migrations(migrationEntries, recorded, latestRecordedId, throughId);
+  if (skipped !== undefined) return yield* skipped;
 });
 
 const run = Migrator.make({});
