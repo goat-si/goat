@@ -140,6 +140,19 @@ describe("MCP app tool output", () => {
     expect(turnItemOutputText(item)).toBe(text);
   });
 
+  it("shows the tool result for a row saved under the legacy app key", () => {
+    const item = toolItem({
+      t3McpApp: {
+        attachmentId: "app-html",
+        server: "repro",
+        tool: "aggregate_rum_events",
+        resourceUri: "ui://repro/dataviz",
+      },
+      result: { content: [{ type: "text", text: "legacy result" }] },
+    });
+    expect(turnItemOutputText(item)).toBe("legacy result");
+  });
+
   it("reads a result with metadata and marks images it cannot preview", () => {
     const item = toolItem({
       goatMcpApp: {
