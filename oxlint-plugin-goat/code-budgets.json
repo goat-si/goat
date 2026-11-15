@@ -829,7 +829,7 @@
   },
   "packages/source-control-gitcafe/src/server/gitCafePullRequestJson.ts": { "nonNull": 4 },
   "packages/source-control-github/scripts/measure-pr-preview.ts": { "nonNull": 1 },
-  "packages/source-control-github/src/server/GitHubPullRequestApi.test.ts": { "lines": 3583 },
+  "packages/source-control-github/src/server/GitHubPullRequestApi.test.ts": { "lines": 3582 },
   "packages/source-control-github/src/server/GitHubPullRequestApi.ts": {
     "lines": 2759,
     "nonNull": 2

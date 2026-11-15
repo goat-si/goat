@@ -5,6 +5,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -515,7 +516,7 @@ export const PullRequestSummary = Schema.Struct({
   headSha: Schema.optional(TrimmedNonEmptyString),
   /** Absent means the read did not report auto-merge state, not that it is off. */
   autoMergeEnabled: Schema.optional(Schema.Boolean),
-  autoMergeMethod: Schema.optional(PullRequestMergeMethod),
+  autoMergeMethod: ForwardCompatibleOptional(PullRequestMergeMethod),
 });
 export type PullRequestSummary = typeof PullRequestSummary.Type;
 
@@ -658,7 +659,7 @@ export const PullRequestDetail = Schema.Struct({
   behindBy: Schema.optional(NonNegativeInt),
   /** Absent means the host does not report auto-merge state, not that it is off. */
   autoMergeEnabled: Schema.optional(Schema.Boolean),
-  autoMergeMethod: Schema.optional(PullRequestMergeMethod),
+  autoMergeMethod: ForwardCompatibleOptional(PullRequestMergeMethod),
   workflowApprovalsRequired: Schema.optional(NonNegativeInt),
   /** Absent where the host has no merge queue or does not report one. */
   mergeQueueRemoval: Schema.optional(PullRequestMergeQueueRemoval),

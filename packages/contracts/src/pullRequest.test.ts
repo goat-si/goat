@@ -190,6 +190,16 @@ describe("PullRequestDetail merge queue removal", () => {
       decodeDetail({ ...detail, mergeQueueRemoval: { ...removal, reason: 5 } }),
     ).toThrow();
   });
+
+  it("a client reads a detail whose auto-merge method a newer host added, dropping only that method", () => {
+    // fast-forward joined the merge methods this way; the next one must not break older clients.
+    const decoded = decodeDetail({ ...detail, autoMergeEnabled: true, autoMergeMethod: "train" });
+    expect(Object.hasOwn(decoded, "autoMergeMethod")).toBe(false);
+    expect(decoded.autoMergeEnabled).toBe(true);
+    expect(decodeDetail({ ...detail, autoMergeMethod: "fast-forward" }).autoMergeMethod).toBe(
+      "fast-forward",
+    );
+  });
 });
 
 describe("fast-forward merges", () => {
