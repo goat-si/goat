@@ -19,6 +19,8 @@ import { AndroidWorkspaceNavigation } from "./AndroidWorkspaceNavigation";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { WorkspaceTabPanes } from "./WorkspaceTabPanes";
 import type { WorkspaceTab } from "./workspace-tabs-state";
+import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
+import { useHardwareBack } from "../../lib/backHandler";
 
 const TABS: readonly WorkspaceTab[] = NAVIGATION_TAB_ORDER;
 
@@ -36,6 +38,18 @@ export function WorkspaceRootScreen() {
     [workspace, fabClearance],
   );
   const tab = workspace.state.selectedTab;
+  const selectTab = useSelectWorkspaceTab();
+  // Tabs are panes of Home, not routes, so Back has nothing to pop and would leave the app.
+  // An open search keeps Back for itself.
+  useHardwareBack(
+    tab !== "threads" &&
+      enabled.includes("threads") &&
+      workspace.state.tabs[tab].searchMode === "resting",
+    () => {
+      selectTab("threads");
+      return true;
+    },
+  );
 
   if (layout.usesSplitView) {
     if (enabled.length === 0) return <View className="flex-1 bg-screen" />;

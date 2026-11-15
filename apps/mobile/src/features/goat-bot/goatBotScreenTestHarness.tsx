@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import type { GoatBotActivity, GoatBotRow } from "@goat/client-runtime/goatBot";
 import { vi } from "vite-plus/test";
 
+import type { DraftComposerAttachment } from "../../lib/composerImages";
+import type { GoatBotAttachmentPickTarget } from "./GoatBotComposerAttachments";
+
 // The GoatBotScreen DOM harness: native modules, the session, the list and the composer, mocked
 // once for the screen's appearance and unread suites.
 const appearance = vi.hoisted(() => ({
@@ -210,10 +213,17 @@ vi.mock("./GoatBotShimmerText", () => ({
   ),
 }));
 const picker = vi.hoisted(() => ({
-  onPicked: null as
-    | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
-    | null,
+  onPicked: null as null | ((files: ReadonlyArray<DraftComposerAttachment>) => void),
   release: vi.fn(),
+  // Picks started from the chat's +, and the one still open: it answers when a test settles it.
+  picks: [] as Array<"media" | "files">,
+  settle: null as null | ((files: ReadonlyArray<DraftComposerAttachment>) => void),
+}));
+// What the chat's composer can do now; each composer test resets it with setupComposer().
+const composer = vi.hoisted(() => ({
+  canSend: true,
+  support: { maxUploadBytes: null } as null | { maxUploadBytes: number | null },
+  alert: vi.fn(),
 }));
 export type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
 const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
@@ -348,6 +358,7 @@ vi.mock("react-native", () => ({
   Image: (props: { accessibilityLabel?: string }) => <img alt={props.accessibilityLabel} />,
   ScrollView: (props: { children?: ReactNode }) => <div>{props.children}</div>,
   Platform: { OS: "ios" },
+  Alert: { alert: composer.alert },
   AccessibilityInfo: {
     announceForAccessibility: a11y.announce,
     setAccessibilityFocus: a11y.focus,
@@ -376,11 +387,30 @@ vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => mod
 vi.mock("./useMobileGoatBotMemberModel", () => ({
   useMobileGoatBotMemberModelMenu: () => models.member,
 }));
-// The real model pill renders; only the native menu it opens stands in, as a box that keeps its style.
+// The real model pill and the chat's + render; only the native menu they open stands in, as a box
+// that keeps its style. A named menu also shows each action as a button "<menu>: <action>".
 vi.mock("../../components/ui/Menu", () => ({
-  Menu: (props: { children?: ReactNode; style?: unknown }) => (
-    <div data-box="model-menu" data-style={JSON.stringify(props.style ?? null)}>
+  Menu: (props: {
+    children?: ReactNode;
+    style?: unknown;
+    accessibilityLabel?: string;
+    actions?: ReadonlyArray<{ id: string; title: string }>;
+    onPressAction?: (event: { nativeEvent: { event: string } }) => void;
+  }) => (
+    <div
+      data-box={props.accessibilityLabel === undefined ? "model-menu" : "menu"}
+      data-style={JSON.stringify(props.style ?? null)}
+    >
       {props.children}
+      {props.accessibilityLabel === undefined
+        ? null
+        : props.actions?.map((action) => (
+            <button
+              key={action.id}
+              aria-label={`${props.accessibilityLabel}: ${action.title}`}
+              onClick={() => props.onPressAction?.({ nativeEvent: { event: action.id } })}
+            />
+          ))}
     </div>
   ),
 }));
@@ -388,9 +418,31 @@ vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async ()
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
-  GoatBotAttachButton: (props: { onPicked: typeof picker.onPicked }) => {
-    picker.onPicked = props.onPicked;
-    return null;
+  GoatBotAttachButton: (props: GoatBotAttachmentPickTarget & { disabled: boolean }) => {
+    // A pick answers in the lifetime current when it lands, or in an ended one after unmount.
+    picker.onPicked = (files) => props.onPicked(files, props.getLifetime() ?? AbortSignal.abort());
+    return <button aria-label="Add attachment" disabled={props.disabled} />;
+  },
+  // The pick's contract at the native picker's edge: it holds the box from start to answer, and an
+  // answer after its lifetime ended is released. GoatBotComposerAttachments.test pins the real one.
+  goatBotAttachmentPick: (target: GoatBotAttachmentPickTarget) => {
+    picker.onPicked = (files) =>
+      target.onPicked(files, target.getLifetime() ?? AbortSignal.abort());
+    return async (kind: "media" | "files") => {
+      const signal = target.getLifetime();
+      if (!signal) return;
+      picker.picks.push(kind);
+      target.onIntake?.(1);
+      picker.settle = (files) => {
+        picker.settle = null;
+        if (signal.aborted) {
+          picker.release(files);
+          return;
+        }
+        if (files.length > 0) target.onPicked(files, signal);
+        target.onIntake?.(-1);
+      };
+    };
   },
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: picker.release,
@@ -464,8 +516,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     return {
       availability: screenSession.availability,
       rows: screenSession.rows,
-      canSend: true,
-      attachmentSupport: { maxUploadBytes: null },
+      canSend: composer.canSend,
+      attachmentSupport: composer.support,
       onSend: screenSession.send,
       onAnswer: screenSession.answer,
       onRetryInput: () => {},
@@ -500,6 +552,16 @@ export const bot: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 
+export function setupComposer() {
+  composer.canSend = true;
+  composer.support = { maxUploadBytes: null };
+  composer.alert.mockClear();
+  picker.onPicked = null;
+  picker.picks = [];
+  picker.settle = null;
+  picker.release.mockClear();
+}
+
 export async function typeInto(container: HTMLElement, value: string) {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
   await act(async () => {
@@ -530,6 +592,7 @@ export {
   appearance,
   botEditing,
   chatFiles,
+  composer,
   device,
   layouts,
   list,

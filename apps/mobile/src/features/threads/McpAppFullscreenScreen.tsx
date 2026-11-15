@@ -60,6 +60,60 @@ function descendsFrom(
 
 /** Resolve apps from stored tool calls so links cannot supply apps the call never produced. */
 export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
+  const { environmentId, threadId, itemId } = route.params;
+  if (!environmentId?.trim() || !threadId?.trim() || !itemId?.trim()) {
+    return <McpAppUnavailable />;
+  }
+  return (
+    <McpAppFullscreen
+      params={route.params}
+      environmentId={EnvironmentId.make(environmentId)}
+      threadId={ThreadId.make(threadId)}
+      itemId={TurnItemId.make(itemId)}
+    />
+  );
+}
+
+function McpAppUnavailable() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  return (
+    <View className="flex-1 bg-screen" style={{ paddingTop: insets.top }}>
+      <McpAppHeader title="App" onClose={() => navigation.goBack()} />
+      <Text className="m-6 text-sm text-foreground-muted">This app cannot be shown.</Text>
+    </View>
+  );
+}
+
+function McpAppHeader(props: { readonly title: string; readonly onClose: () => void }) {
+  return (
+    <View className="h-11 flex-row items-center justify-between px-3">
+      <Text className="text-base font-semibold text-foreground" numberOfLines={1}>
+        {props.title}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Exit full screen"
+        hitSlop={8}
+        onPress={props.onClose}
+      >
+        <SymbolView name="xmark" size={18} tintColor="gray" />
+      </Pressable>
+    </View>
+  );
+}
+
+function McpAppFullscreen({
+  params,
+  environmentId,
+  threadId,
+  itemId,
+}: {
+  readonly params: McpAppFullscreenScreenProps["route"]["params"];
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly itemId: TurnItemId;
+}) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   // Wait for focus before goBack; an exit under another screen must not pop that screen.
@@ -78,10 +132,6 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
     });
   };
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const params = route.params;
-  const environmentId = EnvironmentId.make(params.environmentId);
-  const threadId = ThreadId.make(params.threadId);
-  const itemId = TurnItemId.make(params.itemId);
   const conversationThreadId = useConversationThreadId(
     environmentId,
     threadId,
@@ -112,19 +162,7 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
 
   return (
     <View className="flex-1 bg-screen" style={{ paddingTop: insets.top }}>
-      <View className="h-11 flex-row items-center justify-between px-3">
-        <Text className="text-base font-semibold text-foreground" numberOfLines={1}>
-          {app?.server ?? "App"}
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Exit full screen"
-          hitSlop={8}
-          onPress={onClose}
-        >
-          <SymbolView name="xmark" size={18} tintColor="gray" />
-        </Pressable>
-      </View>
+      <McpAppHeader title={app?.server ?? "App"} onClose={onClose} />
       <View
         className="flex-1"
         style={{ paddingBottom: insets.bottom }}

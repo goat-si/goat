@@ -9,6 +9,7 @@ import {
 } from "@goat/client-runtime/state/filesystem";
 import { appendBrowsePathSegment, isWindowsPlatform } from "@goat/client-runtime/state/projects";
 import { AuthFilesystemReadScope, type EnvironmentId } from "@goat/contracts";
+import { AsyncResult } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
 import { filesystemEnvironment } from "../../state/filesystem";
@@ -110,5 +111,24 @@ export function useBrowsePathInput(
     [browseNavigation],
   );
 
-  return { isBrowseNavigating, pathInput, setPathInput, navigateToBrowsePath };
+  // Registered roots are absolute and `~` expands on the host, so ask the host for its home.
+  const resolveHomePath = async (path: string): Promise<string> => {
+    if (
+      !/^~(?:[\\/]|$)/.test(path) ||
+      !environment ||
+      !readEnvironmentScope(environment.environmentId, AuthFilesystemReadScope) ||
+      !canPreloadBrowsePath(environmentRuntime?.connectionState)
+    ) {
+      return path;
+    }
+    const home = await loadBrowsePath({
+      environmentId: environment.environmentId,
+      input: { partialPath: "~" },
+    });
+    return AsyncResult.isSuccess(home) && home.value
+      ? `${home.value.parentPath.replace(/[\\/]+$/, "")}${path.slice(1)}`
+      : path;
+  };
+
+  return { isBrowseNavigating, pathInput, setPathInput, navigateToBrowsePath, resolveHomePath };
 }
