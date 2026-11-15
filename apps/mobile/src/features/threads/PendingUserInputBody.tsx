@@ -55,7 +55,6 @@ function QuestionText(props: {
   readonly threadId?: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly setDirection: TextDirection | undefined;
-  readonly preserveSoftBreaks?: boolean;
 }) {
   const styles = useMarkdownPreviewStyles();
   const openPullRequest = useOpenPullRequest();
@@ -85,7 +84,7 @@ function QuestionText(props: {
         Platform.OS === "android" ? undefined : props.setDirection === "rtl" ? "right" : "left"
       }
       onLinkPress={(href) => void openLink(href)}
-      preserveSoftBreaks={props.preserveSoftBreaks}
+      preserveSoftBreaks
     />
   );
 }
@@ -200,7 +199,6 @@ export function PendingUserInputBody(props: BodyProps) {
                           threadId={props.threadId}
                           workspaceRoot={props.workspaceRoot}
                           setDirection={setDirection}
-                          preserveSoftBreaks
                         />
                       </View>
                     ) : null}
