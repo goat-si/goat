@@ -102,7 +102,7 @@ export function MobileBotWorkRow(props: {
             {row.unread ? " · Unread" : ""}
           </Text>
         </View>
-        {pullRequests.chips.length > 0 ? (
+        {pullRequests.chips.length > 0 || pullRequests.moreLabel ? (
           // The name above already says each pull request; these words are for the eye.
           <View
             accessibilityElementsHidden
