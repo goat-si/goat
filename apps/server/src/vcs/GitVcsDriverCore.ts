@@ -98,7 +98,7 @@ import {
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
 import { unsetInheritedRepositoryEnv } from "./VcsProcess.ts";
 import { makeCachedGitConfigReader } from "./gitConfigReadCache.ts";
-import { recordPushedUpstream, runSharedConfigCommand } from "./GitSharedConfig.ts";
+import { recordPushedUpstream, runSharedConfigCommand, withSharedConfigWrite } from "./GitSharedConfig.ts";
 import {
   deriveLocalBranchNameFromRemoteRef,
   fetchFailureDetail,
@@ -992,6 +992,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
+  const sharedConfigRepository = (cwd: string) =>
+    Effect.suspend(() => resolveRepositoryPaths(cwd)).pipe(
+        Effect.map((repository) =>
+          repository === null
+            ? null
+            : hostPlatform === "win32"
+              ? repository.gitCommonDir.toLowerCase()
+              : repository.gitCommonDir,
+        ),
+      );
+
   const executeGit = (
     operation: string,
     cwd: string,
@@ -1020,15 +1031,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
         ...(options.progress ? { progress: options.progress } : {}),
       }),
-      repository: Effect.suspend(() => resolveRepositoryPaths(cwd)).pipe(
-        Effect.map((repository) =>
-          repository === null
-            ? null
-            : hostPlatform === "win32"
-              ? repository.gitCommonDir.toLowerCase()
-              : repository.gitCommonDir,
-        ),
-      ),
+      repository: sharedConfigRepository(cwd),
       write: options.writesSharedConfig === true,
       retry: options.retryConfigLock === true,
     }).pipe(
@@ -5091,22 +5094,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (input.oldBranch === input.newBranch) {
       return { branch: input.newBranch };
     }
-    const targetBranch = input.exactName
-      ? input.newBranch
-      : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
+    // Parallel launches often generate the same name; picking it under the lock that serializes
+    // the renames keeps a second launch from choosing a name the first is about to take.
+    return yield* withSharedConfigWrite(
+      sharedConfigRepository(input.cwd),
+      Effect.gen(function* () {
+        const targetBranch = input.exactName
+          ? input.newBranch
+          : yield* resolveAvailableBranchName(input.cwd, input.newBranch);
 
-    yield* executeGit(
-      "GitVcsDriver.renameBranch",
-      input.cwd,
-      ["branch", "-m", "--", input.oldBranch, targetBranch],
-      {
-        timeoutMs: 10_000,
-        fallbackErrorDetail: "git branch rename failed",
-        writesSharedConfig: true,
-      },
+        yield* executeGit(
+          "GitVcsDriver.renameBranch",
+          input.cwd,
+          ["branch", "-m", "--", input.oldBranch, targetBranch],
+          {
+            timeoutMs: 10_000,
+            fallbackErrorDetail: "git branch rename failed",
+          },
+        );
+
+        return { branch: targetBranch };
+      }),
     );
-
-    return { branch: targetBranch };
   });
 
   const switchRef: GitVcsDriver.GitVcsDriver["Service"]["switchRef"] = Effect.fn("switchRef")(
