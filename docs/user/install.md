@@ -350,6 +350,15 @@ The managed Codex runtime for Codex connected through ChatGPT first installs
 the release GOAT tested. When GOAT finds a newer compatible release, its setup
 in **Settings → Providers** offers an update.
 
+The managed Antigravity runtime works the same way. While provider update checks
+are on (**Settings → Maintenance**), opening Antigravity setup checks Google's CLI
+release channel at most once an hour, and setup then shows the new version with
+**Update Antigravity**. Installing or reinstalling checks the channel too. Nothing
+installs until you choose it, and GOAT installs a release only after its download
+matches the SHA-512 digest Google publishes for it. When the channel is unreachable,
+or GOAT's compatibility list withdrew the new release, setup keeps offering the
+release GOAT tested.
+
 Add another provider instance for a separate account or configuration. Each
 instance can have its own environment variables, such as API keys or a custom
 base URL. Mark secret values as sensitive; after saving, GOAT does not display
