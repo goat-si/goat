@@ -18,8 +18,9 @@ const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Ato
 const NO_KEPT = Atom.make<unknown>(null);
 const keyOf = (kind: Kind, environmentId: EnvironmentId, part?: string) =>
   `${generation}:${kind}:${environmentId}${part === undefined ? "" : `:${part}`}`;
-// Whether the computer's bot list last answered that this phone may not read it. Until a read
-// succeeds again, nothing of that computer is shown, kept or live.
+// Whether the computer last refused this phone, by its bot list or its connection. A refusal is
+// only the connection's last failure, which the next unreachable attempt replaces; this keeps it
+// until a read succeeds again, and until then nothing of that computer is shown, kept or live.
 const deniedAtom = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
 const NOT_DENIED = Atom.make(false);
 const deniedKeyOf = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
@@ -93,12 +94,16 @@ export function useKeptPerComputer<A>(
   const store = useAtomSet(atom as Atom.Writable<unknown>);
   const settled = live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
+  const refused = useConnectionRefused(environmentId);
   const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
     if (environmentId === null || key === null) return;
     // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds.
-    if (kind === "bots" && (denied || settled !== null)) setComputerDenied(denied);
+    if (kind === "bots") {
+      if (denied || refused) setComputerDenied(true);
+      else if (settled !== null) setComputerDenied(false);
+    }
     if (denied || !readable) {
       if (stored !== null) store(null);
       return;
@@ -124,6 +129,7 @@ export function useKeptPerComputer<A>(
     settled,
     stored,
     denied,
+    refused,
     readable,
     store,
     setComputerDenied,
@@ -142,13 +148,19 @@ export function useKeptPerComputer<A>(
  */
 export function useComputerReadable(environmentId: EnvironmentId | null): boolean {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
-  const { presentationById } = useEnvironments();
   const denied = useAtomValue(
     environmentId === null ? NOT_DENIED : deniedAtom(deniedKeyOf(environmentId)),
   );
-  if (environmentId === null || !catalog.entries.has(environmentId) || denied) return false;
-  const connection = presentationById.get(environmentId)?.connection;
+  const refused = useConnectionRefused(environmentId);
+  return environmentId !== null && catalog.entries.has(environmentId) && !denied && !refused;
+}
+
+/** The computer's connection stopped because it refuses this phone's credential or scope. */
+function useConnectionRefused(environmentId: EnvironmentId | null): boolean {
+  const { presentationById } = useEnvironments();
+  const connection =
+    environmentId === null ? undefined : presentationById.get(environmentId)?.connection;
   const reason =
     connection !== undefined && "failure" in connection ? connection.failure?.reason : null;
-  return reason !== "authentication" && reason !== "permission";
+  return reason === "authentication" || reason === "permission";
 }
