@@ -140,7 +140,7 @@ describe("linked pull requests", () => {
       query: "fix",
       limit: 10,
     });
-    expect(searching.map((match) => match.number)).toEqual([7, 8]);
+    expect(searching).toEqual([linked[0], linked[2]]);
     const searched = withLinkedComposerPullRequestsFirst({
       keyOf,
       matches: [entry(9, "2026-01-05"), entry(8, "2026-01-03")],
