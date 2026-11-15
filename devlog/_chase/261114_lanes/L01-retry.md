@@ -4,6 +4,8 @@ Lane branch: chase/t3-261114-claude-retry. Round 1 head 637128e1736f (reviewed: 
 
 Merged into #3397 at c9ce9682e9 (2026-11-16): round 2 lane head 47f97c627c, after the fix round below.
 
+Merged into #3397 at b1ef39696d (2026-11-16): the follow-up below, lane head b3d58344c1.
+
 Round 1 ported 10 upstream commits: 896e64f82d, 7 of the 10 effort rows (543ee27fa8, 5badea5b45, cdbfae86cd, 458a792087, 86ae1747ad, 7315c60b95, d20d535e32) and the two predecessor rows a50ebef78b and 694076dcf3. The first version of this record said 11; that count was wrong. Round 2 ports the last three effort rows (00766e2c02, c7618f6c10, 9ce9b1fd41) and the two rows whose predecessors round 1 landed (ccc9aaf10b, 7462f234e8). Each port commit ends with one paragraph holding `Upstream:` and `Decision:`.
 
 ## Review items
