@@ -39,6 +39,8 @@ const screenSession = vi.hoisted(() => ({
   availability: "ready" as string,
   // Whether the bot's computer, which Home and task screens read, is connected.
   homeConnected: true,
+  // Each task's newest chip in the conversation, which says which questions it took answers to.
+  taskChips: new Map() as ReadonlyMap<string, unknown>,
 }));
 // Where the screen navigates, and which remote computers a card's work thread can reach.
 const navigation = vi.hoisted(() => ({ dispatch: vi.fn() }));
@@ -540,6 +542,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
       homeConnected: screenSession.homeConnected,
+      taskChips: screenSession.taskChips,
       streamingReplyIds: new Set<string>(),
       visibleTurnItems: screenSession.visibleTurnItems,
       boundedSnapshots: screenSession.boundedSnapshots,
