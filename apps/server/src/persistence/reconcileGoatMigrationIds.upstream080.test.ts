@@ -13,12 +13,15 @@ import {
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 import {
   currentRow,
+  failingAfterWork,
+  fresh,
   goatNames,
   history,
   isDatabaseNewerThanBuildError,
   schema,
   seedOldGoatLedger,
   seedUserData,
+  snapshot,
   UPSTREAM_80S,
   userData,
 } from "./reconcileGoatMigrationIds.testkit.ts";
@@ -150,28 +153,39 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.deepStrictEqual(yield* schema, tables);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
-  it.effect("an upgrade interrupted in the last upstream step keeps the steps before it", () =>
-    Effect.gen(function* () {
-      yield* seedOldGoatLedger(147);
-      yield* seedUserData;
-      const sql = yield* SqlClient.SqlClient;
-      const data = yield* userData;
-      const [lastId] = UPSTREAM_80S.at(-1)!;
-      const failing = migrationEntries.map((entry) =>
-        entry[0] === lastId
-          ? ([entry[0], entry[1], sql`SELECT * FROM missing_migration_fixture`] as const)
-          : entry,
-      );
-      const failure = yield* Effect.flip(reconcileGoatMigrationIds(failing));
-      assert.strictEqual(failure._tag, "MigrationError");
-      assert.deepStrictEqual(
-        yield* history,
-        migrationManifest.filter(([id]) => id !== lastId),
-      );
-      assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S.slice(-1));
-      assert.deepStrictEqual(yield* history, migrationManifest);
-      assert.deepStrictEqual(yield* userData, data);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect(
+    "an id shift failing in 080 keeps the old ledger; failing in 089 rolls back 089 alone, keeps 080-088 and resumes at 089",
+    () =>
+      Effect.gen(function* () {
+        yield* seedOldGoatLedger(147);
+        yield* seedUserData;
+        const sql = yield* SqlClient.SqlClient;
+        const data = yield* userData;
+        const before = yield* history;
+        const tables = yield* schema;
+        // The collision check, the ledger move and 080 commit together or not at all.
+        const at080 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(80)));
+        assert.strictEqual(at080._tag, "MigrationError");
+        assert.deepStrictEqual(yield* history, before);
+        assert.deepStrictEqual(yield* schema, tables);
+        // 089 fails after its work: that work rolls back, 080-088 stay with their ledger rows.
+        const at089 = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(89)));
+        assert.strictEqual(at089._tag, "MigrationError");
+        assert.deepStrictEqual(
+          yield* history,
+          migrationManifest.filter(([id]) => id !== 89),
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE name IN (
+            'orchestration_v2_projection_threads_worktree_path_idx',
+            'orchestration_v2_projection_threads_root_thread_idx',
+            'orchestration_v2_projection_runs_run_status_idx')`,
+          [],
+        );
+        assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S.slice(-1));
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* userData, data);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("upstream 080-089 accept schema that is already present", () =>

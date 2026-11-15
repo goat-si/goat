@@ -13,47 +13,17 @@ import { hasPendingMigrations, migrationEntries, runMigrations } from "./Migrati
 import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 import {
   currentRow,
+  fresh,
   goatNames,
   history,
   isDatabaseNewerThanBuildError,
   schema,
   seedOldGoatLedger,
   seedUserData,
+  snapshot,
   UPSTREAM_80S,
   userData,
 } from "./reconcileGoatMigrationIds.testkit.ts";
-
-/** Schema objects (a table by its column set, since ALTER TABLE order differs), and the ledger. */
-const snapshot = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const objects = yield* sql<{
-    readonly type: string;
-    readonly name: string;
-    readonly tbl_name: string;
-    readonly sql: string | null;
-  }>`SELECT type, name, tbl_name, sql FROM sqlite_master
-    WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`;
-  const tables = [];
-  for (const object of objects) {
-    if (object.type !== "table") continue;
-    const columns = yield* sql.unsafe<{ readonly name: string }>(
-      `PRAGMA table_info("${object.name}")`,
-    );
-    tables.push([object.name, columns.map((column) => column.name).toSorted()] as const);
-  }
-  return {
-    objects: objects.map((object) =>
-      object.type === "table" ? [object.type, object.name] : [object.type, object.name, object.sql],
-    ),
-    tables,
-    ledger: yield* history,
-  };
-});
-
-const fresh = Effect.gen(function* () {
-  yield* runMigrations();
-  return yield* snapshot;
-}).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 /** A database per test: an in-memory one, or a file that a restart reopens on a new connection. */
 const databases = [

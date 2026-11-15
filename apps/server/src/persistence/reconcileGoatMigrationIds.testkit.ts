@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
 import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
@@ -45,6 +46,53 @@ export const schema = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql`SELECT name, sql FROM sqlite_master ORDER BY name`;
 });
+
+/** Schema objects (a table by its column set, since ALTER TABLE order differs), and the ledger. */
+export const snapshot = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const objects = yield* sql<{
+    readonly type: string;
+    readonly name: string;
+    readonly tbl_name: string;
+    readonly sql: string | null;
+  }>`SELECT type, name, tbl_name, sql FROM sqlite_master
+    WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`;
+  const tables = [];
+  for (const object of objects) {
+    if (object.type !== "table") continue;
+    const columns = yield* sql.unsafe<{ readonly name: string }>(
+      `PRAGMA table_info("${object.name}")`,
+    );
+    tables.push([object.name, columns.map((column) => column.name).toSorted()] as const);
+  }
+  return {
+    objects: objects.map((object) =>
+      object.type === "table" ? [object.type, object.name] : [object.type, object.name, object.sql],
+    ),
+    tables,
+    ledger: yield* history,
+  };
+});
+
+export const fresh = Effect.gen(function* () {
+  yield* runMigrations();
+  return yield* snapshot;
+}).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })));
+
+/** `entries` with migration `failId` doing its real work and then failing, as a kill after it would. */
+export const failingAfterWork = (failId: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return migrationEntries.map((entry) =>
+      entry[0] === failId
+        ? ([
+            entry[0],
+            entry[1],
+            Effect.andThen(entry[2], sql`SELECT * FROM missing_migration_fixture`),
+          ] as const)
+        : entry,
+    );
+  });
 
 /** Upstream 1-79, then GOAT's migrations from 80 up to and including `oldMax`, as GOAT recorded them. */
 export const seedOldGoatLedger = (oldMax: number) =>
