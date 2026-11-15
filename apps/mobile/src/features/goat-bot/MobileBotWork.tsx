@@ -609,6 +609,7 @@ export function MobileBotWork(props: {
           ...mobileBotTaskListItems({
             botName,
             chips,
+            ticking: open && (props.seen ?? props.visible),
             work: environmentId
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
