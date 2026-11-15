@@ -187,6 +187,29 @@ it.effect("a decision that is not JSON leaves its run not quiet and every histor
   ),
 );
 
+it.effect("a run whose stored input id is blank loads without a conversation", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const routine = yield* saveRoutine(fixture);
+      const firingId = yield* fire(fixture, routine);
+      yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ' ' WHERE firing_id = ${firingId}`;
+      yield* fixture.runs.finishChannelFiring({
+        firingId,
+        outcome: { type: "accepted", threadId: botThread },
+        at: yield* now,
+      });
+      assert.deepStrictEqual(
+        historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+          run.firingId,
+          run.status,
+          run.conversation,
+        ]),
+        [[firingId, "running", undefined]],
+      );
+    }),
+  ),
+);
+
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {

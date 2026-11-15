@@ -23,6 +23,7 @@ interface RecentRunRow {
 }
 
 const decodeSnapshot = Schema.decodeUnknownOption(Schema.fromJsonString(ScheduledTaskRun));
+const decodeInputId = Schema.decodeUnknownOption(ChannelInputId);
 const encodeChosen = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
 );
@@ -31,13 +32,14 @@ function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
   const snapshot = decodeSnapshot(row.snapshot_json);
   if (Option.isNone(snapshot)) return undefined;
   const run = snapshot.value;
+  const inputId = decodeInputId(row.input_id);
   return {
     firingId: run.firingId,
     status: run.status,
     requestedAt: run.requestedAt,
     completedAt: run.completedAt,
-    ...(run.dispatchStatus === "accepted" && run.threadId !== null && row.input_id !== null
-      ? { conversation: { threadId: run.threadId, inputId: ChannelInputId.make(row.input_id) } }
+    ...(run.dispatchStatus === "accepted" && run.threadId !== null && Option.isSome(inputId)
+      ? { conversation: { threadId: run.threadId, inputId: inputId.value } }
       : {}),
     ...(run.status === "completed" && row.quiet === 1 ? { quiet: true as const } : {}),
   };
