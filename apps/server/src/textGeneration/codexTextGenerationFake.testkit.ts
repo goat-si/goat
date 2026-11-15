@@ -41,6 +41,7 @@ export interface FakeCodexInput {
   /** Fail if `CODEX_HOME` holds an AGENTS.md, then rotate its auth.json as a token refresh would. */
   refreshAuth?: "in-place" | "replace";
   mcpServers?: ReadonlyArray<{ name: string; enabled: boolean }> | number;
+  requireMcpServersOff?: ReadonlyArray<string>;
   /** Copies the `--output-schema` file here so a test can check what the CLI received. */
   schemaCopyPath?: string;
 }
@@ -58,6 +59,7 @@ export function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     stdinMustNotContain: input.stdinMustNotContain ?? null,
     refreshAuth: input.refreshAuth ?? null,
     mcpServers: input.mcpServers ?? [],
+    requireMcpServersOff: input.requireMcpServersOff ?? [],
     schemaCopyPath: input.schemaCopyPath ?? null,
     stderr: input.stderr ?? null,
     output: input.output,
@@ -122,6 +124,33 @@ export function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "function fail(message, code) {",
         '  process.stderr.write(message + "\\n");',
         "  process.exit(code);",
+        "}",
+        "// Like Codex: a later mcp_servers={...} override replaces servers earlier -c flags defined.",
+        "const servers = new Map();",
+        "const offServers = new Set();",
+        "for (let index = 0; index < args.length; index += 1) {",
+        '  if (args[index] !== "-c" && args[index] !== "--config") continue;',
+        '  const value = args[index + 1] ?? "";',
+        '  if (value.startsWith("mcp_servers={")) {',
+        '    const named = [...value.matchAll(/"([^"]+)"=\\{enabled=false\\}/g)].map((match) => match[1]);',
+        "    for (const name of named) offServers.add(name);",
+        "    for (const name of [...servers.keys()]) {",
+        "      if (named.includes(name)) servers.set(name, false);",
+        "      else servers.delete(name);",
+        "    }",
+        '  } else if (value.startsWith("mcp_servers.")) {',
+        '    const [name, key] = value.slice("mcp_servers.".length).split(/[.=]/);',
+        "    if (value === `mcp_servers.${name}.enabled=false`) offServers.add(name);",
+        "    // An enabled flag alone toggles a server another layer (config.toml) defines.",
+        '    if (key === "enabled" && !servers.has(name)) continue;',
+        '    servers.set(name, servers.get(name) === true || key === "url" || key === "command");',
+        "  }",
+        "}",
+        "for (const [name, hasTransport] of servers) {",
+        '  if (!hasTransport) fail("Error loading config.toml: invalid transport in `mcp_servers." + name + "`", 12);',
+        "}",
+        "for (const name of check.requireMcpServersOff) {",
+        '  if (!offServers.has(name)) fail("MCP server left on: " + name, 13);',
         "}",
         // Codex CLI 0.163.0 forwards the schema to the API, which rejects a non-object root.
         "if (schemaPath !== null) {",
