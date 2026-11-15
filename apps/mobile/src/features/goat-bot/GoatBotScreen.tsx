@@ -422,8 +422,8 @@ export function GoatBotScreen(props: {
     {
       botId: member?.botId ?? null,
       taskId: props.taskId ?? null,
-      environmentId: session.historyEnvironmentId,
-      threadId: session.threadId,
+      environmentId: session.sendEnvironmentId,
+      threadId: session.sendThreadId,
     },
     () => setText(""),
   );
