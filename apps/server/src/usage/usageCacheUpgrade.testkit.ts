@@ -121,7 +121,7 @@ export function registerCacheUpgradeTest(
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v12.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v13.json");
           assert.deepStrictEqual(
             (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
               .filter((name) => name.startsWith("usage-scan-cache"))
@@ -148,5 +148,91 @@ export function registerCacheUpgradeTest(
           ),
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.live("re-prices Claude 1-hour cache writes a v12 cache saved, then drops the v12 file", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const model = "claude-opus-4-5-20251101";
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          transcript,
+          encodeUnknownJsonString({
+            type: "assistant",
+            timestamp: "2026-08-01T10:00:00Z",
+            sessionId: "session-1",
+            message: {
+              id: "msg_ttl",
+              model,
+              usage: {
+                input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 1_000_000,
+                cache_creation: {
+                  ephemeral_5m_input_tokens: 400_000,
+                  ephemeral_1h_input_tokens: 600_000,
+                },
+                output_tokens: 0,
+              },
+            },
+          }) + "\n",
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const { stateDir } = yield* ServerConfig.ServerConfig;
+        const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
+        const first = yield* UsageService.make;
+        yield* first.readSummary(WINDOW);
+        yield* first.awaitPersisted;
+        // A v12 row ends at its rate model: it had no slot for 1-hour cache writes.
+        yield* Effect.promise(async () => {
+          const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+            files: Record<string, { r: unknown[][] }>;
+          };
+          for (const file of Object.values(document.files)) {
+            file.r = file.r.map((row) => row.slice(0, 12));
+          }
+          await NodeFSP.rm(cachePath);
+          await NodeFSP.writeFile(
+            NodePath.join(stateDir, "usage-scan-cache-v12.json"),
+            encodeUnknownJsonString({ ...document, version: 12 }),
+          );
+        });
+
+        const upgraded = yield* UsageService.make;
+        const summary = yield* upgraded.readSummary(WINDOW);
+        // 0.4M x $6.25/M + 0.6M x $10/M
+        assert.closeTo(
+          summary.buckets.reduce((sum, bucket) => sum + bucket.costUsd, 0),
+          8.5,
+          1e-9,
+        );
+        yield* upgraded.awaitPersisted;
+        assert.deepStrictEqual(
+          (yield* Effect.promise(() => NodeFSP.readdir(stateDir))).filter((name) =>
+            name.startsWith("usage-scan-cache"),
+          ),
+          [SCAN_CACHE_FILE_NAME],
+        );
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-service-v12-cache-write-test",
+            home,
+            settings,
+            ratesDocument: {
+              [model]: {
+                litellm_provider: "anthropic",
+                input_cost_per_token: 5e-6,
+                output_cost_per_token: 25e-6,
+                cache_read_input_token_cost: 5e-7,
+                cache_creation_input_token_cost: 6.25e-6,
+                cache_creation_input_token_cost_above_1hr: 1e-5,
+              },
+            },
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped),
   );
 }
