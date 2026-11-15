@@ -17,9 +17,6 @@ import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 
-/** What New routine puts in the message box: the person finishes the sentence. */
-export const GOAT_BOT_NEW_ROUTINE_DRAFT = "Set up a routine: ";
-
 /** The bot's routines on its home: the check-in form, then each bound routine with its switch. */
 export function MobileBotRoutines(props: {
   readonly environmentId: EnvironmentId | null;

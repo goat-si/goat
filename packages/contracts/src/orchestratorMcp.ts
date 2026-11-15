@@ -710,17 +710,18 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   }),
   tail: Schema.optional(clampedPositiveInt(50)).annotate({
     description:
-      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition or itemId. Example: {"threadId":"<id>","tail":3}',
+      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition, beforePosition or itemId. Example: {"threadId":"<id>","tail":3}',
   }),
-  afterPosition: Schema.optional(NonNegativeInt),
+  afterPosition: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(-1))),
+  beforePosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
   }),
   runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
     description: "Max recent runs, 1 to 50.",
   }),
-  maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
-    description: "Max chars per item, 1 to 50000.",
+  maxCharsPerItem: Schema.optional(clampedPositiveInt(20_000)).annotate({
+    description: "Max chars per item, 1 to 20000.",
   }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
@@ -795,6 +796,8 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  /** null when nothing is older than the page. Missing from peers that only read forward. */
+  earlierPosition: Schema.optional(Schema.NullOr(NonNegativeInt)),
   /**
    * The latest run's structured result; null before the thread's first run.
    * Optional because hosts running an older GOAT do not send it.

@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 
 import {
   OrchestratorMcpScheduledTask,
+  OrchestratorMcpThreadReadInput,
   OrchestratorMcpScheduleTaskInput,
   OrchestratorMcpUpdateScheduledTaskInput,
   OrchestratorMcpCreateThreadsInput,
@@ -727,7 +728,7 @@ it("decodes list, detail and search replies across peer versions", () => {
       PreviousOrchestratorMcpThreadReadResult,
       OrchestratorMcpThreadReadResult,
       read,
-      { ...read, thread: { ...detail, ...additions } },
+      { ...read, thread: { ...detail, ...additions }, earlierPosition: 3 },
     ],
     [
       PreviousOrchestratorMcpThreadSearchResult,
@@ -741,6 +742,15 @@ it("decodes list, detail and search replies across peer versions", () => {
     expect(() => Schema.decodeUnknownSync(current)(olderReply)).not.toThrow();
     expect(Schema.decodeUnknownSync(current)(newReply)).toEqual(newReply);
   }
+});
+
+it("thread reads start at the oldest item with afterPosition -1 and page back with beforePosition", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
+  expect(decode({ threadId: "thread-1", afterPosition: -1 }).afterPosition).toBe(-1);
+  expect(decode({ threadId: "thread-1", beforePosition: 4 }).beforePosition).toBe(4);
+  expect(() => decode({ threadId: "thread-1", afterPosition: -2 })).toThrow();
+  expect(() => decode({ threadId: "thread-1", beforePosition: -1 })).toThrow();
+  expect(decode({ threadId: "thread-1", maxCharsPerItem: 50_000 }).maxCharsPerItem).toBe(20_000);
 });
 
 it("rejects a nonboolean schedule binding and advertises the cross-project default", () => {

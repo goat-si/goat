@@ -51,7 +51,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
             (handoff.history?.coverage === undefined
               ? undefined
               : refreshRecoveryToolName(handoff.history.coverage)) ??
-            `From thread ${handoff.threadId}, runs ${handoff.coveredRunOrdinals.from}-${handoff.coveredRunOrdinals.to}. Recover history with ${goatCallText("thread.read")}, view=activity; paginate with afterPosition, and use itemId/textOffset for long items.`
+            `From thread ${handoff.threadId}, runs ${handoff.coveredRunOrdinals.from}-${handoff.coveredRunOrdinals.to}. Recover history with ${goatCallText("thread.read")}, view=activity, afterPosition=-1; paginate with afterPosition=nextPosition, and use itemId/textOffset for long items.`
           }`,
       )
       .join("\n");
