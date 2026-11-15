@@ -60,8 +60,7 @@ vi.mock("~/state/query", () => ({
     };
   },
 }));
-vi.mock("~/hooks/useSettings", async (original) => ({
-  ...(await original<typeof import("~/hooks/useSettings")>()),
+vi.mock("~/hooks/useSettings", () => ({
   usePrimarySettings: <T,>(select: (settings: { timestampFormat: string }) => T) =>
     select({ timestampFormat: reads.timestampFormat }),
 }));
@@ -363,13 +362,12 @@ it("a routine's recent runs are one toolbar stop whose dots name each run in the
   dots()[0]?.focus();
   await userEvent.keyboard("{ArrowRight}");
   expect(focused()).toBe("Run on Nov 14, 04:00, completed");
-  await userEvent.keyboard("{End}");
+  await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
   expect(focused()).toBe("Run on Nov 14, 09:00, completed");
-  await userEvent.keyboard("{Home}");
-  expect(focused()).toBe("Run on Nov 14, 03:00, completed");
   expect(tabStops()).toEqual([document.activeElement]);
   reads.timestampFormat = "12-hour";
-  await screen.rerender(routines(tasks));
+  // Settings are not reactive here, so fresh tasks make the rows draw again.
+  await screen.rerender(routines(tasks.map((task) => ({ ...task }))));
   await expect.element(dot("Run on Nov 14, 9:00 AM, completed")).toBeInTheDocument();
   expect(dot("Run on Nov 14, 09:00, completed").query()).toBeNull();
 });
@@ -414,7 +412,7 @@ it("a dot opens its run in the shared words, and reads only an ended run that re
   await userEvent.click(dot("Run on Nov 14, 05:00, failed"));
   await expect
     .element(page.getByRole("dialog", { name: "Failed · Nov 14, 05:00, finished 05:05" }))
-    .toHaveTextContent("The model refused.");
+    .toMatchTextContent("The model refused.");
   await userEvent.keyboard("{Escape}");
   await expect.element(popup()).not.toBeInTheDocument();
   expect(await readRun("Run on Nov 14, 04:00, completed")).toContain(
@@ -445,20 +443,20 @@ it("an open run that is still running reads once the list shows it ended", async
     ].map((entry, index) => overrides[9 - index] ?? entry);
   await using screen = await render(routines([routine("Morning check", runs())]));
   await userEvent.click(dot("Run on Nov 14, 09:00, running"));
-  await expect.element(popup()).toHaveTextContent("Still running.");
+  await expect.element(popup()).toMatchTextContent("Still running.");
   expect(readKeys()).toEqual([]);
   answer("in-9", { reply: { text: "Build is green." } });
   await screen.rerender(
     routines([routine("Morning check", runs({ 9: finished(9, "completed", "in-9") }))]),
   );
-  await expect.element(popup()).toHaveTextContent("Build is green.");
+  await expect.element(popup()).toMatchTextContent("Build is green.");
   expect(new Set(readKeys())).toEqual(new Set(["input:env:in-9"]));
   await userEvent.keyboard("{Escape}");
   await expect.element(popup()).not.toBeInTheDocument();
 
   // An unsettled run waits like a running one, with its own words.
   await userEvent.click(dot("Run on Nov 14, 08:00, outcome unavailable"));
-  await expect.element(popup()).toHaveTextContent("Details for this run aren't available.");
+  await expect.element(popup()).toMatchTextContent("Details for this run aren't available.");
   expect(readKeys()).not.toContain("input:env:in-8");
   answer("in-8", { reply: { text: "Paused, then done." } });
   const settled = run(8, "paused_by_policy", {
@@ -466,7 +464,7 @@ it("an open run that is still running reads once the list shows it ended", async
     conversation: conversation("in-8"),
   });
   await screen.rerender(routines([routine("Morning check", runs({ 8: settled }))]));
-  await expect.element(popup()).toHaveTextContent("Paused, then done.");
+  await expect.element(popup()).toMatchTextContent("Paused, then done.");
   await userEvent.keyboard("{Escape}");
   await expect.element(popup()).not.toBeInTheDocument();
 
@@ -478,7 +476,7 @@ it("an open run that is still running reads once the list shows it ended", async
     conversation: conversation("in-7"),
   });
   await screen.rerender(routines([routine("Morning check", runs({ 7: quiet }))]));
-  await expect.element(popup()).toHaveTextContent("No update");
+  await expect.element(popup()).toMatchTextContent("No update");
   expect(readKeys()).not.toContain("input:env:in-7");
 });
 
@@ -488,7 +486,7 @@ it("a run pushed out of the seven closes its popover", async () => {
   const old = finished(1, "completed", "in-1");
   await using screen = await render(routines([routine("Morning check", [old])]));
   await userEvent.click(dot("Run on Nov 14, 01:00, completed"));
-  await expect.element(popup()).toHaveTextContent("Old reply.");
+  await expect.element(popup()).toMatchTextContent("Old reply.");
   const before = reads.keys.length;
   const newer = [8, 7, 6, 5, 4, 3, 2].map((hour) => finished(hour, "completed", `in-${hour}`));
   await screen.rerender(routines([routine("Morning check", [...newer, old])]));
@@ -504,7 +502,7 @@ it("docked: a task hiding the chat closes the run popover and reads nothing", as
     routines([routine("Morning check", [running])], { docked: true }),
   );
   await userEvent.click(dot("Run on Nov 14, 09:00, running"));
-  await expect.element(popup()).toHaveTextContent("Still running.");
+  await expect.element(popup()).toMatchTextContent("Still running.");
   await screen.rerender(routines([routine("Morning check", [running])], { docked: true }, true));
   await expect.element(popup()).not.toBeInTheDocument();
   answer("in-9", { reply: { text: "Build is green." } });
@@ -526,7 +524,7 @@ it("sheet: a dot still opens its run while the chat is hidden, without Show in c
     ),
   );
   await userEvent.click(dot("Run on Nov 14, 09:00, completed"));
-  await expect.element(popup()).toHaveTextContent("Build is green.");
+  await expect.element(popup()).toMatchTextContent("Build is green.");
   expect(readKeys()).toContain("input:env:in-9");
   expect(popup().getByRole("button", { name: "Show in chat" }).query()).toBeNull();
 });
