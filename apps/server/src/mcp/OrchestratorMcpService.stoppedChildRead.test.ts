@@ -53,10 +53,10 @@ it.effect(
       );
       assert.equal(read.latestRunId, notice?.id);
       // The read saw the cancelled notice, not the task's interrupted run, so the parent is
-      // still woken with the task's result.
+      // still woken with the task's result; the effect worker may already be delivering it.
       const task = (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents.find(
         (candidate) => candidate.id === created.taskId,
       );
-      assert.equal(task?.completionDelivery?.state, "pending");
+      assert.include(["pending", "claimed"], task?.completionDelivery?.state);
     }).pipe(Effect.provide(layerTest)),
 );
