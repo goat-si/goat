@@ -529,6 +529,7 @@ it("adds lastRunError to MCP task output without breaking an older reader", () =
   const output = JSON.stringify({ ...task, lastRunError: "Weekly usage limit reached" });
   expect(decode(output).lastRunError).toBe("Weekly usage limit reached");
   expect(decode(JSON.stringify(task)).lastRunError).toBeUndefined();
+  expect(() => decode(JSON.stringify({ ...task, lastRunError: 404 }))).toThrow();
   expect(Schema.decodeUnknownSync(Schema.fromJsonString(old))(output).lastRunStatus).toBe("failed");
 });
 
