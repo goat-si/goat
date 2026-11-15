@@ -472,6 +472,24 @@ it("keeps the asks it has when a refresh fails, marked out of date, and reads ag
   expect(query.reads).toBeGreaterThan(before);
 });
 
+it("an asks read refused for access shows nothing of the earlier answer it still holds", async () => {
+  registry = AtomRegistry.make();
+  await showRoster(true);
+  const earlier = read([ask("scout", "task-s", "Which machine?", "2026-11-11T10:10:00.000Z")]);
+  serve(earlier);
+  await act(async () => {});
+  expect(container.textContent).toContain("Which machine?");
+  // This phone lost the scope: the read is refused, and the query still holds its earlier answer.
+  serve(
+    AsyncResult.failure(
+      Cause.fail({ _tag: "EnvironmentAuthorizationError", message: "Not allowed." }),
+      { previousSuccess: Option.some(earlier) },
+    ),
+  );
+  await act(async () => {});
+  expect(container.textContent).not.toContain("Which machine?");
+});
+
 it("reads again when the roster comes back into view, so an ask that arrived meanwhile shows", async () => {
   registry = AtomRegistry.make();
   await showRoster(true);

@@ -1,7 +1,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { RegistryContext } from "@effect/atom-react";
-import { AtomRegistry } from "effect/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { BotProfile, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
@@ -185,11 +185,13 @@ const listed = (ids: string[]) => ({
 /** Renders Scout's row status in one registry that follows the app's computers, as the app does. */
 function rosterRow(bot = scout) {
   const registry = AtomRegistry.make();
-  const stop = followKeptPerComputerCatalog(registry);
+  // The app's connections, as the app hands them to the follower it installs.
+  const connections = Atom.make<ReadonlyMap<string, object>>(new Map());
+  const stop = followKeptPerComputerCatalog(registry, connections as never);
   registry.set(catalog.atom!, listed(["env"]));
   let value: ReturnType<typeof useMobileMemberStatus> | undefined;
-  function Probe() {
-    value = useMobileMemberStatus(bot);
+  function Probe(props: { readonly bot: typeof scout }) {
+    value = useMobileMemberStatus(props.bot);
     return null;
   }
   // The roster's own bot-list read, which says whether this phone may still read the computer.
@@ -218,17 +220,31 @@ function rosterRow(bot = scout) {
     get value() {
       return value;
     },
-    show: (botListCause: unknown = null) =>
-      act(async () =>
+    show: (botListCause: unknown = null, shown: typeof scout | null = bot) =>
+      act(async () => {
+        registry.set(
+          connections,
+          new Map([
+            [
+              "env",
+              {
+                connection:
+                  member.failure === null
+                    ? { phase: member.connected ? "connected" : "disconnected" }
+                    : { phase: "error", failure: member.failure },
+              },
+            ],
+          ]),
+        );
         root.render(
           view(
             <>
               <BotList cause={botListCause} />
-              <Probe />
+              {shown === null ? null : <Probe bot={shown} />}
             </>,
           ),
-        ),
-      ),
+        );
+      }),
     setComputers: (ids: string[]) => act(async () => registry.set(catalog.atom!, listed(ids))),
     [Symbol.asyncDispose]: async () => {
       await act(async () => root.unmount());
@@ -299,13 +315,26 @@ it("a member's kept status goes with its computer, and adding the computer again
   expect(row.value?.latest).toBeUndefined();
 });
 
-it("keeps nothing for a deleted member", async () => {
+it("keeps nothing for a deleted member, even one whose status was kept before it was deleted", async () => {
   setup();
   member.answer = { waitingCount: 1, latest: reply };
-  const deleted = { ...scout, state: "deleted" } as typeof scout;
-  await using row = rosterRow(deleted);
+  await using row = rosterRow();
   await row.show();
   member.connected = false;
+  await row.show(null, { ...scout, state: "deleted" } as typeof scout);
+  expect(row.value?.latest).toBeUndefined();
+});
+
+it("removing a computer forgets the status kept for a member whose row was not on screen", async () => {
+  setup();
+  member.answer = { waitingCount: 1, latest: reply };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  // Scout's row is off screen when the computer is removed and added back.
+  await row.show(null, null);
+  await row.setComputers([]);
+  await row.setComputers(["env"]);
   await row.show();
   expect(row.value?.latest).toBeUndefined();
 });

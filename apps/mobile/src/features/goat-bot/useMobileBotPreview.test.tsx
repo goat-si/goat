@@ -9,7 +9,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { act, type ReactNode } from "react";
 import { RegistryContext } from "@effect/atom-react";
-import { AtomRegistry } from "effect/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -138,7 +138,9 @@ const botList = { bots: [] };
 function mainTile() {
   resetKeptPerComputerForTests();
   const registry = AtomRegistry.make();
-  const stop = followKeptPerComputerCatalog(registry);
+  // The app's connections, as the app hands them to the follower it installs.
+  const connections = Atom.make<ReadonlyMap<string, object>>(new Map());
+  const stop = followKeptPerComputerCatalog(registry, connections as never);
   registry.set(catalog.atom!, listed(["env"]));
   let preview: ReturnType<typeof useMobileBotPreview> = null;
   function Probe() {
@@ -182,6 +184,24 @@ function mainTile() {
         ),
       ),
     setComputers: (ids: string[]) => act(async () => registry.set(catalog.atom!, listed(ids))),
+    /** The computer's connection fails this way, whatever is on screen at the time. */
+    fail: (failure: { kind: string; reason: string } | null) =>
+      act(async () => {
+        connection.failure = failure;
+        registry.set(
+          connections,
+          new Map([
+            [
+              "env",
+              {
+                connection: failure === null ? { phase: "connected" } : { phase: "error", failure },
+              },
+            ],
+          ]),
+        );
+      }),
+    /** Only the main tile is on screen: no bot list, no member rows. */
+    showTileAlone: () => act(async () => root.render(view(<Probe />))),
     [Symbol.asyncDispose]: async () => {
       await act(async () => root.unmount());
       stop();
@@ -250,6 +270,20 @@ it("a refusal stays known after the next attempt fails some other way, until a r
     connection.failure = null;
     await tile.show();
     expect(tile.line).toBe("The build is waiting on you.");
+  } finally {
+    connection.failure = null;
+  }
+});
+
+it("a refusal seen while no bot list is on screen still hides the line when the roster opens", async () => {
+  state.items = [message("b1", "assistant_message", "The build is waiting on you.")];
+  try {
+    await using tile = mainTile();
+    // The phone sits on another screen while the computer refuses it, then fails to reach it.
+    await tile.fail({ kind: "blocked", reason: "authentication" });
+    await tile.fail({ kind: "retrying", reason: "host-unreachable" });
+    await tile.showTileAlone();
+    expect(tile.line).toBeNull();
   } finally {
     connection.failure = null;
   }
