@@ -51,9 +51,10 @@ account.
 
 ## Runtime installation
 
-Managed installation supports Apple Silicon macOS, Linux x64 or ARM64, and Windows
-x64 or ARM64. Intel Macs and musl Linux install Google's native CLI, which needs
-its release channel to be reachable. Allow several GB of free disk space,
+Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
+and Windows x64 or ARM64. When Google's release channel is unreachable, every one
+of these installs the 1.4.5 runtime GOAT tested; musl Linux installs only Google's
+native CLI, so it needs that channel. Allow several GB of free disk space,
 especially on Linux.
 On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.
@@ -140,6 +141,17 @@ Sign out, then sign in again to replace an account.
 Before removing a managed runtime, disable its instances and cancel any active
 installation. Clear any explicit binary path pointing into that runtime. Removal
 is refused while the runtime is in use.
+
+## Run a native goal
+
+When your Antigravity runtime offers `/goal`, send `/goal` followed by a verifiable
+objective. Antigravity keeps working until it completes the goal or you cancel it.
+If you still use the older 1.4.5 runtime, update Antigravity in provider settings,
+then refresh provider status.
+
+Use Stop to interrupt a running goal, then ask Antigravity to stop pursuing it
+before starting more work. Ordinary follow-ups wait until the running turn ends.
+GOAT does not support Antigravity goal status, pause, resume, or clear commands.
 
 ## Check access and troubleshoot
 
