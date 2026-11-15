@@ -106,7 +106,12 @@ import {
 } from "./ServerBrowserSessions.ts";
 import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
-import { loadErrorOf } from "./serverBrowserLoadError.ts";
+import {
+  assertNavigationSucceeded,
+  assertOpenedPageLoaded,
+  loadErrorOf,
+  reportedTabUrl,
+} from "./serverBrowserLoadError.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
 import { makeBrowserHistorySupport } from "./BrowserHistoryRecordAction.ts";
@@ -1373,7 +1378,7 @@ const make = Effect.gen(function* () {
       available: true,
       visible: capacity.visible(tab),
       tabId: tab.tabId,
-      url: url === "about:blank" ? null : url,
+      url: loadError?.url ?? (url === "about:blank" ? null : url),
       title,
       loading: tab.loading,
       ...(loadError ? { loadError } : {}),
@@ -1394,10 +1399,7 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
-          url:
-            candidate.page.url() === "about:blank"
-              ? null
-              : ServerBrowserPage.withoutDataPayload(candidate.page.url()),
+          url: reportedTabUrl(candidate, desktopChannel),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
@@ -1715,6 +1717,7 @@ const make = Effect.gen(function* () {
                     "load",
                     navigationTimeout,
                     tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
+                    () => assertNavigationSucceeded(tab, desktopChannel),
                   );
                 }
               } else {
@@ -1723,6 +1726,7 @@ const make = Effect.gen(function* () {
                   dropTab(tab, false);
                 });
                 navigationSent = tab.initialNavigationSent;
+                if (url) await assertOpenedPageLoaded(tab, desktopChannel, navigationTimeout);
               }
               actionSignal.throwIfAborted();
             };
@@ -1739,11 +1743,6 @@ const make = Effect.gen(function* () {
                 }),
               );
               shown = awaitRevealedViewer(tab, reveal, deadlineMs);
-            }
-            if (!existing && url) {
-              await tab.page
-                .waitForLoadState("load", { timeout: navigationTimeout })
-                .catch(constVoid);
             }
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
@@ -1970,6 +1969,7 @@ const make = Effect.gen(function* () {
               navigateInput.readiness ?? "load",
               navigateInput.timeoutMs ?? request.timeoutMs,
               actionGate(destination).channel,
+              () => assertNavigationSucceeded(tab, desktopChannel),
             ),
           { url: destination },
         );
@@ -2024,7 +2024,7 @@ const make = Effect.gen(function* () {
           .then(ServerBrowserScreen.recheck(tab, request))
           .then((snapshot) => {
             const loadError = loadErrorOf(tab, desktopChannel);
-            return loadError ? { ...snapshot, loadError } : snapshot;
+            return loadError ? { ...snapshot, url: loadError.url, loadError } : snapshot;
           });
       }
       case "logs":
