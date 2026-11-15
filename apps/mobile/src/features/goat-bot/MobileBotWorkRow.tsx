@@ -7,7 +7,7 @@ import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { mobileBotTaskStatus, type MobileTaskChips } from "./mobileBotTaskStatus";
-import { mobileRowTimeSpoken, useMobileRowTime } from "./useMobileRowTime";
+import { useMobileRowTime } from "./useMobileRowTime";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
 type Section = "running" | "waiting" | "finished";
@@ -25,8 +25,7 @@ const CHIP_TEXT_CLASS: Record<GoatBotRowPullRequestChip["state"], string> = {
  * The words a task row says and VoiceOver reads: title, status, how long ago, unread and pinned,
  * then each pull request shown and how many more there are.
  */
-export function mobileBotTaskLabel(row: TaskRow, chips: MobileTaskChips, time = ""): string {
-  const spoken = mobileRowTimeSpoken(time);
+export function mobileBotTaskLabel(row: TaskRow, chips: MobileTaskChips, spoken = ""): string {
   const pullRequests = goatBotRowPullRequests(row, VISIBLE_PULL_REQUESTS);
   return [
     row.task.title,
@@ -64,7 +63,7 @@ export function MobileBotWorkRow(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={mobileBotTaskLabel(row, props.chips, time)}
+      accessibilityLabel={mobileBotTaskLabel(row, props.chips, time.spoken)}
       accessibilityActions={props.actions}
       onAccessibilityAction={(event) => props.onAction(event.nativeEvent.actionName)}
       accessibilityState={{ disabled: !props.openable }}
@@ -98,11 +97,11 @@ export function MobileBotWorkRow(props: {
           ) : null}
           <Text className="text-xs text-foreground-muted">
             {mobileBotTaskStatus(row, props.chips)}
-            {time ? ` · ${time}` : ""}
+            {time.text ? ` · ${time.text}` : ""}
             {row.unread ? " · Unread" : ""}
           </Text>
         </View>
-        {pullRequests.chips.length > 0 ? (
+        {pullRequests.chips.length > 0 || pullRequests.moreLabel ? (
           // The name above already says each pull request; these words are for the eye.
           <View
             accessibilityElementsHidden
