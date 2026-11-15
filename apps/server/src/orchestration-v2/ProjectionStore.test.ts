@@ -2959,26 +2959,36 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           })}
         )
       `;
-      const cancelledSuffixSnapshot = yield* projectionStore.getThreadSnapshotWindow(threadId, {
-        rowLimit: sqlPageLimit,
-      });
-      const cancelledSuffixPage = buildBoundedThreadProjection({
-        policy: { ...THREAD_HISTORY_PAGE_POLICY, maxUserTurns: undefined },
-        projection: cancelledSuffixSnapshot.projection,
-        snapshotSequence: cancelledSuffixSnapshot.snapshotSequence,
-      });
-      assert.strictEqual(cancelledSuffixPage.latestLocalTurnOrdinal, 1_202);
-      assert.lengthOf(cancelledSuffixPage.projection.visibleTurnItems, 75);
-      assert.isFalse(
-        cancelledSuffixPage.projection.visibleTurnItems.some((row) =>
-          String(row.sourceItemId).includes(":cancelled:"),
-        ),
-      );
-      assert.isTrue(
-        cancelledSuffixPage.projection.visibleTurnItems.some(
-          (row) => row.sourceItemId === runlessQueuedId,
-        ),
-      );
+      // A steer that fell back to the queue keeps its queued-turn item while its
+      // run waits. End on cancelled for the checks below.
+      for (const status of ["queued", "cancelled"] as const) {
+        yield* sql`
+          UPDATE orchestration_v2_projection_runs
+          SET status = ${status}, payload_json = json_set(payload_json, '$.status', ${status})
+          WHERE run_id = ${cancelledRunId}
+        `;
+        const cancelledSuffixSnapshot = yield* projectionStore.getThreadSnapshotWindow(threadId, {
+          rowLimit: sqlPageLimit,
+        });
+        const cancelledSuffixPage = buildBoundedThreadProjection({
+          policy: { ...THREAD_HISTORY_PAGE_POLICY, maxUserTurns: undefined },
+          projection: cancelledSuffixSnapshot.projection,
+          snapshotSequence: cancelledSuffixSnapshot.snapshotSequence,
+        });
+        assert.strictEqual(cancelledSuffixPage.latestLocalTurnOrdinal, 1_202);
+        assert.lengthOf(cancelledSuffixPage.projection.visibleTurnItems, 75);
+        assert.isFalse(
+          cancelledSuffixPage.projection.visibleTurnItems.some((row) =>
+            String(row.sourceItemId).includes(":cancelled:"),
+          ),
+          status,
+        );
+        assert.isTrue(
+          cancelledSuffixPage.projection.visibleTurnItems.some(
+            (row) => row.sourceItemId === runlessQueuedId,
+          ),
+        );
+      }
 
       const interruptRunId = RunId.make("run:bounded-sql-history:interrupt");
       const interruptNodeId = NodeId.make("node:bounded-sql-history:interrupt");
@@ -3552,7 +3562,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       assert.isNotEmpty(countQueries);
       for (const countQuery of countQueries) {
         for (const detail of yield* planOf(countQuery)) {
-          assert.notInclude(detail, "orchestration_v2_projection_turn_items");
+          if (detail.includes("orchestration_v2_projection_turn_items")) {
+            // Only held input is read from the sparse index; transcript history stays unread.
+            assert.include(
+              detail,
+              "SEARCH held USING INDEX orchestration_v2_projection_turn_items_queued_input_idx (run_id=?)",
+            );
+          }
         }
       }
     }),
