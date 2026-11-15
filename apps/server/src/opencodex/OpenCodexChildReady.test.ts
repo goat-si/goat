@@ -97,6 +97,14 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
     }),
   );
 
+  it.effect("a Child's Codex setup installs only GOAT's pinned release, never an update", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ managedCodex: false });
+      expect((yield* f.call("installCodex")).kind).toBe("ok");
+      expect(f.installUpdates).toEqual([false]);
+    }),
+  );
+
   it.effect("does not overwrite an unowned deterministic instance", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

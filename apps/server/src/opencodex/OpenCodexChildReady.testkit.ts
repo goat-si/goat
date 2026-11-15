@@ -154,6 +154,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
   };
   const probes = yield* Ref.make(0);
   const resolveCalls: Array<boolean | undefined> = [];
+  const installUpdates: Array<boolean> = [];
   const executable = {
     executablePath: "/fixture/codex",
     source: "managed" as const,
@@ -237,8 +238,9 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
             );
       },
       acquire: () => Effect.succeed(executable),
-      startManagedOnly: () =>
+      startManagedOnly: (input) =>
         Effect.sync(() => {
+          installUpdates.push(input.allowUpdate);
           if (state.installResult === "succeeded") state.managedCodex = true;
           return installState(state.installResult);
         }),
@@ -381,6 +383,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     seedInstance,
     probes: Ref.get(probes),
     resolveCalls,
+    installUpdates,
   };
 });
 
