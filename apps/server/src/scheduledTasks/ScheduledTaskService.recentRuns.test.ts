@@ -389,6 +389,29 @@ it.effect(
     ),
 );
 
+it.effect(
+  "a stored input id that is not plain printable ASCII leaves its run without a conversation",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        const firingId = yield* fire(fixture, routine);
+        yield* accept(fixture, firingId);
+        // Under the byte cap, but each control character would encode as six bytes of JSON.
+        const controlInputId = "channel-input:" + "\u0001".repeat(100);
+        yield* fixture.sql`UPDATE scheduled_task_channel_inputs SET input_id = ${controlInputId} WHERE firing_id = ${firingId}`;
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.status,
+            run.conversation,
+          ]),
+          [[firingId, "running", undefined]],
+        );
+      }),
+    ),
+);
+
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {

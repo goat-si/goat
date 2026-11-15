@@ -27,9 +27,9 @@ interface RecentRunRow {
 }
 
 /**
- * The most bytes one stored run may return to the server: its snapshot plus its input id, measured
- * over the whole value, NULs included. A run this server writes is about 430; task ids have no length
- * limit, and every firing id repeats one. A routine with a larger run carries no history.
+ * The most bytes one stored run may return to the server: snapshot plus input id, counted over the
+ * whole value, NULs included. A run this server writes is about 430. A routine with a larger run
+ * carries no history, so at most 350 of these reach the server; SQLite still reads one to measure it.
  */
 export const MAX_STORED_RUN_BYTES = 1024;
 
@@ -58,6 +58,9 @@ const StoredRun = Schema.Struct({
 });
 const decodeSnapshot = Schema.decodeUnknownOption(Schema.fromJsonString(StoredRun));
 const decodeInputId = Schema.decodeUnknownOption(ChannelInputId);
+// Input ids are `channel-input:` and base64url. A stored one outside printable ASCII, a quote or a
+// backslash gets no conversation, so its encoded JSON is never larger than its stored bytes.
+const PLAIN_INPUT_ID = /^[!#-[\]-~]+$/u;
 const encodeHistory = Schema.encodeUnknownOption(
   Schema.fromJsonString(Schema.Array(ScheduledTaskRecentRun)),
 );
@@ -78,7 +81,7 @@ function recentRun(row: RecentRunRow): ScheduledTaskRecentRun | undefined {
   const snapshot = decodeSnapshot(row.snapshot_json);
   if (Option.isNone(snapshot)) return undefined;
   const run = snapshot.value;
-  const inputId = decodeInputId(row.input_id);
+  const inputId = Option.filter(decodeInputId(row.input_id), (id) => PLAIN_INPUT_ID.test(id));
   return {
     firingId: run.firingId,
     status: run.status,
