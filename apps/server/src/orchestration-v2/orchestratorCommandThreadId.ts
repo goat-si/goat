@@ -1,0 +1,88 @@
+import { type OrchestrationV2ServerCommand, ThreadId } from "@goat/contracts";
+
+function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
+  switch (command.type) {
+    case "thread.create":
+    case "thread.archive":
+    case "thread.unarchive":
+    case "thread.promote":
+    case "thread.delete":
+    case "thread.guest-share.open":
+    case "delegated_task.review-continue":
+    case "thread.guest-share.redeem":
+    case "thread.guest-share.close":
+    case "thread.guest-message.submit":
+    case "thread.guest-message.dismiss":
+    case "thread.settle":
+    case "thread.auto-settle":
+    case "thread.unsettle":
+    case "thread.snooze":
+    case "thread.unsnooze":
+    case "thread.auto-settle.set":
+    case "thread.pin":
+    case "thread.unpin":
+    case "thread.pin.reorder":
+    case "thread.active.reorder":
+    case "thread.visit":
+    case "thread.mark-unread":
+    case "thread.metadata.update":
+    case "thread.pull-request.link":
+    case "thread.pull-request.unlink":
+    case "thread.pull-request-link.sync":
+    case "thread.pull-request.watch":
+    case "thread.pull-request-watch.sync":
+    case "thread.pull-request.sync":
+    case "thread.title.regeneration.complete":
+    case "thread.project.adopt-folder":
+    case "thread.runtime-mode.set":
+    case "thread.interaction-mode.set":
+    case "thread.model-selection.set":
+    case "provider-session.detach":
+    case "message.dispatch":
+    case "notification.delivery.accept":
+    case "prepared-run.release":
+    case "prepared-run.progress":
+    case "prepared-run.fail":
+    case "prepared-run.retry":
+    case "subagent.stop":
+    case "run.interrupt":
+    case "queued-message.promote-to-steer":
+    case "queued-run.start":
+    case "queue.resume":
+    case "queued-run.reorder":
+    case "queued-run.cancel":
+    case "queued-run.edit":
+    case "runtime-request.respond":
+    case "runtime-request.delivery.fail":
+    case "thread.user-input.dismiss":
+    case "checkpoint.rollback":
+    case "checkpoint.rollback.fail":
+    case "thread.background-work.settle":
+    case "thread.interrupt.unresponsive":
+    case "run.start-hold.update":
+    case "thread.stop":
+    case "provider.switch":
+      return command.threadId;
+    case "delegated_task.request":
+    case "delegated_task.remote.register":
+    case "delegated_task.remote.progress":
+    case "delegated_task.remote.result":
+    case "delegated_task.wake-policy":
+    case "delegated_task.review-ledger.append":
+    case "delegated_task.completion-delivery.acknowledge":
+    case "delegated_task.completion-delivery.dispose":
+    case "thread.created.record":
+      return command.parentThreadId;
+    case "handoff.create":
+    case "handoff.transition":
+    case "secret_request.record":
+    case "thread.notice.record":
+    case "channel.timeline.record":
+      return command.threadId;
+    case "thread.fork":
+    case "thread.merge_back":
+      return command.targetThreadId;
+  }
+}
+
+export { commandThreadId };
