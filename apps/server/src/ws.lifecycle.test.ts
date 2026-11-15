@@ -119,11 +119,16 @@ import { assert, it } from "@effect/vitest";
 import {
   AuthOrchestrationReadScope,
   AuthSessionId,
+  AuthSourceControlWriteScope,
   EnvironmentId,
+  GitCommandError,
   WS_METHODS,
   WsRpcGroup,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
@@ -423,4 +428,105 @@ it.effect.each([
       ),
       Effect.scoped,
     ),
+);
+
+const removeWorktreeAsClient = Effect.fn("WsLifecycleTest.removeWorktreeAsClient")(function* (
+  path: string,
+) {
+  const removed: Array<string> = [];
+  const rpc = WsRpcGroup.requests.get(WS_METHODS.vcsRemoveWorktree);
+  if (rpc?._tag !== WS_METHODS.vcsRemoveWorktree) {
+    return yield* Effect.die("vcs.removeWorktree is not registered");
+  }
+  const responses = yield* Queue.unbounded<RpcMessage.FromServer<typeof rpc>>();
+  const services = Layer.mergeAll(
+    layerUnusedLifecycleRpcServices,
+    Layer.mock(GitWorkflowService.GitWorkflowService)({
+      removeWorktree: (input) => Effect.sync(() => void removed.push(input.path)),
+    }),
+    Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({ refreshStatus: () => Effect.void }),
+    Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+    Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+    Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+    Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+    Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+    Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: process.cwd() }),
+    Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+    layerLifecycleEnvironment,
+  );
+  const server = yield* RpcServer.makeNoSerialization(RpcGroup.make(rpc), {
+    ...WS_RPC_SERVER_OPTIONS,
+    onFromServer: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+  }).pipe(
+    Effect.provide(
+      layerWsRpc(
+        {
+          sessionId: AuthSessionId.make("older-client"),
+          subject: "older-client",
+          method: "browser-session-cookie",
+          scopes: [AuthSourceControlWriteScope],
+          principalKind: "person",
+        },
+        {
+          hasHost: Effect.succeed(false),
+          attach: () => Stream.die("unused connection catalog"),
+          respond: () => Effect.die("unused connection catalog"),
+          invoke: () => Effect.die("unused connection catalog"),
+        },
+        { surface: "web" },
+        {},
+        yield* PreviewAutomationBroker.PreviewAutomationBroker,
+        yield* ServerBrowser.ServerBrowser,
+        () => Effect.void,
+      ).pipe(Layer.provide(services)),
+    ),
+  );
+  // The request an older web or desktop client sends after "Delete the worktree too?".
+  yield* server.write(0, {
+    _tag: "Request",
+    id: RpcMessage.RequestId("remove"),
+    tag: WS_METHODS.vcsRemoveWorktree,
+    payload: { cwd: process.cwd(), path, force: true },
+    headers: Headers.empty,
+  });
+  const response = yield* Queue.take(responses);
+  if (response._tag !== "Exit") return yield* Effect.die("vcs.removeWorktree did not finish");
+  return { exit: response.exit, removed };
+});
+
+const layerRemoveWorktreeSources = Layer.mergeAll(
+  Layer.fresh(layerLifecycleSources),
+  ServerLifecycleEvents.layer,
+  RpcAuthorization.layer([AuthSourceControlWriteScope]),
+  Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+  Layer.mock(ServerBrowser.ServerBrowser)({}),
+);
+
+it.effect(
+  "vcs.removeWorktree refuses a folder outside GOAT's worktrees folder from any client, older ones included",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const userCheckout = yield* fs.makeTempDirectoryScoped({ prefix: "user-checkout-" });
+      const { exit, removed } = yield* removeWorktreeAsClient(userCheckout);
+      assert.deepEqual(removed, []);
+      assert.isTrue(Exit.isFailure(exit));
+      if (!Exit.isFailure(exit)) return;
+      const error = Cause.squash(exit.cause);
+      if (!(error instanceof GitCommandError)) return assert.fail(String(error));
+      assert.include(error.message, "outside GOAT's worktrees folder");
+    }).pipe(Effect.provide(layerRemoveWorktreeSources), Effect.scoped),
+);
+
+it.effect("vcs.removeWorktree still removes a worktree GOAT placed in its worktrees folder", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfigModule.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
+    const managed = (yield* fs.realPath(config.worktreesDir)) + "/repo/feature";
+    const { exit, removed } = yield* removeWorktreeAsClient(managed);
+    assert.isTrue(Exit.isSuccess(exit));
+    assert.deepEqual(removed, [managed]);
+  }).pipe(Effect.provide(layerRemoveWorktreeSources), Effect.scoped),
 );
