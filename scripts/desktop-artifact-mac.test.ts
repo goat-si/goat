@@ -43,7 +43,7 @@ const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function
   return { stageDistDir } as const;
 });
 
-it.layer(NodeServices.layer, { excludeTestServices: true })("packaged desktop payload", (it) => {
+it.layer(NodeServices.layer, { excludeTestServices: true })("macOS packaged payload", (it) => {
   it.effect("rejects a macOS app whose packaged server bundle cannot resolve", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -99,6 +99,9 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("packaged desktop pa
       }),
     ),
   );
+});
+
+it.layer(NodeServices.layer, { excludeTestServices: true })("Linux packaged payload", (it) => {
   it.effect("rejects a Linux app whose packaged server bundle cannot resolve", () =>
     Effect.scoped(
       Effect.gen(function* () {
