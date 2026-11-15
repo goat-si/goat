@@ -1611,8 +1611,8 @@ describe("UsageService", () => {
               ] as const
             ).map(([id, key]) => ({
               instanceId: ProviderInstanceId.make(id),
-              environment: { CURSOR_API_KEY: key },
-              ownVariables: new Set(["CURSOR_API_KEY"]),
+              config: {},
+              environment: [{ name: "CURSOR_API_KEY", value: key, sensitive: true }],
             })),
             keychainUsageEnabled: false,
             windowStartMs: 0,

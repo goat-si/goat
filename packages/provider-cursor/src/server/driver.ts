@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
@@ -45,6 +46,7 @@ import * as CursorKeychain from "./CursorKeychain.ts";
 import * as CursorUsageAccounts from "./CursorUsageAccounts.ts";
 
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
+const decodeCursorSettingsOption = Schema.decodeUnknownOption(CursorSettings);
 const isSdkRunnerError = Schema.is(CursorAgentSdk.CursorAgentSdkRunnerError);
 
 const DRIVER_KIND = ProviderDriverKind.make("cursor");
@@ -82,15 +84,16 @@ export const CursorDriver: ProviderDriver<
       CursorUsageAccounts.CursorUsageAccounts.pipe(
         Effect.flatMap((accounts) =>
           accounts.scan({
-            instances: instances.map(({ instanceId, environment }) => ({
-              instanceId,
-              environment,
-              ownVariables: new Set(
-                (settings.providerInstances[instanceId]?.environment ?? []).map(
-                  (variable) => variable.name,
-                ),
-              ),
-            })),
+            // Config and own variables come from one settings snapshot; a missing record is the
+            // default instance.
+            instances: instances.map(({ instanceId }) => {
+              const record = settings.providerInstances[instanceId];
+              return {
+                instanceId,
+                config: Option.getOrUndefined(decodeCursorSettingsOption(record?.config ?? {})),
+                environment: record?.environment ?? [],
+              };
+            }),
             keychainUsageEnabled: settings.cursorKeychainUsageEnabled,
             windowStartMs,
             retentionCutoffMs,
