@@ -58,6 +58,7 @@ import {
   makeWithdrawalCheck,
 } from "./AntigravityInstallationLookup.ts";
 import { makeAntigravityValidator } from "./AntigravityInstallationValidate.ts";
+import { isNewer } from "./managedRelease.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import {
   resolveAntigravityReleaseAsset,
@@ -532,7 +533,8 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
             const keepInstalled =
               value.installedVersion !== null &&
               (candidate === null ||
-                compareSemverVersions(value.installedVersion, candidate.version) > 0) &&
+                (candidate.version !== value.installedVersion &&
+                  !isNewer(candidate.version, value.installedVersion))) &&
               !(yield* isWithdrawn(value.installedVersion));
             return {
               ...value,

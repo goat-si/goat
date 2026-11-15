@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import {
   makeHarness,
@@ -8,6 +9,7 @@ import {
   releaseAsset,
   serverContents,
   terminalState,
+  writeRelease,
 } from "./AntigravityInstallation.testkit.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 
@@ -210,5 +212,33 @@ it.layer(NodeServices.layer)("Antigravity managed CLI updates", (it) => {
       yield* later.installation.checkForUpdate;
       expect((yield* later.installation.state).version).toBe("1.5.0");
     }),
+  );
+
+  it.effect.each([
+    ["the pin while Google's channel is unreachable", () => null, "1.4.5"],
+    ["Google's supported release", undefined, "1.5.8"],
+  ] as const)(
+    "a restart over an install the 1.1.1 pin recorded as agy_acp_server_1.1.1 offers %s",
+    ([, nativeManifest, offered]) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-legacy-" });
+        yield* writeRelease(`${baseDir}/tools/antigravity-acp/win32-x64`, {
+          ...(yield* releaseAsset(undefined, "win32")),
+          sha256: "2".repeat(64),
+          version: "agy_acp_server_1.1.1",
+        });
+        const { installation } = yield* makeHarness({
+          baseDir,
+          native: true,
+          nativeVersion: "1.5.8",
+          platform: "win32",
+          archive: Buffer.from(serverContents),
+          ...(nativeManifest === undefined ? {} : { nativeManifest }),
+        });
+        expect((yield* installation.state).installedVersion).toBe("agy_acp_server_1.1.1");
+        yield* installation.checkForUpdate;
+        expect((yield* installation.state).version).toBe(offered);
+      }),
   );
 });
