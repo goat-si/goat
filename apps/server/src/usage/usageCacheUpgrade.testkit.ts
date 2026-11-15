@@ -150,7 +150,7 @@ export function registerCacheUpgradeTest(
       }).pipe(Effect.scoped),
   );
 
-  it.live("re-prices Claude 1-hour cache writes a v12 cache saved, then drops the v12 file", () =>
+  it.effect("re-prices Claude 1-hour cache writes a v12 cache saved, then drops the v12 file", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
       const model = "claude-opus-4-5-20251101";

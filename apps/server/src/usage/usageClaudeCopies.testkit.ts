@@ -57,7 +57,7 @@ export function registerClaudeCopiesTests(
   layerService: typeof Main.layerService,
   claudeLine: typeof Main.claudeLine,
 ) {
-  it.live(
+  it.effect(
     "merges partial Claude copies through tail replacement, newline completion and restart",
     () =>
       Effect.gen(function* () {
@@ -116,7 +116,7 @@ export function registerClaudeCopiesTests(
       }).pipe(Effect.scoped),
   );
 
-  it.live(
+  it.effect(
     "re-parses Claude usage a v11 cache saved from a partial copy, then drops the v11 file",
     () =>
       Effect.gen(function* () {
