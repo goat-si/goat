@@ -167,3 +167,24 @@ it("removes a cancelled queued read without starting it", async () => {
   await Promise.all(reads);
   expect(read).not.toHaveBeenCalled();
 });
+
+it("a Check's value replaces its reference's cached failure and leaves other cached secrets alone", async () => {
+  const settings = decodeSettings({
+    secretProviders: {
+      vault: { kind: "one_password", label: "Vault", config: { account: "team" } },
+    },
+  });
+  const checked = decodeReference({ provider: "vault", reference: "op://work/item/password" });
+  const other = decodeReference({ provider: "vault", reference: "op://work/other/password" });
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("locked"))
+    .mockResolvedValueOnce("other-value");
+  const resolve = makeSecretResolver(read);
+  await expect(resolve(settings.secretProviders, checked)).rejects.toThrow("Could not read secret");
+  expect(await resolve(settings.secretProviders, other)).toBe("other-value");
+  resolve.prime(settings.secretProviders, checked, "checked-value");
+  expect(await resolve(settings.secretProviders, checked)).toBe("checked-value");
+  expect(await resolve(settings.secretProviders, other)).toBe("other-value");
+  expect(read).toHaveBeenCalledTimes(2);
+});

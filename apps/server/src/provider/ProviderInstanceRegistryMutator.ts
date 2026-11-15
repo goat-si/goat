@@ -2,10 +2,17 @@
 import type {
   ProviderInstanceConfigMap,
   ProviderInstanceId,
+  SecretReference,
   ServerSettings,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+
+/** A secret Settings' Check read just now; a reload uses it instead of reading it again. */
+export interface CheckedSecret {
+  readonly reference: SecretReference;
+  readonly value: string;
+}
 
 export interface ProviderInstanceRegistryMutatorShape {
   readonly reconcile: (
@@ -13,7 +20,10 @@ export interface ProviderInstanceRegistryMutatorShape {
     secretProviders?: ServerSettings["secretProviders"],
     deferSecrets?: boolean,
   ) => Effect.Effect<void>;
-  readonly reloadSecrets?: (instanceId?: ProviderInstanceId) => Effect.Effect<void>;
+  readonly reloadSecrets?: (
+    instanceId?: ProviderInstanceId,
+    checked?: CheckedSecret,
+  ) => Effect.Effect<void>;
   readonly hydrateSecrets?: () => Effect.Effect<void>;
 }
 

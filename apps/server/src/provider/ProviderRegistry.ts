@@ -77,6 +77,7 @@ export class ProviderRegistry extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
     readonly reloadSecretsAndRefresh?: (
       instanceId?: ProviderInstanceId,
+      checked?: import("./ProviderInstanceRegistryMutator.ts").CheckedSecret,
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /** Only refreshed instances can verify an update; the published list still includes every row. */
@@ -943,8 +944,8 @@ export const layer = Layer.effect(
       awaitInFlightRefresh,
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
-      reloadSecretsAndRefresh: (instanceId?: ProviderInstanceId) =>
-        (instanceRegistry.reloadSecrets?.(instanceId) ?? Effect.void).pipe(
+      reloadSecretsAndRefresh: (instanceId, checked) =>
+        (instanceRegistry.reloadSecrets?.(instanceId, checked) ?? Effect.void).pipe(
           Effect.andThen(syncLiveSourcesAndContinue),
           Effect.andThen(instanceId === undefined ? refresh() : refreshInstance(instanceId)),
           Effect.catchCause(recoverRefreshFailure),

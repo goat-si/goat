@@ -52,8 +52,8 @@ export const make = Effect.fn("SecretCheck.make")(function* (
           detail: `Could not read this secret from "${label}". Check the reference and that 1Password is unlocked.`,
         } as const;
       }
-      // Later reads elsewhere (source control, devices) see the new value instead of a cached failure.
-      cachedResolveSecret.invalidate();
+      // Later reads elsewhere see this value; other references keep their cached values.
+      cachedResolveSecret.prime(settings.value.secretProviders, reference, value.value);
       const reload = providerRegistry.reloadSecretsAndRefresh;
       if (reload !== undefined) {
         const readers = Object.entries(deriveProviderInstanceConfigMap(settings.value)).flatMap(
@@ -66,7 +66,9 @@ export const make = Effect.fn("SecretCheck.make")(function* (
               ? [ProviderInstanceId.make(id)]
               : [],
         );
-        yield* Effect.forEach(readers, reload, { discard: true });
+        // The reload uses the value just read, so the reference is not read (or prompted) again.
+        const checked = { reference, value: value.value };
+        yield* Effect.forEach(readers, (id) => reload(id, checked), { discard: true });
       }
       return { _tag: "Resolved" } as const;
     });

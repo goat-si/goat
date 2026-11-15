@@ -20,6 +20,7 @@ const secretVariable = (secret: SecretReference) => ({
 
 const harness = (read: (account: string, reference: string) => Promise<string>) => {
   const reloaded: Array<ProviderInstanceId | undefined> = [];
+  const reloadedWith: Array<string | undefined> = [];
   const reads: string[] = [];
   const layer = Layer.effect(
     SecretCheck.SecretCheck,
@@ -30,9 +31,10 @@ const harness = (read: (account: string, reference: string) => Promise<string>) 
   ).pipe(
     Layer.provide(
       Layer.mock(ProviderRegistry.ProviderRegistry)({
-        reloadSecretsAndRefresh: (instanceId) =>
+        reloadSecretsAndRefresh: (instanceId, checkedSecret) =>
           Effect.sync(() => {
             reloaded.push(instanceId);
+            reloadedWith.push(checkedSecret?.value);
             return [];
           }),
       }),
@@ -56,12 +58,12 @@ const harness = (read: (account: string, reference: string) => Promise<string>) 
     ),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { layer, reloaded, reads };
+  return { layer, reloaded, reloadedWith, reads };
 };
 
 it.effect("reads the reference on every check and reloads only the providers that use it", () =>
   Effect.gen(function* () {
-    const { layer, reloaded, reads } = harness(async () => "fresh-api-key");
+    const { layer, reloaded, reloadedWith, reads } = harness(async () => "fresh-api-key");
     const results = yield* Effect.gen(function* () {
       const service = yield* SecretCheck.SecretCheck;
       return [yield* service.check(checked), yield* service.check(checked)];
@@ -73,6 +75,8 @@ it.effect("reads the reference on every check and reloads only the providers tha
       ProviderInstanceId.make("codex_work"),
       ProviderInstanceId.make("codex_work"),
     ]);
+    // One read per Check: the reload gets that read's value instead of reading again.
+    expect(reloadedWith).toEqual(["fresh-api-key", "fresh-api-key"]);
   }),
 );
 

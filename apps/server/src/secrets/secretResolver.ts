@@ -66,6 +66,8 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
   >();
   const pending = new Map<string, Promise<string>>();
   let generation = 0;
+  const cacheKey = (gen: number, provider: string, account: string, reference: SecretReference) =>
+    `${gen}\u0000${provider}\u0000${account}\u0000${reference.reference}`;
   const resolve = async (
     providers: ServerSettings["secretProviders"],
     reference: SecretReference,
@@ -75,7 +77,7 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
       throw new Error("Secret provider unavailable");
     }
     const currentGeneration = generation;
-    const key = `${currentGeneration}\u0000${reference.provider}\u0000${provider.config.account}\u0000${reference.reference}`;
+    const key = cacheKey(currentGeneration, reference.provider, provider.config.account, reference);
     const cached = cache.get(key);
     if (cached) {
       if (cached.ok) return cached.value;
@@ -103,6 +105,19 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     invalidate: () => {
       generation++;
       cache.clear();
+    },
+    /** Caches one reference's value read elsewhere, leaving every other cached secret in place. */
+    prime: (
+      providers: ServerSettings["secretProviders"],
+      reference: SecretReference,
+      value: string,
+    ) => {
+      const provider = providers[reference.provider];
+      if (provider?.kind !== "one_password" || !isOnePasswordConfig(provider.config)) return;
+      cache.set(cacheKey(generation, reference.provider, provider.config.account, reference), {
+        ok: true,
+        value,
+      });
     },
   });
 }
