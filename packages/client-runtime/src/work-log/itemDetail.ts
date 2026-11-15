@@ -1,4 +1,5 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@goat/contracts";
+import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import {
   mcpToolResultOutput,
@@ -240,7 +241,11 @@ function dynamicToolOutputText(
   omitLinks: boolean,
 ): string | null {
   const output = item.output;
-  if (!isRecord(output) || !(MCP_APP_OUTPUT_KEY in output) || !("result" in output)) {
+  if (
+    !isRecord(output) ||
+    !(MCP_APP_OUTPUT_KEY in output || LEGACY_MCP_APP_OUTPUT_KEY in output) ||
+    !("result" in output)
+  ) {
     return formatToolValue(output, item.viewedImagePath !== undefined, omitLinks);
   }
   const result = output.result;
