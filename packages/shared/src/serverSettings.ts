@@ -109,26 +109,21 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "antigravity",
 ].map((driver) => ProviderDriverKind.make(driver));
 
-/** Only project-scoped callers may include configured instances when falling back; machine-level callers leave it unset. */
+/** Configured instances come after every default instance, so they only win when no default qualifies. */
 export function fallbackTextGenerationModelSelection(
   providerInstances: ServerSettings["providerInstances"],
   isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean,
-  options?: {
-    readonly includeConfiguredInstances?: boolean;
-    readonly defaultModelSelection?: ModelSelection | null;
-  },
+  options?: { readonly defaultModelSelection?: ModelSelection | null },
 ): ModelSelection | null {
   const candidates = [
     ...TEXT_GENERATION_FALLBACK_DRIVERS.map(
       (driver) => [defaultInstanceIdForDriver(driver), driver] as const,
     ),
-    ...(options?.includeConfiguredInstances === true
-      ? Object.entries(providerInstances).flatMap(([instanceId, instance]) =>
-          TEXT_GENERATION_FALLBACK_DRIVERS.includes(instance.driver)
-            ? [[ProviderInstanceId.make(instanceId), instance.driver] as const]
-            : [],
-        )
-      : []),
+    ...Object.entries(providerInstances).flatMap(([instanceId, instance]) =>
+      TEXT_GENERATION_FALLBACK_DRIVERS.includes(instance.driver)
+        ? [[ProviderInstanceId.make(instanceId), instance.driver] as const]
+        : [],
+    ),
   ];
   const match = candidates.find(([instanceId, driver]) => isEnabled(instanceId, driver));
   if (match === undefined) return null;
@@ -206,22 +201,18 @@ function agentOnlySelection(
   if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
     return selection;
   return (
-    fallbackTextGenerationModelSelection(
-      settings.providerInstances,
-      (id, driver) => {
-        if (textGenerator(settings, id) !== undefined) return false;
-        if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
-        if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
-        if (providers === undefined) return true;
-        const provider = providers.find((candidate) => candidate.instanceId === id);
-        return (
-          provider?.enabled === true &&
-          isProviderAvailable(provider) &&
-          isProviderTextGenerationCapable(provider)
-        );
-      },
-      { includeConfiguredInstances: true },
-    ) ?? selection
+    fallbackTextGenerationModelSelection(settings.providerInstances, (id, driver) => {
+      if (textGenerator(settings, id) !== undefined) return false;
+      if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
+      if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
+      if (providers === undefined) return true;
+      const provider = providers.find((candidate) => candidate.instanceId === id);
+      return (
+        provider?.enabled === true &&
+        isProviderAvailable(provider) &&
+        isProviderTextGenerationCapable(provider)
+      );
+    }) ?? selection
   );
 }
 

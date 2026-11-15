@@ -464,6 +464,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
     ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
+    ...(task.lastRunError === null ? {} : { lastRunError: task.lastRunError }),
     runCount: task.runCount,
     lastRunAt: task.lastRunAt,
     ...webhookUrlFields(task.webhook, mayRun),

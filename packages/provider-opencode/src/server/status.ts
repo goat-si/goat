@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import type { OpenCodeSettings } from "../settings.ts";
 import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -416,11 +417,25 @@ const settleOpenCode2Catalog = <E>(
   });
 
 const OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS = 5_000;
+// A busy cold OpenCode 2.2.7 holds a read about 14 s while plugins activate, then answers 503.
+const OPENCODE_2_READ_TIMEOUT_MS = 20_000;
+
+class OpenCode2ReadTimeout extends Data.TaggedError("OpenCode2ReadTimeout") {}
+const isReadTimeout = (error: unknown): error is OpenCode2ReadTimeout =>
+  error instanceof OpenCode2ReadTimeout;
+
+/** Bounds one read of a server already lent, so its own start stays outside the cap. */
+export type BoundOpenCode2Read = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+) => Effect.Effect<A, E | OpenCode2ReadTimeout, R>;
 
 export const makeOpenCode2ModelLoader = <E, Identity = undefined>(
   list:
     | Effect.Effect<ReadonlyArray<OpenCode2Model>, E>
-    | ((identity: Identity) => Effect.Effect<ReadonlyArray<OpenCode2Model>, E>),
+    | ((
+        identity: Identity,
+        boundRead: BoundOpenCode2Read,
+      ) => Effect.Effect<ReadonlyArray<OpenCode2Model>, E | OpenCode2ReadTimeout>),
   identity?: Effect.Effect<Identity>,
   sameIdentity: (left: Identity, right: Identity) => boolean = Object.is,
   environment?: Effect.Effect<NodeJS.ProcessEnv>,
@@ -436,13 +451,26 @@ export const makeOpenCode2ModelLoader = <E, Identity = undefined>(
         lastIdentity = currentIdentity;
         hasIdentity = true;
       }
+      const checkEnvironment = environment === undefined ? undefined : yield* environment;
       const settleTimeoutMs = resolveProviderProbeTimeoutMs(
         "opencode",
         OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS,
-        environment === undefined ? undefined : yield* environment,
+        checkEnvironment,
       );
+      const readTimeoutMs = resolveProviderProbeTimeoutMs(
+        "opencode",
+        OPENCODE_2_READ_TIMEOUT_MS,
+        checkEnvironment,
+      );
+      const boundRead: BoundOpenCode2Read = (read) =>
+        read.pipe(
+          Effect.timeoutOrElse({
+            duration: readTimeoutMs,
+            orElse: () => Effect.fail(new OpenCode2ReadTimeout()),
+          }),
+        );
       let latest: ReadonlyArray<OpenCode2Model> = [];
-      const tracked = (typeof list === "function" ? list(currentIdentity) : list).pipe(
+      const tracked = (typeof list === "function" ? list(currentIdentity, boundRead) : list).pipe(
         Effect.tap((models) =>
           Effect.sync(() => {
             if (models.length > 0) latest = models;
@@ -454,11 +482,14 @@ export const makeOpenCode2ModelLoader = <E, Identity = undefined>(
       return yield* tracked.pipe(
         Effect.retry({ while: isActivatingPlugins, schedule: Schedule.spaced("1 second") }),
         Effect.timeoutOption(PLUGIN_ACTIVATION_DEADLINE),
+        // A read the server holds past the cap lists nothing yet, as one that never answers.
+        Effect.catchIf(isReadTimeout, () => Effect.succeedNone),
         Effect.flatMap((first) =>
           Option.isNone(first)
             ? Effect.succeedNone
             : settleOpenCode2Catalog(tracked, first.value).pipe(
                 Effect.timeoutOption(settleTimeoutMs),
+                Effect.catchIf(isReadTimeout, () => Effect.succeedNone),
               ),
         ),
         Effect.catch((error) =>

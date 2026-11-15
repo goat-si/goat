@@ -3,8 +3,8 @@ import type { ScheduledTask } from "@goat/contracts";
 type RunFields = Pick<ScheduledTask, "lastRun" | "lastRunStatus"> &
   Partial<Pick<ScheduledTask, "lastRunError">>;
 
-// The server keeps writing the terminal status into lastRunError so clients without
-// lastRun still learn why a run ended; a client showing the badge drops that repeat.
+// Older servers wrote the bare terminal status into lastRunError; a client showing the
+// badge drops that repeat and keeps a real reason.
 export function scheduledTaskRunPresentation(task: RunFields) {
   const error = task.lastRunError ?? null;
   return {
