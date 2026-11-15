@@ -59,7 +59,9 @@ repositories. Use the checkboxes, or "Select all" and "Select none", to change
 the selection. Linked worktrees of
 bare repositories can be offered as separate projects. Conversations in other
 linked git worktrees count toward their main checkout, so a repository is
-offered even if you only worked in its worktrees. Codex scratch directories
+offered even if you only worked in its worktrees. A conversation from a linked
+worktree continues in that worktree, and GOAT never deletes it, even when you
+delete the thread. Codex scratch directories
 under `Documents/Codex`, and anything under `Downloads`, are not offered.
 
 A large or malformed history can reach the scan limit. GOAT keeps the

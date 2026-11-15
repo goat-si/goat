@@ -254,7 +254,8 @@ To close several, press **Close**, drag across the rows in the same group, and r
 Press **Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.
 
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
-supports approving waiting fork workflows and opening a revert pull request for a merged change.
+supports approving waiting fork workflows. GitHub and GitLab can open a revert pull request for
+a merged change.
 
 Pull request sharing is off by default. In Settings → Connections → Pull request sharing (Pull
 request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
