@@ -10,13 +10,16 @@ import {
 
 const mocks = vi.hoisted(() => ({
   screenFocused: true,
+  routeFocused: true,
   topRoute: "Home",
   options: null as null | { headerSearchBarOptions?: Record<string, never> },
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 vi.mock("@react-navigation/native", () => ({
   useFocusEffect: () => {},
-  useIsFocused: () => true,
+  useIsFocused: () => mocks.routeFocused,
+  useNavigationState: <T,>(select: (state: { index: number; routes: { name: string }[] }) => T) =>
+    select({ index: 1, routes: [{ name: "Home" }, { name: mocks.topRoute }] }),
   useNavigation: () => ({
     isFocused: () => mocks.screenFocused,
     getState: () => ({ routes: [{ name: "Home" }, { name: mocks.topRoute }] }),
@@ -116,6 +119,7 @@ function Harness(props: {
 
 function renderSearch(tab: WorkspaceSearchTab, query: string, sidebar = false, slotActive = true) {
   mocks.screenFocused = true;
+  mocks.routeFocused = true;
   mocks.topRoute = "Home";
   const root = createRoot(document.createElement("div"));
   const stateRef = createRef<WorkspaceTabsState>();
@@ -212,6 +216,22 @@ it("closing Settings search with its X clears it while the Settings route sits a
   act(() => page.search().onClose?.());
   expect(page.state().tabs.settings).toMatchObject({ query: "theme" });
   act(() => page.root.unmount());
+});
+
+it("restores the Settings query while the Settings route above Home holds navigation focus", () => {
+  const frames: FrameRequestCallback[] = [];
+  using _frames = vi.spyOn(window, "requestAnimationFrame").mockImplementation((frame) => {
+    frames.push(frame);
+    return frames.length;
+  });
+  const { root, native, search } = renderSearch("settings", "theme");
+  // Home draws the Settings list under the Settings route, so Home itself reports unfocused.
+  mocks.routeFocused = false;
+  mocks.topRoute = "Settings";
+  act(() => search().onBlur());
+  act(() => frames.at(-1)?.(0));
+  expect(native.setText).toHaveBeenCalledWith("theme");
+  act(() => root.unmount());
 });
 
 it("a late close from a retained list slot keeps the query after Settings takes the native tab", () => {

@@ -25,6 +25,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { RelativeTimeLabel } from "../RelativeTimeLabel";
 import {
   BookmarkIcon,
   CheckIcon,
@@ -36,6 +37,7 @@ import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
 import { rememberHomeOrigin } from "./goatBotHomeRequest";
+import { GoatBotPullRequestChips } from "./GoatBotPullRequestChips";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -408,7 +410,7 @@ function WorkRow({
             onClick={() => onOpenTask(row)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status} unread={row.unread} returned={returned} />
+            <WorkRowText row={row} title={title} status={status} returned={returned} />
           </button>
         ) : (
           <Link
@@ -418,7 +420,7 @@ function WorkRow({
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status} unread={row.unread} returned={returned} />
+            <WorkRowText row={row} title={title} status={status} returned={returned} />
           </Link>
         )}
         {row.view.pinnedAt !== null && (
@@ -459,25 +461,32 @@ function WorkRow({
   );
 }
 
-/** A row's title and status, then the chevron that says the row opens. */
+/** A row's title, status and last activity, its pull requests, then the chevron that says it opens. */
 function WorkRowText({
+  row,
   title,
   status,
-  unread,
   returned,
 }: {
+  readonly row: TaskRow;
   readonly title: string;
   readonly status: string;
-  readonly unread: boolean;
   readonly returned: boolean;
 }) {
   return (
     <>
       <span className="min-w-0 flex-1">
         <span className="block truncate">{title}</span>
-        <span className="block truncate text-xs text-muted-foreground">{status}</span>
+        <span className="flex min-w-0 gap-1 text-xs text-muted-foreground">
+          <span className="truncate">{status}</span>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">
+            <RelativeTimeLabel timestamp={row.lastActivityAt} />
+          </span>
+        </span>
+        <GoatBotPullRequestChips row={row} />
       </span>
-      {unread ? (
+      {row.unread ? (
         <>
           <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
           {/* The open control says it, so a person tabbing through hears it with the title. */}

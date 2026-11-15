@@ -90,6 +90,7 @@ const unusedSshService = {
   update: () => Effect.die("unexpected update"),
   disconnectEnvironment: () => Effect.die("unexpected disconnect"),
   revalidateTunnels: Effect.die("unexpected revalidation"),
+  closeAllTunnels: Effect.die("unexpected tunnel close"),
 } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
 
 describe("SSH runtime IPC", () => {
@@ -237,6 +238,7 @@ describe("SSH runtime IPC", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueMcpClientSession: () => Effect.die("unexpected MCP session"),
         issueClientSession: () => Effect.die("unexpected client session"),
         runRemoteScript: () => Effect.die("unexpected remote script"),
@@ -401,6 +403,7 @@ describe("SSH environment IPC", () => {
             resolveHost: () => Effect.die("unused"),
             disconnectEnvironment: () => Effect.die("unused"),
             revalidateTunnels: Effect.die("unused"),
+            closeAllTunnels: Effect.die("unused"),
             ensureEnvironment: (receivedTarget, options) =>
               Effect.sync(() => {
                 const { onPreparationProgress, onPreparationAdmission, ...nativeOptions } =

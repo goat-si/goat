@@ -24,6 +24,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { OPENCODE_PROVIDER, openCode2DurableVersion } from "@goat/provider-opencode/testing";
 import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import { type ProviderReplayGate } from "@goat/provider-testing/replayGate";
@@ -125,6 +126,11 @@ export const noOpenRequests: ReadonlyArray<ProviderReplayEntry> = [
   replyData("permission.list", []),
   out("session.form.list", { sessionID: SESSION }),
   replyData("session.form.list", []),
+];
+
+export const emptyShellInventory: ReadonlyArray<ProviderReplayEntry> = [
+  out("shell.list", "<any>"),
+  reply("shell.list", { location: { directory: WORK }, data: [] }),
 ];
 
 const withInstructions = (
@@ -314,10 +320,14 @@ export const colorForm = {
 export const resumed = (
   entries: ReadonlyArray<ProviderReplayEntry>,
   options?: {
-    readonly version?: "2.2.5";
+    readonly version?: "2.2.1" | "2.2.5" | "2.2.6";
+    readonly shellRecovery?: ReadonlyArray<ProviderReplayEntry>;
+    readonly lastRunOrdinal?: number;
     readonly goal?: OrchestrationV2ProviderThread["goal"];
     readonly external?: boolean;
     readonly supervised?: boolean;
+    readonly processExit?: Effect.Effect<void>;
+    readonly beforeResponse?: (path: string) => Effect.Effect<void>;
     readonly memoryInstructions?: (value: string) => Response;
     readonly onInstructions?: (key: string, value: string) => void;
     readonly replayGate?: ProviderReplayGate;
@@ -325,6 +335,7 @@ export const resumed = (
     readonly resolveExtractedTextPath?: (path: string) => Effect.Effect<string | undefined>;
     readonly fileSystem?: FileSystem.FileSystem;
     readonly onPrompt?: (input: unknown) => void;
+    readonly borrowers?: { current: number };
   },
 ) =>
   Effect.gen(function* () {
@@ -334,9 +345,17 @@ export const resumed = (
         out("session.get", { sessionID: SESSION }),
         replyData("session.get", sessionInfo()),
         ...noOpenRequests,
-        ...(options?.version === "2.2.5"
+        ...(options?.version === "2.2.5" || options?.version === "2.2.6"
           ? [out("rpc.call", "<any>"), reply("rpc.call", { output: null })]
           : []),
+        ...(options?.shellRecovery ??
+          (options?.version === undefined
+            ? []
+            : [
+                ...(options.version === "2.2.6"
+                  ? [out("job.list", { kind: "shell" }), reply("job.list", { data: [] })]
+                  : emptyShellInventory),
+              ])),
         ...withInstructions([
           ...(options?.supervised === true
             ? [
@@ -359,7 +378,12 @@ export const resumed = (
           : { memoryInstructions: options.memoryInstructions }),
         ...(options?.fileSystem === undefined ? {} : { fileSystem: options.fileSystem }),
         ...(options?.onPrompt === undefined ? {} : { onPrompt: options.onPrompt }),
+        ...(options?.borrowers === undefined ? {} : { borrowers: options.borrowers }),
         ...(options?.external === undefined ? {} : { external: options.external }),
+        ...(options?.processExit === undefined ? {} : { processExit: options.processExit }),
+        ...(options?.beforeResponse === undefined
+          ? {}
+          : { beforeResponse: options.beforeResponse }),
         ...(options?.replayGate === undefined ? {} : { replayGate: options.replayGate }),
         ...(options?.attachmentsDir === undefined
           ? {}
@@ -372,6 +396,9 @@ export const resumed = (
     const thread = yield* runtime.resumeThread({
       providerThread: {
         ...providerThread(yield* DateTime.now),
+        ...(options?.lastRunOrdinal === undefined
+          ? {}
+          : { lastRunOrdinal: options.lastRunOrdinal }),
         ...(options?.goal === undefined ? {} : { goal: options.goal }),
       },
       threadId,
@@ -561,7 +588,7 @@ export const stopFirstTurn = (
       .interruptTurn({ providerThread: thread, providerTurnId: yield* providerTurnId })
       .pipe(Effect.forkScoped);
     yield* TestClock.adjust("11 seconds");
-    yield* Fiber.join(interrupt);
+    yield* Fiber.join(interrupt).pipe(Effect.flip);
   });
 
 export const turnItems = (collected: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
@@ -586,3 +613,57 @@ export const openRequests = (
   out("session.form.list", { sessionID: SESSION }),
   replyData("session.form.list", forms),
 ];
+
+export const continuationTurn = (
+  thread: OrchestrationV2ProviderThread,
+  offer: ProviderContinuationRequests.ProviderContinuationRequest,
+  suffix = "wake",
+) => {
+  // Continuation offers always carry the message their turn starts with.
+  if (offer.messageId === undefined) throw new Error("continuation offer has no message");
+  return {
+    ...withLineage(thread),
+    runId: RunId.make(`run:opencode2-adapter:${suffix}`),
+    runOrdinal: 2,
+    providerTurnOrdinal: 2,
+    attemptId: RunAttemptId.make(`attempt:opencode2-adapter:${suffix}`),
+    message: {
+      ...turnInput(thread).message,
+      messageId: offer.messageId,
+      text: offer.detail ?? "",
+      createdBy: "agent" as const,
+      creationSource: "provider" as const,
+    },
+  };
+};
+
+export const childReport = (inboxID: string, text: string) =>
+  event("session.inbox.enqueued", {
+    inboxID,
+    sessionID: SESSION,
+    item: {
+      type: "synthetic",
+      payload: {
+        text: `<subagent sessionID="${CHILD}" state="completed" description="Sleep">\n${text}\n</subagent>`,
+        description: "Sleep",
+        metadata: { source: "subagent", childID: CHILD, agent: "General", state: "completed" },
+      },
+      delivery: "steer",
+    },
+  });
+
+export const terminals = (
+  runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+  count: number,
+) =>
+  runtime.events.pipe(
+    Stream.filter(
+      (
+        event,
+      ): event is Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }> =>
+        event.type === "turn.terminal",
+    ),
+    Stream.take(count),
+    Stream.runCollect,
+    Effect.forkScoped,
+  );

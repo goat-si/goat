@@ -82,6 +82,7 @@ const heldTitleLayer = Effect.fn("EffectWorker.test.heldTitleLayer")(function* (
             Effect.succeedSome({
               projectId: ProjectId.make("project:mcp-test"),
               title: "Synthetic project",
+              hasCustomTitle: false,
               workspaceRoot: "/synthetic",
               defaultModelSelection: null,
               defaultThreadEnvMode: null,

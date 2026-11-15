@@ -14,6 +14,7 @@ import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@goat/contra
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopPrimaryPaste from "../app/DesktopPrimaryPaste.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
@@ -29,7 +30,10 @@ import {
   TRACKPAD_SCROLL_END_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
-import { PASSKEY_BRIDGE_ARGUMENT } from "../preview/GuestProtocol.ts";
+import {
+  PASSKEY_BRIDGE_ARGUMENT,
+  PRIMARY_PASTE_DISABLED_ARGUMENT,
+} from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -44,13 +48,19 @@ import {
 } from "./DesktopWindowAppearance.ts";
 import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
 import * as DesktopWindowBounds from "./DesktopWindowBounds.ts";
+import {
+  clampWindowBoundsToDisplay,
+  getDisplayDistanceSquared,
+  getOverlapArea,
+  MIN_MAIN_WINDOW_HEIGHT,
+  MIN_MAIN_WINDOW_WIDTH,
+  normalBoundsOnWindowDisplay,
+  windowBoundsEqual,
+} from "./mainWindowPlacement.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 
 type DisplayBounds = DesktopWindowBounds.DisplayBounds;
-
-const MIN_MAIN_WINDOW_WIDTH = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width;
-const MIN_MAIN_WINDOW_HEIGHT = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height;
 
 function parseMailtoAddress(rawUrl: string): Option.Option<string> {
   let url: URL;
@@ -149,42 +159,6 @@ function getIconOption(
   });
 }
 
-function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
-  const overlapWidth = Math.max(
-    0,
-    Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x),
-  );
-  const overlapHeight = Math.max(
-    0,
-    Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y),
-  );
-  return overlapWidth * overlapHeight;
-}
-
-function getAxisGap(
-  firstStart: number,
-  firstSize: number,
-  secondStart: number,
-  secondSize: number,
-): number {
-  if (firstStart + firstSize < secondStart) {
-    return secondStart - (firstStart + firstSize);
-  }
-  if (secondStart + secondSize < firstStart) {
-    return firstStart - (secondStart + secondSize);
-  }
-  return 0;
-}
-
-function getDisplayDistanceSquared(
-  windowBounds: DesktopAppSettings.DesktopWindowBounds,
-  displayBounds: DisplayBounds,
-): number {
-  const dx = getAxisGap(windowBounds.x, windowBounds.width, displayBounds.x, displayBounds.width);
-  const dy = getAxisGap(windowBounds.y, windowBounds.height, displayBounds.y, displayBounds.height);
-  return dx * dx + dy * dy;
-}
-
 function selectRecoveryDisplay(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
   displays: readonly DisplayBounds[],
@@ -210,41 +184,12 @@ function selectRecoveryDisplay(
   return selected;
 }
 
-function clampDimension(value: number, minimum: number, available: number): number {
-  const maximum = Math.max(minimum, Math.floor(available));
-  return Math.min(Math.max(Math.round(value), minimum), maximum);
-}
-
-function clampCoordinate(value: number, start: number, available: number, size: number): number {
-  const minimum = Math.round(start);
-  const maximum = Math.max(minimum, Math.round(start + available) - size);
-  return Math.min(Math.max(Math.round(value), minimum), maximum);
-}
-
-function clampWindowBoundsToDisplay(
-  windowBounds: DesktopAppSettings.DesktopWindowBounds,
-  displayBounds: DisplayBounds,
-): DesktopAppSettings.DesktopWindowBounds {
-  const width = clampDimension(windowBounds.width, MIN_MAIN_WINDOW_WIDTH, displayBounds.width);
-  const height = clampDimension(windowBounds.height, MIN_MAIN_WINDOW_HEIGHT, displayBounds.height);
-  return {
-    x: clampCoordinate(windowBounds.x, displayBounds.x, displayBounds.width, width),
-    y: clampCoordinate(windowBounds.y, displayBounds.y, displayBounds.height, height),
-    width,
-    height,
-  };
-}
-
-function windowBoundsEqual(
-  left: DesktopAppSettings.DesktopWindowBounds,
-  right: DesktopAppSettings.DesktopWindowBounds,
-): boolean {
-  return (
-    left.x === right.x &&
-    left.y === right.y &&
-    left.width === right.width &&
-    left.height === right.height
-  );
+function readDisplayBoundsOrEmpty(): readonly DisplayBounds[] {
+  try {
+    return Electron.screen.getAllDisplays().map((display) => display.bounds);
+  } catch {
+    return [];
+  }
 }
 
 export function resolveInitialMainWindowBounds(
@@ -352,6 +297,7 @@ export const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const previewManager = yield* PreviewManager.PreviewManager;
   const previewPasskeys = yield* PreviewPasskeys.PreviewPasskeys;
+  const primaryPaste = yield* DesktopPrimaryPaste.DesktopPrimaryPaste;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
@@ -470,33 +416,52 @@ export const make = Effect.gen(function* () {
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let boundsPersistenceEnabled = persistedBounds === null || restoredPersistedBounds;
-    const readPersistableBounds = (): DesktopAppSettings.DesktopWindowBounds | null => {
+    let lastPersistableState: {
+      readonly bounds: DesktopAppSettings.DesktopWindowBounds;
+      readonly isMaximized: boolean;
+    } | null = null;
+    const readPersistableState = () => {
       if (window.isDestroyed()) {
         return null;
       }
+      // Minimized windows report stale state on some platforms (macOS: not maximized, the
+      // pre-move normal frame; Windows: -32000), so they keep the state seen before minimizing.
+      if (window.isMinimized()) {
+        return lastPersistableState;
+      }
+      const isMaximized = window.isMaximized();
       const bounds =
-        window.isFullScreen() || window.isMaximized() || window.isMinimized()
-          ? window.getNormalBounds()
+        window.isFullScreen() || isMaximized
+          ? normalBoundsOnWindowDisplay(
+              window.getNormalBounds(),
+              window.getBounds(),
+              readDisplayBoundsOrEmpty(),
+            )
           : window.getBounds();
-      return DesktopAppSettings.normalizeMainWindowBounds({
+      const persistableBounds = DesktopAppSettings.normalizeMainWindowBounds({
         x: Math.round(bounds.x),
         y: Math.round(bounds.y),
         width: Math.round(bounds.width),
         height: Math.round(bounds.height),
       });
+      lastPersistableState =
+        persistableBounds === null ? null : { bounds: persistableBounds, isMaximized };
+      return lastPersistableState;
     };
-    const fallbackWindowBounds = boundsPersistenceEnabled ? null : readPersistableBounds();
+    const fallbackWindowBounds = boundsPersistenceEnabled
+      ? null
+      : (readPersistableState()?.bounds ?? null);
     const fallbackWindowMaximized = persistedSettings.mainWindowMaximized;
     const persistCurrentBounds = (): Fiber.Fiber<void, never> | undefined => {
       if (!boundsPersistenceEnabled) {
         return pendingBoundsPersistFiber;
       }
-      const bounds = readPersistableBounds();
-      if (bounds === null) {
+      const state = readPersistableState();
+      if (state === null) {
         return pendingBoundsPersistFiber;
       }
       pendingBoundsPersistFiber = runFork(
-        desktopSettings.setMainWindowBounds(bounds, window.isMaximized()).pipe(
+        desktopSettings.setMainWindowBounds(state.bounds, state.isMaximized).pipe(
           Effect.asVoid,
           Effect.catch((error) =>
             logWindowWarning("failed to persist main window bounds", {
@@ -508,16 +473,15 @@ export const make = Effect.gen(function* () {
       return pendingBoundsPersistFiber;
     };
     const scheduleBoundsPersist = () => {
-      if (!boundsPersistenceEnabled) {
-        const currentBounds = readPersistableBounds();
-        if (
-          currentBounds === null ||
+      const state = readPersistableState();
+      if (
+        !boundsPersistenceEnabled &&
+        (state === null ||
           (fallbackWindowBounds !== null &&
-            windowBoundsEqual(currentBounds, fallbackWindowBounds) &&
-            window.isMaximized() === fallbackWindowMaximized)
-        ) {
-          return;
-        }
+            windowBoundsEqual(state.bounds, fallbackWindowBounds) &&
+            state.isMaximized === fallbackWindowMaximized))
+      ) {
+        return;
       }
       boundsPersistenceEnabled = true;
       if (boundsPersistFiber !== undefined) {
@@ -576,6 +540,12 @@ export const make = Effect.gen(function* () {
         webPreferences.additionalArguments = [
           ...(webPreferences.additionalArguments ?? []),
           PASSKEY_BRIDGE_ARGUMENT,
+        ];
+      }
+      if (!primaryPaste.enabled) {
+        webPreferences.additionalArguments = [
+          ...(webPreferences.additionalArguments ?? []),
+          PRIMARY_PASTE_DISABLED_ARGUMENT,
         ];
       }
     });
@@ -717,6 +687,7 @@ export const make = Effect.gen(function* () {
     });
     window.webContents.on("before-input-event", (event, input) => {
       quitShortcutHandler(event, input);
+      if (window.isDestroyed()) return;
       // Cmd/Ctrl+W reaches the renderer; DevTools uses the native menu shortcut.
       window.webContents.setIgnoreMenuShortcuts(
         (environment.platform === "darwin" ? input.meta : input.control) &&
@@ -732,6 +703,7 @@ export const make = Effect.gen(function* () {
       }
     });
     window.webContents.on("input-event", (_event, input) => {
+      if (window.isDestroyed()) return;
       if (input.type === "gestureScrollBegin") {
         window.webContents.send(TRACKPAD_SCROLL_BEGIN_CHANNEL);
       } else if (input.type === "gestureScrollEnd") {

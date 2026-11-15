@@ -7,166 +7,34 @@ import {
 } from "@goat/contracts";
 import type { OpenCodeSettings } from "../settings.ts";
 import * as Cause from "effect/Cause";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
-import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   buildServerProvider,
-  classifySpawnFailure,
-  isCommandMissingCause,
-  spawnFailureMessage,
   COMPACT_SLASH_COMMAND,
   nonEmptyTrimmed,
   providerModelsFromSettings,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
+import { ServiceUnavailableError } from "@opencode/protocol/errors";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
-import { findSpawnFailure } from "./spawnFailure.ts";
+import { formatOpenCodeProbeError, OpenCodeProbeError } from "./probeFailure.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
-
-class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
-  readonly cause?: unknown;
-  readonly detail: string;
-}> {}
-
-function normalizeProbeMessage(message: string): string | undefined {
-  const trimmed = message.trim();
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-  if (
-    trimmed === "An error occurred in Effect.tryPromise" ||
-    trimmed === "An error occurred in Effect.try"
-  ) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function normalizedErrorMessage(cause: unknown): string | undefined {
-  if (cause instanceof OpenCodeProbeError) {
-    return normalizeProbeMessage(cause.detail);
-  }
-
-  if (!(cause instanceof Error)) {
-    return undefined;
-  }
-
-  return normalizeProbeMessage(cause.message);
-}
-
-const OPENCODE_MISSING = "OpenCode CLI (`opencode`) is not installed or not on PATH.";
-
-function formatOpenCodeProbeError(input: {
-  readonly cause: unknown;
-  readonly host: Parameters<typeof withLoginShellPathNote>[1];
-  readonly isExternalServer: boolean;
-  readonly phase: "version" | "inventory";
-  readonly serverUrl: string;
-  readonly binaryPath: string;
-}): {
-  readonly installed: boolean;
-  readonly message: string;
-  readonly authStatus?: "unauthenticated";
-} {
-  const detail = normalizedErrorMessage(input.cause);
-  const lower = detail?.toLowerCase() ?? "";
-
-  if (input.isExternalServer) {
-    // Bare auth-code digits can be part of the endpoint's port or path.
-    if (
-      /(?:^|\s)(?:status(?:\s+code)?(?:\s*[:=]\s*|\s+)|http(?:\/\d(?:\.\d)?)?\s+)(?:401|403)\b/.test(
-        lower,
-      ) ||
-      /\b(?:unauthorized|forbidden)\b/.test(lower)
-    ) {
-      return {
-        installed: true,
-        authStatus: "unauthenticated",
-        message: "OpenCode server rejected authentication. Check the server URL and password.",
-      };
-    }
-
-    if (
-      lower.includes("econnrefused") ||
-      lower.includes("enotfound") ||
-      lower.includes("fetch failed") ||
-      lower.includes("networkerror") ||
-      lower.includes("timed out") ||
-      lower.includes("timeout") ||
-      lower.includes("socket hang up")
-    ) {
-      return {
-        installed: true,
-        message: `Couldn't reach the configured OpenCode server at ${input.serverUrl}. Check that the server is running and the URL is correct.`,
-      };
-    }
-
-    return {
-      installed: true,
-      message: detail ?? "Failed to connect to the configured OpenCode server.",
-    };
-  }
-
-  const spawn = findSpawnFailure(input.cause);
-  if (spawn !== undefined) {
-    const failure = classifySpawnFailure(input.cause, spawn.cwd, undefined, {
-      binary: input.binaryPath,
-      env: { PATH: spawn.path },
-    });
-    if (failure === "missing")
-      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING, input.host) };
-    const message = spawnFailureMessage(failure, spawn.cwd, input.binaryPath);
-    if (message) return { installed: true, message };
-  }
-  let cause = spawn === undefined ? input.cause : undefined;
-  const seen = new Set<unknown>();
-  while (cause && typeof cause === "object" && !seen.has(cause)) {
-    seen.add(cause);
-    if (isCommandMissingCause(cause)) {
-      return { installed: false, message: withLoginShellPathNote(OPENCODE_MISSING, input.host) };
-    }
-    cause = "cause" in cause ? cause.cause : undefined;
-  }
-  if (lower.includes("quarantine")) {
-    return {
-      installed: true,
-      message:
-        "macOS is blocking the OpenCode binary (quarantine). Run `xattr -d com.apple.quarantine $(which opencode)` to fix this.",
-    };
-  }
-
-  if (lower.includes("invalid code signature") || lower.includes("corrupted")) {
-    return {
-      installed: true,
-      message:
-        "macOS killed the OpenCode process due to an invalid code signature. The binary may be corrupted. Try reinstalling OpenCode.",
-    };
-  }
-
-  const failureLabel =
-    input.phase === "inventory"
-      ? "Failed to load OpenCode provider inventory"
-      : "Failed to execute OpenCode CLI health check";
-  return {
-    installed: true,
-    message: detail ? `${failureLabel}: ${detail}` : `${failureLabel}.`,
-  };
-}
 
 // The status check owns the span; keep handled failures visible without adding another span.
 const logDiscoveryFailure = Effect.fnUntraced(function* (input: {
@@ -256,9 +124,7 @@ function openCodeCapabilitiesForModel(input: {
   readonly model: ProviderListResponse["all"][number]["models"][string];
   readonly agents: ReadonlyArray<Agent>;
 }): ModelCapabilities {
-  const rawVariantValues = Object.keys(input.model.variants ?? {});
-  const variantValues =
-    rawVariantValues.length > 0 ? rawVariantValues : ["low", "medium", "high", "xhigh"];
+  const variantValues = Object.keys(input.model.variants ?? {});
   const defaultVariant = inferDefaultVariant(input.providerID, variantValues);
   const variantOptions = variantValues.map((value) =>
     defaultVariant === value
@@ -338,7 +204,7 @@ function markOpenCodeLegacy(
 }
 
 function flattenOpenCodeModels(
-  input: OpenCodeRuntime.OpenCodeInventory,
+  input: Pick<OpenCodeRuntime.OpenCodeInventory, "providerList" | "agents">,
 ): ReadonlyArray<ServerProviderModel> {
   const connected = new Set(input.providerList.connected);
   const entries: Array<{ model: ServerProviderModel; release: OpenCodeRelease }> = [];
@@ -379,6 +245,21 @@ function flattenOpenCodeModels(
   }
 
   return markOpenCodeLegacy(entries).toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+/** Undefined when OpenCode lists no models, so callers can keep the catalog they have. */
+export function openCodeProviderModels(
+  settings: Pick<OpenCodeSettings, "customModels">,
+  catalog: Pick<OpenCodeRuntime.OpenCodeInventory, "providerList" | "agents">,
+): ReadonlyArray<ServerProviderModel> | undefined {
+  const models = flattenOpenCodeModels(catalog);
+  return models.length === 0
+    ? undefined
+    : providerModelsFromSettings(
+        models,
+        settings.customModels,
+        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      );
 }
 
 function trimOptional(value: string | null | undefined): string | undefined {
@@ -505,28 +386,73 @@ const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
     .toSorted()
     .join("\n");
 
+// A cold OpenCode 2.2.5 503s model reads for about a minute while its location plugins activate.
+const PLUGIN_ACTIVATION_DEADLINE = "2 minutes";
+
+const isServiceUnavailable = Schema.is(ServiceUnavailableError);
+const isActivatingPlugins = (error: unknown): boolean =>
+  OpenCodeRuntime.isOpenCodeRuntimeError(error)
+    ? isActivatingPlugins(error.cause)
+    : isServiceUnavailable(error) && error.service === "plugin";
+
 /** A cold server can list a partial catalog; two agreeing reads reduce that startup race. */
+const settleOpenCode2Catalog = <E>(
+  list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
+  first: ReadonlyArray<OpenCode2Model>,
+) =>
+  Effect.suspend(() => {
+    let previous = first.length > 0 ? catalogFingerprint(first) : undefined;
+    return Effect.delay(list, "250 millis").pipe(
+      Effect.repeat({
+        until: (models) => {
+          const fingerprint = models.length > 0 ? catalogFingerprint(models) : undefined;
+          const settled = fingerprint !== undefined && fingerprint === previous;
+          previous = fingerprint;
+          return settled;
+        },
+        schedule: Schedule.spaced("250 millis"),
+      }),
+    );
+  });
+
+const OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS = 5_000;
+
 export const makeOpenCode2ModelLoader = <E>(
   list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
+  environment?: NodeJS.ProcessEnv,
 ) =>
   Effect.sync(() => {
     let lastLoaded: ReadonlyArray<OpenCode2Model> = [];
     return Effect.suspend(() => {
-      let previous: string | undefined;
       let latest: ReadonlyArray<OpenCode2Model> = [];
-      return list.pipe(
-        Effect.repeat({
-          until: (models) => {
+      const tracked = list.pipe(
+        Effect.tap((models) =>
+          Effect.sync(() => {
             if (models.length > 0) latest = models;
-            const fingerprint = models.length > 0 ? catalogFingerprint(models) : undefined;
-            const settled = fingerprint !== undefined && fingerprint === previous;
-            previous = fingerprint;
-            return settled;
-          },
-          schedule: Schedule.spaced("250 millis"),
-        }),
-        Effect.catch((error) => (latest.length > 0 ? Effect.succeed(latest) : Effect.fail(error))),
-        Effect.timeoutOption("5 seconds"),
+          }),
+        ),
+      );
+      // The first read can include a cold server start, so only settling shares the budget.
+      // Each retry borrows the managed server, so retries well inside its idle TTL keep it alive.
+      return tracked.pipe(
+        Effect.retry({ while: isActivatingPlugins, schedule: Schedule.spaced("1 second") }),
+        Effect.timeoutOption(PLUGIN_ACTIVATION_DEADLINE),
+        Effect.flatMap((first) =>
+          Option.isNone(first)
+            ? Effect.succeedNone
+            : settleOpenCode2Catalog(tracked, first.value).pipe(
+                Effect.timeoutOption(
+                  resolveProviderProbeTimeoutMs(
+                    "opencode",
+                    OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS,
+                    environment,
+                  ),
+                ),
+              ),
+        ),
+        Effect.catch((error) =>
+          latest.length > 0 ? Effect.succeedSome(latest) : Effect.fail(error),
+        ),
         Effect.map((loaded) => {
           // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
           if (loaded._tag === "Some") lastLoaded = loaded.value;
@@ -536,6 +462,19 @@ export const makeOpenCode2ModelLoader = <E>(
       );
     });
   });
+
+/** None when the reads fail or never agree, so a partial catalog never passes for a settled one. */
+export const readSettledOpenCode2Catalog = <E>(
+  list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
+  environment?: NodeJS.ProcessEnv,
+) =>
+  list.pipe(
+    Effect.flatMap((first) => settleOpenCode2Catalog(list, first)),
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("opencode", OPENCODE_2_CATALOG_SETTLE_TIMEOUT_MS, environment),
+    ),
+    Effect.orElseSucceed(() => Option.none<ReadonlyArray<OpenCode2Model>>()),
+  );
 
 export interface OpenCode2Workspace {
   readonly skills: ReadonlyArray<{
@@ -562,12 +501,15 @@ export const loadOpenCode2Workspace = Effect.fn("OpencodeProviderStatus.loadOpen
     scanned: Effect.Effect<void>,
     loaded: Effect.Effect<boolean>,
     settled: Effect.Effect<void> = Effect.void,
+    environment?: NodeJS.ProcessEnv,
   ) {
     const wasLoaded = yield* loaded;
     yield* settled;
     const first = yield* read;
     if (wasLoaded && first.commands.length > 0) return first;
-    yield* scanned.pipe(Effect.timeoutOption("10 seconds"));
+    yield* scanned.pipe(
+      Effect.timeoutOption(resolveProviderProbeTimeoutMs("opencode", 10_000, environment)),
+    );
     return yield* read;
   },
 );
@@ -650,6 +592,31 @@ function openCode2ModelCapabilities(model: OpenCode2Model): ModelCapabilities {
   });
 }
 
+export function openCode2ProviderModels(
+  settings: Pick<OpenCodeSettings, "customModels">,
+  catalog: ReadonlyArray<OpenCode2Model>,
+): ReadonlyArray<ServerProviderModel> {
+  return providerModelsFromSettings(
+    markOpenCodeLegacy(
+      catalog.map((model) => {
+        const subProvider = subProviderLabelFor(model);
+        return {
+          model: {
+            slug: `${model.providerID}/${model.id}`,
+            name: model.name,
+            ...(subProvider ? { subProvider } : {}),
+            isCustom: false,
+            capabilities: openCode2ModelCapabilities(model),
+          },
+          release: model,
+        };
+      }),
+    ).toSorted((left, right) => left.name.localeCompare(right.name)),
+    settings.customModels,
+    DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+  );
+}
+
 const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
   settings: OpenCodeSettings,
   version: string,
@@ -706,30 +673,11 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
       version,
     });
   }
-  const models = providerModelsFromSettings(
-    markOpenCodeLegacy(
-      result.value.map((model) => {
-        const subProvider = subProviderLabelFor(model);
-        return {
-          model: {
-            slug: `${model.providerID}/${model.id}`,
-            name: model.name,
-            ...(subProvider ? { subProvider } : {}),
-            isCustom: false,
-            capabilities: openCode2ModelCapabilities(model),
-          },
-          release: model,
-        };
-      }),
-    ).toSorted((left, right) => left.name.localeCompare(right.name)),
-    settings.customModels,
-    DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-  );
   return buildServerProvider({
     presentation: OPENCODE_2_PRESENTATION,
     enabled: true,
     checkedAt,
-    models,
+    models: openCode2ProviderModels(settings, result.value),
     skills,
     slashCommands: [COMPACT_SLASH_COMMAND],
     probe:
@@ -754,6 +702,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     OpenCode2Workspace["skills"],
     OpenCodeRuntime.OpenCodeRuntimeError
   > = Effect.succeed([]),
+  environment?: NodeJS.ProcessEnv,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -891,6 +840,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
           ...(openCodeSettings.serverPassword
             ? { serverPassword: settingsSecretLiteral(openCodeSettings.serverPassword) }
             : {}),
+          ...(environment !== undefined ? { environment } : {}),
         })
         .pipe(Effect.flatMap(loadInventory), Effect.scoped)
     : serverOwner.withServer(loadInventory);
@@ -918,16 +868,14 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     };
   }
 
-  const inventoryModels = flattenOpenCodeModels(inventoryExit.value);
-  const models = providerModelsFromSettings(
-    inventoryModels,
-    customModels,
-    DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-  );
+  const catalogModels = openCodeProviderModels(openCodeSettings, inventoryExit.value);
+  const models =
+    catalogModels ??
+    providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES);
   const skills = openCodeSkillsToServerProviderSkills(inventoryExit.value.skills);
   const connectedCount = inventoryExit.value.providerList.connected.length;
-  const catalogReady = connectedCount > 0 && inventoryModels.length > 0;
-  if (connectedCount > 0 && inventoryModels.length === 0) {
+  const catalogReady = connectedCount > 0 && catalogModels !== undefined;
+  if (connectedCount > 0 && catalogModels === undefined) {
     yield* logDiscoveryFailure({ phase: "inventory", isExternalServer, version });
   }
   return {

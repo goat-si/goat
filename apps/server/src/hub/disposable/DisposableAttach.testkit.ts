@@ -272,7 +272,7 @@ export const world = <A, E>(
     });
   const grant: Grant = { value: GRANT, calls: 0 };
   return Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 147 });
+    yield* runMigrations({ toMigrationInclusive: 157 });
     const settings = yield* Settings.ServerSettingsService;
     yield* withPersonConsent(
       settings.updateSettings({

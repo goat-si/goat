@@ -142,7 +142,7 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
   }
 }
 
-function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean): string {
+export function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean): string {
   if (isLoading) {
     return triggerKind === "path" ? "Searching files…" : "Loading…";
   }
@@ -150,7 +150,7 @@ function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean):
     case "pull-request":
       return "No matching pull requests.";
     case "path":
-      return "No matching files or folders.";
+      return "No matching mentions.";
     case "skill":
       return "No skills found.";
     case "slash-command":

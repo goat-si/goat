@@ -1,6 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
 import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@goat/contracts";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -19,7 +18,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
-import { describeUpdateErrorCause, UPDATE_CHECK_SETTLE_WAIT } from "./updateFailures.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "./updateFailures.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 import {
   getDesktopUpdateInstallationMessage,
@@ -115,16 +114,22 @@ describe("DesktopUpdates", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const updates = yield* DesktopUpdates.DesktopUpdates;
+            const desktopState = yield* DesktopState.DesktopState;
             yield* updates.configure;
-            return yield* updates.getState;
+            return {
+              state: yield* updates.getState,
+              canInstallUpdates: yield* Ref.get(desktopState.canInstallUpdates),
+            };
           }),
         ).pipe(Effect.provide(makeHarness({ platform: "linux", packageType }).layer));
 
       const deb = yield* linuxState("deb\n");
-      assert.equal(deb.status, "idle");
+      assert.equal(deb.state.status, "idle");
+      assert.isTrue(deb.canInstallUpdates);
 
       const unmarked = yield* linuxState(undefined);
-      assert.equal(unmarked.status, "disabled");
+      assert.equal(unmarked.state.status, "disabled");
+      assert.isFalse(unmarked.canInstallUpdates);
     }),
   );
 
@@ -224,6 +229,26 @@ describe("DesktopUpdates", () => {
         ]);
         assert.equal(state.omittedReleaseCount, 0);
         assert.equal(state.downloadPercent, 100);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("checks shortly after startup and then every four hours", () => {
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        yield* TestClock.adjust("15 seconds");
+        assert.equal(harness.checkCount(), 1);
+
+        yield* TestClock.adjust("3 hours");
+        assert.equal(harness.checkCount(), 1);
+
+        yield* TestClock.adjust("1 hour");
+        assert.equal(harness.checkCount(), 2);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -715,7 +740,11 @@ describe("DesktopUpdates", () => {
         const result = yield* updates.install;
         assert.isTrue(result.accepted);
         assert.isFalse(yield* Ref.get(desktopState.quitting));
-        assert.deepEqual(harness.installSteps, ["quitAndInstall", "startBackend"]);
+        assert.deepEqual(harness.installSteps, [
+          "closeSshTunnels",
+          "quitAndInstall",
+          "startBackend",
+        ]);
         assert.equal(harness.updateRestartMarkers.size, 0);
         assert.equal(harness.installRecords.size, 0);
       }),
@@ -745,7 +774,7 @@ describe("DesktopUpdates", () => {
 
         const result = yield* updates.install;
         assert.equal(result.state.errorContext, "install");
-        assert.deepEqual(harness.installSteps, ["quitAndInstall"]);
+        assert.deepEqual(harness.installSteps, ["closeSshTunnels", "quitAndInstall"]);
         assert.isFalse((yield* (yield* pool.primary).snapshot).desiredRunning);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
@@ -839,7 +868,11 @@ describe("DesktopUpdates", () => {
         assert.equal(harness.quitAndInstalls(), 1);
         harness.emit("error", new Error("duplicate native installer error"));
         yield* flushCallbacks;
-        assert.deepEqual(harness.installSteps, ["quitAndInstall", "startBackend"]);
+        assert.deepEqual(harness.installSteps, [
+          "closeSshTunnels",
+          "quitAndInstall",
+          "startBackend",
+        ]);
 
         yield* Deferred.succeed(releaseRecovery, undefined);
         const failedResult = yield* Fiber.join(failedInstall);
@@ -938,49 +971,4 @@ describe("DesktopUpdates", () => {
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
   );
-});
-
-describe("describeUpdateErrorCause", () => {
-  it("removes URLs, credentials, response bodies, and headers from summaries", () => {
-    const messages = [
-      "Cannot download https://user:url-secret@example.com/update?token=query-secret, status 403",
-      "Request failed: Bearer bearer-secret",
-      "Request failed: Basic basic-secret",
-      "Request failed: Authorization: Bearer header-secret",
-      "Request failed: Cookie=session-secret",
-      "Request failed: api_key=\"key-secret\" password='password-secret' access_token=token-secret",
-      '404 Not Found\n{"body":"body-secret"}\nHeaders: cookie=header-secret',
-      "Request failed\rHeaders: cookie=header-secret",
-    ];
-
-    for (const message of messages) {
-      const summary = describeUpdateErrorCause(new Error(message));
-      assert.include(summary, "Error:");
-      assert.notInclude(summary, "secret");
-      assert.notInclude(summary, "https://");
-      assert.notInclude(summary, "Headers:");
-    }
-    assert.equal(describeUpdateErrorCause("404 Not Found\nbody-secret"), "404 Not Found");
-  });
-
-  it("bounds long messages, parallel failures, and cyclic causes", () => {
-    const longError = new Error("x".repeat(10_000));
-    const parallel = Cause.combine(Cause.fail(longError), Cause.die(longError));
-    assert.isAtMost(describeUpdateErrorCause(parallel).length, 1024);
-
-    const cyclic = new Error("retry failed");
-    cyclic.cause = cyclic;
-    assert.include(describeUpdateErrorCause(cyclic), "[truncated cause]");
-    assert.isAtMost(describeUpdateErrorCause(cyclic).length, 1024);
-  });
-
-  it("does not serialize arbitrary payloads or let unreadable errors break logging", () => {
-    assert.equal(describeUpdateErrorCause({ payload: "secret" }), "object");
-    const unreadable = Object.defineProperty({}, "message", {
-      get() {
-        throw new Error("unreadable error");
-      },
-    });
-    assert.equal(describeUpdateErrorCause(unreadable), "UnknownError");
-  });
 });

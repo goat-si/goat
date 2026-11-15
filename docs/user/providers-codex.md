@@ -32,6 +32,13 @@ Running `codex login` does not change a managed ChatGPT connection. In
 **Settings → Providers**, add a Codex instance, choose **Configure manually**,
 and complete the wizard. Then select that instance from the thread’s model picker.
 
+## Allow more time for provider checks
+
+If an authenticated Codex installation reports “Timed out while checking Codex
+app-server provider status,” set `GOAT_CODEX_PROBE_TIMEOUT_MS=60000` in the
+GOAT server's environment and restart it. See [Provider check timeouts](./install.md#provider-check-timeouts)
+for configuration and other providers.
+
 ## Change an instance's settings
 
 Changing a Codex instance's binary path, launch arguments, environment,

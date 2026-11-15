@@ -9,7 +9,10 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
-import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
+import {
+  parseGenericCliVersion,
+  resolveProviderProbeTimeoutMs,
+} from "@goat/provider-core/server/snapshotProbe";
 
 export interface ProbedOpenCode {
   readonly generation: "v1" | "v2";
@@ -17,8 +20,8 @@ export interface ProbedOpenCode {
 }
 
 // Meant to stop a hung `--version`; wrapped installs can take several seconds to start cold.
-const OPENCODE_VERSION_PROBE_TIMEOUT = "10 seconds";
-const OPENCODE_SERVER_PROBE_TIMEOUT = "5 seconds";
+const OPENCODE_VERSION_PROBE_TIMEOUT_MS = 10_000;
+const OPENCODE_SERVER_PROBE_TIMEOUT_MS = 5_000;
 // 2.x's own CLI decodes `{version, pid}` from `/api/info`; requiring both keeps unrelated JSON out.
 const decodeApiInfo = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String, pid: Schema.Int })),
@@ -60,6 +63,11 @@ export const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
   environment: NodeJS.ProcessEnv | undefined,
 ) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+  const timeoutMs = resolveProviderProbeTimeoutMs(
+    "opencode",
+    OPENCODE_VERSION_PROBE_TIMEOUT_MS,
+    environment,
+  );
   const { stdout, code } = yield* runtime
     .runOpenCodeCommand({
       binaryPath,
@@ -68,12 +76,12 @@ export const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
     })
     .pipe(
       Effect.timeoutOrElse({
-        duration: OPENCODE_VERSION_PROBE_TIMEOUT,
+        duration: timeoutMs,
         orElse: () =>
           Effect.fail(
             new OpenCodeRuntime.OpenCodeRuntimeError({
               operation: "probeOpenCodeBinary",
-              detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
+              detail: `OpenCode CLI version probe timed out after ${timeoutMs / 1_000} seconds.`,
             }),
           ),
       }),
@@ -90,6 +98,7 @@ export const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
 const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
   serverUrl: string,
   serverPassword: string,
+  environment?: NodeJS.ProcessEnv,
 ) {
   const client = yield* HttpClient.HttpClient;
   const baseUrl = URL.parse(serverUrl.trim());
@@ -132,7 +141,11 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
             }),
         ),
         Effect.timeoutOrElse({
-          duration: OPENCODE_SERVER_PROBE_TIMEOUT,
+          duration: resolveProviderProbeTimeoutMs(
+            "opencode",
+            OPENCODE_SERVER_PROBE_TIMEOUT_MS,
+            environment,
+          ),
           orElse: () =>
             Effect.fail(
               new OpenCodeRuntime.OpenCodeRuntimeError({
@@ -169,7 +182,7 @@ export const probeOpenCodeRuntime = (
   HttpClient.HttpClient | OpenCodeRuntime.OpenCodeRuntime
 > =>
   settings.serverUrl.trim().length > 0
-    ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
+    ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword, environment)
     : probeOpenCodeBinary(settings.binaryPath, environment);
 
 // Only 2.x is kept: 1.x can be upgraded in place while GOAT runs, and 2.x converts the shared
