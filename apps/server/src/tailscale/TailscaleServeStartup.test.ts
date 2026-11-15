@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/http";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as NetAddress from "effect/net/NetAddress";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -237,13 +238,17 @@ it.effect("takes back a Serve route another server left on a dead port", () =>
 );
 
 it.effect.each([
-  { atStop: "other", disabled: 0 },
-  { atStop: "unreadable", disabled: 0 },
-  { atStop: "ours", disabled: 1 },
+  { atStop: "other", disabled: 0, warned: false },
+  { atStop: "unreadable", disabled: 0, warned: true },
+  { atStop: "ours", disabled: 1, warned: false },
 ] as const)(
   "at stop turns the route off only while it is ours ($atStop: $disabled)",
-  ({ atStop, disabled }) =>
-    Effect.gen(function* () {
+  ({ atStop, disabled, warned }) => {
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    return Effect.gen(function* () {
       const offs = yield* Ref.make(0);
       const applied = yield* Deferred.make<void>();
       const holder = yield* Ref.make<"none" | "ours" | "other" | "unreadable">("none");
@@ -272,5 +277,13 @@ it.effect.each([
         }),
       );
       expect(yield* Ref.get(offs)).toBe(disabled);
-    }),
+      expect(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Tailscale Serve left on; its current routes could not be read",
+        ),
+      ).toBe(warned);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  },
 );
