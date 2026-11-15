@@ -181,6 +181,7 @@ export function MobileBotRosterView(props: {
                 bot.profile?.name ?? "GOAT Bot",
                 props.unread ? "unread" : null,
                 ...(mainSignals?.spoken ?? []),
+                props.preview || null,
               ]
                 .filter((part) => part !== null)
                 .join(", ")}
