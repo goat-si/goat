@@ -26,3 +26,10 @@ export function settingsSecretLiteral(value: SettingsSecretValue): string {
   if (typeof value !== "string") throw new Error("Secret reference has not been resolved");
   return value;
 }
+
+/** What a Settings secret check found; a readable secret's value never leaves the server. */
+export const SecretSourceCheckResult = Schema.Union([
+  Schema.TaggedStruct("Resolved", {}),
+  Schema.TaggedStruct("Failed", { detail: Schema.String }),
+]);
+export type SecretSourceCheckResult = typeof SecretSourceCheckResult.Type;

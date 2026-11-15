@@ -205,6 +205,7 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
+import * as SecretCheck from "./secrets/SecretCheck.ts";
 import { RpcInstrumentation, rpcInstrumentationLayer } from "./observability/RpcInstrumentation.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
@@ -1435,6 +1436,7 @@ export const layerWsRpc = (
       const accessRpc = yield* AccessRpc.make(currentSession);
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
+      const secretCheck = yield* SecretCheck.SecretCheck;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const sourceControlStarPrompt = yield* SourceControlStarPrompt.SourceControlStarPrompt;
@@ -2840,6 +2842,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
+        [WS_METHODS.serverCheckSecretSource]: (input) => secretCheck.check(input.source),
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
@@ -3660,7 +3663,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(SshHostSetup.SshHostSetup, sshHostSetup)),
               Layer.provide(Layer.succeed(ProviderHostSync.ProviderHostSync, providerHostSync)),
               Layer.provide(Layer.succeed(CodexRoutes.CodexRouteService, codexRoutes)),
-              Layer.provide(OtlpEndpointCheck.layer),
+              Layer.provide(Layer.merge(OtlpEndpointCheck.layer, SecretCheck.layer)),
               Layer.provide(
                 Layer.succeed(
                   PullRequestReviewGuideService.PullRequestReviewGuideService,

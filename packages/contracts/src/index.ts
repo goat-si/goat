@@ -78,6 +78,7 @@ export * from "./settings.ts";
 export * from "./worktreeRetention.ts";
 export {
   SecretReference,
+  SecretSourceCheckResult,
   isSecretReference,
   isOnePasswordReference,
   SettingsSecretValue,
