@@ -572,6 +572,26 @@ describe("orchestration V2 wire projection", () => {
     ).toBeLessThan(270_000);
   });
 
+  it("sends an app saved under the legacy key under the current key", () => {
+    const app = {
+      attachmentId: "app-html",
+      server: "repro",
+      tool: "chart",
+      resourceUri: "ui://repro/chart",
+    };
+    const result = { content: [{ type: "text", text: "Rendered chart" }] };
+    const item = {
+      ...base,
+      type: "dynamic_tool" as const,
+      toolName: "repro.chart",
+      input: {},
+      output: { t3McpApp: app, result },
+    };
+    expect(projectTurnItemForDetail(item)).toMatchObject({
+      output: { goatMcpApp: app, result },
+    });
+  });
+
   it("keeps image markers when the rest of a tool output is too large to send", () => {
     const image = {
       type: "image",

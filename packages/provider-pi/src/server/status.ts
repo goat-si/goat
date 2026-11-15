@@ -21,7 +21,11 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import {
+  buildPiRpcLaunch,
+  resolvePiLaunchArgs,
+  sanitizePiProbeEnvironment,
+} from "./mcpInjection.ts";
 import {
   makePiRpcConnection,
   PiRpcError,
@@ -389,7 +393,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   }
 
   const spawnCwd = safeProcessCwd();
-  const probeEnvironment = providerProbeEnvironment(environment);
+  const probeEnvironment = sanitizePiProbeEnvironment(providerProbeEnvironment(environment));
   const versionResult = yield* runPiVersionCommand(
     piSettings,
     probeEnvironment,

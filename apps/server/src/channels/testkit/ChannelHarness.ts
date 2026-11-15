@@ -750,6 +750,7 @@ export function makeHarness(
   );
 
   const layerLaunchDependencies = Layer.mergeAll(
+    layerOrchestrator,
     layerExternal,
     layerThreads,
     CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),

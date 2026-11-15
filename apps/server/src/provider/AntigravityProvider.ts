@@ -157,7 +157,8 @@ interface AntigravityProviderState {
 }
 
 interface AntigravityProviderOptions {
-  readonly environment?: NodeJS.ProcessEnv;
+  /** Read at each check, so a probe timeout override set after construction applies. */
+  readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly stampIdentity: (snapshot: ServerProviderDraft) => Effect.Effect<ServerProvider>;
   readonly probe: Effect.Effect<
     EffectAcpSchema.InitializeResponse,
@@ -308,7 +309,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const timeoutMs = resolveProviderProbeTimeoutMs(
       "antigravity",
       HEALTH_CHECK_TIMEOUT_MS,
-      options.environment,
+      options.environment ? yield* options.environment : undefined,
     );
     const result = yield* options.probe.pipe(Effect.timeoutOption(timeoutMs), Effect.result);
     const initialized =

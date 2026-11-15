@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { makeAssistantStreamingFilter, splitBufferedAssistantText } from "./assistantStreaming.ts";
 import {
   MessageId,
@@ -171,4 +171,34 @@ it("holds a streamed section heading until its content has a boundary", () => {
     ready: "**Results**\n\nBody\n\n",
     rest: "Next",
   });
+});
+
+const shownText = (event: ProviderAdapter.ProviderAdapterV2Event | null) =>
+  event?.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+    ? event.turnItem.text
+    : null;
+
+it("a rewrite that drops an open code fence shows the new text's boundary", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  assert.equal(shownText(filter(assistantEvent("Intro\n\n```ts\nx()\n"), 0)), "Intro\n\n");
+  assert.equal(shownText(filter(assistantEvent("Retry\n\n- a\n- b"), 400)), "Retry\n\n- a\n");
+});
+
+it("scans each streamed line once while a long code fence is still open", () => {
+  const filter = makeAssistantStreamingFilter("paragraph");
+  const lineCount = 400;
+  let text = "Intro\n\n```ts\n";
+  const indexOf = vi.spyOn(String.prototype, "indexOf");
+  try {
+    for (let line = 0; line < lineCount; line++) {
+      text += `const value${line} = ${line};\n`;
+      filter(assistantEvent(text), line * 400);
+    }
+    const newlineSearches = indexOf.mock.calls.filter(([search]) => search === "\n").length;
+    expect(newlineSearches).toBeLessThan(lineCount * 4);
+  } finally {
+    indexOf.mockRestore();
+  }
+  text += "```\n";
+  assert.equal(shownText(filter(assistantEvent(text), lineCount * 400)), text);
 });

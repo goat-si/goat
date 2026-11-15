@@ -105,7 +105,8 @@ type Seen = { target: GoatBotAttachmentPickTarget | null };
 interface ComposerProps {
   readonly shown: boolean;
   readonly foreground: boolean;
-  readonly conversation?: string;
+  /** The draft owner's generation; another number is another conversation. */
+  readonly owner?: number;
   /** Gets the pick target the menu last received, the one a pick captures when it starts. */
   readonly onTarget?: (target: GoatBotAttachmentPickTarget) => void;
   /** Runs inside the commit that renders these props, before any later work can answer. */
@@ -120,7 +121,7 @@ function InCommit({ run }: { readonly run?: (() => void) | undefined }) {
 }
 
 function Composer(props: ComposerProps) {
-  const files = useGoatBotDraftAttachments(props.shown, props.conversation ?? "env/main");
+  const files = useGoatBotDraftAttachments(props.shown, props.owner ?? 0);
   const target = files.target(10_000_000);
   const { onTarget } = props;
   useLayoutEffect(() => {
@@ -290,7 +291,7 @@ it("a pick that answers after the chat moved to another conversation is released
   const view = await render();
   try {
     await view.press("Photo Library");
-    await view.draw({ shown: true, foreground: true, conversation: "env-2/main" });
+    await view.draw({ shown: true, foreground: true, owner: 1 });
     expect(view.busy()).toBe("0");
     await answer([photo("moved")]);
     expect(view.files()).toBe("");
@@ -312,7 +313,7 @@ it("a pick that answers in the very commit that moves the chat to another conver
     await view.draw({
       shown: true,
       foreground: true,
-      conversation: "env/scout",
+      owner: 1,
       inCommit: () => started.onPicked([photo("crossing")], lifetime),
     });
     expect(view.files()).toBe("");

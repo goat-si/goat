@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ProjectId } from "@goat/contracts";
+import { CommandId, MessageId, ProjectId, ProviderDriverKind } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -143,6 +143,49 @@ it.effect("reports a restart that stops the running turn as restarted", () =>
           ThreadManagementService.layer.pipe(
             Layer.provideMerge(layer),
             Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+            ),
+          ),
+        ),
+      );
+    }),
+  ),
+);
+
+it.effect("reports the recorded restart on replay after its provider is disabled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { layer, startFirstTurn } = yield* goalHarness("restart-replay-disabled");
+      yield* Effect.gen(function* () {
+        const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const threadId = yield* startFirstTurn;
+        const input = {
+          projectId: ProjectId.make("project:restart-replay-disabled"),
+          commandId: CommandId.make("restart"),
+          threadId,
+          messageId: MessageId.make("message:restart"),
+          text: "do this instead",
+          attachments: [],
+          mode: "restart",
+          createdBy: "agent",
+          creationSource: "mcp",
+        } as const;
+        const sent = yield* threadManagement.sendToThread(input);
+        yield* settings.updateSettings({
+          providerInstances: {
+            [runSelection.instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: false },
+          },
+        });
+        const replayed = yield* threadManagement.sendToThread(input);
+
+        assert.deepEqual([sent.delivery, replayed.delivery], ["restarted", "restarted"]);
+      }).pipe(
+        Effect.provide(
+          ThreadManagementService.layer.pipe(
+            Layer.provideMerge(layer),
+            Layer.provideMerge(ServerSettings.layerTest()),
             Layer.provide(
               CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
             ),

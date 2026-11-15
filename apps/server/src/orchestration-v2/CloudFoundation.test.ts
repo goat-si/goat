@@ -19,6 +19,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -218,6 +219,7 @@ it.effect.each([
             PreviewAgentActivity.layer,
             inboxLayer,
             IdAllocator.layer,
+            ThreadCommandExecutor.layer,
             ServerSettings.layerTest(),
             Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({
               allocate: () => Effect.succeed(1),
