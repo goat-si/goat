@@ -1,7 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import { ChannelInputId, CommandId, ThreadId, type ScheduledTaskRecentRun } from "@goat/contracts";
 import { scheduledTaskRunPresentation } from "../scheduledTaskRun.ts";
-import { botRoutineRuns } from "./routineRuns.ts";
+import { botRoutineRuns, routineRunState, routineRunTime } from "./routineRuns.ts";
 
 const conversation = (input: string) => ({
   threadId: ThreadId.make("bot-thread"),
@@ -62,4 +62,57 @@ it("names each run's time and outcome in the last-run words, marks quiet runs, o
 it("absent history draws no dots", () => {
   expect(botRoutineRuns({}, 7, formatTime)).toEqual([]);
   expect(botRoutineRuns({ recentRuns: [] }, 7, formatTime)).toEqual([]);
+});
+
+it("carries each run's raw status, quiet and dispatch failure, so a client never reads the display word", () => {
+  const recentRuns = [
+    run(9, "completed", { quiet: true, conversation: conversation("input-9") }),
+    run(8, "failed", { dispatchFailed: true }),
+    run(7, "running", { conversation: conversation("input-7") }),
+  ];
+  const dots = botRoutineRuns({ recentRuns }, 7, formatTime);
+  expect(dots.map((dot) => [dot.status, dot.quiet, dot.dispatchFailed])).toEqual([
+    ["running", undefined, undefined],
+    ["failed", undefined, true],
+    ["completed", true, undefined],
+  ]);
+});
+
+it("a run is in flight, ended, or unsettled: an unknown status counts as ended only once it has a finish time", () => {
+  const state = (status: string, completedAt: string | null = null) =>
+    routineRunState({ status, completedAt });
+  expect(["dispatching", "queued", "running"].map((status) => state(status))).toEqual([
+    "in-flight",
+    "in-flight",
+    "in-flight",
+  ]);
+  expect(
+    ["completed", "failed", "interrupted", "cancelled", "rolled_back"].map((status) =>
+      state(status),
+    ),
+  ).toEqual(["ended", "ended", "ended", "ended", "ended"]);
+  expect(state("paused_by_policy")).toBe("unsettled");
+  expect(state("paused_by_policy", "2026-11-14T09:05:00.000Z")).toBe("ended");
+});
+
+it("formats a run's time as short month, day, hour and minute, in the given locale and hour choice", () => {
+  const at = "2026-11-14T09:00:00.000Z";
+  expect(routineRunTime(at, { locale: "en-US", hour12: true, timeZone: "UTC" })).toBe(
+    "Nov 14, 9:00 AM",
+  );
+  expect(routineRunTime(at, { locale: "en-US", hour12: false, timeZone: "UTC" })).toBe(
+    "Nov 14, 09:00",
+  );
+  // Without a choice, the locale's own hour form applies.
+  expect(routineRunTime(at, { locale: "en-GB", timeZone: "UTC" })).toBe("14 Nov, 09:00");
+});
+
+it("joins the date and time with a comma on every engine, and can give the time alone", () => {
+  const at = "2026-11-14T21:05:00.000Z";
+  expect(routineRunTime(at, { locale: "en-US", hour12: true, timeZone: "UTC" })).toBe(
+    "Nov 14, 9:05 PM",
+  );
+  expect(
+    routineRunTime(at, { locale: "en-US", hour12: false, timeZone: "UTC", timeOnly: true }),
+  ).toBe("21:05");
 });

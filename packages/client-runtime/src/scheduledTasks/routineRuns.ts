@@ -11,6 +11,10 @@ export type RoutineRunShape =
 
 export interface RoutineRunDot {
   readonly firingId: ScheduledTaskRecentRun["firingId"];
+  /** The run's own status, for deciding what to show; `word` is only for reading. */
+  readonly status: string;
+  readonly quiet?: true;
+  readonly dispatchFailed?: true;
   readonly shape: RoutineRunShape;
   /** The outcome in the last-run line's words, such as "completed", "dispatch failed" or "no update". */
   readonly word: string;
@@ -44,6 +48,9 @@ export function botRoutineRuns(
       const word = quiet ? "no update" : outcome.label.toLowerCase();
       return {
         firingId: run.firingId,
+        status: run.status,
+        ...(run.quiet === true ? { quiet: true as const } : {}),
+        ...(run.dispatchFailed === true ? { dispatchFailed: true as const } : {}),
         shape: quiet ? "bar" : SHAPE_BY_TONE[outcome.tone],
         word,
         accessibleName: `Run on ${formatTime(run.requestedAt)}, ${word}`,
@@ -52,4 +59,51 @@ export function botRoutineRuns(
         ...(run.conversation === undefined ? {} : { conversation: run.conversation }),
       };
     });
+}
+
+const IN_FLIGHT = new Set(["dispatching", "queued", "running"]);
+const ENDED = new Set(["completed", "failed", "interrupted", "cancelled", "rolled_back"]);
+
+/**
+ * Whether a run has an outcome to read. A status this client does not know may still be in
+ * flight, so it counts as ended only once the run has a finish time.
+ */
+export function routineRunState(
+  run: Pick<RoutineRunDot, "status" | "completedAt">,
+): "in-flight" | "ended" | "unsettled" {
+  if (IN_FLIGHT.has(run.status)) return "in-flight";
+  if (ENDED.has(run.status) || run.completedAt !== null) return "ended";
+  return "unsettled";
+}
+
+/**
+ * A run's time as short month, day, hour and minute, joined by a comma on every engine (some put
+ * "at" between them); web passes its timestamp locale and hour form. `timeOnly` drops the date.
+ */
+export function routineRunTime(
+  iso: string,
+  options: {
+    readonly locale?: string;
+    readonly hour12?: boolean;
+    readonly timeZone?: string;
+    readonly timeOnly?: boolean;
+  } = {},
+): string {
+  const zone = options.timeZone === undefined ? {} : { timeZone: options.timeZone };
+  const clock = {
+    minute: "2-digit",
+    ...(options.hour12 === undefined ? {} : { hour12: options.hour12 }),
+    ...zone,
+  } as const;
+  // A 24-hour clock reads "09:00"; a 12-hour one reads "9:00 AM".
+  const cycle = new Intl.DateTimeFormat(options.locale, {
+    ...clock,
+    hour: "numeric",
+  }).resolvedOptions().hourCycle;
+  const hour = cycle === "h23" || cycle === "h24" ? "2-digit" : "numeric";
+  const at = Date.parse(iso);
+  const time = new Intl.DateTimeFormat(options.locale, { ...clock, hour }).format(at);
+  if (options.timeOnly === true) return time;
+  const day = new Intl.DateTimeFormat(options.locale, { month: "short", day: "numeric", ...zone });
+  return `${day.format(at)}, ${time}`;
 }
