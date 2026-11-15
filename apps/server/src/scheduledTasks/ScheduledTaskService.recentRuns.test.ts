@@ -433,14 +433,14 @@ it.effect(
   () =>
     withWebhookService((fixture) =>
       Effect.gen(function* () {
-        // Each run stays under MAX_STORED_RUN_BYTES (about 840 stored bytes with a 600-byte ASCII
-        // task id), so only the byte budget can omit a routine: about 24 of them fill 128 KB. Every
-        // full routine has the same id length, run count and statuses, so all histories are one size.
+        // Ids of 250 bytes stay under the 256-byte id cap, and each accepted run stores 809 bytes
+        // (snapshot plus input id), under the 1,024-byte run cap, so only the budget omits a routine.
+        // Each history encodes to 5,041 bytes, so 25 fit after the empty one; all are one size.
         const full = (index: number) =>
-          `goat-bot-check-in:${String(index).padStart(2, "0")}-${"x".repeat(600 - 21)}`;
+          `goat-bot-check-in:${String(index).padStart(2, "0")}-${"x".repeat(250 - 21)}`;
         const noRunsFirst = yield* saveRoutine(fixture, "goat-bot-check-in:00");
         const fullRoutines: Array<ScheduledTask> = [];
-        for (let index = 1; index <= 27; index++)
+        for (let index = 1; index <= 28; index++)
           fullRoutines.push(yield* saveRoutine(fixture, full(index)));
         const noRunsLast = yield* saveRoutine(fixture, "goat-bot-check-in:zz");
         // Firing ids hold the clock in milliseconds; keep every one six digits long, and stay well
@@ -448,7 +448,7 @@ it.effect(
         yield* TestClock.adjust(Duration.seconds(100));
         for (const routine of fullRoutines)
           for (let index = 0; index < SCHEDULED_TASK_RECENT_RUNS; index++)
-            yield* refuse(fixture, yield* fire(fixture, routine));
+            yield* accept(fixture, yield* fire(fixture, routine));
 
         const listed = yield* fixture.service.list();
         const task = (routine: ScheduledTask) =>
