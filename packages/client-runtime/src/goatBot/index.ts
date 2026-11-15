@@ -31,6 +31,7 @@ export * from "./botColor.ts";
 export * from "./unread.ts";
 export * from "./changeRequestLinks.ts";
 export * from "./pullRequestChips.ts";
+export * from "./rowTime.ts";
 export * from "./quote.ts";
 export * from "./eventSubject.ts";
 export * from "@goat/shared/goatBotNames";
