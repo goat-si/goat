@@ -14,7 +14,7 @@ export const ANTIGRAVITY_DOWNLOAD_HOSTS: ReadonlySet<string> = new Set([
 export const refuseRedirects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, FetchHttpClient.RequestInit, { redirect: "error" });
 
-export const ANTIGRAVITY_CLI_MANIFEST_BASE =
+const ANTIGRAVITY_CLI_MANIFEST_BASE =
   "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests";
 
 const Manifest = Schema.Struct({
