@@ -59,7 +59,16 @@ function setup(destination: { environmentId: string; threadId: string } | null) 
 function move(destination: { environmentId: string; threadId: string } | null) {
   screenSession.environmentId = destination?.environmentId ?? null;
   screenSession.threadId = destination?.threadId ?? null;
+  screenSession.sending = undefined;
   composer.canSend = destination !== null;
+}
+
+/** A reconnect before the bot confirms again: history shows the saved reference, nothing sends. */
+function unconfirmed(saved: { environmentId: string; threadId: string }) {
+  screenSession.environmentId = saved.environmentId;
+  screenSession.threadId = saved.threadId;
+  screenSession.sending = null;
+  composer.canSend = false;
 }
 
 async function open(element: ReactNode) {
@@ -138,13 +147,17 @@ it("a different destination for the same bot, as after a Home move or a new conf
   }
 });
 
-it("a destination that resolves for the first time takes a draft once sending is possible", async () => {
+it("before its destination first resolves the box takes no text, and once it resolves a draft stays", async () => {
   setup(null);
   const chat = await open(<GoatBotScreen visible />);
+  const box = () =>
+    chat.view.container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
   try {
     expect(chat.typed()).toBe("");
+    expect(box()?.readOnly).toBe(true);
     move(main);
     await chat.view.rerender(<GoatBotScreen visible />);
+    expect(box()?.readOnly).toBe(false);
     await typeInto(chat.view.container, "Now it can send");
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chat.typed()).toBe("Now it can send");
@@ -165,6 +178,27 @@ it("a draft survives the destination going missing and coming back the same, and
     move(main);
     await chat.view.rerender(<GoatBotScreen visible />);
     // The saved reference shows first, then confirmation reports the same one.
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chat.typed()).toBe("Still mine");
+    expect(picker.release).not.toHaveBeenCalled();
+    await chat.press("Send message");
+    expect(screenSession.send).toHaveBeenCalledWith("Still mine", [file]);
+  } finally {
+    await chat.close();
+  }
+});
+
+it("a reconnect that shows a different saved reference until the bot confirms again keeps the draft", async () => {
+  setup(main);
+  const chat = await open(<GoatBotScreen visible />);
+  try {
+    await typeInto(chat.view.container, "Still mine");
+    await chat.press("Add to message: Photo Library");
+    await act(async () => picker.settle?.([file]));
+    // A saved reference that lags the confirmed one, as after a failed preferences write.
+    unconfirmed({ environmentId: "env", threadId: "older-main-thread" });
+    await chat.view.rerender(<GoatBotScreen visible />);
+    move(main);
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chat.typed()).toBe("Still mine");
     expect(picker.release).not.toHaveBeenCalled();
@@ -228,7 +262,7 @@ it("Send right after the destination changed sends nothing written for the old o
   }
 });
 
-it("answering ends when the destination changes, even with the same question still listed", async () => {
+it("answering ends and its typed answer clears when the destination changes, even with the same question still listed", async () => {
   setup(main);
   const chat = await open(<GoatBotScreen visible />);
   screenSession.rows = [asked];
@@ -240,9 +274,11 @@ it("answering ends when the destination changes, even with the same question sti
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     expect(chat.view.container.querySelector('[aria-label^="Answering: "]')).not.toBeNull();
+    await typeInto(chat.view.container, "Keep it");
     move({ environmentId: "env-2", threadId: "main-thread-2" });
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chat.view.container.querySelector('[aria-label^="Answering: "]')).toBeNull();
+    expect(chat.typed()).toBe("");
     await typeInto(chat.view.container, "A new message");
     await chat.press("Send message");
     expect(screenSession.answer).not.toHaveBeenCalled();
