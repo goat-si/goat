@@ -430,8 +430,8 @@ function MemberRow(props: {
           </Text>
           <MobileBotRowSignalMarks signals={signals} />
           {waitingCount > 0 ? (
-            // The bubble sets waiting apart from the unread pill by shape; on a selected row the
-            // warning colour falls under 4.5:1, so the mark takes the row's text colour there.
+            // The bubble sets waiting apart from the unread pill by shape; on a selected light row
+            // the warning colour falls under 4.5:1, so a selected row's mark takes its text colour.
             <View
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
@@ -441,13 +441,15 @@ function MemberRow(props: {
                 name="questionmark.bubble"
                 size={13}
                 tintColorClassName={
-                  props.selected === true ? "accent-foreground" : "accent-warning-foreground"
+                  props.selected === true
+                    ? "accent-thread-selected-foreground"
+                    : "accent-warning-foreground"
                 }
               />
               <Text
                 className={
                   props.selected === true
-                    ? "text-xs font-semibold text-foreground"
+                    ? "text-xs font-semibold text-thread-selected-foreground"
                     : "text-xs font-semibold text-warning-foreground"
                 }
               >
