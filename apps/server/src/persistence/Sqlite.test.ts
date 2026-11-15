@@ -18,12 +18,14 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Runtime from "effect/Runtime";
 import { makeCommandGate } from "../serverRuntimeStartup.ts";
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerOwnership from "../serverOwnership.ts";
 import * as PersistenceOwner from "./PersistenceRecoveryOwner.ts";
 import { GOAT_MIGRATION_NAMES } from "./reconcileGoatMigrationIds.ts";
@@ -478,8 +480,13 @@ it.effect("names a database file that is not SQLite", () => {
 });
 const ownGoatHome = Effect.fn(function* () {
   const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
-  // The lock a running server holds for as long as it runs.
-  yield* ServerOwnership.holdServerOwnershipLock(serverRuntimeStatePath);
+  // A running server's own path; an empty home, so no boot service on this machine is read.
+  const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+  yield* ServerOwnership.acquireServerOwnership(serverRuntimeStatePath).pipe(
+    Effect.provide(ProcessRunner.layer),
+    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.Environment, {}),
+  );
 });
 
 const onServerDatabase = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
@@ -553,6 +560,32 @@ it.layer(NodeServices.layer)("layerCliConfig", (it) => {
       yield* ownGoatHome();
 
       yield* Effect.void.pipe(Effect.provide(SqlitePersistence.layerCliConfig));
+    }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
+  );
+
+  it.effect("does not resume GOAT's id shift in a home a running server owns", () =>
+    Effect.gen(function* () {
+      yield* onServerDatabase(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          // A shift stopped after 082: GOAT's rows moved, upstream 083-089 still to run.
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 83 AND 89`;
+        }),
+      );
+      const before = yield* recordedMigrations;
+      yield* ownGoatHome();
+
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+
+      assert.deepEqual(yield* recordedMigrations, before);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
     }).pipe(Effect.scoped, Effect.provide(layerGoatHome)),
   );
 });
