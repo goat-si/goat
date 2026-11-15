@@ -178,7 +178,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `peer-links` upstream 연결 환경 데이터 모델
 
 - 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
-- 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072는 GOAT 70-72와 충돌하므로 지금은 옮기지 않고, 이후 사이클이 upstream 마이그레이션 73 이상을 받을 때 재실행 안전 스키마로 예약한다. 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
+- 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072(PeerLinks, PeerLinkFence, WaitingLinkRequestIndex)는 GOAT도 같은 이름과 id로 등록해 스키마만 둔다. 071·072는 upstream처럼 다시 실행해도 안전하다 (사이클 261114). 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 
@@ -191,6 +191,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #661
 - 경로: `.agents/skills/test-goat-{app,mobile}`, `goat.json`, `.cursor/` (삭제), `pr-assets/` (삭제), `scripts/lib/goat-rename/rules.ts`
 - 정책: upstream의 `.agents/skills/test-t3-{app,mobile}`과 루트 `t3.json`은 `goat-rename --apply`의 경로 규칙이 `test-goat-*`, `goat.json`으로 옮기고, 본문의 스킬 이름도 바꾼다(테스트 픽스처의 샘플 이름은 upstream 그대로). upstream `.cursor/`는 drop 규칙이 지운다. upstream 체크아웃에 `--apply --root`를 먼저 돌리면 충돌이 없고, 원본을 바로 머지했다면 머지 뒤 `--apply`가 modify/delete 충돌을 같은 결과로 정리한다. `--check`는 되살아난 drop 경로를 잡는다. 결정과 이유: `devlog/_fin/261021_repo_hygiene.md`.
+
+### `resizable-width` 줄어든 패널의 드래그
+
+- 커밋: #3349 (이슈 #3343)
+- 경로: `apps/web/src/hooks/useResizableWidth.ts`, `apps/web/src/hooks/useResizableWidth.browser.test.tsx`
+- 정책: 클릭만 하면 저장하지 않는 부분은 upstream 9ff0fac0f48을 손으로 옮긴 것이다(응답형 기본값과 `setWidth`는 옮기지 않았다). GOAT 차이는 두 가지다. 드래그는 화면에 보이는 폭(`min(저장값, host 폭)`)에서 시작하고, 놓을 때는 화면에 보이는 폭을 저장한다. 봇 작업 패널은 `min(var(--resizable-width), calc(100% - 400px))`로 줄어들어 저장값보다 좁게 보일 수 있기 때문이다. 저장할 폭은 `cleanup`에서 `transition-property`를 지우기 전에 읽는다(지운 뒤 읽으면 미리보기 패널의 폭 애니메이션 시작점을 읽는다). 취소한 드래그는 `restoreWidth`로 저장값을 되돌린다. upstream은 `startWidth`를 되돌리는데 GOAT의 `startWidth`는 화면 폭이라 같은 값이 아니다. upstream이 이 hook을 바꾸면 받고 `renderedWidth`, 두 읽기, 취소 때의 `restoreWidth`만 다시 얹는다. #3291(bdf27377e7)은 `PreviewPanelShell.tsx`와 `RightPanelResizeHandle.tsx`를 바꿨지만 이 hook과 `useResizeDrag.ts`는 건드리지 않았다.
 
 ### `screen-code` 화면 코드 실행 `goat_screen_run`
 
@@ -221,7 +227,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 **마이그레이션 id.** Effect migrator는 기록된 최대 id 이하의 마이그레이션을 이름과 상관없이
 건너뛴다 (`.repos/effect-smol/packages/effect/src/sql/Migrator.ts:258`). GOAT가 먼저 쓴 id를
 upstream이 다른 이름으로 쓰면, 이미 GOAT 마이그레이션을 기록한 DB는 upstream 스키마 변경을 영영
-받지 못한다. `apps/server/src/persistence/Migrations.ts:202`도 이 상황을 경고만 한다. 그래서
+받지 못한다. `apps/server/src/persistence/Migrations.ts`의 `runMigrations`도 이 상황을 경고만 한다. 그래서
 규칙은 이렇다.
 
 - GOAT 전용 마이그레이션은 가능하면 만들지 않는다. 필요하면 upstream에 올릴 수 있는 형태로 만든다.
@@ -236,6 +242,7 @@ upstream이 다른 이름으로 쓰면, 이미 GOAT 마이그레이션을 기록
   `assertV2MigrationsCanRun`은 옛 GOAT id를 건너뛴 upstream 마이그레이션으로 읽으므로 reconcile이 그보다
   먼저 돈다 (사이클 261014). Memory 마이그레이션도 같은 방식으로 옮긴다. `assertMemoryMigrationsCompatible`는 GOAT 행의 간격이 하나가 아니거나, Memory 앞의 GOAT 마이그레이션이 비었거나, 모르는 Memory 이름이 있을 때만 거부한다 (사이클 261019).
 - upstream이 `migrationEntries` export를 지워도 GOAT 원장 테스트가 쓰므로 유지한다 (사이클 261021, 065-067 → GOAT 068-094).
+- upstream 080-089가 GOAT 80-147과 겹쳐 GOAT 블록을 90-157로 옮겼다 (사이클 261114, 결정 014fa4c4). upstream 080 `ScheduledTaskThreadMode`는 스키마만 받았고, 그 기능(`4aab23cd72`)은 아직 없다.
 - 사이클 스캔에서 id가 겹치면 위 방식으로 옮긴다. 옮길 수 없는 경우만 `⛔` 카드로 결정한다.
 
 **`t3_*` 이름 누수.** upstream이 새 MCP 도구나 프롬프트 문자열을 `t3_*`로 추가하면 깨끗하게 머지된

@@ -1,6 +1,7 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { Link, useRouter } from "@tanstack/react-router";
+import { useContext } from "react";
 
 import { ChevronLeftIcon } from "~/components/solar";
 
@@ -11,6 +12,7 @@ import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
 import { rememberHomeOrigin } from "./goatBotHomeRequest";
+import { GoatBotChatHidden } from "./goatBotLayout";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -50,8 +52,9 @@ export function GoatBotWorkPeek({
 }) {
   const member = useGoatBotMember();
   const router = useRouter();
-  // Opening a task acknowledges its activity, as its task view does.
-  useAcknowledgeTaskRead({ environmentId, taskId, readThrough: unreadThrough, onAcknowledged });
+  // Opening a task acknowledges its activity, as its task view does; not while a task hides it.
+  const readThrough = useContext(GoatBotChatHidden) ? null : unreadThrough;
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged });
   return (
     <section
       aria-label={title}

@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+
 import type { SettingsSearchItem } from "./settingsSearch";
 
 export const BETA_SETTINGS_SEARCH_ITEMS = [
@@ -9,7 +11,7 @@ export const BETA_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "working-shelf",
-    title: "Working section",
+    title: msg("Working section"),
     to: "/settings/beta",
     searchTerms: ["beta hide fold running monitoring threads inbox sidebar shelf"],
   },

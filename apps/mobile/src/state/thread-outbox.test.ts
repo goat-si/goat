@@ -355,8 +355,8 @@ describe("thread outbox", () => {
       options: [{ id: "native-option", value: "keep-this-choice" }],
     };
     const providers = [
-      { instanceId: codex.instanceId, showInteractionModeToggle: true },
-      { instanceId: antigravity.instanceId, showInteractionModeToggle: false },
+      { instanceId: codex.instanceId, showInteractionModeToggle: true, models: [] },
+      { instanceId: antigravity.instanceId, showInteractionModeToggle: false, models: [] },
     ];
     const message = {
       ...queuedMessage({ messageId: "queued-plan", createdAt: "2026-09-02T10:00:00.000Z" }),

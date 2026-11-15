@@ -21,6 +21,7 @@ import {
   XIcon,
 } from "~/components/solar";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { T, useGT, useMessages } from "gt-react";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { Button } from "../ui/button";
@@ -103,6 +104,8 @@ export function SettingsSidebarNav({
   /** GOAT renders the sections in the app sidebar beside the full Settings page. */
   placement?: "page" | "app-sidebar";
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const inAppSidebar = placement === "app-sidebar";
@@ -126,7 +129,7 @@ export function SettingsSidebarNav({
   // Below md the nav is an icon rail; searching expands it over the page.
   const [compactSearchOpen, setCompactSearchOpen] = useState(false);
   const [activeResultIndex, setActiveResultIndex] = useState(0);
-  const results = searchSettings(query, searchableItems);
+  const results = searchSettings(query, searchableItems, m);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
   const compactRail = !inAppSidebar && !compactSearchOpen;
@@ -197,7 +200,7 @@ export function SettingsSidebarNav({
 
   return (
     <nav
-      aria-label="Settings sections"
+      aria-label={gt("Settings sections")}
       data-glass-pane={inAppSidebar ? undefined : "rail"}
       className={
         inAppSidebar
@@ -237,8 +240,8 @@ export function SettingsSidebarNav({
                 onBlur={() => {
                   if (!isSearching) setCompactSearchOpen(false);
                 }}
-                placeholder="Search"
-                aria-label="Search settings"
+                placeholder={gt("Search")}
+                aria-label={gt("Search settings")}
                 role="combobox"
                 aria-autocomplete="list"
                 aria-expanded={isSearching && hasResults}
@@ -256,7 +259,7 @@ export function SettingsSidebarNav({
                   size="icon-micro"
                   variant="ghost-muted"
                   className="shrink-0"
-                  aria-label="Clear settings search"
+                  aria-label={gt("Clear settings search")}
                   onClick={() => {
                     clearSearch();
                     searchInputRef.current?.focus();
@@ -273,14 +276,14 @@ export function SettingsSidebarNav({
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
-                No settings found
+                <T>No settings found</T>
               </p>
             ) : null}
             {isSearching ? (
               <SidebarMenu
                 id={hasResults ? "settings-search-results" : undefined}
                 role={hasResults ? "listbox" : undefined}
-                aria-label={hasResults ? "Settings search results" : undefined}
+                aria-label={hasResults ? gt("Settings search results") : undefined}
               >
                 {results.map((item, index) => (
                   <SidebarMenuItem
@@ -302,10 +305,10 @@ export function SettingsSidebarNav({
                       <SettingsSectionIcon to={item.to} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-sidebar-foreground">
-                          {item.title}
+                          {m(item.title)}
                         </span>
                         <span className="block truncate text-2xs text-sidebar-muted-foreground/75">
-                          {SETTINGS_SECTION_LABELS[item.to]}
+                          {m(SETTINGS_SECTION_LABELS[item.to])}
                         </span>
                       </span>
                     </SidebarMenuButton>
@@ -314,7 +317,7 @@ export function SettingsSidebarNav({
               </SidebarMenu>
             ) : (
               <nav
-                aria-label="Settings sections"
+                aria-label={gt("Settings sections")}
                 onKeyDown={handleSettingsSectionKeyDown}
                 className="flex flex-col gap-3"
               >
@@ -326,7 +329,7 @@ export function SettingsSidebarNav({
                         id={headingId}
                         className="px-2 py-1 text-xs font-medium text-sidebar-muted-foreground/70"
                       >
-                        {group.label}
+                        {m(group.label)}
                       </h2>
                       <SidebarMenu aria-labelledby={headingId}>
                         {group.paths.map((to) => {
@@ -345,7 +348,7 @@ export function SettingsSidebarNav({
                                 onClick={() => handleSectionClick(to)}
                               >
                                 <Icon />
-                                <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
+                                <span className="truncate">{m(SETTINGS_SECTION_LABELS[to])}</span>
                               </SidebarMenuButton>
                             </SidebarMenuItem>
                           );

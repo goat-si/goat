@@ -155,16 +155,19 @@ function view(
   source?: Parameters<typeof GoatBotChatView>[0]["source"],
 ) {
   return (
-    <GoatBotChatView
-      availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(threadId) } }}
-      canOperate
-      rows={rows}
-      source={source}
-      onSend={() => {}}
-      onRetryInput={() => {}}
-      legacyAgentRoute={null}
-      attachmentSupport={{ maxUploadBytes: 1_000_000 }}
-    />
+    <div style={{ width: 1200 }}>
+      {/* Home docks only in a chat view of 752px or more; the 980px window gate is faked above. */}
+      <GoatBotChatView
+        availability={{ kind: "ready", bot: { environmentId, threadId: ThreadId.make(threadId) } }}
+        canOperate
+        rows={rows}
+        source={source}
+        onSend={() => {}}
+        onRetryInput={() => {}}
+        legacyAgentRoute={null}
+        attachmentSupport={{ maxUploadBytes: 1_000_000 }}
+      />
+    </div>
   );
 }
 

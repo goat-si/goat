@@ -1,5 +1,10 @@
 import { createAdvertisedEndpoint } from "@goat/shared/advertisedEndpoint";
-import type { AdvertisedEndpoint, AdvertisedEndpointProvider } from "@goat/contracts";
+import {
+  ExecutionEnvironmentDescriptor,
+  type AdvertisedEndpoint,
+  type AdvertisedEndpointProvider,
+} from "@goat/contracts";
+import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import {
   buildTailscaleHttpsBaseUrl,
   classifyTailscaleHttpsEndpoint,
@@ -11,12 +16,14 @@ import {
   readWindowsExcludedTcpPortRanges,
   reservedPortMessage,
   suggestFreePort,
+  TAILSCALE_PROBE_TIMEOUT,
   type TailscaleHttpsEndpointClassification,
   type TailscaleStatus,
 } from "@goat/tailscale";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { NetworkInterfaces } from "./DesktopNetworkInterfaces.ts";
@@ -77,10 +84,28 @@ function resolveTailscaleIpAdvertisedEndpoints(input: {
   return endpoints;
 }
 
+// The backend may run elsewhere (WSL), so ask it for its id instead of reading the state dir.
+// Bounded like the Serve probe; the HTTP client alone would wait minutes for an answer.
+const classifyServesThisBackend = (localHttpUrl: string) => (baseUrl: string) =>
+  HttpClient.get(new URL(GOAT_ENVIRONMENT_PATH, localHttpUrl)).pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(ExecutionEnvironmentDescriptor)),
+    Effect.option,
+    Effect.timeoutOption(TAILSCALE_PROBE_TIMEOUT),
+    Effect.map(Option.flatten),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(null),
+        onSome: ({ environmentId }) => classifyTailscaleHttpsEndpoint({ baseUrl, environmentId }),
+      }),
+    ),
+  );
+
 const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
   "resolveTailscaleMagicDnsAdvertisedEndpoint",
 )(function* (input: {
   readonly dnsName: string | null;
+  readonly localHttpUrl: string;
   readonly serveEnabled: boolean;
   readonly servePort?: number;
   readonly probe?: (
@@ -101,12 +126,7 @@ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
   });
   const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
   const classification = input.serveEnabled
-    ? yield* (
-        input.probe?.(httpBaseUrl) ??
-          classifyTailscaleHttpsEndpoint({
-            baseUrl: httpBaseUrl,
-          })
-      )
+    ? yield* (input.probe ?? classifyServesThisBackend(input.localHttpUrl))(httpBaseUrl)
     : null;
   const isReachable = classification === "ok";
   let description = "MagicDNS hostname. Configure Tailscale Serve for HTTPS access.";
@@ -172,6 +192,7 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
     const ipEndpoints = resolveTailscaleIpAdvertisedEndpoints({ ...input, status });
     const magicDnsEndpoint = yield* resolveTailscaleMagicDnsAdvertisedEndpoint({
       dnsName: status?.magicDnsName ?? null,
+      localHttpUrl: `http://127.0.0.1:${input.port}`,
       serveEnabled: input.serveEnabled === true,
       ...(input.servePort === undefined ? {} : { servePort: input.servePort }),
       ...(input.probe === undefined ? {} : { probe: input.probe }),

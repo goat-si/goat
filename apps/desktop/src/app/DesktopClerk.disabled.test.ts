@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import { afterAll, vi } from "vite-plus/test";
@@ -70,6 +71,7 @@ it.effect(
               Layer.provideMerge(
                 Layer.mergeAll(
                   NodePath.layerPosix,
+                  Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
                   Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
                     stateDir: "/tmp/wp1-s-desktop",
                     appDataDirectory: "/tmp/wp1-s-app-data",

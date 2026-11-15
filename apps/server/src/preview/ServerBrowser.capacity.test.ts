@@ -11,7 +11,9 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
@@ -159,6 +161,7 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
     grantPermissions: vi.fn(async () => {}),
     cookies: async () => [],
     newCDPSession: async (target: unknown) => {
+      if (pageSetupFailure) throw pageSetupFailure;
       const session = makeSession(
         target === page ? undefined : (target as ReturnType<typeof makeFrame>),
         () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
@@ -222,6 +225,7 @@ const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: numb
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
 let contextFailure: Error | null = null;
+let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
 let desktopPageUrl = "about:blank";
@@ -356,12 +360,34 @@ const dependencies = Layer.mergeAll(
   Layer.provideMerge(NodeServices.layer),
 );
 const layer = ServerBrowser.layer.pipe(Layer.provideMerge(dependencies));
+const ready = Effect.gen(function* () {
+  const browser = yield* ServerBrowser.ServerBrowser;
+  const broker = yield* Broker.PreviewAutomationBroker;
+  yield* Effect.yieldNow;
+  const session = desktopRendersNext ? { session: "profile" } : {};
+  const opened = yield* broker.invoke<PreviewAutomationStatus>({
+    scope,
+    operation: "open",
+    input: { reuseExistingTab: false, show: false, ...session },
+  });
+  const tabId = PreviewTabId.make(opened.tabId!);
+  return { browser, broker, tabId };
+});
+const viewerInput = (tabId: string, canOperate: boolean) => ({
+  threadId: scope.thread.threadId,
+  tabId,
+  canOperate,
+  maxWidth: 1280,
+  maxHeight: 800,
+  quality: 70,
+});
 beforeEach(() => {
   contexts.length = 0;
   encoderStreams.length = 0;
   contextRequests.length = 0;
   contextGate = null;
   contextFailure = null;
+  pageSetupFailure = null;
   initialNavigation = null;
   mockCopy.page = "";
   mockCopy.key = "";
@@ -552,6 +578,178 @@ it.live("the tab the desktop shows is visible and picked for agents without a ta
           expect.objectContaining({ tabId: shownTab, visible: true }),
         ],
       });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  { budget: "agent", limit: 8 },
+  { budget: "server", limit: 32 },
+])("opens and popups reserve the $budget budget before session creation", ({ budget, limit }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, browser, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const open = (target = scope) =>
+        broker.invoke<PreviewAutomationStatus>({
+          scope: target,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+      for (let index = 1; index < limit - 3; index++) {
+        yield* open(budget === "agent" ? scope : asSession(`other-${Math.floor(index / 8)}`));
+      }
+
+      const sessionGate = Promise.withResolvers<void>();
+      const launchGate = (contextGate = Promise.withResolvers<void>());
+      const sessionStarted = Promise.withResolvers<void>();
+      const popupStarted = Promise.withResolvers<void>();
+      const realOpen = manager.open;
+      const delayedOpen = vi.spyOn(manager, "open").mockImplementation((input) =>
+        Effect.promise(() => {
+          if (delayedOpen.mock.calls.length === 2) popupStarted.resolve();
+          sessionStarted.resolve();
+          return sessionGate.promise;
+        }).pipe(Effect.andThen(realOpen(input))),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          sessionGate.resolve();
+          launchGate.resolve();
+          delayedOpen.mockRestore();
+        }),
+      );
+      const events = yield* manager.subscribeEvents;
+      const first = yield* open().pipe(Effect.result, Effect.forkScoped);
+      yield* Effect.promise(() => sessionStarted.promise);
+      const popup = makeContext();
+      const resized = Promise.withResolvers<void>();
+      const setViewportSize = popup.page.setViewportSize;
+      popup.page.setViewportSize = vi.fn(async (size) => {
+        await setViewportSize(size);
+        if (size?.width === 900) resized.resolve();
+      });
+      const newCDPSession = popup.newCDPSession;
+      let popupSessions = 0;
+      popup.newCDPSession = async (target) => {
+        if (popupSessions++ > 0) await launchGate.promise;
+        return newCDPSession(target);
+      };
+      contexts[0]!.page.emit("popup", popup.page);
+      // GOAT resolves the popup target's owner before reserving its session.
+      yield* Effect.promise(() => popupStarted.promise);
+      const last = yield* open().pipe(Effect.result, Effect.forkScoped);
+      const overflow = yield* open().pipe(Effect.result, Effect.forkScoped);
+      // The host processes this after the opens, while manager creation is blocked.
+      const reused = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "open",
+        input: { show: false },
+      });
+      expect(reused.tabId).toBe(tabId);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(
+        limit - 3,
+      );
+
+      sessionGate.resolve();
+      for (let count = 0; count < 3; count++) {
+        let event = yield* PubSub.take(events);
+        while (event.type !== "opened") event = yield* PubSub.take(events);
+        yield* manager.resize({
+          threadId: scope.thread.threadId,
+          tabId: event.tabId,
+          viewport: { _tag: "freeform", width: 900, height: 700 },
+        });
+      }
+      // The same slots must stay reserved after publication, while pages are still opening.
+      const duringLaunch = yield* open().pipe(Effect.result, Effect.forkScoped);
+      const rejectedPopup = makeContext();
+      contexts[0]!.page.emit("popup", rejectedPopup.page);
+      yield* broker.invoke({ scope, tabId, operation: "status", input: {} });
+      launchGate.resolve();
+
+      expect((yield* Fiber.join(first))._tag).toBe("Success");
+      expect((yield* Fiber.join(last))._tag).toBe("Success");
+      for (const fiber of [overflow, duringLaunch]) {
+        expect(yield* Fiber.join(fiber)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "PreviewAutomationControlInterruptedError", reason: "tabLimit" },
+        });
+      }
+      yield* Effect.promise(() => resized.promise);
+      const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+      for (const session of sessions)
+        yield* browser.attachViewer(viewerInput(session.tabId, false));
+      expect(sessions).toHaveLength(limit);
+      expect(popup.page.isClosed()).toBe(false);
+      expect(rejectedPopup.page.isClosed()).toBe(true);
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.tabs).toHaveLength(limit);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("failed session and browser launches release capacity, as does closing a tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const open = broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      for (let count = 1; count < 7; count++) yield* open;
+      const failSession = vi
+        .spyOn(manager, "open")
+        .mockImplementationOnce(() => Effect.die(new Error("session creation failed")));
+      yield* Effect.addFinalizer(() => Effect.sync(() => failSession.mockRestore()));
+      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      failSession.mockRestore();
+      const events = yield* manager.subscribeEvents;
+      contextFailure = new Error("Chromium launch failed");
+      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      let failedSession = yield* PubSub.take(events);
+      while (failedSession.type !== "opened") failedSession = yield* PubSub.take(events);
+      // A failed launch must not leave a session a viewer can relaunch past the budget.
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
+      contextFailure = null;
+      pageSetupFailure = new Error("CDP setup failed");
+      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      pageSetupFailure = null;
+      expect(contexts.at(-1)!.close).toHaveBeenCalled();
+      expect(contexts.at(-1)!.page.isClosed()).toBe(true);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
+      expect((yield* open).available).toBe(true);
+      expect(yield* open.pipe(Effect.flip)).toMatchObject({ reason: "tabLimit" });
+      expect(
+        yield* broker
+          .invoke<PreviewAutomationStatus>({
+            scope,
+            tabId: PreviewTabId.make(failedSession.tabId),
+            operation: "open",
+            input: { show: false },
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "PreviewAutomationTabNotFoundError" });
+      const browser = yield* ServerBrowser.ServerBrowser;
+      expect(
+        yield* browser.attachViewer(viewerInput(failedSession.tabId, false)).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "ServerBrowserTabNotFoundError" });
+      yield* broker.invoke({ scope, tabId, operation: "close", input: {} });
+      expect((yield* open).available).toBe(true);
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "status",
+        input: {},
+      });
+      expect(status.tabs).toHaveLength(8);
     }),
   ).pipe(Effect.provide(layer)),
 );

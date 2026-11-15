@@ -6,7 +6,10 @@ import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import { useFocusComposerOnThreadOpen } from "./chat/useFocusComposerOnThreadOpen";
-import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
+import {
+  announcedRun,
+  isDetailBehindShell,
+} from "@goat/client-runtime/state/thread-activity-announcement";
 import {
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
@@ -96,6 +99,7 @@ import {
   workflowOpeningParentThreadId,
 } from "@goat/client-runtime/state/subagentRuntime";
 import { threadSupportsProviderHandoff } from "@goat/client-runtime/state/thread-workflows";
+import { chatCompactionState } from "./chat/chatCompaction";
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
@@ -1516,25 +1520,14 @@ export default function ChatView(props: ChatViewProps) {
       latestServerUserItem.attachments.length === 0 &&
       latestServerUserItem.runId === activeActivityRun?.runId &&
       !isLatestRunSettled(activeActivityRun, activeRuntime));
-  const compactionSettled = serverVisibleTurnItems.some(
-    ({ item }) =>
-      item.type === "compaction" &&
-      item.runId === activeActivityRun?.runId &&
-      (item.status === "completed" ||
-        item.status === "failed" ||
-        item.status === "interrupted" ||
-        item.status === "cancelled"),
-  );
-  const compactionRunning = serverVisibleTurnItems.some(
-    ({ item }) =>
-      item.type === "compaction" &&
-      item.runId !== null &&
-      item.runId === activeRuntime?.activeRunId &&
-      item.status === "running",
-  );
-  const isCompacting =
-    (isSendBusy || phase === "connecting" || phase === "running") &&
-    (compactionRunning || (compactRequestIsActive && !compactionSettled));
+  const { isCompacting, canSteer } = chatCompactionState({
+    turnItems: serverVisibleTurnItems,
+    activityRunId: activeActivityRun?.runId,
+    activeRunId: activeRuntime?.activeRunId,
+    compactRequestIsActive,
+    busy: isSendBusy || phase === "connecting" || phase === "running",
+    projection: serverProjection,
+  });
   const isWorking =
     phase === "running" ||
     isSendBusy ||
@@ -3807,7 +3800,7 @@ export default function ChatView(props: ChatViewProps) {
                                   isLocalDraftThread && activeProject === null
                                 }
                                 phase={phase}
-                                isCompacting={isCompacting}
+                                canSteer={canSteer}
                                 canInterrupt={canInterruptRunningThread}
                                 isConnecting={isConnecting}
                                 isSendBusy={

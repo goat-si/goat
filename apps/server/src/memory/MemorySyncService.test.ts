@@ -62,8 +62,8 @@ import * as Settings from "../serverSettings.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
-import searchMigration from "../persistence/Migrations/090_MemorySearchCounters.ts";
-import revisionSizeMigration from "../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
+import searchMigration from "../persistence/Migrations/100_MemorySearchCounters.ts";
+import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
 import { migrationManifest, runMigrations } from "../persistence/Migrations.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
@@ -1769,10 +1769,10 @@ it.effect.each([
             assert.isEmpty(
               yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`,
             );
-            // Every migration from 095 on runs once against the earlier schema.
+            // Every migration from 105 on runs once against the earlier schema.
             assert.deepStrictEqual(
               yield* runMigrations(),
-              migrationManifest.filter(([id]) => id >= 95),
+              migrationManifest.filter(([id]) => id >= 105),
             );
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
@@ -1789,7 +1789,7 @@ it.effect.each([
             );
             assert.strictEqual(result.state, "disabled");
             assert.strictEqual(result.retainedLocalSpaceId, space);
-          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(94)))),
+          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(104)))),
         );
         // Close the SQLite connection and rebuild the service, preserving only the upgraded file.
         yield* Effect.scoped(
@@ -1830,7 +1830,7 @@ it.effect.each([
             const item = listed.items[0];
             if (item?.status !== "active") throw new Error("retained memory missing");
             assert.strictEqual(item.payload.text, "synthetic fact 98010");
-          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(86)))),
+          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(96)))),
         );
       }).pipe(Effect.provide(NodeServices.layer)),
     ),
