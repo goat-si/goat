@@ -41,7 +41,6 @@ import type {
   TaskUpdateInput,
   TaskUpdateOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
   type ChatAttachment,
@@ -55,7 +54,6 @@ import {
   NodeId,
   type OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
-  ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
   type ProviderReplayTranscript,
@@ -75,7 +73,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -108,6 +105,31 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
+import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
+import {
+  WAKE_NATIVE_SESSION,
+  WAKE_TASK_ID,
+  WAKE_SUMMARY,
+  WAKE_ASSISTANT_TEXT,
+  WAKE_RESULT_TEXT,
+  claudeSdkFrame,
+  wakeTaskStarted,
+  makeAssistantTextFrame,
+  makeAssistantErrorFrame,
+  makeResultFrame,
+  turnOneResult,
+  wakeNotification,
+  wakeAssistant,
+  wakeTurnInit,
+  wakeResult,
+  STALE_TASK_NOTIFICATION_RESULT_TEXT,
+  staleTaskNotificationResult,
+  makeSubagentAssistantFrames,
+  makeSubagentToolResultFrame,
+  makeSubagentTaskStartedFrame,
+  makeSubagentNotificationFrame,
+  subagentRouting,
+} from "./ClaudeWakeFrames.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
 import {
@@ -155,21 +177,7 @@ beforeEach(() => {
     sources: [],
   });
 });
-const layerAdapterTest = Layer.mergeAll(
-  MemoryDerivedCache.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  NodeServices.layer,
-  Layer.effectContext(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "claude-adapter-test-" });
-      return Context.make(HostProcess.HomeDirectory, home).pipe(
-        Context.add(HostProcess.Environment, { HOME: home, PATH: "/usr/bin:/bin" }),
-      );
-    }),
-  ).pipe(Layer.provide(NodeServices.layer)),
-);
+const layerAdapterTest = layerClaudeAdapterTest;
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
@@ -1848,184 +1856,6 @@ describe("ClaudeAdapterV2 attachments", () => {
   );
 });
 
-describe("ClaudeAdapterV2 native fork", () => {
-  it.effect("forks at the source assistant cursor and resumes the forked session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-v2-fork-attachments-",
-        });
-        const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
-        const forkCalls: Array<ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput> = [];
-        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
-          attachmentsDir,
-          fileSystem,
-          path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
-          idAllocator,
-          queryRunner: {
-            allocateSessionId: Effect.succeed("source-native-session"),
-            open: (input) =>
-              Effect.sync(() => {
-                openedQueries.push(input);
-                return {
-                  messages: Stream.never,
-                  offer: () => Effect.void,
-                  setModel: () => Effect.void,
-                  applyFlagSettings: () => Effect.void,
-                  setPermissionMode: () => Effect.void,
-                  backgroundTasks: () => Effect.succeed(false),
-                  stopTask: () => Effect.void,
-                  interrupt: Effect.void,
-                  close: Effect.void,
-                };
-              }),
-            forkSession: (input) =>
-              Effect.sync(() => {
-                forkCalls.push(input);
-                return { sessionId: "forked-native-session" };
-              }),
-            subagentLaunchToolUseId: () => Effect.succeed(null),
-            assertComplete: Effect.void,
-          },
-        });
-        const providerSessionId = ProviderSessionId.make("provider-session-claude-fork");
-        const sourceThreadId = ThreadId.make("thread-claude-fork-source");
-        const targetThreadId = ThreadId.make("thread-claude-fork-target");
-        const runtime = yield* adapter.openSession({
-          threadId: sourceThreadId,
-          providerSessionId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const sourceProviderThread = yield* runtime.ensureThread({
-          threadId: sourceThreadId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const now = yield* DateTime.now;
-        const providerTurnId = ProviderTurnId.make("provider-turn-claude-source");
-        const forkedProviderThread = yield* runtime.forkThread({
-          sourceProviderThread,
-          sourceProviderTurns: [
-            {
-              id: providerTurnId,
-              providerThreadId: sourceProviderThread.id,
-              nodeId: NodeId.make("node-claude-source"),
-              runAttemptId: RunAttemptId.make("run-attempt-claude-source"),
-              nativeTurnRef: {
-                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                nativeId: "assistant-message-cursor",
-                strength: "weak",
-              },
-              ordinal: 1,
-              status: "completed",
-              startedAt: now,
-              completedAt: now,
-            },
-          ],
-          providerTurnId,
-          targetThreadId,
-        });
-
-        assert.deepEqual(forkCalls, [
-          {
-            sessionId: "source-native-session",
-            options: {
-              dir: "/workspace",
-              upToMessageId: "assistant-message-cursor",
-            },
-            environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
-            threadId: targetThreadId,
-            providerSessionId,
-          },
-        ]);
-        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
-        assert.equal(forkedProviderThread.forkedFrom?.providerThreadId, sourceProviderThread.id);
-        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
-
-        yield* runtime.startTurn({
-          appThread: {
-            createdBy: "user",
-            creationSource: "web",
-            id: targetThreadId,
-            projectId: ProjectId.make("project-claude-fork-target"),
-            title: "Claude fork target",
-            providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            modelSelection: {
-              instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-              model: "claude-sonnet-4-6",
-            },
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: forkedProviderThread.id,
-            lineage: {
-              parentThreadId: sourceThreadId,
-              relationshipToParent: "fork",
-              rootThreadId: sourceThreadId,
-            },
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-          threadId: targetThreadId,
-          runId: RunId.make("run-claude-fork-target"),
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: RunAttemptId.make("run-attempt-claude-fork-target"),
-          rootNodeId: NodeId.make("node-claude-fork-target-root"),
-          providerThread: forkedProviderThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message-claude-fork-target"),
-            text: "Respond with fork ok",
-            attachments: [],
-          },
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-
-        assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
-        assert.equal(openedQueries[0]?.options.sessionId, undefined);
-      }).pipe(Effect.provide(layerAdapterTest)),
-    ),
-  );
-});
-
 function makeFakeClaudeCli(answerSetServers = true) {
   const spawns: Array<SpawnOptions> = [];
   const controlRequests: Array<object> = [];
@@ -2323,178 +2153,6 @@ const encodeProviderThreadJson = Schema.encodeEffect(providerThreadJson);
 const decodeProviderThreadJson = Schema.decodeUnknownEffect(providerThreadJson);
 
 describe("ClaudeAdapterV2 background wake turns", () => {
-  const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
-  const WAKE_TASK_ID = "bdqirlcyw";
-  const WAKE_TOOL_USE_ID = "toolu_01Rs6JNNf5SqHRxpq5DeJHrW";
-  const WAKE_TASK_DESCRIPTION = "Background sleep test";
-  const WAKE_SUMMARY = 'Background command "Background sleep test" completed (exit code 0)';
-  const WAKE_ASSISTANT_TEXT = "WAKE_DONE";
-  const WAKE_RESULT_TEXT = "WAKE_DONE";
-
-  function claudeSdkFrame(frame: unknown): SDKMessage {
-    if (
-      typeof frame !== "object" ||
-      frame === null ||
-      typeof Reflect.get(frame, "type") !== "string"
-    ) {
-      throw new Error("Frame is not a Claude Agent SDK message.");
-    }
-    return frame as SDKMessage;
-  }
-
-  const wakeTaskStarted = claudeSdkFrame({
-    type: "system",
-    subtype: "task_started",
-    task_id: WAKE_TASK_ID,
-    tool_use_id: WAKE_TOOL_USE_ID,
-    description: WAKE_TASK_DESCRIPTION,
-    is_backgrounded: true,
-    task_type: "local_bash",
-    uuid: "00000000-0000-4000-8000-000000000101",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const makeAssistantTextFrame = (input: { readonly uuid: string; readonly text: string }) =>
-    claudeSdkFrame({
-      type: "assistant",
-      message: {
-        model: "claude-sonnet-4-6",
-        id: `msg_${input.uuid}`,
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: input.text }],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 1,
-          output_tokens: 1,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
-      },
-      parent_tool_use_id: null,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeAssistantErrorFrame = (input: {
-    readonly uuid: string;
-    readonly error:
-      | "authentication_failed"
-      | "invalid_request"
-      | "rate_limit"
-      | "server_error"
-      | undefined;
-    readonly text?: string;
-    readonly parentToolUseId?: string | null;
-    readonly apiErrorParams?: unknown;
-  }) =>
-    claudeSdkFrame({
-      type: "assistant",
-      message: {
-        model: "claude-sonnet-4-6",
-        id: `msg_${input.uuid}`,
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: input.text ?? "Claude could not complete this request." }],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 1,
-          output_tokens: 1,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
-      },
-      parent_tool_use_id: input.parentToolUseId ?? null,
-      ...(input.error === undefined ? {} : { error: input.error }),
-      ...(input.apiErrorParams === undefined ? {} : { api_error_params: input.apiErrorParams }),
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeResultFrame = (input: {
-    readonly uuid: string;
-    readonly result: string;
-    readonly numTurns?: number;
-    readonly origin?: { readonly kind: "task-notification" };
-    readonly subtype?: string;
-    readonly isError?: boolean;
-    readonly errors?: ReadonlyArray<string>;
-    readonly apiErrorStatus?: number;
-    // null omits the field, as the CLI does on a zero-turn result.
-    readonly terminalReason?: SDKResultMessage["terminal_reason"] | null;
-    readonly usage?: {
-      readonly input_tokens: number;
-      readonly output_tokens: number;
-      readonly cache_creation_input_tokens: number;
-      readonly cache_read_input_tokens: number;
-    };
-  }) =>
-    claudeSdkFrame({
-      type: "result",
-      subtype: input.subtype ?? "success",
-      duration_ms: 10,
-      duration_api_ms: 10,
-      is_error: input.isError ?? false,
-      num_turns: input.numTurns ?? 1,
-      result: input.result,
-      stop_reason: "end_turn",
-      total_cost_usd: 0,
-      usage: input.usage ?? {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-      },
-      modelUsage: {},
-      permission_denials: [],
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-      ...(input.origin === undefined ? {} : { origin: input.origin }),
-      ...(input.errors === undefined ? {} : { errors: input.errors }),
-      ...(input.apiErrorStatus === undefined ? {} : { api_error_status: input.apiErrorStatus }),
-      ...(input.terminalReason === null
-        ? {}
-        : { terminal_reason: input.terminalReason ?? "completed" }),
-    });
-  const turnOneResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000102",
-    result: "Kicked off the build in the background.",
-  });
-  const wakeNotification = claudeSdkFrame({
-    type: "system",
-    subtype: "task_notification",
-    task_id: WAKE_TASK_ID,
-    tool_use_id: WAKE_TOOL_USE_ID,
-    status: "completed",
-    output_file: `/tmp/claude-replay/tasks/${WAKE_TASK_ID}.output`,
-    summary: WAKE_SUMMARY,
-    uuid: "00000000-0000-4000-8000-000000000103",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const wakeAssistant = makeAssistantTextFrame({
-    uuid: "00000000-0000-4000-8000-000000000107",
-    text: WAKE_ASSISTANT_TEXT,
-  });
-  const wakeTurnInit = claudeSdkFrame({
-    type: "system",
-    subtype: "init",
-    uuid: "00000000-0000-4000-8000-000000000110",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const wakeResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000104",
-    result: WAKE_RESULT_TEXT,
-    origin: { kind: "task-notification" },
-  });
-  const STALE_TASK_NOTIFICATION_RESULT_TEXT =
-    "Stale task-notification origin text that must not appear.";
-  const staleTaskNotificationResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000106",
-    result: STALE_TASK_NOTIFICATION_RESULT_TEXT,
-    numTurns: 0,
-    origin: { kind: "task-notification" },
-    terminalReason: null,
-  });
-
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
   it.effect("names the starting run on a background wake", () =>
@@ -10010,118 +9668,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  const makeSubagentAssistantFrames = (input: {
-    readonly parentToolUseId: string;
-    readonly uuid: string;
-    readonly messageId?: string;
-    readonly text?: string;
-    readonly bashToolUseId?: string;
-  }): ReadonlyArray<SDKMessage> =>
-    [
-      ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
-      ...(input.bashToolUseId === undefined
-        ? []
-        : [
-            {
-              type: "tool_use",
-              id: input.bashToolUseId,
-              name: "Bash",
-              input: { command: "git log -5" },
-            },
-          ]),
-    ].map((block, index) =>
-      claudeSdkFrame({
-        type: "assistant",
-        message: {
-          model: "claude-sonnet-4-6",
-          id: input.messageId ?? `msg_${input.uuid}`,
-          type: "message",
-          role: "assistant",
-          content: [block],
-        },
-        parent_tool_use_id: input.parentToolUseId,
-        uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
-        session_id: WAKE_NATIVE_SESSION,
-      }),
-    );
-  const makeSubagentToolResultFrame = (input: {
-    readonly parentToolUseId: string;
-    readonly uuid: string;
-    readonly toolUseId: string;
-  }) =>
-    claudeSdkFrame({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: input.toolUseId, content: "ok" }],
-      },
-      parent_tool_use_id: input.parentToolUseId,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeSubagentTaskStartedFrame = (input: {
-    readonly taskId: string;
-    readonly toolUseId: string;
-    readonly uuid: string;
-  }) =>
-    claudeSdkFrame({
-      type: "system",
-      subtype: "task_started",
-      task_id: input.taskId,
-      tool_use_id: input.toolUseId,
-      description: "Audit recent commits",
-      subagent_type: "general-purpose",
-      is_backgrounded: true,
-      task_type: "local_agent",
-      prompt: "Audit the last five commits.",
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeSubagentNotificationFrame = (input: {
-    readonly taskId: string;
-    readonly toolUseId: string;
-    readonly summary: string;
-    readonly uuid: string;
-  }) =>
-    claudeSdkFrame({
-      type: "system",
-      subtype: "task_notification",
-      task_id: input.taskId,
-      tool_use_id: input.toolUseId,
-      status: "completed",
-      output_file: `/tmp/${input.taskId}.output`,
-      summary: input.summary,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const subagentRouting = (
-    events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
-    nativeToolIds: ReadonlyArray<string>,
-  ) => {
-    const childThreadId =
-      events.find((event) => event.type === "subagent.updated")?.subagent.childThreadId ??
-      undefined;
-    const toolThreadIds = new Map<string, Set<string>>();
-    for (const event of events) {
-      const nativeId =
-        event.type === "turn_item.updated" ? event.turnItem.nativeItemRef?.nativeId : undefined;
-      if (event.type === "turn_item.updated" && nativeId && nativeToolIds.includes(nativeId)) {
-        toolThreadIds.set(
-          nativeId,
-          (toolThreadIds.get(nativeId) ?? new Set()).add(event.turnItem.threadId),
-        );
-      }
-    }
-    const assistantTexts = (threadId: string | undefined) =>
-      events.flatMap((event) =>
-        event.type === "message.updated" &&
-        event.message.role === "assistant" &&
-        event.message.threadId === threadId
-          ? [event.message.text]
-          : [],
-      );
-    return { childThreadId, toolThreadIds, assistantTexts };
-  };
   it.effect.each([
     { label: "an empty one", quotaFailureFirst: false },
     { label: "a quota failure and an empty one", quotaFailureFirst: true },

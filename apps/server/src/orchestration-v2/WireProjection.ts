@@ -17,6 +17,7 @@ import {
   redactComputerUseTypedText,
 } from "@goat/shared/toolActivity";
 import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
+import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   dedupeSubagentBodies,
   dedupeTurnItemBodies,
@@ -292,8 +293,11 @@ function boundToolOutput(output: unknown): unknown {
   if (typeof output !== "object" || output === null || !("result" in output)) {
     return boundToolResult(output);
   }
+  const stored: { readonly [key: string]: unknown } = output;
+  // Rows saved before the rename keep the app under the legacy key.
   const app =
-    MCP_APP_OUTPUT_KEY in output ? readMcpAppReference(output[MCP_APP_OUTPUT_KEY]) : undefined;
+    readMcpAppReference(stored[MCP_APP_OUTPUT_KEY]) ??
+    readMcpAppReference(stored[LEGACY_MCP_APP_OUTPUT_KEY]);
   if (app === undefined) return boundToolResult(output);
   // The app receives this result, so its image data stays unless it is too large to send.
   const fits = boundDynamicValue(output.result) === output.result;
