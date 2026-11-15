@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds real worktree layouts on disk.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -18,13 +19,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
-import {
-  checkPortAvailabilityOnHosts,
-  createDevRunnerEnv,
-  findFirstAvailableOffset,
-  resolveModePortOffsets,
-  runDevRunnerWithInput,
-} from "./dev-runner.ts";
+import { createDevRunnerEnv, runDevRunnerWithInput } from "./dev-runner.ts";
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
 const isWindows = HostProcess.Platform.defaultValue() === "win32";
@@ -213,172 +208,50 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.HOST, undefined);
       }),
     );
-  });
 
-  describe("findFirstAvailableOffset", () => {
-    it.effect("advances until all required ports are available", () =>
+    it.effect("drops an inherited GOAT_HOST from a parent GOAT server", () =>
       Effect.gen(function* () {
-        const taken = new Set([13773, 5733, 13774, 5734]);
-        const offset = yield* findFirstAvailableOffset({
-          startOffset: 0,
-          requireServerPort: true,
-          requireWebPort: true,
-          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
-        });
-
-        assert.equal(offset, 2);
-      }),
-    );
-
-    it.effect("skips browser-blocked web ports before probing availability", () =>
-      Effect.gen(function* () {
-        const probed: Array<{ port: number; role: string | undefined }> = [];
-        const offset = yield* findFirstAvailableOffset({
-          // 5733 + 833 = 6566, which browsers block as sane-port.
-          startOffset: 833,
-          requireServerPort: true,
-          requireWebPort: true,
-          checkPortAvailability: (port, role) => {
-            probed.push({ port, role });
-            return Effect.succeed(true);
-          },
-        });
-
-        assert.equal(offset, 834);
-        assert.deepStrictEqual(probed, [
-          { port: 14_607, role: "server" },
-          { port: 6567, role: "web" },
-        ]);
-      }),
-    );
-
-    it.effect("does not reject a server-only offset because its unused web port is blocked", () =>
-      Effect.gen(function* () {
-        const offset = yield* findFirstAvailableOffset({
-          startOffset: 833,
-          requireServerPort: true,
-          requireWebPort: false,
-          checkPortAvailability: () => Effect.succeed(true),
-        });
-
-        assert.equal(offset, 833);
-      }),
-    );
-  });
-
-  describe("checkPortAvailabilityOnHosts", () => {
-    it.effect("checks overlapping hosts sequentially to avoid self-interference", () =>
-      Effect.gen(function* () {
-        let inFlightCount = 0;
-        const calls: Array<[number, string]> = [];
-
-        const available = yield* checkPortAvailabilityOnHosts(
-          13_773,
-          ["127.0.0.1", "0.0.0.0", "::"],
-          (port, host) =>
-            Effect.promise(async () => {
-              calls.push([port, host]);
-              inFlightCount += 1;
-              const overlapped = inFlightCount > 1;
-              await Promise.resolve();
-              inFlightCount -= 1;
-              return !overlapped;
-            }),
-        );
-
-        assert.equal(available, true);
-        assert.deepStrictEqual(calls, [
-          [13_773, "127.0.0.1"],
-          [13_773, "0.0.0.0"],
-          [13_773, "::"],
-        ]);
-      }),
-    );
-  });
-
-  describe("devPortProbeHosts", () => {
-    it.effect("passes the port role so only the server port sees the bind host", () =>
-      Effect.gen(function* () {
-        const probed: Array<{ port: number; role: string | undefined }> = [];
-
-        yield* resolveModePortOffsets({
+        const env = yield* createDevRunnerEnv({
           mode: "dev",
-          startOffset: 0,
-          hasExplicitServerPort: false,
-          hasExplicitDevUrl: false,
-          checkPortAvailability: (port, role) => {
-            probed.push({ port, role });
-            return Effect.succeed(true);
-          },
+          baseEnv: { GOAT_PORT: "3773", GOAT_HOST: "0.0.0.0" },
+          serverOffset: 0,
+          webOffset: 0,
+          goatHome: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
         });
 
-        assert.deepStrictEqual(probed, [
-          { port: 13_773, role: "server" },
-          { port: 5733, role: "web" },
-        ]);
+        assert.equal(env.GOAT_PORT, "13773");
+        assert.equal(env.GOAT_HOST, undefined);
       }),
     );
   });
 
-  describe("resolveModePortOffsets", () => {
-    it.effect("uses a shared fallback offset for dev mode", () =>
-      Effect.gen(function* () {
-        const taken = new Set([13773, 5733]);
-        const offsets = yield* resolveModePortOffsets({
-          mode: "dev",
-          startOffset: 0,
-          hasExplicitServerPort: false,
-          hasExplicitDevUrl: false,
-          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
-        });
+  describe("cli", () => {
+    it("ignores the parent GOAT server's GOAT_PORT and GOAT_HOST", () => {
+      const result = NodeChildProcess.spawnSync(
+        process.execPath,
+        ["scripts/dev-runner.ts", "dev:server", "--dry-run"],
+        {
+          cwd: NodePath.resolve(import.meta.dirname, ".."),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GOAT_PORT: "3773",
+            GOAT_HOST: "0.0.0.0",
+          },
+        },
+      );
 
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
-      }),
-    );
-
-    it.effect("keeps server offset stable for dev:web and only shifts web offset", () =>
-      Effect.gen(function* () {
-        const taken = new Set([5733]);
-        const offsets = yield* resolveModePortOffsets({
-          mode: "dev:web",
-          startOffset: 0,
-          hasExplicitServerPort: false,
-          hasExplicitDevUrl: false,
-          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
-        });
-
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1 });
-      }),
-    );
-
-    it.effect("shifts only server offset for dev:server", () =>
-      Effect.gen(function* () {
-        const taken = new Set([13773]);
-        const offsets = yield* resolveModePortOffsets({
-          mode: "dev:server",
-          startOffset: 0,
-          hasExplicitServerPort: false,
-          hasExplicitDevUrl: false,
-          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
-        });
-
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
-      }),
-    );
-
-    it.effect("respects explicit dev-url override for dev:web", () =>
-      Effect.gen(function* () {
-        const offsets = yield* resolveModePortOffsets({
-          mode: "dev:web",
-          startOffset: 0,
-          hasExplicitServerPort: false,
-          hasExplicitDevUrl: true,
-          checkPortAvailability: () => Effect.succeed(false),
-        });
-
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
-      }),
-    );
+      assert.equal(result.status, 0, result.stderr);
+      const output = `${result.stdout}${result.stderr}`;
+      assert.match(output, /serverPort=\d+ /);
+      assert.notMatch(output, /serverPort=3773 /);
+    });
   });
 
   describe("runDevRunnerWithInput", () => {
@@ -564,6 +437,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const { env, tailscaleCalls } = yield* shareSpawned({ built: true, host: "::1" });
           const serve = tailscaleCalls.find((args) => args.includes("--bg"));
           assert.equal(serve?.at(-1), `http://[::1]:${env?.GOAT_PORT}`);
+        }),
+      );
+
+      // Node resolves localhost to ::1 first, so a 127.0.0.1 target can miss the backend.
+      it.effect("--built --host localhost keeps the backend's localhost name", () =>
+        Effect.gen(function* () {
+          const { env, tailscaleCalls } = yield* shareSpawned({ built: true, host: "localhost" });
+          const serve = tailscaleCalls.find((args) => args.includes("--bg"));
+          assert.equal(serve?.at(-1), `http://localhost:${env?.GOAT_PORT}`);
         }),
       );
 

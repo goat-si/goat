@@ -81,10 +81,12 @@ import {
   ThreadManagementProjectThreadsListError,
   ThreadManagementDurableRunProjectionError,
   ThreadManagementProviderInstanceDisabledError,
-  ThreadManagementBackgroundWaitError,
   ThreadManagementError,
 } from "./ThreadManagementErrors.ts";
+import { ThreadManagementBackgroundWaitError } from "./threadManagementBackgroundWait.ts";
+
 export * from "./ThreadManagementErrors.ts";
+export { ThreadManagementBackgroundWaitError };
 
 /**
  * "steer_when_ready" is how another thread's agent talks to a thread: like steering, whatever
@@ -1848,6 +1850,12 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
+    if (input.awaited && matched.length === 0) {
+      return yield* new ThreadManagementBackgroundWaitError({
+        threadId: input.threadId,
+        reason: "unmatched",
+      });
+    }
     const matchedIds = new Set(matched);
     return { matched, unmatched: input.taskIds.filter((taskId) => !matchedIds.has(taskId)) };
   });
