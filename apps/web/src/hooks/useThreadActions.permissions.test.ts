@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   toasts: [] as string[],
   afterRequest: undefined as ((action: string) => void) | undefined,
   sessionLookupFails: false,
+  worktreeManaged: true as boolean | undefined,
 }));
 
 vi.mock("react", () => ({
@@ -74,15 +75,22 @@ vi.mock("../state/use-atom-command", () => ({
     },
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
-  useAtomQueryRunner: () => async (environmentId: string) =>
-    state.sessionLookupFails
-      ? AsyncResult.failure(Cause.fail(new Error("Session lookup failed")))
-      : AsyncResult.success({
-          authenticated: true,
-          scopes: [...(state.scopes.get(environmentId) ?? [])],
-          auth: { serverUpdateScope: "environment:maintain" },
-        }),
+  useAtomQueryRunner: (query: unknown) =>
+    query === "session" ? loadSession : loadWorktreeThreadIds,
 }));
+const loadWorktreeThreadIds = async () =>
+  AsyncResult.success({
+    threadIds: [target.threadId],
+    ...(state.worktreeManaged === undefined ? {} : { managed: state.worktreeManaged }),
+  });
+const loadSession = async (environmentId: string) =>
+  state.sessionLookupFails
+    ? AsyncResult.failure(Cause.fail(new Error("Session lookup failed")))
+    : AsyncResult.success({
+        authenticated: true,
+        scopes: [...(state.scopes.get(environmentId) ?? [])],
+        auth: { serverUpdateScope: "environment:maintain" },
+      });
 vi.mock("../state/threads", () => ({
   threadEnvironment: Object.fromEntries(
     [
@@ -255,6 +263,7 @@ beforeEach(() => {
   state.toasts = [];
   state.afterRequest = undefined;
   state.sessionLookupFails = false;
+  state.worktreeManaged = true;
   useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   useDiffPanelStore.setState(useDiffPanelStore.getInitialState(), true);
   usePreviewMiniPlayerStore.setState(usePreviewMiniPlayerStore.getInitialState(), true);
@@ -390,5 +399,42 @@ describe("thread action permissions", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it.each([
+    { reason: "outside GOAT's worktrees folder", managed: false },
+    { reason: "when an older server cannot say who made it", managed: undefined },
+  ])("deletes a thread without offering its worktree $reason", async ({ managed }) => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    // An imported session records the user's own checkout as its thread's worktree.
+    state.threads[0]!.worktreePath = "/Users/me/own-checkout";
+    state.worktreeManaged = managed;
+    expect((await useThreadActions().deleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).not.toHaveBeenCalled();
+    expect(state.requests.map((request) => request.action)).toEqual(["stopSession", "delete"]);
+  });
+
+  it("offers and removes a worktree GOAT made", async () => {
+    state.scopes
+      .get(secondary)!
+      .add(AuthOrchestrationOperateScope)
+      .add(AuthSourceControlWriteScope);
+    state.threads[0]!.worktreePath = "/worktrees/thread";
+    expect((await useThreadActions().deleteThread(target))._tag).toBe("Success");
+    expect(state.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Delete the worktree too?"),
+      {
+        variant: "destructive",
+      },
+    );
+    expect(state.requests.map((request) => request.action)).toEqual([
+      "stopSession",
+      "delete",
+      "removeWorktree",
+      "refreshStatus",
+    ]);
   });
 });

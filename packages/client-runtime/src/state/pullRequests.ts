@@ -53,6 +53,7 @@ import {
   type QueryAnswerHandler,
 } from "./runtime.ts";
 import { createPullRequestRouter } from "./pullRequestRouting.ts";
+import { createEnvironmentSessionAtoms } from "./session.ts";
 import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
@@ -229,6 +230,25 @@ export function createPullRequestEnvironmentAtoms<R, E>(
   onAnswer: PullRequestAnswerHandlers = {},
 ) {
   const refreshes = createPullRequestRefreshAtomFamily(runtime);
+  const sessions = createEnvironmentSessionAtoms(runtime);
+  const linkedThreadSignals = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:pull-requests:linked-thread-refreshes",
+    tag: WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes,
+  });
+  // Servers without `linkedThreadRefreshes` never signal link changes, so poll them instead.
+  const linkedThreadsRefreshes = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): unknown => {
+      const signal = get(refreshes({ environmentId, input: {} }));
+      const config = get(sessions.initialConfigValueAtom(environmentId));
+      if (config?.environment.capabilities.linkedThreadRefreshes === true) {
+        return [signal, get(linkedThreadSignals({ environmentId, input: {} }))];
+      }
+      // @effect-diagnostics-next-line globalTimers:off - Mirrors `Atom.withRefresh`, outside an Effect runtime.
+      const handle = setTimeout(() => get.refreshSelf(), 10_000);
+      get.addFinalizer(() => clearTimeout(handle));
+      return {};
+    }),
+  );
   const commandScheduler = createAtomCommandScheduler();
   const routedRequest = createPullRequestRouter();
   const serialPerEnvironment = {
@@ -505,8 +525,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       persistence: persistQuery(PullRequestLinkedThreadsResult),
       tag: WS_METHODS.pullRequestsLinkedThreads,
       staleTimeMs: 0,
-      refreshIntervalMs: 10_000,
-      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
+      refreshTrigger: ({ environmentId }) => linkedThreadsRefreshes(environmentId),
     }),
     // For callers that open a thread from the answer: a persisted one reads as final before
     // the connection is known, and a kept one can predate the thread.

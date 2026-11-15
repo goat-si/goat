@@ -1627,7 +1627,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const { manager, providerCalls } = yield* makeManager({
         providerScenario: {
           prListByHeadSelector: {
-            main: [
+            "contributor:main": [
               {
                 number: 777,
                 title: "Fork PR from main",
@@ -1658,7 +1658,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
       expect(providerCalls).toContainEqual({
         operation: "listChangeRequests",
-        headSelector: "main",
+        headSelector: "contributor:main",
         state: "all",
         limit: 100,
       });

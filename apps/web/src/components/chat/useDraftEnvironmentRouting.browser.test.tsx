@@ -105,7 +105,11 @@ const clonedRef = (): ScopedProjectRef =>
 async function setup() {
   state.projects.clear();
   state.listeners.clear();
-  state.addProjectToMachine.mockReset().mockResolvedValue(undefined);
+  state.addProjectToMachine
+    .mockReset()
+    .mockImplementation((input: { readonly projectId: string }) =>
+      Promise.resolve(input.projectId),
+    );
   state.toast.mockReset();
   state.unsilenceProjectCloneToasts.mockReset();
   state.projectArrivalTimesOut = false;

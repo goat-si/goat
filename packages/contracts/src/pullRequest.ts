@@ -5,6 +5,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -54,7 +55,13 @@ export type PullRequestChecksState = typeof PullRequestChecksState.Type;
 export const PullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
 export type PullRequestMergeability = typeof PullRequestMergeability.Type;
 
-export const PullRequestMergeMethod = Schema.Literals(["merge", "squash", "rebase"]);
+/** `fast-forward` refuses unless the head contains the base, where `rebase` rewrites the branch onto it. */
+export const PullRequestMergeMethod = Schema.Literals([
+  "merge",
+  "squash",
+  "rebase",
+  "fast-forward",
+]);
 export type PullRequestMergeMethod = typeof PullRequestMergeMethod.Type;
 
 export const PullRequestAction = Schema.Literals([
@@ -321,6 +328,8 @@ export const PullRequestMergeCapabilities = Schema.Struct({
   merge: Schema.Boolean,
   squash: Schema.Boolean,
   rebase: Schema.Boolean,
+  /** Optional so servers that predate it still decode; absent means not allowed. */
+  "fast-forward": Schema.optional(Schema.Boolean),
 });
 export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.Type;
 
@@ -507,7 +516,7 @@ export const PullRequestSummary = Schema.Struct({
   headSha: Schema.optional(TrimmedNonEmptyString),
   /** Absent means the read did not report auto-merge state, not that it is off. */
   autoMergeEnabled: Schema.optional(Schema.Boolean),
-  autoMergeMethod: Schema.optional(PullRequestMergeMethod),
+  autoMergeMethod: ForwardCompatibleOptional(PullRequestMergeMethod),
 });
 export type PullRequestSummary = typeof PullRequestSummary.Type;
 
@@ -605,6 +614,14 @@ export const PullRequestReportStateInput = Schema.Struct({
 });
 export type PullRequestReportStateInput = typeof PullRequestReportStateInput.Type;
 
+/** The host's merge queue letting go of a pull request without merging it, newest first. */
+export const PullRequestMergeQueueRemoval = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  removedAt: IsoDateTime,
+  reason: Schema.NullOr(Schema.String),
+});
+export type PullRequestMergeQueueRemoval = typeof PullRequestMergeQueueRemoval.Type;
+
 export const PullRequestDetail = Schema.Struct({
   provider: SourceControlProviderKind,
   capabilities: PullRequestCapabilities,
@@ -642,8 +659,10 @@ export const PullRequestDetail = Schema.Struct({
   behindBy: Schema.optional(NonNegativeInt),
   /** Absent means the host does not report auto-merge state, not that it is off. */
   autoMergeEnabled: Schema.optional(Schema.Boolean),
-  autoMergeMethod: Schema.optional(PullRequestMergeMethod),
+  autoMergeMethod: ForwardCompatibleOptional(PullRequestMergeMethod),
   workflowApprovalsRequired: Schema.optional(NonNegativeInt),
+  /** Absent where the host has no merge queue or does not report one. */
+  mergeQueueRemoval: Schema.optional(PullRequestMergeQueueRemoval),
   maintainerCanModify: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
@@ -922,20 +941,7 @@ export const PullRequestUnavailableReason = Schema.Literals([
 ]);
 export type PullRequestUnavailableReason = typeof PullRequestUnavailableReason.Type;
 
-/**
- * `author:me` names whoever is signed in to the host being read, GitHub's `@me` spelled either
- * way. A host's own search would answer it, but the page and the server both re-check an author
- * against the row's login, so the name is resolved before either comparison rather than being
- * matched as the literal login "me".
- */
-export function resolvePullRequestAuthorFilter(
-  author: string,
-  viewer: string | null | undefined,
-): string {
-  const trimmed = author.trim();
-  if (!/^@?me$/i.test(trimmed)) return trimmed;
-  return viewer === null || viewer === undefined || viewer.trim().length === 0 ? trimmed : viewer;
-}
+export { resolvePullRequestAuthorFilter } from "./pullRequestAuthorFilter.ts";
 
 export class PullRequestUnavailableError extends Schema.TaggedError<PullRequestUnavailableError>()(
   "PullRequestUnavailableError",
