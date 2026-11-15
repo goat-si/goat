@@ -4,6 +4,7 @@ import {
   OrchestratorMcpThreadConfigureResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
+  type OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadRetryResult,
   type OrchestratorMcpThreadSendInput,
@@ -27,6 +28,13 @@ export const withoutHost = <T extends { readonly host?: unknown; readonly allHos
 ): Omit<T, "host" | "allHosts"> => {
   const { host: _host, allHosts: _allHosts, ...rest } = input;
   return rest;
+};
+
+// A linked host serves a forwarded read as a client read, which starts at the oldest item, so
+// afterPosition -1 changes nothing there; older hosts reject -1 and do not know beforePosition.
+export const remoteReadArguments = (input: OrchestratorMcpThreadReadInput) => {
+  const { afterPosition, beforePosition: _beforePosition, ...rest } = withoutHost(input);
+  return afterPosition === undefined || afterPosition < 0 ? rest : { ...rest, afterPosition };
 };
 
 /**

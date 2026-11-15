@@ -26,13 +26,16 @@ export const makeProviderRunControls = (
       typeof RunExecutionService.selectInheritedBackgroundTurnItems
     >;
   }) => {
+    const isCurrentAttemptIn = (statuses: ReadonlyArray<OrchestrationV2Run["status"]>) =>
+      projectionStore
+        .getRun(input.threadId, input.runId)
+        .pipe(
+          Effect.map(
+            (run) => run?.activeAttemptId === input.attemptId && statuses.includes(run.status),
+          ),
+        );
     const isCurrentAttemptInStatus = (expectedStatus: OrchestrationV2Run["status"]) =>
-      projectionStore.getRuntimeRecoveryProjection(input.threadId).pipe(
-        Effect.map((current) => {
-          const run = current.runs.find((candidate) => candidate.id === input.runId);
-          return run?.activeAttemptId === input.attemptId && run.status === expectedStatus;
-        }),
-      );
+      isCurrentAttemptIn([expectedStatus]);
     return {
       isCurrentAttemptInStatus,
       loadInheritedBackgroundTurnItems: () =>
@@ -53,16 +56,7 @@ export const makeProviderRunControls = (
         projectionStore
           .getRuntimeRecoveryProjection(input.threadId)
           .pipe(Effect.map((current) => current.thread.worktreePath !== input.worktreePath)),
-      shouldFinalizeRun: () =>
-        projectionStore.getRuntimeRecoveryProjection(input.threadId).pipe(
-          Effect.map((current) => {
-            const run = current.runs.find((candidate) => candidate.id === input.runId);
-            return (
-              run?.activeAttemptId === input.attemptId &&
-              (run.status === "starting" || run.status === "running")
-            );
-          }),
-        ),
+      shouldFinalizeRun: () => isCurrentAttemptIn(["starting", "running"]),
       hasUnpairedRunInterruptRequest: () =>
         projectionStore
           .hasUnpairedRunInterruptRequest(

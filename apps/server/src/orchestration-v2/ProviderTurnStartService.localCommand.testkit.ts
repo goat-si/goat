@@ -538,6 +538,25 @@ export function makeLocalCommandHarness(input: {
       ),
     }),
   );
+  const getRuntimeRecoveryProjection = vi.fn<
+    ProjectionStore.ProjectionStoreV2Shape["getRuntimeRecoveryProjection"]
+  >(() =>
+    input.recoveryReadFailure !== undefined
+      ? Effect.fail(
+          new ProjectionStore.ProjectionStoreReadError({
+            threadId,
+            cause: input.recoveryReadFailure,
+          }),
+        )
+      : Effect.as(failReadIfRunning, {
+          ...projection,
+          hasConversation: projection.messages.some(
+            (m) =>
+              m.role === "user" &&
+              (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
+          ),
+        }),
+  );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -596,22 +615,12 @@ export function makeLocalCommandHarness(input: {
             >),
           getThreadRecords,
           getTurnStartContext,
-          getRuntimeRecoveryProjection: () =>
-            input.recoveryReadFailure !== undefined
-              ? Effect.fail(
-                  new ProjectionStore.ProjectionStoreReadError({
-                    threadId,
-                    cause: input.recoveryReadFailure,
-                  }),
-                )
-              : Effect.as(failReadIfRunning, {
-                  ...projection,
-                  hasConversation: projection.messages.some(
-                    (m) =>
-                      m.role === "user" &&
-                      (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
-                  ),
-                }),
+          getRuntimeRecoveryProjection,
+          getRun: (_threadId, id) =>
+            Effect.as(
+              failReadIfRunning,
+              projection.runs.find((candidate) => candidate.id === id),
+            ),
           getTurnStartHistory: () =>
             Effect.fail(
               new ProjectionStore.ProjectionStoreReadError({
@@ -652,6 +661,7 @@ export function makeLocalCommandHarness(input: {
     runId,
     getThreadRecords,
     getTurnStartContext,
+    getRuntimeRecoveryProjection,
     setProjection: (next: OrchestrationV2ThreadProjection) => {
       projection = next;
     },
