@@ -175,9 +175,10 @@ it("a draft survives the destination going missing and coming back the same, and
     await act(async () => picker.settle?.([file]));
     move(null);
     await chat.view.rerender(<GoatBotScreen visible />);
-    move(main);
-    await chat.view.rerender(<GoatBotScreen visible />);
     // The saved reference shows first, then confirmation reports the same one.
+    unconfirmed(main);
+    await chat.view.rerender(<GoatBotScreen visible />);
+    move(main);
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chat.typed()).toBe("Still mine");
     expect(picker.release).not.toHaveBeenCalled();
