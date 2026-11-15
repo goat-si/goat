@@ -188,6 +188,7 @@ const threadsLayer = (
       stopWorkflow: unused,
       forceStopThread: unused,
       forceStopDelegatedTask: unused,
+      forceStopUnresponsiveRun: unused,
       stopDelegatedTasks: unused,
       getThreadEventSequence: unused,
       recoverDelegatedTask: unused,

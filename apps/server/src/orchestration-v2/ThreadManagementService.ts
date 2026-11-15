@@ -85,7 +85,11 @@ import {
   ThreadManagementError,
 } from "./ThreadManagementErrors.ts";
 import { ThreadManagementBackgroundWaitError } from "./threadManagementBackgroundWait.ts";
-import { DelegatedForceStopRefused, forceStopDelegatedTask } from "./delegatedForceStop.ts";
+import {
+  DelegatedForceStopRefused,
+  forceStopDelegatedTask,
+  forceStopUnresponsiveRun,
+} from "./delegatedForceStop.ts";
 
 export * from "./ThreadManagementErrors.ts";
 export { ThreadManagementBackgroundWaitError };
@@ -335,6 +339,18 @@ export interface ThreadManagementServiceShape {
       readonly childThreadId: ThreadId;
       readonly runId: RunId;
     },
+    | OrchestrationV2ForceStopThreadError
+    | DelegatedForceStopRefused
+    | Orchestrator.OrchestratorV2Error
+  >;
+  /** goat#2338: Force stop of the thread's live run, refused unless its Stop went unanswered. */
+  readonly forceStopUnresponsiveRun: (input: {
+    readonly threadId: ThreadId;
+    readonly runId?: RunId | undefined;
+    readonly reason: string;
+    readonly subject: string;
+  }) => Effect.Effect<
+    OrchestrationV2ForceStopThreadResult & { readonly runId: RunId },
     | OrchestrationV2ForceStopThreadError
     | DelegatedForceStopRefused
     | Orchestrator.OrchestratorV2Error
@@ -1981,6 +1997,11 @@ const make = Effect.gen(function* () {
           getThreadShell: orchestrator.getThreadShell,
           forceStop,
         },
+        input,
+      ),
+    forceStopUnresponsiveRun: (input) =>
+      forceStopUnresponsiveRun(
+        { getThreadRecords: orchestrator.getThreadRecords, forceStop },
         input,
       ),
     awaitBackgroundTasks,

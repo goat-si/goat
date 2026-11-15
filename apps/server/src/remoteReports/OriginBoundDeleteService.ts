@@ -53,6 +53,31 @@ const keysMatch = (supplied: Buffer, storedHex: string) => {
   return stored.length === supplied.length && NodeCrypto.timingSafeEqual(supplied, stored);
 };
 
+/** The origin label of the binding, when this read key binds the correlation to that thread. */
+export const boundOriginLabel = Effect.fn("OriginBoundDeleteService.boundOriginLabel")(function* (
+  sql: SqlClient.SqlClient,
+  input: { readonly correlationId: string; readonly readKey: string; readonly threadId: ThreadId },
+) {
+  const rows = yield* sql<{
+    readonly threadId: ThreadId;
+    readonly readKeyHash: string;
+    readonly originLabel: string;
+  }>`
+    SELECT thread_id AS "threadId", read_key_hash AS "readKeyHash", origin_label AS "originLabel"
+    FROM remote_report_bindings
+    WHERE correlation_id = ${input.correlationId}
+  `.pipe(Effect.mapError(unavailable));
+  const binding = rows[0];
+  const supplied = NodeCrypto.createHash("sha256").update(input.readKey, "utf8").digest();
+  if (
+    binding === undefined ||
+    !keysMatch(supplied, binding.readKeyHash) ||
+    binding.threadId !== input.threadId
+  )
+    return yield* notBound();
+  return binding.originLabel;
+});
+
 const outcome = (commandId: CommandId, receipt: StoredReceipt): OriginBoundDeleteResult =>
   receipt.status === "accepted"
     ? { _tag: "accepted", commandId, sequence: receipt.resultSequence }
@@ -101,19 +126,7 @@ const make = Effect.gen(function* () {
   const authorize = Effect.fn("OriginBoundDeleteService.authorize")(function* (
     input: OriginBoundDeleteInput,
   ) {
-    const rows = yield* sql<{ readonly threadId: ThreadId; readonly readKeyHash: string }>`
-      SELECT thread_id AS "threadId", read_key_hash AS "readKeyHash"
-      FROM remote_report_bindings
-      WHERE correlation_id = ${input.correlationId}
-    `.pipe(Effect.mapError(unavailable));
-    const binding = rows[0];
-    const supplied = NodeCrypto.createHash("sha256").update(input.readKey, "utf8").digest();
-    if (
-      binding === undefined ||
-      !keysMatch(supplied, binding.readKeyHash) ||
-      binding.threadId !== input.threadId
-    )
-      return yield* notBound();
+    yield* boundOriginLabel(sql, input);
   });
   const dispatchDelete = Effect.fn("OriginBoundDeleteService.dispatch")(function* (
     threadId: ThreadId,

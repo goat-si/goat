@@ -1,123 +1,29 @@
 import { assert, it } from "@effect/vitest";
-import {
-  CommandId,
-  EventId,
-  NodeId,
-  type OrchestrationV2DomainEvent,
-  ProviderTurnId,
-  ThreadId,
-  TurnItemId,
-} from "@goat/contracts";
+import { NodeId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { createWatchingThread, delegate, layerTest, send } from "./ThreadStop.testkit.ts";
-
-/** Puts the thread's first run mid-turn with a Stop request, flagged unanswered when asked. */
-const stopRequested = (threadId: ThreadId, unanswered: boolean) =>
-  Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    const projections = yield* ProjectionStore.ProjectionStoreV2;
-    const now = yield* DateTime.now;
-    const started = yield* orchestrator.getThreadProjection(threadId);
-    const run = started.runs[0]!;
-    const attempt = started.attempts.find((candidate) => candidate.runId === run.id)!;
-    const providerThreadId = run.providerThreadId!;
-    const providerTurnId = ProviderTurnId.make(`provider-turn:${threadId}`);
-    const apply = (event: Omit<OrchestrationV2DomainEvent, "id" | "threadId">) =>
-      projections.apply({
-        ...event,
-        id: EventId.make(`event:${threadId}:${event.type}`),
-        threadId,
-      } as OrchestrationV2DomainEvent);
-    yield* apply({
-      type: "run.updated",
-      runId: run.id,
-      occurredAt: now,
-      payload: { ...run, status: "running", startedAt: now, activeAttemptId: attempt.id },
-    });
-    yield* apply({
-      type: "run-attempt.updated",
-      occurredAt: now,
-      payload: { ...attempt, status: "running", startedAt: now },
-    });
-    yield* apply({
-      type: "provider-turn.updated",
-      occurredAt: now,
-      payload: {
-        id: providerTurnId,
-        providerThreadId,
-        nodeId: run.rootNodeId!,
-        runAttemptId: attempt.id,
-        nativeTurnRef: null,
-        ordinal: 1,
-        status: "running",
-        startedAt: now,
-        completedAt: null,
-      },
-    });
-    yield* apply({
-      type: "turn-item.updated",
-      runId: run.id,
-      occurredAt: now,
-      payload: {
-        id: TurnItemId.make(`turn-item:${threadId}:interrupt-request`),
-        threadId,
-        runId: run.id,
-        nodeId: run.rootNodeId!,
-        providerThreadId,
-        providerTurnId,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 1_000,
-        status: "completed",
-        title: "Interrupt requested",
-        startedAt: now,
-        completedAt: now,
-        updatedAt: now,
-        type: "run_interrupt_request",
-        message: "Cancelled by the parent",
-      },
-    });
-    if (unanswered)
-      yield* orchestrator.dispatch({
-        type: "thread.interrupt.unresponsive",
-        commandId: CommandId.make(`unresponsive:${threadId}`),
-        threadId,
-        providerThreadId,
-        providerTurnId,
-      });
-  });
-
-/** A parent mid-run with one delegated task whose child run is running. */
-const parentWithTask = (name: string, stop: "none" | "requested" | "unanswered") =>
-  Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    const parentThreadId = ThreadId.make(`thread:${name}`);
-    yield* createWatchingThread(parentThreadId, 40);
-    yield* send(parentThreadId, "plan", "start_immediately");
-    const childThreadId = yield* delegate(parentThreadId, `${name} task`);
-    if (stop !== "none") yield* stopRequested(childThreadId, stop === "unanswered");
-    const parent = yield* orchestrator.getThreadProjection(parentThreadId);
-    const taskId = parent.subagents.find((task) => task.childThreadId === childThreadId)!.id;
-    return { parentThreadId, childThreadId, taskId };
-  });
-
-const runStatuses = (threadId: ThreadId) =>
-  Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    return (yield* orchestrator.getThreadProjection(threadId)).runs.map((run) => run.status);
-  });
-
-const refusal = (input: { parentThreadId: ThreadId; taskId: NodeId }) =>
-  Effect.gen(function* () {
-    const threads = yield* ThreadManagementService.ThreadManagementService;
-    const error = yield* Effect.flip(threads.forceStopDelegatedTask(input));
-    return error._tag === "DelegatedForceStopRefused" ? error.reason : error._tag;
-  });
+import {
+  interruptResult,
+  parentWithTask,
+  refusal,
+  runStatuses,
+  stopRequested,
+  updateChildProviderThread,
+} from "./delegatedForceStop.testkit.ts";
+import {
+  adapter,
+  createWatchingThread,
+  delegate,
+  layerForAdapter,
+  layerTest,
+  send,
+} from "./ThreadStop.testkit.ts";
 
 it.effect("the parent's Force stop ends its task's child after Stop went unanswered", () =>
   Effect.gen(function* () {
@@ -182,3 +88,80 @@ it.effect("a grandchild is not its grandparent's to force stop", () =>
     assert.deepEqual(yield* runStatuses(grandchildThreadId), ["running"]);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect(
+  "Force stop after a server restart ends the child, and the decision survives the next",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const database = Layer.succeedContext(yield* Layer.build(SqlitePersistence.layerMemory));
+        // Each provide builds new services over the same storage, as a restarted server does.
+        const server = layerForAdapter(adapter, { database });
+        const task = yield* parentWithTask("force-restart", "unanswered").pipe(
+          Effect.provide(server),
+        );
+        const forced = yield* ThreadManagementService.ThreadManagementService.use((threads) =>
+          threads.forceStopDelegatedTask(task),
+        ).pipe(Effect.provide(server));
+        assert.equal(forced.childThreadId, task.childThreadId);
+        const after = yield* Effect.all({
+          runs: runStatuses(task.childThreadId),
+          reason: interruptResult(task.childThreadId),
+          again: refusal(task),
+        }).pipe(Effect.provide(server));
+        assert.deepEqual(after, {
+          runs: ["interrupted"],
+          reason: `Force stopped by parent thread "${task.parentThreadId}" (${task.parentThreadId})`,
+          again: "not_unresponsive",
+        });
+      }),
+    ),
+);
+
+it.effect("the parent's Force stop of a cloud child refuses and leaves its run alone", () =>
+  Effect.gen(function* () {
+    const task = yield* parentWithTask("force-cloud", "unanswered");
+    yield* updateChildProviderThread(task.childThreadId, (thread, now) => ({
+      ...thread,
+      cloudTask: {
+        taskId: "cloud-task-1",
+        status: "running",
+        tracking: "polled",
+        source: { repository: "goat-si/goat", branch: "dev" },
+        localChangesExcluded: false,
+        updatedAt: DateTime.formatIso(now),
+      },
+    }));
+    assert.equal(yield* refusal(task), "cloud");
+    assert.deepEqual(yield* runStatuses(task.childThreadId), ["running"]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("the parent's Force stop detaches a child session another working thread shares", () => {
+  const calls: Array<string> = [];
+  const sibling = ThreadId.make("thread:force-shared-sibling");
+  const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+    isLive: () => Effect.succeed(true),
+    otherWorkingThreads: () => Effect.succeed([sibling]),
+    detach: () => Effect.sync(() => calls.push("detach")),
+    releaseUnlessBusy: () => Effect.sync(() => calls.push("release")).pipe(Effect.as(true)),
+  });
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* createWatchingThread(sibling, 41);
+    yield* send(sibling, "sibling work", "start_immediately");
+    const siblingRuns = yield* runStatuses(sibling);
+    const task = yield* parentWithTask("force-shared", "unanswered");
+    yield* updateChildProviderThread(task.childThreadId, (thread) => ({
+      ...thread,
+      providerSessionId: ProviderSessionId.make("provider-session:force-shared"),
+    }));
+    const forced = yield* threads.forceStopDelegatedTask(task);
+    assert.deepEqual(
+      { outcome: forced.outcome, sharedWith: forced.sharedWithThreadIds, calls },
+      { outcome: "shared", sharedWith: [sibling], calls: ["detach"] },
+    );
+    assert.deepEqual(yield* runStatuses(task.childThreadId), ["interrupted"]);
+    assert.deepEqual(yield* runStatuses(sibling), siblingRuns);
+  }).pipe(Effect.provide(layerForAdapter(adapter, { sessions })));
+});

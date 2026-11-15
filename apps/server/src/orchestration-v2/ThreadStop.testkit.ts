@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "./EventStore.ts";
 
@@ -25,6 +26,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import type * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -38,9 +40,23 @@ export const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("Runs here never reach a provider"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
-const layerDatabase = SqlitePersistence.layerMemory;
-export const layerForAdapter = (providerAdapter: ProviderAdapter.ProviderAdapterV2["Service"]) =>
-  ThreadManagementService.layer.pipe(
+/**
+ * `database` lets a test reopen the same file as a restarted server; `sessions` replaces the
+ * session manager ThreadManagementService tears Force stop down through.
+ */
+export const layerForAdapter = (
+  providerAdapter: ProviderAdapter.ProviderAdapterV2["Service"],
+  options: {
+    readonly database?: Layer.Layer<SqlClient.SqlClient>;
+    readonly sessions?: Layer.Layer<ProviderSessionManager.ProviderSessionManagerV2>;
+  } = {},
+) => {
+  const layerDatabase = options.database ?? SqlitePersistence.layerMemory;
+  const management =
+    options.sessions === undefined
+      ? ThreadManagementService.layer
+      : ThreadManagementService.layer.pipe(Layer.provide(options.sessions));
+  return management.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         layerDatabase,
@@ -57,6 +73,7 @@ export const layerForAdapter = (providerAdapter: ProviderAdapter.ProviderAdapter
     Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provideMerge(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
   );
+};
 export const layerTest = layerForAdapter(adapter);
 
 export const encodeEffectRequest = Schema.encodeSync(

@@ -1,11 +1,11 @@
-import type {
-  NodeId,
+import {
+  type NodeId,
   OrchestrationV2ForceStopThreadError,
-  OrchestrationV2ForceStopThreadInput,
-  OrchestrationV2ForceStopThreadResult,
-  OrchestrationV2TurnItem,
-  RunId,
-  ThreadId,
+  type OrchestrationV2ForceStopThreadInput,
+  type OrchestrationV2ForceStopThreadResult,
+  type OrchestrationV2TurnItem,
+  type RunId,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import type * as Orchestrator from "./Orchestrator.ts";
 import { latestActiveRun } from "./ThreadManagementService.ts";
 
-/** Why a parent's Force stop of its task was refused; nothing was stopped. */
+/** Why a Force stop an agent or another machine asked for was refused; nothing was stopped. */
 export class DelegatedForceStopRefused extends Data.TaggedError("DelegatedForceStopRefused")<{
   readonly reason: "not_owner" | "not_unresponsive" | "remote";
   readonly message: string;
@@ -30,19 +30,59 @@ function stopIsUnresponsive(runId: RunId, items: ReadonlyArray<OrchestrationV2Tu
   return unresponsive;
 }
 
+interface ForceStopDeps {
+  readonly getThreadRecords: Orchestrator.OrchestratorV2Shape["getThreadRecords"];
+  readonly forceStop: (
+    input: OrchestrationV2ForceStopThreadInput,
+    reason: string,
+  ) => Effect.Effect<OrchestrationV2ForceStopThreadResult, OrchestrationV2ForceStopThreadError>;
+}
+
 /**
- * goat#2338: the thread that created a task Force stops that task's child, only once the child
- * ignored an ordinary Stop. It is the person's Force stop, named for the parent thread.
+ * The person's Force stop, run for someone else (goat#2338) and only on a run that ignored an
+ * ordinary Stop. `runId`, when given, must still be the thread's live run.
+ */
+export const forceStopUnresponsiveRun = Effect.fn(
+  "ThreadManagementService.forceStopUnresponsiveRun",
+)(function* (
+  deps: ForceStopDeps,
+  input: {
+    readonly threadId: ThreadId;
+    readonly runId?: RunId | undefined;
+    readonly reason: string;
+    readonly subject: string;
+  },
+) {
+  const run = latestActiveRun(yield* deps.getThreadRecords(input.threadId, ["runs"]));
+  if (input.runId !== undefined && run !== undefined && run.id !== input.runId)
+    return yield* new OrchestrationV2ForceStopThreadError({
+      threadId: input.threadId,
+      reason: "superseded",
+    });
+  const items =
+    run === undefined
+      ? []
+      : (yield* deps.getThreadRecords(input.threadId, ["turnItems"], {
+          turnItemRunIds: [run.id],
+          turnItemTypes: ["run_interrupt_request", "run_interrupt_result"],
+        })).turnItems;
+  if (run === undefined || !stopIsUnresponsive(run.id, items))
+    return yield* new DelegatedForceStopRefused({
+      reason: "not_unresponsive",
+      message: `not_unresponsive: ${input.subject} has no run whose Stop went unanswered. Cancel it normally first; force only once its stop.state is "unresponsive".`,
+    });
+  const result = yield* deps.forceStop({ threadId: input.threadId, runId: run.id }, input.reason);
+  return { ...result, runId: run.id };
+});
+
+/**
+ * goat#2338: the thread that created a local task Force stops that task's child, only once the
+ * child ignored an ordinary Stop. Remote children go through their host (remoteTaskForceStop.ts).
  */
 export const forceStopDelegatedTask = Effect.fn("ThreadManagementService.forceStopDelegatedTask")(
   function* (
-    deps: {
-      readonly getThreadRecords: Orchestrator.OrchestratorV2Shape["getThreadRecords"];
+    deps: ForceStopDeps & {
       readonly getThreadShell: Orchestrator.OrchestratorV2Shape["getThreadShell"];
-      readonly forceStop: (
-        input: OrchestrationV2ForceStopThreadInput,
-        reason: string,
-      ) => Effect.Effect<OrchestrationV2ForceStopThreadResult, OrchestrationV2ForceStopThreadError>;
     },
     input: { readonly parentThreadId: ThreadId; readonly taskId: NodeId },
   ) {
@@ -64,31 +104,18 @@ export const forceStopDelegatedTask = Effect.fn("ThreadManagementService.forceSt
     if (task.remote !== undefined || task.childThreadId === null)
       return yield* new DelegatedForceStopRefused({
         reason: "remote",
-        message: `remote: task ${input.taskId} runs on ${task.remote?.host ?? "another host"}; force stop reaches only local children. Cancel it normally and read it with task.read.`,
+        message: `remote: task ${input.taskId} runs on ${task.remote?.host ?? "another host"}, so its host must force stop it.`,
       });
     const childThreadId = task.childThreadId;
-    const child = yield* deps.getThreadRecords(childThreadId, ["runs", "providerTurns"]);
-    const run = latestActiveRun(child);
-    const items =
-      run === undefined
-        ? []
-        : (yield* deps.getThreadRecords(childThreadId, ["turnItems"], {
-            turnItemRunIds: [run.id],
-            turnItemTypes: ["run_interrupt_request", "run_interrupt_result"],
-          })).turnItems;
-    if (run === undefined || !stopIsUnresponsive(run.id, items))
-      return yield* new DelegatedForceStopRefused({
-        reason: "not_unresponsive",
-        message: `not_unresponsive: task ${input.taskId} has no run whose Stop went unanswered. Cancel it normally first; force only once task.read shows stop.state "unresponsive".`,
-      });
     const parent = yield* deps.getThreadShell(input.parentThreadId);
     const parentName = parent?.title
       ? `"${parent.title}" (${input.parentThreadId})`
       : input.parentThreadId;
-    const result = yield* deps.forceStop(
-      { threadId: childThreadId, runId: run.id },
-      `Force stopped by parent thread ${parentName}`,
-    );
-    return { ...result, childThreadId, runId: run.id };
+    const result = yield* forceStopUnresponsiveRun(deps, {
+      threadId: childThreadId,
+      reason: `Force stopped by parent thread ${parentName}`,
+      subject: `task ${input.taskId}`,
+    });
+    return { ...result, childThreadId };
   },
 );
