@@ -188,6 +188,28 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     }).pipe(provide);
   });
 
+  it.effect("closes an announced upgrade that runs nothing with the finished line", () => {
+    const { provide, reopen } = database();
+    return Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 89 });
+      const lines: Array<string> = [];
+      const logger = Logger.make(({ message }) => {
+        lines.push(Array.isArray(message) ? message.join(" ") : String(message));
+      });
+      const executed = yield* onRestart(
+        reopen,
+        runMigrations({ toMigrationInclusive: 89 }).pipe(
+          Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      );
+      assert.deepStrictEqual(executed, []);
+      const started = lines.indexOf(DATABASE_MIGRATIONS_STARTED_MESSAGE);
+      assert.isAtLeast(started, 0);
+      assert.isAbove(lines.indexOf(DATABASE_MIGRATIONS_FINISHED_MESSAGE), started);
+      assert.isFalse(isRunningDatabaseMigrations(lines.join("\n")));
+    }).pipe(provide);
+  });
+
   it.effect("refuses a T3 ledger with a newer row at 90 and leaves it unchanged", () => {
     const { provide } = database();
     return Effect.gen(function* () {
