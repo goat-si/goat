@@ -405,36 +405,59 @@ it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   ),
 );
 
-it.effect("history stops at its byte budget: later routines carry none, however small", () =>
-  withWebhookService((fixture) =>
-    Effect.gen(function* () {
-      // Task ids have no maximum length, and every firing id repeats the task id. The helper's
-      // input ids repeat it too, which real ones (a digest) do not, so this reaches the budget sooner.
-      const long = (letter: string) => `goat-bot-check-in:${letter}-${"x".repeat(9_000)}`;
-      const routines = [
-        yield* saveRoutine(fixture, long("a")),
-        yield* saveRoutine(fixture, long("b")),
-        yield* saveRoutine(fixture, long("c")),
-        yield* saveRoutine(fixture, "goat-bot-check-in:d"),
-      ];
-      for (const routine of routines.slice(0, 3))
-        for (let index = 0; index < 3; index++) {
-          const firingId = yield* fire(fixture, routine);
-          yield* answer(fixture, firingId, yield* accept(fixture, firingId), false);
-        }
-      const listed = yield* fixture.service.list();
-      assert.deepStrictEqual(
-        routines.map((routine) => historyOf(listed, routine.id)?.length),
-        [3, 3, undefined, undefined],
-      );
-      const bytes = (tasks: ReadonlyArray<ScheduledTask>) =>
-        new TextEncoder().encode(encodeList({ tasks })).length;
-      const added =
-        bytes(listed.tasks) - bytes(listed.tasks.map(({ recentRuns: _recent, ...task }) => task));
-      assert.isAtMost(added, SCHEDULED_TASK_RECENT_RUN_BYTES);
-      assert.isAbove(added, SCHEDULED_TASK_RECENT_RUN_BYTES / 2);
-    }),
-  ),
+it.effect(
+  "history stops at its byte budget: the routine that would pass it and every later one carry none",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        // Each run stays under MAX_STORED_RUN_CHARS (about 840 stored characters with a 600-character
+        // task id), so only the byte budget can omit a routine: about 24 of them fill 128 KB. Every
+        // full routine has the same id length, run count and statuses, so all histories are one size.
+        const full = (index: number) =>
+          `goat-bot-check-in:${String(index).padStart(2, "0")}-${"x".repeat(600 - 21)}`;
+        const noRunsFirst = yield* saveRoutine(fixture, "goat-bot-check-in:00");
+        const fullRoutines: Array<ScheduledTask> = [];
+        for (let index = 1; index <= 27; index++)
+          fullRoutines.push(yield* saveRoutine(fixture, full(index)));
+        const noRunsLast = yield* saveRoutine(fixture, "goat-bot-check-in:zz");
+        // Firing ids hold the clock in milliseconds; keep every one six digits long, and stay well
+        // inside the routines' hourly schedule so only these firings exist.
+        yield* TestClock.adjust(Duration.seconds(100));
+        for (const routine of fullRoutines)
+          for (let index = 0; index < SCHEDULED_TASK_RECENT_RUNS; index++)
+            yield* refuse(fixture, yield* fire(fixture, routine));
+
+        const listed = yield* fixture.service.list();
+        const task = (routine: ScheduledTask) =>
+          listed.tasks.find((each) => each.id === routine.id);
+        // A routine with no runs carries an empty history; an omitted one carries no key at all.
+        assert.deepStrictEqual(task(noRunsFirst)?.recentRuns, []);
+        assert.notProperty(task(noRunsLast), "recentRuns");
+
+        // The routines that carry history are a prefix of the list; the rest carry no key.
+        const lengths = fullRoutines.map((routine) => task(routine)?.recentRuns?.length);
+        const carried = lengths.indexOf(undefined);
+        assert.isAbove(carried, 1);
+        assert.deepStrictEqual(lengths, [
+          ...Array.from({ length: carried }, () => SCHEDULED_TASK_RECENT_RUNS),
+          ...Array.from({ length: fullRoutines.length - carried }, () => undefined),
+        ]);
+
+        const bytes = (tasks: ReadonlyArray<ScheduledTask>) =>
+          new TextEncoder().encode(encodeList({ tasks })).length;
+        const withoutHistory = listed.tasks.map(({ recentRuns: _recent, ...rest }) => rest);
+        const added = bytes(listed.tasks) - bytes(withoutHistory);
+        const oneHistory =
+          bytes(
+            withoutHistory.map((rest, index) =>
+              rest.id === fullRoutines[0]?.id ? (listed.tasks[index] ?? rest) : rest,
+            ),
+          ) - bytes(withoutHistory);
+        assert.isAtMost(added, SCHEDULED_TASK_RECENT_RUN_BYTES);
+        // The first omitted routine's history is the same size, so adding it would pass the budget.
+        assert.isAbove(added + oneHistory, SCHEDULED_TASK_RECENT_RUN_BYTES);
+      }),
+    ),
 );
 
 it.effect("a stored run over the size cap leaves only its own routine without history", () =>
