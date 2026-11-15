@@ -142,3 +142,68 @@ describe("loadOpenCode2Catalog", () => {
     }),
   );
 });
+
+describe("a lent OpenCode 2 server's model read", () => {
+  const loadHungRead = (environment: NodeJS.ProcessEnv) =>
+    makeOpenCode2ModelLoader(
+      (_identity: undefined, boundRead) =>
+        boundRead(readCatalog({ "/api/provider": PROVIDERS_BODY }, ["/api/model"])),
+      undefined,
+      undefined,
+      Effect.succeed(environment),
+    );
+
+  it.effect("lists nothing yet once a read that never answers reaches 20 seconds", () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(yield* loadHungRead({}));
+      yield* TestClock.adjust("19999 millis");
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust("1 millis");
+
+      assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+    }),
+  );
+
+  it.effect.each([
+    { override: "30000", endsAt: 30_000 },
+    { override: "5000", endsAt: 20_000 },
+  ])(
+    "GOAT_OPENCODE_PROBE_TIMEOUT_MS=$override raises the read cap and never lowers it",
+    ({ override, endsAt }) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          yield* loadHungRead({ GOAT_OPENCODE_PROBE_TIMEOUT_MS: override }),
+        );
+        yield* TestClock.adjust(endsAt - 1);
+        assert.isUndefined(fiber.pollUnsafe());
+        yield* TestClock.adjust(1);
+
+        assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+      }),
+  );
+
+  // regression: #30251 OpenCode 2.2.7 holds each read about 14 s before the plugin 503
+  it.effect("still lists every model when plugins finish activating within 2 minutes", () =>
+    Effect.gen(function* () {
+      const activatedAt = (yield* Clock.currentTimeMillis) + 60_000;
+      const listModels = Effect.gen(function* () {
+        if ((yield* Clock.currentTimeMillis) >= activatedAt) {
+          return yield* Effect.as(Effect.sleep("9 seconds"), MODELS_BODY);
+        }
+        yield* Effect.sleep("14 seconds");
+        return { status: 503, body: PLUGINS_ACTIVATING_BODY };
+      });
+      const load = yield* makeOpenCode2ModelLoader(
+        (_identity: undefined, boundRead) =>
+          boundRead(readCatalog({ "/api/model": listModels, "/api/provider": PROVIDERS_BODY })),
+        undefined,
+        undefined,
+        Effect.succeed({}),
+      );
+      const fiber = yield* Effect.forkChild(load);
+      yield* TestClock.adjust("2 minutes");
+
+      assert.strictEqual((yield* Fiber.join(fiber)).length, 2);
+    }),
+  );
+});
