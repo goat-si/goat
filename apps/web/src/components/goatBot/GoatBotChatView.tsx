@@ -20,6 +20,7 @@ import { cn } from "~/lib/utils";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { GoatBotFileViewer } from "./GoatBotFileViewer";
 import { GoatBotOpenFileContext } from "./GoatBotReplyFiles";
+import { centerGoatBotRow, focusGoatBotRow, goatBotRunReplyRow } from "./goatBotRunRow";
 import { GoatBotWorkPanel } from "./GoatBotWorkPanel";
 import { useGoatBotRoutineLanding } from "./useGoatBotRoutineLanding";
 
@@ -159,6 +160,7 @@ function GoatBotChatViewWithSource(props: GoatBotChatViewProps) {
 function GoatBotChatViewContent({
   source,
   projectionRef,
+  visibleTurnItems,
   unreadSince,
   supportsTaskThreads = false,
   supportsTaskRetry = false,
@@ -203,13 +205,18 @@ function GoatBotChatViewContent({
   const acceptsFiles = canSend && attachmentSupport !== null;
   const composerRef = useRef<GoatBotComposerHandle>(null);
   const homeRef = useRef<HTMLButtonElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   // Why the narrow sheet last closed: a draft action leaves focus in the message box and a file
-  // takes focus itself; plain dismissal returns focus to the chip that opened the sheet.
-  const sheetClosedFor = useRef<"draft" | "file" | null>(null);
+  // takes focus itself, and Show in chat lands on its row; plain dismissal returns focus to the
+  // chip that opened the sheet.
+  const sheetClosedFor = useRef<"draft" | "file" | { readonly row: string } | null>(null);
   const sheetFinalFocus = () => {
     const reason = sheetClosedFor.current;
     sheetClosedFor.current = null;
     if (reason === "file") return false;
+    if (typeof reason === "object" && reason !== null) {
+      return centerGoatBotRow(conversationRef.current, reason.row) ?? homeRef.current ?? true;
+    }
     const field = reason === "draft" ? composerRef.current?.field() : null;
     if (!field) return homeRef.current ?? true;
     field.setSelectionRange(field.value.length, field.value.length);
@@ -352,6 +359,21 @@ function GoatBotChatViewContent({
     viewing.threadId === bot.threadId
       ? viewing
       : null;
+  // A routine run's reply in this chat, for Home's run popover; none while the chat is out of view.
+  const showRunInChat = (inputId: string) => {
+    if (hidden || shownFile !== null) return undefined;
+    const rowId = goatBotRunReplyRow(visibleTurnItems ?? [], rows, inputId);
+    if (rowId === null) return undefined;
+    return () => {
+      if (narrow) {
+        sheetClosedFor.current = { row: rowId };
+        setHomeReturn(null);
+        setPanelOpen(false);
+      } else {
+        focusGoatBotRow(conversationRef.current, rowId);
+      }
+    };
+  };
   const [dragActive, setDragActive] = useState(false);
   // One value per bot server, so the reply file cards under every message skip re-rendering.
   const openFileStable = useStableCallback(openFile);
@@ -516,7 +538,10 @@ function GoatBotChatViewContent({
             sends={local.identity === timelineIdentity ? local.sends : 0}
           />
           {/* The conversation stays mounted under an open file, so closing it keeps its place. */}
-          <div className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}>
+          <div
+            ref={conversationRef}
+            className={cn("flex min-h-0 flex-1 flex-col", shownFile !== null && "hidden")}
+          >
             {/* An open file covers the conversation, so its activity lines stop reading. */}
             <GoatBotStepsReader rows={rows} paused={shownFile !== null || hidden}>
               <GoatBotOpenFileContext value={fileOpening}>
@@ -655,6 +680,7 @@ function GoatBotChatViewContent({
             routineLanding={routineLanding.landing}
             homeReturn={homeReturn}
             onHomeReturnConsumed={() => setHomeReturn(null)}
+            showRunInChat={showRunInChat}
           />
         </aside>
       )}
@@ -691,6 +717,7 @@ function GoatBotChatViewContent({
               routineLanding={routineLanding.landing}
               homeReturn={homeReturn}
               onHomeReturnConsumed={() => setHomeReturn(null)}
+              showRunInChat={showRunInChat}
             />
           </SheetPopup>
         </Sheet>
