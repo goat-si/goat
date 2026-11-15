@@ -20,10 +20,7 @@ export class DelegatedForceStopRefused extends Data.TaggedError("DelegatedForceS
 }> {}
 
 /** Whether the run's latest Stop timed out unanswered, the state clients show as Force stop. */
-export function stopIsUnresponsive(
-  runId: RunId,
-  items: ReadonlyArray<OrchestrationV2TurnItem>,
-): boolean {
+function stopIsUnresponsive(runId: RunId, items: ReadonlyArray<OrchestrationV2TurnItem>): boolean {
   let unresponsive = false;
   for (const item of items) {
     if (item.runId !== runId) continue;

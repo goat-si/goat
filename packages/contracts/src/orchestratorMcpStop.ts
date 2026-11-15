@@ -5,7 +5,7 @@ import { IsoDateTime, NodeId, ThreadId } from "./baseSchemas.ts";
 /** goat#2338: the parent's Force stop of its own task child once that child ignored Stop. */
 export const OrchestratorMcpTaskForce = Schema.optional(Schema.Boolean).annotate({
   description:
-    "Only after a cancel left the child stop=unresponsive: kill its agent and end its run. Parent only.",
+    "Only after a cancel left the child stop=unresponsive (task.read): kill its agent and end the run. Parent only.",
 });
 
 export const OrchestratorMcpTaskCancelResult = Schema.Struct({
