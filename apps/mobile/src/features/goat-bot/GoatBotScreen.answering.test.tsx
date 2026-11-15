@@ -328,3 +328,26 @@ it("a question its server does not name keeps answering while its row is out of 
     screenSession.rows = [];
   }
 });
+
+it("an earlier attempt's answered question does not end a retry's question while its row is shown (#3405)", async () => {
+  const retry = { ...asked(["Keep", "Clear"]), answerQuestionId: "q-ask-2" };
+  const { view, press, chip } = await open(retry);
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    // The task's chip lists the first attempt's answer; the retry's question is still open.
+    screenSession.taskChips = answered("task-ask", "q-ask");
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    await press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith(
+      "Use the staging cache",
+      "task-ask",
+      "q-ask-2",
+    );
+    expect(screenSession.send).not.toHaveBeenCalled();
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
