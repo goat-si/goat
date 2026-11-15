@@ -1,5 +1,5 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import type { GoatBotRowStatus } from "@goat/client-runtime/goatBot";
+import { goatBotPreviewText, type GoatBotRowStatus } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
 import { useEffect, useMemo } from "react";
 
@@ -15,6 +15,9 @@ import { useKeptPerComputer } from "./useKeptPerComputer";
  * again when its conversation changes or is visited; offline, the last answer kept for it, and
  * nothing once access is refused or the computer removed. \`status\` is what its row face reads.
  */
+// The row shows one line; a kept message is cut well past what a phone row can show.
+const KEPT_LINE_LENGTH = 200;
+
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
   /**
@@ -51,7 +54,7 @@ export function useMobileMemberStatus(bot: BotProfile): {
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
-  // Kept: only the count and the newest message, never the work it saw going, which may have stopped.
+  // Kept: the count and the row's one line of the newest message, never the work it saw going.
   const answer = status.data;
   const row = useMemo(
     () =>
@@ -59,7 +62,14 @@ export function useMobileMemberStatus(bot: BotProfile): {
         ? null
         : {
             waitingCount: answer.waitingCount,
-            ...(answer.latest === undefined ? {} : { latest: answer.latest }),
+            ...(answer.latest === undefined
+              ? {}
+              : {
+                  latest: {
+                    ...answer.latest,
+                    text: goatBotPreviewText(answer.latest.text).slice(0, KEPT_LINE_LENGTH),
+                  },
+                }),
           },
     [answer],
   );

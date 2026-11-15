@@ -325,3 +325,15 @@ it("a member's kept status is gone once its computer refuses this phone, and doe
   await row.show();
   expect(row.value?.latest).toBeUndefined();
 });
+
+it("keeps only the row's one line of a member's newest message, cut to a bound", async () => {
+  setup();
+  const long = { ...reply, text: "## Disk check\n\n**Which** machine? " + "x".repeat(500) };
+  member.answer = { waitingCount: 1, latest: long };
+  await using row = rosterRow();
+  await row.show();
+  member.connected = false;
+  await row.show();
+  expect(row.value?.latest?.text.startsWith("Disk check Which machine? x")).toBe(true);
+  expect(row.value?.latest?.text.length).toBe(200);
+});
