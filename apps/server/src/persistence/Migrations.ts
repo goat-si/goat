@@ -442,11 +442,39 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     if (includesV2) {
       yield* assertV2MigrationsCanRun(toMigrationInclusive);
     }
-    return [
+    const sql = yield* SqlClient.SqlClient;
+    const ledger = yield* sql`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+    `;
+    const [latest] =
+      ledger.length === 0
+        ? []
+        : yield* sql<{
+            readonly id: number | null;
+          }>`SELECT MAX(migration_id) AS id FROM effect_sql_migrations`;
+    const latestRecordedId = latest?.id ?? 0;
+    const pending = migrationEntries.filter(
+      ([id]) =>
+        id > latestRecordedId && (toMigrationInclusive === undefined || id <= toMigrationInclusive),
+    );
+    // One transaction per migration: an index build on a large database can take minutes, and a
+    // restart then resumes after the last finished migration instead of rolling all of them back.
+    const executed: Array<readonly [id: number, name: string]> = [
       ...previewMigrations,
       ...goatMigrations,
-      ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
     ];
+    for (const [index, [id, name]] of pending.entries()) {
+      if (latestRecordedId > 0) {
+        yield* Effect.log("Upgrading database").pipe(
+          Effect.annotateLogs({
+            migration: `${id}_${name}`,
+            progress: `${index + 1} of ${pending.length}`,
+          }),
+        );
+      }
+      executed.push(...(yield* run({ loader: makeMigrationLoader(id) })));
+    }
+    return executed;
   }).pipe(Effect.catchTags({ MigrationError: failIfDatabaseNewerThanBuild }));
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
