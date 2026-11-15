@@ -418,7 +418,6 @@ export function GoatBotScreen(props: {
   );
   const memberModelMenu = useMobileGoatBotMemberModelMenu(member, goatBotName(props.main ?? null));
   const mainModelMenu = useMobileGoatBotModelMenu();
-  // The draft belongs to the bot, task and destination it is written for; a new one drops it.
   const draftOwner = useGoatBotDraftOwner(
     {
       botId: member?.botId ?? null,

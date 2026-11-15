@@ -168,6 +168,8 @@ it("a draft survives the destination going missing and coming back the same, and
     await chat.view.rerender(<GoatBotScreen visible />);
     expect(chat.typed()).toBe("Still mine");
     expect(picker.release).not.toHaveBeenCalled();
+    await chat.press("Send message");
+    expect(screenSession.send).toHaveBeenCalledWith("Still mine", [file]);
   } finally {
     await chat.close();
   }
@@ -211,10 +213,13 @@ it("Send right after the destination changed sends nothing written for the old o
   const chat = await open(<GoatBotScreen visible />);
   try {
     await typeInto(chat.view.container, "Meant for the old computer");
+    await chat.press("Add to message: Photo Library");
+    await act(async () => picker.settle?.([file]));
     move({ environmentId: "env-2", threadId: "main-thread-2" });
     await chat.view.rerender(<GoatBotScreen visible />);
     await chat.press("Send message");
     expect(screenSession.send).not.toHaveBeenCalled();
+    expect(picker.release).toHaveBeenCalledWith([file]);
     await typeInto(chat.view.container, "Fresh");
     await chat.press("Send message");
     expect(screenSession.send).toHaveBeenCalledWith("Fresh", []);

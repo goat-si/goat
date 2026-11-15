@@ -27,7 +27,6 @@ export function useGoatBotDraftAttachments(shown: boolean, owner: number) {
   };
   // oxlint-disable-next-line goat/react-effect-budget -- The draft's files go with its owner: released when the owner changes or the screen unmounts, inside that commit.
   useLayoutEffect(() => {
-    // This owner's files: the maps are reused, so the cleanup empties them for the next owner.
     const draft = { owner, files: draftFiles.current, held: held.current };
     return () => {
       for (const release of draft.files.values()) release();
