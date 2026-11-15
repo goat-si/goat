@@ -612,3 +612,37 @@ it("a run closed by focusing something else leaves focus there", async () => {
   await expect.element(popup()).not.toBeInTheDocument();
   expect(document.activeElement).toBe(elsewhere.element());
 });
+
+it("a long reply with no chat row is fully reachable in the popover", async () => {
+  setup();
+  const lines = (word: string) =>
+    Array.from({ length: 20 }, (_, index) => `${word} line ${index + 1}`).join("\n");
+  answer("in-9", { reply: { text: lines("Reply") } });
+  answer("in-8", { failure: { reason: "provider", message: lines("Failure") } });
+  await using _screen = await render(
+    routines([
+      routine("Morning check", [finished(9, "completed", "in-9"), finished(8, "failed", "in-8")]),
+    ]),
+  );
+  for (const [name, last] of [
+    ["Run on Nov 14, 09:00, completed", "Reply line 20"],
+    ["Run on Nov 14, 08:00, failed", "Failure line 20"],
+  ] as const) {
+    await userEvent.click(dot(name));
+    const body = popup().getByRole("region", { name: "Run details" });
+    await expect.element(body).toMatchTextContent(last);
+    const element = body.element();
+    // Not clamped: the whole text lays out, inside a bounded body that scrolls.
+    expect(getComputedStyle(element).webkitLineClamp).toBe("none");
+    expect(getComputedStyle(element).overflowY).toBe("auto");
+    expect(element.scrollHeight).toBeGreaterThan(element.clientHeight);
+    // Reachable by keyboard: the body takes focus and scrolls with the keys.
+    expect(element.tabIndex).toBe(0);
+    element.focus();
+    await userEvent.keyboard("{End}");
+    await vi.waitFor(() => expect(element.scrollTop).toBeGreaterThan(0));
+    await userEvent.keyboard("{Escape}");
+    await expect.element(popup()).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(dot(name).element());
+  }
+});
