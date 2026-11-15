@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
+import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
