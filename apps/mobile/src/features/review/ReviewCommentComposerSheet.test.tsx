@@ -95,7 +95,9 @@ it.each(["picker", "paste"] as const)(
     mocks.pick.mockImplementation(() =>
       pending.promise.then((images) => ({ images, error: null })),
     );
-    mocks.paste.mockImplementation(() => pending.promise);
+    mocks.paste.mockImplementation(() =>
+      pending.promise.then((attachments) => ({ attachments, error: null })),
+    );
     const image = {
       id: method,
       type: "image" as const,

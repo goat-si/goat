@@ -380,7 +380,12 @@ export function mcpToolResultOutput(result: {
   readonly content?: unknown;
   readonly structuredContent?: unknown;
 }): unknown {
-  const { content, structuredContent } = result;
+  const { content } = result;
+  const structuredContent =
+    (Array.isArray(result.structuredContent) || Predicate.isObject(result.structuredContent)) &&
+    Object.keys(result.structuredContent).length === 0
+      ? undefined
+      : result.structuredContent;
   if (structuredContent === undefined || structuredContent === null) {
     return content ?? undefined;
   }

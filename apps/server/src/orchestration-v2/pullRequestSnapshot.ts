@@ -56,7 +56,7 @@ export const readPullRequestSnapshot = Effect.fn("ProjectionStore.readPullReques
       SELECT t.payload_json FROM orchestration_v2_projection_threads t
       WHERE t.deleted_at IS NULL${
         threadId === undefined
-          ? sql` AND json_extract(t.payload_json, '$.archivedAt') IS NULL`
+          ? sql` AND t.archived_at IS NULL`
           : sql` AND t.thread_id = ${threadId}`
       }${
         unsettledOnly

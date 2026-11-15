@@ -38,7 +38,7 @@ export function useInitialNewTaskProject(props: {
   const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
   const navigation = useNavigation();
   const isFocused = useIsFocused();
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation();
   const environments = useWorkspaceEnvironments();
   const environmentLoading = useNewTaskEnvironmentLoading(
     initialProjectRef?.environmentId ? EnvironmentId.make(initialProjectRef.environmentId) : null,

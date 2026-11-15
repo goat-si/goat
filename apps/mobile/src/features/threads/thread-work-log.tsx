@@ -75,12 +75,8 @@ import { BrowserAppIcon } from "./BrowserAppIcon";
 import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
 import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
-import {
-  formatItemFullDetail,
-  relativizeWorkLabelPaths,
-  type ThreadFeedActivity,
-  workEntryRowLabel,
-} from "../../lib/threadActivity";
+import { formatItemFullDetail, type ThreadFeedActivity } from "../../lib/threadActivity";
+import { relativizeWorkLabelPaths, workEntryRowLabel } from "../../lib/workEntryRowLabel";
 import {
   toolCallLines,
   turnItemOutputImages,

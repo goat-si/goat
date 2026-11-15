@@ -122,7 +122,7 @@ export function NewTaskDraftScreen(props: {
   const flow = useNewTaskFlow();
   const servesRoute = props.flowKey === flow.flowKey;
   const navigation = useNavigation();
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation();
   const {
     consumeShare,
     getShare,
