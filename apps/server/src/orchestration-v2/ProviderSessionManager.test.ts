@@ -20,6 +20,7 @@ export {
 import { registerExtensionSessionChecks } from "./ProviderExtensionSessionChecks.testkit.ts";
 import { registerDetachRequestCheck } from "./ProviderSessionDetachRequest.testkit.ts";
 import { registerSessionScopedArtifactCheck } from "./ProviderSessionScopedArtifact.testkit.ts";
+import { registerRetryStallCheck } from "./ProviderRetryStall.testkit.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CodexRoutes from "../provider/CodexRouteService.ts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
@@ -3714,6 +3715,8 @@ it.effect.each(["manual_shutdown", "server_shutdown"] as const)(
 );
 
 registerCodexLoadKeyCheck({ makeThreadCreatedEvent, makeProviderThread, layerTest });
+
+registerRetryStallCheck({ makeThreadCreatedEvent, layerTest });
 
 registerDetachRequestCheck({
   makeThreadCreatedEvent,

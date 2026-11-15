@@ -78,6 +78,7 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
+import { makeRetryStallWatch } from "./ProviderRetryStallWatch.ts";
 import * as Retirement from "./ProviderSessionRetirement.ts";
 import {
   providerThreadLoadKey,
@@ -2299,13 +2300,26 @@ export const layerWithOptions = (
       const startEventPump = (entry: LiveSessionEntry) => {
         let stoppedByProvider = false;
         let lastSessionStatus = entry.runtime.providerSession.status;
+        const retryStalls = makeRetryStallWatch({
+          providerSessionId: entry.runtime.providerSessionId,
+          isCurrent: Ref.get(sessions).pipe(
+            Effect.map(
+              (current) =>
+                current.get(sessionKey(entry.runtime.providerSessionId))?.runtime === entry.runtime,
+            ),
+          ),
+          projectionStore,
+          runtime: entry.exposedRuntime,
+        });
         return entry.runtime.events.pipe(
-          Stream.runForEach((event) => {
+          Stream.runForEach((nativeEvent) => {
             if (shutdownSignal.received) return Effect.void;
             // Live output bypasses persistence and subscribers so floods cannot delay domain events.
-            if (event.type === "command_output.delta") {
-              return commandOutput.append(event);
+            if (nativeEvent.type === "command_output.delta") {
+              return commandOutput.append(nativeEvent);
             }
+            const tracked = retryStalls.track(nativeEvent);
+            const event = tracked.event;
             const releaseLiveOutput =
               event.type === "turn_item.updated" &&
               event.turnItem.type === "command_execution" &&
@@ -2335,6 +2349,7 @@ export const layerWithOptions = (
                   ? Effect.void
                   : touchActivity(entry.runtime.providerSessionId, { providerActivity: true }),
             ).pipe(
+              Effect.andThen(retryStalls.update(tracked)),
               Effect.andThen(
                 event.type === "provider_session.updated"
                   ? persistProviderSessionUpdate(entry, event)
