@@ -9,7 +9,7 @@ import {
   type RoutineRunShape,
 } from "@goat/client-runtime/scheduledTasks";
 import type { ChannelInputSnapshot, EnvironmentId, ThreadId } from "@goat/contracts";
-import { useContext, useRef, useState } from "react";
+import { useContext, useState } from "react";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { channelEnvironment } from "~/state/channels";
 import { useEnvironmentQuery } from "~/state/query";
@@ -54,8 +54,9 @@ export function GoatBotRoutineRuns(props: {
 }) {
   const timeOptions = useRunTimeOptions();
   const [openId, setOpenId] = useRunPopoverOpen(props.docked);
-  // Show in chat focuses the reply itself, so its close gives no focus back to the dot.
-  const toChat = useRef(false);
+  // Show in chat focuses the reply itself, so that run's close gives no focus back to its dot. A
+  // boolean keeps Base UI's own rule of returning focus only when it is still in the popup.
+  const [toChatId, setToChatId] = useState<RoutineRunDot["firingId"] | null>(null);
   const dots = botRoutineRuns(props.task, RUNS_SHOWN, (iso) => routineRunTime(iso, timeOptions));
   if (dots.length === 0) return null;
   // A run pushed out of the seven closes its popover.
@@ -69,7 +70,7 @@ export function GoatBotRoutineRuns(props: {
     show === undefined
       ? undefined
       : () => {
-          toChat.current = true;
+          setToChatId(open?.firingId ?? null);
           setOpenId(null);
           show();
         };
@@ -79,11 +80,12 @@ export function GoatBotRoutineRuns(props: {
         <Popover
           key={dot.firingId}
           open={dot === open}
-          onOpenChange={(next) =>
+          onOpenChange={(next) => {
+            if (next) setToChatId(null);
             setOpenId((current) =>
               next ? dot.firingId : current === dot.firingId ? null : current,
-            )
-          }
+            );
+          }}
         >
           <PopoverTrigger
             render={
@@ -95,15 +97,7 @@ export function GoatBotRoutineRuns(props: {
           >
             <RunShape shape={dot.shape} />
           </PopoverTrigger>
-          <PopoverPopup
-            width="md"
-            align="start"
-            finalFocus={() => {
-              const returnFocus = !toChat.current;
-              toChat.current = false;
-              return returnFocus;
-            }}
-          >
+          <PopoverPopup width="md" align="start" finalFocus={dot.firingId !== toChatId}>
             <RunDetails
               environmentId={props.environmentId}
               dot={dot}
