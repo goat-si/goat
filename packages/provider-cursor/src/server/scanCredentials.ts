@@ -16,7 +16,7 @@ export interface ScanInstance {
 }
 
 /** Why the scan leaves an instance out, as a person reads it. */
-export const SCAN_EXCLUSIONS = {
+const SCAN_EXCLUSIONS = {
   settings: "its settings cannot be read",
   backend: "its Cursor backend is not Cursor's",
   endpoint: "its usage endpoint is not Cursor's",
