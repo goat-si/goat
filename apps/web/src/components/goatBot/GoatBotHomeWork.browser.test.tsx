@@ -203,6 +203,47 @@ it("says Unread on the control that opens an unread task", async () => {
     .toBeVisible();
 });
 
+it("a row names its pull requests and their state on the control that opens it", async () => {
+  const pullRequests = [
+    { repository: "goat-si/goat", number: 42, state: "open", watching: false },
+    { repository: "goat-si/goat", number: 41, state: "merged", watching: false },
+    { repository: "goat-si/goat", number: 40, watching: false },
+  ];
+  const rows = setup([
+    {
+      ...taskRow("task-a", "Ship chips", "running", "2026-11-09T03:00:00.000Z"),
+      pullRequests,
+      pullRequestsOmitted: 2,
+    } as Row,
+    {
+      ...taskRow("task-b", "Read state", "running", "2026-11-09T02:00:00.000Z"),
+      pullRequests: [{ repository: "goat-si/goat", number: 7, watching: false }],
+    } as Row,
+    // An older server sends no pull requests.
+    taskRow("task-c", "Older server", "running", "2026-11-09T01:00:00.000Z"),
+  ]);
+  await using screen = await render(view(rows));
+  await expect
+    .element(
+      screen.getByRole("button", {
+        name: /^Ship chips.*Pull request goat-si\/goat#42, open.*Pull request goat-si\/goat#41, merged.*\+3 more/,
+      }),
+    )
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: /goat-si\/goat#40/ }).query()).toBeNull();
+  await expect
+    .element(
+      screen.getByRole("button", {
+        name: /^Read state.*Pull request goat-si\/goat#7, state unknown/,
+      }),
+    )
+    .toBeVisible();
+  expect(screen.getByText("State unknown").query()).toBeNull();
+  const older = screen.getByRole("button", { name: /^Older server/ });
+  await expect.element(older).toBeVisible();
+  expect(older.element().textContent).not.toMatch(/#|more/);
+});
+
 it("ends a long list with a centred Show more row that shows the rest", async () => {
   const rows = setup(
     Array.from({ length: 7 }, (_, index) =>
