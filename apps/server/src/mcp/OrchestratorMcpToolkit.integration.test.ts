@@ -1243,7 +1243,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
           finished.subagents.find((task) => task.id === delegated.taskId)?.completionWake,
         ).toBe("always");
         const completions = yield* Ref.get(offers);
-        expect(new Set(completions.map((o) => o.delegatedCompletion?.messageId)).size).toBe(1);
+        const ids = new Set(completions.map((o) => o.delegatedCompletion?.messageId ?? "none"));
         const delivery = finished.runs.flatMap((run) =>
           run.delegatedCompletion?.delivery === null ||
           run.delegatedCompletion?.delivery === undefined
@@ -1252,7 +1252,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         );
         expect(delivery).toHaveLength(1);
         expect(delivery[0]?.taskIds).toEqual([delegated.taskId]);
-        expect(completions[0]?.delegatedCompletion?.messageId).toBe(delivery[0]?.messageId);
+        expect([...ids]).toEqual([delivery[0]?.messageId]);
       }).pipe(Effect.provide(layer));
     }),
   ),
