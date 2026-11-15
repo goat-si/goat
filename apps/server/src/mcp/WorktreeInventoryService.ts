@@ -33,6 +33,7 @@ import {
 } from "../workspace/workspaceLease.ts";
 import {
   isFilesystemRoot,
+  isManagedWorktreeLocation,
   makeIsManagedWorktreePath,
   managedWorktreesDirectories,
 } from "../worktreesDirectory.ts";
@@ -360,7 +361,9 @@ const make = Effect.gen(function* () {
             branch: record.branch,
             main: record === first,
             missing,
-            managed: context.managedRoots.some((root) => root !== key && within(root, key)),
+            managed: context.managedRoots.some((root) =>
+              isManagedWorktreeLocation(root, key, path),
+            ),
             threads: shells.map((thread) => ({
               threadId: thread.id,
               title: thread.title,
@@ -789,6 +792,11 @@ const make = Effect.gen(function* () {
         requested +
           ` is not a git worktree of a GOAT project. ${goatCallText("worktree.inventory")} lists them.`,
       );
+    if (input.threadId !== undefined && !target.entry.managed)
+      return yield* failure(
+        "invalid_request",
+        `Refused to remove ${target.entry.path}: it is outside GOAT's worktrees folder, so thread ${input.threadId} pointing at it does not make it GOAT's to remove.`,
+      );
     // A symlink to a worktree resolves to it; deleting through an alias would
     // remove a checkout the caller did not name. A path must be the worktree's
     // own; a threadId may also use the path that thread recorded, even when
@@ -819,8 +827,8 @@ const make = Effect.gen(function* () {
     );
     if (unfinished !== undefined)
       return "thread " + unfinished.threadId + " (" + unfinished.title + ") has not finished a run";
-    if (facts.entry.threads.length === 0 && !facts.entry.managed)
-      return "it is bound to no thread and sits outside GOAT's worktrees folder";
+    // A thread can point at a checkout GOAT never made, such as an imported session's own worktree.
+    if (!facts.entry.managed) return "it is outside GOAT's worktrees folder";
     return null;
   };
 

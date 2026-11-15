@@ -62,8 +62,9 @@ export interface FakeProviderScenario {
   /** Check out the pull request head from its pull ref: fast-forward only unless forced. */
   syncCheckoutWithPullHead?: boolean;
   /**
-   * The host's `headBranchProbe`. By default the fake probes only bare branch names, a hundred
-   * at a time, so tests see GitManager defer to the hook; null leaves the probe to GitManager.
+   * The host's `headBranchProbe`. By default the fake probes bare branch names, a hundred at a
+   * time, or only the owner-qualified default branch, as GitHub does, so tests see GitManager
+   * defer to the hook; null leaves the probe to GitManager.
    */
   headBranchProbe?: SourceControlProvider["Service"]["headBranchProbe"] | null;
 }
@@ -315,8 +316,10 @@ export function createFakeSourceControlProvider(scenario: FakeProviderScenario =
       : {
           headBranchProbe:
             scenario.headBranchProbe ??
-            (({ headSelectors }: { readonly headSelectors: ReadonlyArray<string> }) => ({
-              headSelectors: headSelectors.filter((selector) => !selector.includes(":")),
+            (({ headSelectors, defaultBranchHeadSelector }) => ({
+              headSelectors: defaultBranchHeadSelector
+                ? [defaultBranchHeadSelector]
+                : headSelectors.filter((selector) => !selector.includes(":")),
               limit: 100,
             })),
         };

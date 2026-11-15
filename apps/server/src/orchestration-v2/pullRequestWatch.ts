@@ -27,7 +27,8 @@ export type PullRequestWatchChange =
   | { readonly kind: "checks-awaiting-approval"; readonly checks: ReadonlyArray<PullRequestCheck> }
   | { readonly kind: "remarks"; readonly remarks: ReadonlyArray<PullRequestComment> }
   | { readonly kind: "no-checks"; readonly minutes: number }
-  | { readonly kind: "conflicting" };
+  | { readonly kind: "conflicting" }
+  | { readonly kind: "merge-queue-removed"; readonly reason: string | null };
 
 export interface PullRequestWatchReport {
   /** What wakes the agent now. Empty means no wake. */
@@ -85,6 +86,7 @@ export function evaluatePullRequestWatch(
     | "viewer"
     | "author"
     | "workflowApprovalsRequired"
+    | "mergeQueueRemoval"
   >,
   remarks: ReadonlyArray<PullRequestComment> | null,
   context: PullRequestWatchContext,
@@ -242,6 +244,24 @@ export function evaluatePullRequestWatch(
   const conflicting =
     detail.mergeability === "unknown" ? toldConflict : detail.mergeability === "conflicting";
 
+  // The queue's checks run on a commit of its own, so its head can stay green after the queue
+  // drops it. After the first read, IDs avoid comparing the server clock with the host clock.
+  // The initial read uses whole seconds to exclude historical removals.
+  const removal = detail.mergeQueueRemoval;
+  if (
+    removal !== undefined &&
+    // Merging also records a removal, up to a second before the pull request reads as merged.
+    removal.reason !== "merged" &&
+    removal.id !== watch.mergeQueueRemovalId &&
+    (watch.mergeQueueRemovalId !== undefined ||
+      Date.parse(removal.removedAt) >= Math.floor(Date.parse(watch.startedAt) / 1000) * 1000)
+  ) {
+    // Queue removals mostly follow failed queue checks, so they share that wake mode.
+    sort({ kind: "merge-queue-removed", reason: removal.reason }, policy.checksFailed);
+  }
+  // Null records an empty baseline; historical IDs are saved without waking the watch.
+  const mergeQueueRemovalId = removal?.id ?? watch.mergeQueueRemovalId ?? null;
+
   const commentsOnly = changes.length > 0 && changes.every((change) => change.kind === "remarks");
   const progress = headMoved || [...changes, ...held].some((change) => change.kind !== "remarks");
   const wakes = (progress ? 0 : watch.wakes) + (commentsOnly ? 1 : 0);
@@ -260,6 +280,7 @@ export function evaluatePullRequestWatch(
       remarksThrough,
       remarkIds,
       conflicting,
+      mergeQueueRemovalId,
       wakes,
       ...(watch.automatic === true ? { automatic: true } : {}),
       checksAwaitedSince,
@@ -324,6 +345,10 @@ function changeLines(
       ];
     case "conflicting":
       return [`- The branch now conflicts with ${context.baseBranch}.`];
+    case "merge-queue-removed":
+      return [
+        `- It was removed from the merge queue without merging${change.reason === null ? "" : `: ${change.reason}`}.`,
+      ];
   }
 }
 
@@ -334,6 +359,7 @@ const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   remarks: "new comments",
   "no-checks": "no checks reported",
   conflicting: "merge conflict",
+  "merge-queue-removed": "removed from merge queue",
 };
 
 /**
@@ -364,6 +390,8 @@ function heldFragment(
       return `no checks reported${context.commit} after ${change.minutes} minutes`;
     case "conflicting":
       return `conflicts with ${context.baseBranch}`;
+    case "merge-queue-removed":
+      return `removed from the merge queue without merging${change.reason === null ? "" : `: ${change.reason}`}`;
   }
 }
 
@@ -378,6 +406,7 @@ const HELD_KINDS = [
   ["checks", /^(checks failed|all \d+ (required )?checks? passed|no checks reported)/],
   ["approval", /^checks await approval/],
   ["conflict", /^conflicts with /],
+  ["queue", /^removed from the merge queue/],
   ["comments", /^\d+ new comments?[,:]/],
 ] as const;
 
@@ -518,7 +547,10 @@ function pullRequestWatchMessage(input: {
       : `Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and GOAT wakes you on the next change. When you hand the work back to the user, call ${goatCallText("pull_request.unwatch")} first so the thread returns to their inbox.`,
   ].join("\n");
   const failed = changes.some(
-    (change) => change.kind === "checks-failed" || change.kind === "conflicting",
+    (change) =>
+      change.kind === "checks-failed" ||
+      change.kind === "conflicting" ||
+      change.kind === "merge-queue-removed",
   );
   const summary = changes.map((change) => SUMMARY[change.kind]);
   if (exhausted) summary.push("stopped watching");

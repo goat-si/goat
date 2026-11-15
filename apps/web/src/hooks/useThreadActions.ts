@@ -492,21 +492,21 @@ export function useThreadActions() {
       survivingThreads,
       threadRef.threadId,
     );
-    // A shell that leaves idle subagent children out cannot prove nobody else uses the worktree,
-    // so the server's list decides. A failed read keeps the worktree.
-    if (orphanedWorktreePath !== null && environmentConfig?.shellThreadFamilies === true) {
+    // The server knows who else uses the worktree, which a shell missing idle subagents cannot, and
+    // whether GOAT made it. A failed read, or an older server that cannot say, keeps the worktree.
+    if (orphanedWorktreePath !== null) {
       const occupants = await loadWorktreeThreadIds({
         environmentId: threadRef.environmentId,
         input: { worktreePath: orphanedWorktreePath },
       });
       if (
         occupants._tag !== "Success" ||
+        occupants.value.managed !== true ||
         occupants.value.threadIds.some(
           (threadId) => threadId !== threadRef.threadId && deletedIds?.has(threadId) !== true,
         )
-      ) {
+      )
         orphanedWorktreePath = null;
-      }
     }
     const displayWorktreePath = orphanedWorktreePath
       ? formatWorktreePathForDisplay(orphanedWorktreePath)

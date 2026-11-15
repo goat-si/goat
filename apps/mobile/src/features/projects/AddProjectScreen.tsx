@@ -1147,12 +1147,11 @@ export function AddProjectDestinationScreen(props: {
       return;
     }
     if (environment.supportsCloneTracking) {
-      const projectId = ProjectId.make(uuidv4());
       const title = inferProjectTitleFromPath(resolved.path);
       const startResult = await startProjectClone({
         environmentId: environment.environmentId,
         input: {
-          projectId,
+          projectId: ProjectId.make(uuidv4()),
           title,
           createdAt: new Date().toISOString(),
           remoteUrl,
@@ -1162,6 +1161,7 @@ export function AddProjectDestinationScreen(props: {
       if (AsyncResult.isFailure(startResult)) {
         setError(errorMessage(Cause.squash(startResult.cause)));
       } else {
+        const { projectId } = startResult.value;
         // Wait for the create event; the client store otherwise falls back to the project picker and loses clone controls.
         const project = await waitForProject(
           { environmentId: environment.environmentId, projectId },

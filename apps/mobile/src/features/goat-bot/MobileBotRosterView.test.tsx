@@ -223,8 +223,12 @@ it("lists only bots: the main bot as a tile with its latest message, and no task
   expect(container.textContent).toContain("Also in Slack");
   expect(container.textContent).not.toContain("Show more");
   expect(container.querySelector("button:disabled")?.textContent).toContain("Coming soon");
-  const tile = container.querySelector('[aria-label="GOAT Bot, unread"]') as HTMLButtonElement;
-  await act(async () => tile.click());
+  const tile = [...container.querySelectorAll("button")].find((element) =>
+    element.getAttribute("aria-label")?.startsWith("GOAT Bot"),
+  );
+  // As on a member row, the spoken name ends with the line the tile shows.
+  expect(tile?.getAttribute("aria-label")).toBe("GOAT Bot, unread, Latest reply");
+  await act(async () => tile?.click());
   expect(open).toHaveBeenCalledWith({ kind: "main", profile: null });
 });
 
