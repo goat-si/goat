@@ -95,9 +95,9 @@ export const goatMigrationIdsMove = <E>(
 };
 
 /**
- * Upstream migrations below a recorded GOAT migration that the ledger does not record under their
- * own id and name. GOAT's run after upstream's, so only an id shift leaves these, and the migrator,
- * which runs only ids above the highest recorded, never would.
+ * Upstream migrations whose ids the ledger does not record, below a recorded GOAT migration. GOAT's
+ * run after upstream's, so only an id shift leaves these, and the migrator, which runs only ids
+ * above the highest recorded, never would. An id recorded under another name is another history's.
  */
 export const displacedUpstreamMigrations = <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
@@ -110,10 +110,9 @@ export const displacedUpstreamMigrations = <E>(
       GOAT_MIGRATION_NAMES.has(row.name) ? (currentIds.get(row.name) ?? 0) : 0,
     ),
   );
-  const recorded = new Set(history.map((row) => `${row.migration_id}_${row.name}`));
+  const recordedIds = new Set(history.map((row) => row.migration_id));
   return entries.filter(
-    ([id, name]) =>
-      !GOAT_MIGRATION_NAMES.has(name) && id < highestGoat && !recorded.has(`${id}_${name}`),
+    ([id, name]) => !GOAT_MIGRATION_NAMES.has(name) && id < highestGoat && !recordedIds.has(id),
   );
 };
 
@@ -198,13 +197,6 @@ const runNextDisplaced = Effect.fn("reconcileGoatMigrationIds.runNextDisplaced")
   const [next] = displacedUpstreamMigrations(entries, history);
   if (next === undefined) return undefined;
   const [id, name, migration] = next;
-  const recorded = history.find((row) => row.migration_id === id);
-  if (recorded !== undefined) {
-    return yield* new Migrator.MigrationError({
-      kind: "BadState",
-      message: `Migration ${id} is recorded as ${recorded.name}, expected ${name}.`,
-    });
-  }
   yield* migration.pipe(
     Effect.mapError(
       (cause) =>
@@ -236,17 +228,30 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
     const id = GOAT_MIGRATION_NAMES.has(row.name) ? currentIds.get(row.name) : undefined;
     return id === undefined ? [] : [{ migration_id: id, name: row.name }];
   });
-  const upstreamIds = new Set(
-    history.filter((row) => !GOAT_MIGRATION_NAMES.has(row.name)).map((row) => row.migration_id),
+  const upstreamRows = new Map(
+    history
+      .filter((row) => !GOAT_MIGRATION_NAMES.has(row.name))
+      .map((row) => [row.migration_id, row.name]),
   );
   const unknownGoat = history.some(
     (row) => GOAT_MIGRATION_NAMES.has(row.name) && !currentIds.has(row.name),
   );
-  if (unknownGoat || goatRows.some((row) => upstreamIds.has(row.migration_id))) {
+  if (unknownGoat || goatRows.some((row) => upstreamRows.has(row.migration_id))) {
     return yield* new Migrator.MigrationError({
       kind: "BadState",
       message: "Cannot move GOAT migrations onto ids another migration recorded.",
     });
+  }
+  const highestMoved = Math.max(0, ...goatRows.map((row) => row.migration_id));
+  for (const [id, name] of entries) {
+    const recorded = upstreamRows.get(id);
+    if (GOAT_MIGRATION_NAMES.has(name) || id > highestMoved || recorded === undefined) continue;
+    if (recorded !== name) {
+      return yield* new Migrator.MigrationError({
+        kind: "BadState",
+        message: `Migration ${id} is recorded as ${recorded}, expected ${name}.`,
+      });
+    }
   }
   yield* sql`DELETE FROM effect_sql_migrations WHERE name IN ${sql.in(goatRows.map((row) => row.name))}`;
   for (const row of goatRows) {
