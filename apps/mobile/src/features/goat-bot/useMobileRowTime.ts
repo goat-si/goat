@@ -1,8 +1,6 @@
 import { minuteTick } from "@goat/client-runtime/clock";
 import { useSyncExternalStore } from "react";
 
-import { minuteTickToEpochMs } from "../../lib/clock";
-
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -35,9 +33,10 @@ export function mobileRowTimeSpoken(time: string): string {
 /**
  * A row's time. It follows the shared minute clock only while `ticking` (Home shown, the app
  * active), so a hidden Home or a backgrounded app keeps no row awake; the snapshot is the row's own
- * text, so a row re-renders only when that text changes, and on resume it reads the time afresh.
+ * text, so a row re-renders only when that text changes. It reads the wall clock, not the clock's
+ * cached minute, which another subscriber can hold stale after the app was suspended.
  */
 export function useMobileRowTime(timestamp: string, ticking: boolean): string {
-  const read = () => mobileRowTime(timestamp, minuteTickToEpochMs(minuteTick.getSnapshot()));
+  const read = () => mobileRowTime(timestamp, Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS);
   return useSyncExternalStore(ticking ? minuteTick.subscribe : notTicking, read, read);
 }

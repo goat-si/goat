@@ -24,7 +24,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { useNowMinuteMs } from "../../lib/clock";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -415,12 +414,10 @@ export function MobileBotWork(props: {
     onAcknowledged: (taskId, through, scope, sent) =>
       actions.marked(taskId, scope, sent, history.markRead(scope, taskId, through)),
   });
-  const now = useNowMinuteMs();
   const routineThreadId = member?.threadId ?? home.botRef?.threadId ?? null;
+  // Only the order matters here, and it does not depend on the time; the card reads its own clock.
   const boundRoutines =
-    routineThreadId === null
-      ? []
-      : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, now);
+    routineThreadId === null ? [] : botRoutineRows(routines.data?.tasks ?? [], routineThreadId, 0);
   if (
     routineFocus &&
     !showAllRoutines &&
@@ -609,7 +606,7 @@ export function MobileBotWork(props: {
           ...mobileBotTaskListItems({
             botName,
             chips,
-            ticking: open && (props.seen ?? props.visible),
+            ticking: open && (props.seen ?? props.visible) && peekEntry === null,
             work: environmentId
               ? botHomeWork(homeRows, children.data?.groups ?? [], environmentId, homeRemote, chips)
               : { running: [], waiting: [], finished: [] },
@@ -692,7 +689,6 @@ export function MobileBotWork(props: {
           tasks={routines.data?.tasks ?? null}
           error={Boolean(routines.error)}
           onRetry={routines.refresh}
-          rows={boundRoutines}
           showAll={showAllRoutines}
           onShowAllChange={setShowAllRoutines}
           focusRoutineId={routineFocus?.id ?? null}

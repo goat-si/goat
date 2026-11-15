@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
+import { botRoutineRows } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
+import { useNowMinuteMs } from "../../lib/clock";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
@@ -28,7 +29,6 @@ export function MobileBotRoutines(props: {
   readonly tasks: ReadonlyArray<ScheduledTask> | null;
   readonly error: boolean;
   readonly onRetry: () => void;
-  readonly rows: ReadonlyArray<BotRoutineRow>;
   readonly showAll: boolean;
   readonly onShowAllChange: (showAll: boolean) => void;
   /** A routine the home opened on; its row reports where it sits so the list can scroll to it. */
@@ -41,6 +41,10 @@ export function MobileBotRoutines(props: {
   readonly onCheckInDraftChange: MobileCheckInDraftUpdate;
 }) {
   const { environmentId, botName } = props;
+  // The card keeps its own clock for "Next run in …", so a minute re-renders it alone, not Home.
+  const now = useNowMinuteMs();
+  const rows =
+    props.tasks && props.botThreadId ? botRoutineRows(props.tasks, props.botThreadId, now) : [];
   // Asking the bot for a routine needs no list, so the entry point never waits on it.
   const newRoutine = props.onNewRoutine ? (
     <Pressable
@@ -77,8 +81,8 @@ export function MobileBotRoutines(props: {
         </Pressable>
       ) : !props.tasks ? (
         <Text className="text-foreground-muted">Loading routines…</Text>
-      ) : props.rows.length && environmentId ? (
-        (props.showAll ? props.rows : props.rows.slice(0, 5)).map((routine) => (
+      ) : rows.length && environmentId ? (
+        (props.showAll ? rows : rows.slice(0, 5)).map((routine) => (
           <MobileRoutineRow
             key={routine.id}
             environmentId={environmentId}
@@ -100,7 +104,7 @@ export function MobileBotRoutines(props: {
           }
         />
       )}
-      {props.rows.length > 5 ? (
+      {rows.length > 5 ? (
         <Pressable
           accessibilityRole="button"
           onPress={() => props.onShowAllChange(!props.showAll)}
