@@ -3905,6 +3905,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             bufferedTaskNotificationIds.has(taskId),
           );
           scheduledWakeupsByNativeThread.delete(nativeThreadId);
+          scheduleWakeupCalls.clear();
           possibleEarlyWakeNativeThreads.delete(nativeThreadId);
           yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
           yield* clearNativeThreadTaskIdSet(
@@ -6119,6 +6120,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     // turn on a live process leaves it pending. Process exits null the query first.
                     if (input.status !== "failed" || (yield* Ref.get(queryContext)) === null) {
                       scheduledWakeupsByNativeThread.delete(nativeThreadId);
+                      scheduleWakeupCalls.clear();
                     }
                     yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
                     yield* clearNativeThreadTaskIdSet(
