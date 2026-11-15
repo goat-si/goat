@@ -1,3 +1,4 @@
+import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
@@ -453,6 +454,10 @@ export interface OrchestratorV2Shape
     options: ProjectionTimelinePageOptions,
   ) => Effect.Effect<ProjectionTimelinePage, OrchestratorProjectionError>;
   readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, OrchestratorV2Error>;
+  readonly getTranscriptByteFloor: (
+    threadId: ThreadId,
+    limit: number,
+  ) => Effect.Effect<number, OrchestratorV2Error>;
   readonly getTurnItem: (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
@@ -523,6 +528,12 @@ export interface OrchestratorV2Shape
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, OrchestratorV2Error>;
+  readonly getThreadNewestRun: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Effect.Success<ReturnType<ProjectionStoreV2["Service"]["getThreadNewestRun"]>>,
+    OrchestratorV2Error
+  >;
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
   ) => Effect.Effect<ThreadId | null, OrchestratorV2Error>;
@@ -566,91 +577,6 @@ export function threadHasUnfinishedWork(records: {
         run.status !== "rolled_back",
     ) || records.runtimeRequests.some((request) => request.status === "pending")
   );
-}
-
-function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
-  switch (command.type) {
-    case "thread.create":
-    case "thread.archive":
-    case "thread.unarchive":
-    case "thread.promote":
-    case "thread.delete":
-    case "thread.guest-share.open":
-    case "delegated_task.review-continue":
-    case "thread.guest-share.redeem":
-    case "thread.guest-share.close":
-    case "thread.guest-message.submit":
-    case "thread.guest-message.dismiss":
-    case "thread.settle":
-    case "thread.auto-settle":
-    case "thread.unsettle":
-    case "thread.snooze":
-    case "thread.unsnooze":
-    case "thread.auto-settle.set":
-    case "thread.pin":
-    case "thread.unpin":
-    case "thread.pin.reorder":
-    case "thread.active.reorder":
-    case "thread.visit":
-    case "thread.mark-unread":
-    case "thread.metadata.update":
-    case "thread.pull-request.link":
-    case "thread.pull-request.unlink":
-    case "thread.pull-request-link.sync":
-    case "thread.pull-request.watch":
-    case "thread.pull-request-watch.sync":
-    case "thread.pull-request.sync":
-    case "thread.title.regeneration.complete":
-    case "thread.project.adopt-folder":
-    case "thread.runtime-mode.set":
-    case "thread.interaction-mode.set":
-    case "thread.model-selection.set":
-    case "provider-session.detach":
-    case "message.dispatch":
-    case "notification.delivery.accept":
-    case "prepared-run.release":
-    case "prepared-run.progress":
-    case "prepared-run.fail":
-    case "prepared-run.retry":
-    case "subagent.stop":
-    case "run.interrupt":
-    case "queued-message.promote-to-steer":
-    case "queued-run.start":
-    case "queue.resume":
-    case "queued-run.reorder":
-    case "queued-run.cancel":
-    case "queued-run.edit":
-    case "runtime-request.respond":
-    case "runtime-request.delivery.fail":
-    case "thread.user-input.dismiss":
-    case "checkpoint.rollback":
-    case "checkpoint.rollback.fail":
-    case "thread.background-work.settle":
-    case "thread.interrupt.unresponsive":
-    case "run.start-hold.update":
-    case "thread.stop":
-    case "provider.switch":
-      return command.threadId;
-    case "delegated_task.request":
-    case "delegated_task.remote.register":
-    case "delegated_task.remote.progress":
-    case "delegated_task.remote.result":
-    case "delegated_task.wake-policy":
-    case "delegated_task.review-ledger.append":
-    case "delegated_task.completion-delivery.acknowledge":
-    case "delegated_task.completion-delivery.dispose":
-    case "thread.created.record":
-      return command.parentThreadId;
-    case "handoff.create":
-    case "handoff.transition":
-    case "secret_request.record":
-    case "thread.notice.record":
-    case "channel.timeline.record":
-      return command.threadId;
-    case "thread.fork":
-    case "thread.merge_back":
-      return command.targetThreadId;
-  }
 }
 
 function pendingThreadTitleGenerationEffect(
@@ -11686,7 +11612,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Checkpoint ${command.checkpointId} was not found.`,
         });
       }
-      if (targetCheckpoint.status !== "ready") {
+      // Missing snapshots support conversation rewind only.
+      if (
+        targetCheckpoint.status !== "ready" &&
+        !(command.restoreFiles === false && targetCheckpoint.status === "missing")
+      ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -11739,7 +11669,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
         const targetProviderTurn =
           targetRun === undefined ? undefined : providerTurnForRun(projection, targetRun);
-        if (targetRun === undefined || targetProviderTurn === undefined) {
+        if (
+          targetRun === undefined ||
+          targetRun.status === "rolled_back" ||
+          targetProviderTurn === undefined
+        ) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
@@ -13736,6 +13670,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         .getMessageCount(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
     }),
+    getTranscriptByteFloor: Effect.fn("OrchestratorV2.getTranscriptByteFloor")(
+      function (threadId, limit) {
+        return projectionStore
+          .getTranscriptByteFloor(threadId, limit)
+          .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      },
+    ),
     getTurnItem: Effect.fn("OrchestratorV2.getTurnItem")(function (input) {
       return projectionStore
         .getTurnItem(input)
@@ -13829,6 +13770,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId) {
       return projectionStore
         .getThreadShell(threadId)
+        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+    }),
+    getThreadNewestRun: Effect.fn("OrchestratorV2.getThreadNewestRun")(function (threadId) {
+      return projectionStore
+        .getThreadNewestRun(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
     }),
     findGuestShareThreadId: Effect.fn("OrchestratorV2.findGuestShareThreadId")(function (shareId) {

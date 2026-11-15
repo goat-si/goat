@@ -365,3 +365,46 @@ it.effect("refuses local checkpoint replication without orchestration:operate", 
     expect(requested).toEqual(["orchestration:operate"]);
   }),
 );
+
+// An older host rejects afterPosition -1 and does not know beforePosition.
+it.effect("forwards a host read in a form older hosts accept", () =>
+  runService(
+    {
+      interactionMode: "default",
+      // Only the forwarded arguments matter, so the reply need not decode.
+      hostCall: () => Effect.succeed({}),
+    },
+    (service) =>
+      Effect.gen(function* () {
+        const remoteThreadId = ThreadId.make("remote-1");
+        yield* Effect.result(
+          service.readThread(scope, {
+            host: "box",
+            threadId: remoteThreadId,
+            afterPosition: -1,
+          } as never),
+        );
+        yield* Effect.result(
+          service.readThread(scope, {
+            host: "box",
+            threadId: remoteThreadId,
+            beforePosition: 7,
+          } as never),
+        );
+      }),
+  ).pipe(
+    Effect.tap(({ calls }) =>
+      Effect.sync(() => {
+        expect(
+          calls.map((call) => ({
+            arguments: call.arguments,
+            optionalArguments: call.optionalArguments,
+          })),
+        ).toEqual([
+          { arguments: { threadId: "remote-1" }, optionalArguments: undefined },
+          { arguments: { threadId: "remote-1" }, optionalArguments: { beforePosition: 7 } },
+        ]);
+      }),
+    ),
+  ),
+);

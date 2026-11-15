@@ -836,3 +836,106 @@ describe("LaunchWatchService follower contact failures", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+describe("LaunchWatchService a queued message removed before it started", () => {
+  it.effect.each([
+    ["names the newest run", run3],
+    ["presents the run that ran", run2],
+  ] as const)(
+    "tells the launcher once that a person's queued message was removed while an earlier run went on, when the shell %s",
+    ([, shellRun]) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const reported = yield* reportsQueue(world);
+        const baseDir = yield* tempDir;
+        const release = yield* Deferred.make<void>();
+        world.waitHandler = (input) =>
+          input.runId === run2
+            ? Deferred.await(release).pipe(Effect.andThen(finished(run2)))
+            : input.runId === run3
+              ? cancelled(run3)
+              : finished(input.runId ?? run1);
+        addRun(world, run1, 1);
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* service.watchExternal(external());
+            expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+            yield* Queue.take(reported);
+            expect(yield* Queue.take(world.idleWaits)).toBe(30_000);
+            // run-2, the thread's own, is still going when a look finds it.
+            addRun(world, run2, 2, { requestedAt: 20_000, completedAt: null });
+            yield* look(world);
+            expect(yield* Queue.take(world.waitStarted)).toBe(run2);
+            // A person's queued message is removed before it starts, with no look in between;
+            // then run-2 ends, going straight on to it, so its own end is not reported.
+            addRun(world, run3, 3, {
+              requestedAt: 25_000,
+              completedAt: 26_000,
+              status: "cancelled",
+              startedAt: null,
+              cause: "queued_cancelled",
+              trigger: "message:person-1",
+            });
+            addRun(world, run2, 2, { requestedAt: 20_000, completedAt: 30_000 });
+            world.shells.set(target, { ...world.shells.get(target), latestRunId: shellRun });
+            yield* Deferred.succeed(release, undefined);
+            yield* Queue.take(world.idleWaits);
+            expect(reportedRuns(world)).toEqual([run1, run3]);
+            // Later looks tell it nothing more.
+            yield* look(world);
+            yield* Queue.take(world.idleWaits);
+            expect(yield* service.find(keyOf())).toMatchObject({
+              pendingRuns: [],
+              reportedRuns: [run1, run3],
+              skippedRuns: [run2],
+            });
+          }),
+        );
+        expect(reportedRuns(world)).toEqual([run1, run3]);
+        expect(world.webhookReports.map(({ report }) => [report.runId, report.status])).toEqual([
+          [run1, "completed"],
+          [run3, "cancelled"],
+        ]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("LaunchWatchService an idle look at a closed thread", () => {
+  it.effect.each(["archivedAt", "deletedAt"] as const)(
+    "ends the watch without a report once a look finds the thread's %s set",
+    (closed) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const reported = yield* reportsQueue(world);
+        const released = yield* Queue.unbounded<void>();
+        world.webhookRelease = Queue.offer(released, undefined).pipe(Effect.asVoid);
+        const baseDir = yield* tempDir;
+        const inline = {
+          type: "inline" as const,
+          url: "https://bot.example/hook",
+          secretName: "s-closed",
+        };
+        addRun(world, run1, 1);
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* service.watchExternal({
+              ...external(),
+              route: { notifyWebhook: true, webhookTarget: inline },
+            });
+            yield* launchAndFinish(world, reported);
+            addRun(world, run2, 2);
+            world.shells.set(target, {
+              ...world.shells.get(target),
+              [closed]: DateTime.makeUnsafe(0) as never,
+            });
+            yield* look(world);
+            // Deleting the watch releases its webhook secret.
+            yield* Queue.take(released);
+            expect(yield* service.find(keyOf())).toBeNull();
+          }),
+        );
+        expect(reportedRuns(world)).toEqual([run1]);
+        expect(waitedRuns(world)).toEqual([run1]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
