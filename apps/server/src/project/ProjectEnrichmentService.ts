@@ -59,6 +59,7 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly awaitRepositoryIdentity: (
       workspaceRoot: string,
     ) => Effect.Effect<RepositoryIdentity | null>;
+    readonly refreshRepositoryIdentity: (workspaceRoot: string) => Effect.Effect<void>;
     readonly invalidate: (workspaceRoots: Iterable<string>) => Effect.Effect<void>;
     readonly subscribeChanges: Effect.Effect<
       PubSub.Subscription<ProjectEnrichmentChange>,
@@ -355,11 +356,29 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     );
   });
 
+  const refreshRepositoryIdentity: ProjectEnrichmentService["Service"]["refreshRepositoryIdentity"] =
+    Effect.fn("ProjectEnrichmentService.refreshRepositoryIdentity")(function* (workspaceRoot) {
+      const cached = yield* Cache.get(repositoryIdentityCache, workspaceRoot);
+      if (Exit.isFailure(cached) || cached.value !== null) return;
+      const result = yield* Effect.exit(
+        repositoryIdentityResolver.resolve(workspaceRoot, { refresh: true }),
+      );
+      if (Exit.isFailure(result)) {
+        yield* logFailure(workspaceRoot, "repositoryIdentity", result);
+        return;
+      }
+      if (result.value === null) return;
+      lookupsInFlight.delete(workspaceRoot);
+      yield* Cache.invalidate(repositoryIdentityCache, workspaceRoot);
+      yield* resolveRepositoryIdentity(workspaceRoot);
+    });
+
   return ProjectEnrichmentService.of({
     peek,
     request,
     getAvailable,
     awaitRepositoryIdentity,
+    refreshRepositoryIdentity,
     invalidate,
     subscribeChanges: PubSub.subscribe(changes),
   });

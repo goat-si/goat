@@ -1,3 +1,4 @@
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 
 import {
@@ -75,7 +76,7 @@ export const layerRunExecutionTest = RunExecutionService.layer.pipe(
       Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
       layerTurnItemPositionsTest,
       mockEventSink({}),
-      IdAllocator.layer,
+      Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
       Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
         ingestNormalized: () => Effect.succeed([]),
       }),
@@ -90,6 +91,7 @@ export function captureRootRunTermination(input: {
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  readonly hasWorkspaceMoved?: () => Effect.Effect<boolean, never>;
   readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
   readonly seedOpenSubagent?: boolean;
   readonly events?: (
@@ -185,7 +187,7 @@ export function captureRootRunTermination(input: {
                 return { committed: true, storedEvents: [] };
               }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: input.ingestNormalized ?? (() => Effect.succeed([])),
           }),
@@ -271,6 +273,9 @@ export function captureRootRunTermination(input: {
         attemptId: ids.attemptId,
         providerTurnOrdinal: 1,
         shouldFinalizeRun: input.shouldFinalizeRun,
+        ...(input.hasWorkspaceMoved === undefined
+          ? {}
+          : { hasWorkspaceMoved: input.hasWorkspaceMoved }),
         ...(input.shouldStartProviderTurn === undefined
           ? {}
           : { shouldStartProviderTurn: input.shouldStartProviderTurn }),
