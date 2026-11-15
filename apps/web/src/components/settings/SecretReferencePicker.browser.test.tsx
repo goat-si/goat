@@ -4,7 +4,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const { state, checkSecretSource, checkSecretSourceCommand } = vi.hoisted(() => ({
-  state: { capabilities: {} as { secretSourceCheck?: boolean } },
+  state: { capabilities: {} as { secretSourceCheck?: boolean | undefined } },
   checkSecretSource: vi.fn(async (_request: unknown) => ({
     _tag: "Success" as const,
     value: { _tag: "Resolved" } as { _tag: "Resolved" } | { _tag: "Failed"; detail: string },
