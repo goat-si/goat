@@ -273,6 +273,56 @@ it.effect("a run stored with a status this server does not know stays in the his
   ),
 );
 
+it.effect(
+  "a run kept from before history began stays, without a conversation, beside new runs",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        // Before this change: one kept firing, whose link to the bot input was pruned after 7 days.
+        const old = yield* fire(fixture, routine);
+        yield* accept(fixture, old);
+        yield* refuse(fixture, old);
+        yield* fixture.sql`DELETE FROM scheduled_task_channel_inputs WHERE firing_id = ${old}`;
+        const fresh = yield* fire(fixture, routine);
+        const inputId = yield* accept(fixture, fresh);
+        yield* answer(fixture, fresh, inputId, false);
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.status,
+            run.conversation?.inputId,
+            run.dispatchFailed,
+          ]),
+          [
+            [fresh, "completed", inputId, undefined],
+            [old, "failed", undefined, undefined],
+          ],
+        );
+      }),
+    ),
+);
+
+it.effect("two routines firing in the same second each keep their own run", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const first = yield* saveRoutine(fixture, "goat-bot-check-in:first");
+      const second = yield* saveRoutine(fixture, "goat-bot-check-in:second");
+      yield* TestClock.adjust(Duration.seconds(1));
+      yield* fixture.service.runNow({ id: first.id });
+      yield* fixture.service.runNow({ id: second.id });
+      const listed = yield* fixture.service.list();
+      const firings = [first, second].map((routine) =>
+        historyOf(listed, routine.id)?.map((run) => [
+          run.firingId.includes(routine.id),
+          run.status,
+        ]),
+      );
+      assert.deepStrictEqual(firings, [[[true, "dispatching"]], [[true, "dispatching"]]]);
+    }),
+  ),
+);
+
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {
