@@ -335,6 +335,8 @@ async function readRun(name: string) {
   const said = popup().element().textContent ?? "";
   await userEvent.keyboard("{Escape}");
   await expect.element(popup()).not.toBeInTheDocument();
+  // Escape gives focus back to the dot that opened the run.
+  expect(document.activeElement).toBe(dot(name).element());
   return said;
 }
 
@@ -567,4 +569,40 @@ it("Show in chat is offered only for a run the chat can show, and closes the pop
   expect(show).toHaveBeenCalledOnce();
   await expect.element(popup()).not.toBeInTheDocument();
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reply row" }).element());
+});
+
+it("opening another dot keeps the new run open with focus inside", async () => {
+  setup();
+  for (const id of ["in-9", "in-8"]) answer(id, { reply: { text: `Reply ${id}` } });
+  const tasks = [
+    routine("Morning check", [finished(9, "completed", "in-9"), finished(8, "completed", "in-8")]),
+  ];
+  await using _screen = await render(routines(tasks));
+  const nine = page.getByRole("dialog", { name: "Completed · Nov 14, 09:00, finished 09:05" });
+  const eight = page.getByRole("dialog", { name: "Completed · Nov 14, 08:00, finished 08:05" });
+  await userEvent.click(dot("Run on Nov 14, 09:00, completed"));
+  await expect.element(nine).toBeVisible();
+  // The run that closes as another opens must not pull focus back to its dot.
+  await userEvent.click(dot("Run on Nov 14, 08:00, completed"));
+  await expect.element(nine).not.toBeInTheDocument();
+  await expect.element(eight).toMatchTextContent("Reply in-8");
+  expect(eight.element().contains(document.activeElement)).toBe(true);
+});
+
+it("a run closed by focusing something else leaves focus there", async () => {
+  setup();
+  answer("in-9", { reply: { text: "Reply in-9" } });
+  await using screen = await render(
+    <>
+      {/* Above the strip, so the popover below its dot does not cover it. */}
+      <button type="button">Elsewhere</button>
+      {routines([routine("Morning check", [finished(9, "completed", "in-9")])])}
+    </>,
+  );
+  await userEvent.click(dot("Run on Nov 14, 09:00, completed"));
+  await expect.element(popup()).toMatchTextContent("Reply in-9");
+  const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+  await userEvent.click(elsewhere);
+  await expect.element(popup()).not.toBeInTheDocument();
+  expect(document.activeElement).toBe(elsewhere.element());
 });
