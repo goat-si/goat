@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { Button } from "../../components/ui/Button";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
@@ -429,13 +430,30 @@ function MemberRow(props: {
           </Text>
           <MobileBotRowSignalMarks signals={signals} />
           {waitingCount > 0 ? (
-            <Text
+            // The bubble sets waiting apart from the unread pill by shape; on a selected row the
+            // warning colour falls under 4.5:1, so the mark takes the row's text colour there.
+            <View
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
-              className="text-xs font-semibold text-foreground"
+              className="flex-row items-center gap-0.5"
             >
-              {waitingCount}
-            </Text>
+              <SymbolView
+                name="questionmark.bubble"
+                size={13}
+                tintColorClassName={
+                  props.selected === true ? "accent-foreground" : "accent-warning-foreground"
+                }
+              />
+              <Text
+                className={
+                  props.selected === true
+                    ? "text-xs font-semibold text-foreground"
+                    : "text-xs font-semibold text-warning-foreground"
+                }
+              >
+                {waitingCount}
+              </Text>
+            </View>
           ) : null}
         </View>
         {line ? (
