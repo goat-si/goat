@@ -132,6 +132,7 @@ export const layerTest = Layer.mergeAll(
           repositoryIdentityResolved: false,
         }),
       awaitRepositoryIdentity: () => Effect.succeed(null),
+      refreshRepositoryIdentity: () => Effect.void,
       invalidate: () => Effect.void,
       subscribeChanges: Effect.never,
     }),
