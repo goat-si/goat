@@ -1,51 +1,68 @@
 # L02 retry: provider adapter fixes (lane record)
 
-Lane branch: `chase/t3-261114-adapters-retry`. Earlier runs' pushed heads (up to `0c89523f1d`) were never opened as a PR; this file is the lane's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Deferrals are tracked in #3176.
+Lane branch: `chase/t3-261114-adapters-retry`, pushed at `6e62d5c624` (run 5). No PR yet; this file is the lane's full record. Upstream range fa2f4ff2a2..93cbca3fcbd. Deferrals are tracked in #3176.
 
 ## Decisions
 
 | upstream | decision | GOAT commit | reason |
 | --- | --- | --- | --- |
-| 2248ca8db9 fix(cursor): steer the live run | adapt | 0c89523f1d | GOAT's Cursor adapter keeps the live run; a declined steer queues right after the active run with the user's model. Needed upstream's Kiro capability flag so a steer with attachments still restarts. Code moved out first (c0d2082486, de2ff5d7b3, 7e6936778a, a462be1344). |
+| 2248ca8db9 fix(cursor): steer the live run | adapt | 0c89523f1d | GOAT's Cursor adapter keeps the live run; a declined steer queues right after the active run with the user's model. Needed upstream's Kiro capability flag so a steer with attachments still restarts. Moves first: c0d2082486, de2ff5d7b3, 7e6936778a, a462be1344. |
 | 315b06c5ec managed installs update past their pin | adapt (Codex half) | 288d66a681 | Owner decision 2026-11-15. SHA-256 from the release's codex-package_SHA256SUMS verified before install, download capped at 1 GiB; pinned release keeps its exact-size check and stays the fallback. Moves first: 3b58c0548f, 028f0c0a56. |
-| 315b06c5ec Antigravity registry path | skip | none | Never ported: it installs an archive without a digest GOAT verifies (AntigravityInstallation.ts:629); 4099e62767 replaced it upstream. |
-| b5b470542a Codex Stop that Codex never confirms | adapt, held | 4bedf48e18 (local branch chase/t3-261114-l02-hold-b5b, not pushed) | Coordinator Option 2. Held because the agent-facing check met the STOP rule: an unconfirmed Stop leaves the child "running" in thread.status with no visible reason and only a person's Force stop clears it (goat#2338). Waiting for the coordinator. |
-| ee9e36c8b2 feat(secrets): check a secret reference before saving it | not done this round | none | Adapt to GOAT's own secret resolver (apps/server/src/secrets/secretResolver.ts:62, ProviderInstanceRegistry.ts:179) and SecretReferencePicker; new RPC is C4. |
-| 4099e62767 Antigravity native goals | adapt (native goals part) | 8a1c2870e1 | Sessions that list a "goal" command report native goals; the ACP adapter reads it after startup commands drain; Antigravity goal controls other than "/goal <objective>" are refused before any event. GOAT's hasNativeGoals generalised (providerTurnStartHelpers.ts:28). Moves first: 4d5775de74, d4cc03e826. pair.test.ts not carried (an unrelated Tailscale serve test rewrite). |
-| 4099e62767 Antigravity managed CLI updates | owner-approved, not yet ported | none | Upstream's final installer is 1177 lines (test 1321) and replaces GOAT's AntigravityInstallation.ts (966) with the manifest SHA-512 path, host allow-list, refused redirects and bounded download and extraction; it needs splitting into new modules to stay under 1000 lines. Its new CLI arguments (antigravityAuthSupport.ts, AntigravityDriver.test.ts:388) and system-prompt metadata (AntigravityAcpSupport.ts) go with it, since they need the CLI range >=1.5.1 <2. |
-| b42841808d | deferred | none | Needs predecessors 729f6757d9 and 5ff3d3c0ec, not on dev. |
+| 315b06c5ec Antigravity registry path | skip | none | Never ported: it installs an archive without a digest GOAT verifies; 4099e62767 replaced it upstream. |
+| 4099e62767 Antigravity native goals | adapt | 8a1c2870e1 | Sessions that list a "goal" command report native goals; Antigravity goal controls other than "/goal <objective>" are refused before any event. Moves first: 4d5775de74, d4cc03e826. pair.test.ts not carried (an unrelated Tailscale serve test rewrite). |
+| 4099e62767 Antigravity managed CLI updates | adapt (owner decision: port, final form) | 096c5f6af6, 598171a316 | The installer reads Google's CLI manifest (antigravityCliRelease.ts) and installs a release only after its SHA-512 matches; hosts allow-listed to dl.google.com and storage.googleapis.com, redirects refused (fetch RequestInit redirect "error"), download and extracted executable capped at 512 MiB each. Unreachable or unusable manifest: nothing offered, the pinned 1.4.5 stays the fallback with its exact-size SHA-256 check; a release the model manifest withdrew is neither offered nor installed; an installed native CLI newer than the offer is re-checked, never downgraded. CLI arguments (`acp --gemini-dir <run GEMINI_HOME> --app-data-dir antigravity-acp`), the advertised system-prompt append, the driver and auth test expectations and the >=1.5.1 <2 manifest range come with it. Upstream's 1177-line installer is split: AntigravityInstallation.ts 773, Archive 252, Validate 116, Lookup 112, Records 80, antigravityCliRelease.ts 100. Move first: 76f448422c (driver test harness). |
+| ee9e36c8b2 check a secret reference before saving it | adapt (C4) | 2627d704b9 | GOAT's resolver: server.checkSecretSource reads the reference once, uncached (resolveSecret with read admission, 45 s cap), answers Resolved or Failed with a reason and never the value; on success it clears the resolver cache and reloads the provider instances whose secrets include the reference (reloadSecretsAndRefresh). Guarded by settings:write in CLIENT_GUARDED_RPC_SCOPES; servers advertise the optional secretSourceCheck capability and clients show Check only where it is present. Web: Check beside a saved reference in SecretReferencePicker. Mobile has no secret reference settings. Moves first: 8323f359e2 (ws.ts), the OTLP check RPC into contracts/serverCheckRpc.ts (rpc.ts 2810 to 2808 with the new RPC). |
+| b5b470542a Codex Stop that Codex never confirms | adapt, coordinator Option 2 | 9ad8a91332 (the held 4bedf48e18), 902f3edd06 | Stop fails with ProviderAdapterInterruptTimeoutError after 10 s; the turn stays open and clients offer Force stop. 902f3edd06 makes the state visible to agents for every provider: goat_thread_status, goat_thread_read (summary and messages) and goat_task_status carry an optional `stop: { state: "unresponsive", since }` from the run_interrupt_request's unresponsiveAt; descriptions say only a person can Force stop (goat#2338). goat_thread_interrupt and task_cancel still return interrupt_requested and cancel_requested. Moves first: 5cef8760b0, 5b0b916eae. Agent Force stop not built. |
+| c9dfc404cc custom Codex providers no longer report native quota | adapt (earlier run) | 90b3a526f3 | Only a confirmed native OpenAI route reads the login's quota. Not in this table before run 5. Interacts with #3207's CodexDriver.usageHome test; see Gate. |
+| b42841808d count Codex request ledgers | deferred | none | Needs 729f6757d9 and 5ff3d3c0ec, ported in L09 retry (chase/t3-261114-server-misc-retry e363f29d85, under review, not yet in chase/t3-261114-all). Portable in a later L02 round once L09 lands there; UsageService.ts has 6 lines of headroom. |
 
 ## C4
 
-- 315b06c5ec Codex half (install verification). Negative tests in apps/server/src/provider/CodexInstallation.update.test.ts: published checksum mismatch keeps the managed install (:67); unreachable checksums offer no update and download nothing (:83); a release the manifest withdrew is refused before and during install (:111, :198); a withdrawn managed install returns to the pinned release (:151). No wire contract changes: `ProviderInstallState` fields are unchanged, so older peers see a version offer the same way they see the pinned one.
+- 315b06c5ec Codex half: negative tests in CodexInstallation.update.test.ts (checksum mismatch, unreachable checksums, withdrawn release, withdrawn install back to the pin). No wire change.
+- 4099e62767 updater, AntigravityInstallation.update.test.ts: unreachable manifest keeps the pinned release and downloads no CLI; a SHA-512 mismatch installs nothing and keeps the previous release; a withdrawn release is neither offered nor downloaded; a manifest URL on another host is ignored; a redirected download fails and the redirect target is never fetched. antigravityCliRelease.test.ts refuses a bad digest, pre-1.5.0, http, a lookalike host, another bucket or folder, query strings and a version mismatch. No wire change: ProviderInstallState is unchanged.
+- ee9e36c8b2: new RPC server.checkSecretSource. Negative: clientRpcPermissions.test.ts pins settings:write (failed with [] before the scope entry). Older server: SecretReferencePicker.browser.test.tsx shows no Check without the capability. SecretCheck.test.ts: unreadable or empty secret reloads nothing; an unconfigured provider is not read.
+- b5b470542a Option 2: the stop field is optional both ways. HostThreadsMcpService.test.ts: a newer host's stop reaches the caller, a host that predates it reports none, and the thread-read fallback for hosts without goat_thread_status carries it; orchestratorMcpStop.test.ts: a caller's pre-field schema reads a newer host's status. Negative: threadStatus.test.ts reports no stop while the provider may still confirm Stop or after it did.
 
-## When a Codex update happens and what the user sees
+## When updates happen and what the user sees
 
-GOAT looks for a newer Codex at most hourly, and only while a client watches Codex setup with provider update checks on. It offers a release only when the model manifest marks it supported. Settings → Providers → Codex then shows "Update Codex" with the new version; nothing installs until the user presses it. A fresh install still gets the pinned release; an existing install is never downgraded. docs/user/install.md says this.
+Codex and Antigravity: GOAT looks for a newer release at most hourly, and only while a client watches the provider's setup with provider update checks on (Settings → Maintenance; gated in providerInstallation.ts). Install or reinstall also checks. Settings → Providers then shows the new version and "Update Codex" or "Update Antigravity"; nothing installs until the user presses it. A fresh install gets the newest verified release (Antigravity) or the pinned one (Codex, and Antigravity when Google's channel is unreachable); an installed release is never downgraded. docs/user/install.md and providers-antigravity.md say this.
 
 ## Known limits
 
-- No MCP Force stop exists (goat#2338); relevant once b5b470542a lands.
-- The Antigravity managed install stays on its pin until 4099e62767's updater is ported.
+- Agents cannot Force stop (goat#2338). A Stop the provider never confirms shows as stop=unresponsive; only a person's Force stop, the provider ending the turn or an unload ends the run.
+- The child's lane slot stays held until that run ends (PermissionProfiles.unresponsiveStop.test.ts pins the release on completed, interrupted and failed).
+- task_cancel drops the parent's completion wake for local children on every provider; that is its contract on dev (OrchestratorMcpService.ts cancel-task-completion-delivery, tested by "returns cancel requested when post-stop disposal fails"), not new with b5b470542a. Its description says to read the child with task_status after a cancel.
+- The installer validates new installs with the environment it was built with (unchanged from the integration tip); checks and launches pass the current one.
 
-## Surfaces
+## Cross-lane
 
-Server: Codex installer, Cursor steering, Antigravity native goals (orchestrator refusal, goal-driver check), provider registry moves. Web: Codex setup shows "Update Codex" when a newer verified release is offered (CodexSetupSection.tsx). Desktop: same as web. Mobile: no change. Agents/MCP: an agent sending "/goal pause" (or clear, resume, edit, bare /goal) to an Antigravity thread gets the dispatch refusal message. Providers: Codex, Cursor, Antigravity (ACP adapter capability read).
+- L03: commandThreadId.ts is one blob (c150d91d8b) on both sides; L03's beforeTurnItemsWrite harness edit lives in test/ProviderSessionManagerHarness.testkit.ts; Orchestrator.ts 13917 to 13878 by 058f65acfe.
+- L06 (scm-retry merges first): once it is in the integration tip this lane merges, delete ProviderSnapshotMerge.ts's saved Antigravity account carry-over and testkit/watchedPullRequestDetail.ts and import L06's ProviderSavedAccount.ts and runtimeLayer.testkit.ts. Not yet in bd69c4db0b.
+- L09 (merges before this lane): b42841808d becomes portable then.
 
-## Dev merges
+## Integration merges
 
-- 87dbaa401a merges origin/chase/t3-261114-all (56421003ff). Conflicts: CodexProvider.ts (kept the catch-up branch's per-provider probe timeout and the lane's native-usage destructuring), ProviderRegistry.ts (took the catch-up branch's move to ProviderModelRetention.ts and carried the lane's Cursor retention rule there), contracts orchestrationV2.ts (kept both capability fields). Budget moves after the merge: 69822712dd, e3970030d2, ef9cd1233f.
+- 87dbaa401a (56421003ff), run 4.
+- 485b911ac4 (74ae8cc7b2): conflicts in AntigravityAdapterV2.ts (kept native goals and the session launch resolver), provider-acp adapter.ts (kept the integration import and re-export of acpPerTurnPromptUsage), ProviderSessionManager.test.ts (kept the testkit, carried L03's edit there).
+- a71bd62a47 (24c7a4e0da) and 8aa9952bd8 (bd69c4db0b, with dev b53dea9e4b): no conflicts.
 
-## Tests
+## Gate (run 5, head 6e62d5c624, merged with chase/t3-261114-all bd69c4db0b)
 
-- 4099e62767 native goals fail-first: on dev code the five "refuses unsupported Antigravity goal controls" rows and the hasNativeGoals row fail, and both "negotiates native goals" rows hang to the 240 s test timeout (capabilities are read before the startup commands drain); all pass after the port.
-- Codex half fail-first: the update tests do not compile or pass against dev's installer (no checkForUpdate, no SHA256SUMS lookup); after the port, CodexInstallation tests 80 pass.
-- b5b470542a fail-first (held commit): all six new or rewritten tests fail on dev's adapter; removing the survivor pass-through fails 3 rows plus H2; replacing a pending waiter fails the second-Stop row.
+Not READY. check:changed on 8aa9952bd8 (load 3 to 7): unused patches, format, lint, graphql, agent context budget, knip 1/2 and 2/2, typecheck (42 packages) pass; agent surface audit failed on a stale audit doc, regenerated in d7acf1300a. Test (2994 files): 7 failed, 2979 passed, 8 skipped (39341 tests passed). Of the 8 failing tests, 3 are the known unrelated macOS ones (runtimeFactsScripts and tunnel.client-session, goat#3363; NotesGit). 4 were this lane's stop-field reads meeting mocks without turn items and a test racing the effect worker; fixed in 6e62d5c624 (those 10 tests pass). The last one is open:
 
-- check:changed on 8a1c2870e1: same as below with test 1505 files: 3 failed (the same three), 1494 passed, 8 skipped (23276 tests passed).
-- check:changed on ef9cd1233f (merged with chase/t3-261114-all 56421003ff): unused patches, format, lint, knip 1/2 and 2/2, graphql (2), agent surface audit, agent context budget, typecheck (42 packages) pass; test 1502 files: 3 failed, 1491 passed, 8 skipped (23266 tests passed). The three failures are outside the lane, which has no diff from chase/t3-261114-all in those paths, and they fail the same way alone: packages/ssh runtimeFactsScripts.test.ts and tunnel.client-session.test.ts ("Remote host is missing node on PATH": this Mac's non-interactive shell has no node), apps/server notes/NotesGit.test.ts (attachment commit order under the local git).
-- goat-rename --check: 0.
+- CodexDriver.usageHome.test.ts "a new home's own reading is not overridden by a later report from the old home" fails on the lane and passes on bd69c4db0b. It fails already at 485b911ac4, so it is not from run 5's ports: #3207's fake Codex answers account/read with requiresOpenaiAuth false, and the lane's c9dfc404cc port (90b3a526f3, codexRoutesSpendNativeQuota, CodexProviderAccount.ts:95) treats that as a custom provider with no native quota, so the session's 10% reading is never shown. With requiresOpenaiAuth true the test gets past that and then fails at its later [5] check. Next step: decide whether the fixture should describe a native ChatGPT login (and finish adapting its later steps) or whether a native route without OpenAI auth must still report usage; then rerun check:changed.
 
-NOT RUN: ee9e36c8b2 port; the 4099e62767 Antigravity updater; captures of the Codex "Update Codex" offer; real Codex, Cursor or Antigravity turns; native-client checks.
+goat-rename --check: 0 (in the check:changed run).
+
+## Remaining rows (next concrete step each)
+
+- CodexDriver.usageHome conflict above: decide fixture vs rule, fix, rerun the gate.
+- Orchestrator.ts budget after L04: free at least 34 more lines (13878 now; L04 adds about 25). Prepared: move the lane's steer follow-up queue position and the reorder of later queued runs into steerFollowUpQueue.ts (about 24 lines), plus another verbatim move; measure again on the tip with L04.
+- EffectOutboxRequest.ts: when the merged tip has L04, put modelSelection and steerFollowUpAfterRunOrdinal there (they are in EffectOutbox.ts's provider-turn.steer request now).
+- L01 ProviderSessionManagerErrors.ts (feea042f19) is not in bd69c4db0b: when it is, delete the five error classes and the release reason from ProviderSessionManagerTypes.ts, import them, and grep that no class is defined twice.
+- L06 scm-retry and L09 retry: not in bd69c4db0b; follow-ups listed under Cross-lane.
+- Lane review: NOT RUN.
+
+NOT RUN: a green check:changed on 6e62d5c624; real Codex, Cursor or Antigravity turns; a real Antigravity CLI update against Google's channel (only the manifest and storage URLs were fetched with curl: both answer 200 without a redirect); captures of "Update Codex", "Update Antigravity" and the secret Check; native-client checks; independent review of the C4 commits.
 
 Model: anthropic/claude-opus-5-5 via Codex in GOAT on pen-macmini, coordinated by anthropic/claude-opus-5-5
