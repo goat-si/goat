@@ -130,6 +130,7 @@ export const CodexScanState = Schema.Struct({
     Schema.optionalKey(Schema.mutable(Schema.Array(CodexUnreportedRequest))),
   ),
   unreportedOverflow: Schema.mutableKey(Schema.optionalKey(Schema.Boolean)),
+  requestLedgerActive: Schema.mutableKey(Schema.optionalKey(Schema.Boolean)),
   malformedRecords: Schema.mutableKey(TokenCount),
   sawSessionMeta: Schema.mutableKey(Schema.Boolean),
   modelProvider: Schema.mutableKey(Schema.String),
@@ -184,8 +185,8 @@ function isForkCopy(state: CodexScanState, timestampMs: number): boolean {
 }
 
 /**
- * Cumulative counters validate request deltas. Older events without cumulative counters use
- * normalized consecutive-request deduplication.
+ * Identified request-ledger entries report spending independently of context snapshots.
+ * Legacy snapshots validate request deltas against cumulative counters.
  */
 export function parseCodexLine(line: string, state: CodexScanState): readonly UsageRecord[] {
   let parsed: unknown;
@@ -224,6 +225,7 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
   }
 
   if (record["type"] === "turn_context") {
+    state.requestLedgerActive = false;
     if (typeof payloadRecord["model"] === "string") state.model = payloadRecord["model"];
     // Model carry is useful for usage, but history recovery needs this context's own identity.
     state.turnId =
@@ -235,13 +237,31 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
     return [];
   }
 
-  // Several of these may sit between two snapshots, so they only explain a gap in the counters.
+  // Request ledgers include spending that context snapshots can omit.
   if (record["type"] === "token_usage_record") {
     const timestampMs = parseTimestampMs(record["timestamp"]);
     const usage = readCodexTokenUsage(payloadRecord["usage"]);
     if (timestampMs === null || usage === null || state.model.length === 0) return [];
     // Copied history is already billed in the parent.
     if (isForkCopy(state, timestampMs)) return [];
+    const responseId = payloadRecord["response_id"];
+    if (typeof responseId === "string" && responseId.length > 0) {
+      const pending = state.unreportedRequests ?? [];
+      state.requestLedgerActive = true;
+      for (const request of pending) {
+        state.lastCumulativeUsage = advanceCodexUsage(state.lastCumulativeUsage, request.usage);
+      }
+      state.lastCumulativeUsage = advanceCodexUsage(state.lastCumulativeUsage, usage);
+      delete state.unreportedRequests;
+      return [
+        ...pending.map((request) => codexRequestRecord(state, request.usage, request)),
+        {
+          ...codexRequestRecord(state, usage, codexAttribution(state, timestampMs)),
+          dedupeKey: JSON.stringify(["codex", state.sessionId, responseId]),
+        },
+      ];
+    }
+    state.requestLedgerActive = false;
     if (state.unreportedOverflow) return [];
     const pending = (state.unreportedRequests ??= []);
     if (pending.length >= 1024) {
@@ -285,6 +305,12 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): readonly Usag
       state.lastCumulativeUsage = advanceCodexUsage(state.lastCumulativeUsage, last);
     }
     state.lastUsageSignature = signature;
+    return [];
+  }
+
+  // Context snapshots can rewind on resume and omit compaction spending; identified requests are authoritative.
+  if (state.requestLedgerActive) {
+    if (cumulative !== null) rebaseCodexUsage(state, cumulative);
     return [];
   }
 
@@ -428,6 +454,7 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
       session_id: true,
       model_provider: true,
       turn_id: true,
+      response_id: true,
       model: true,
       thread_settings: { service_tier: true },
       forked_from_id: true,

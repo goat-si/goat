@@ -56,6 +56,7 @@ import {
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+import { dropArchivedOriginals } from "./usageArchiveCache.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -643,6 +644,8 @@ export const make = Effect.gen(function* () {
       }
       return { path, records, malformedRecords };
     });
+    const livePaths = files.map((file) => file.path);
+    if (dropArchivedOriginals(fileCache, livePaths, read)) cacheDirty = true;
     const unread = failedPaths + read.filter((file) => file.failed).length;
     yield* Effect.annotateCurrentSpan({
       "usage.files": files.length,
