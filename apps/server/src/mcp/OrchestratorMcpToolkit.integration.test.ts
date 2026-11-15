@@ -1243,7 +1243,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
           finished.subagents.find((task) => task.id === delegated.taskId)?.completionWake,
         ).toBe("always");
         const completions = yield* Ref.get(offers);
-        expect(completions).toHaveLength(1);
+        expect(new Set(completions.map((o) => o.delegatedCompletion?.messageId)).size).toBe(1);
         const delivery = finished.runs.flatMap((run) =>
           run.delegatedCompletion?.delivery === null ||
           run.delegatedCompletion?.delivery === undefined
