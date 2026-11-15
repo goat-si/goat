@@ -75,7 +75,7 @@ const answer = (
   { sql, runs }: Fixture,
   firingId: CommandId,
   inputId: string,
-  quiet: boolean | "malformed",
+  quiet: boolean | "malformed" | "oversized",
 ) =>
   Effect.gen(function* () {
     yield* sql`INSERT OR IGNORE INTO channel_conversations
@@ -84,7 +84,11 @@ const answer = (
     yield* sql`INSERT OR IGNORE INTO channel_bindings
       (binding_id, conversation_id, connection_id, reply_address_json, last_activity_at)
       VALUES ('binding', 'conversation', 'goat', '{}', '2026-11-07T00:00:00.000Z')`;
-    const decision = { replyText: "Done.", action: { type: quiet ? "no_update" : "report_only" } };
+    // An oversized quiet decision carries a long reply, as no quiet routine decision does.
+    const decision = {
+      replyText: quiet === "oversized" ? "x".repeat(4096) : "Done.",
+      action: { type: quiet ? "no_update" : "report_only" },
+    };
     const decisionJson = quiet === "malformed" ? "{" : JSON.stringify(decision);
     yield* sql`INSERT INTO channel_inbox (input_id, owner_id, kind, connection_id, idempotency_key,
       content_hash, conversation_id, binding_id, message_json, state, accepted_at, decision_json)
@@ -225,6 +229,29 @@ it.effect("a run that cannot be read is left out, and the rest of the list stays
       assert.deepStrictEqual(
         historyOf(yield* fixture.service.list(), routine.id)?.map((run) => run.firingId),
         [firings[0], firings[2]],
+      );
+    }),
+  ),
+);
+
+it.effect("a decision over the size cap is not parsed: its run is kept and not quiet", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const routine = yield* saveRoutine(fixture);
+      const small = yield* fire(fixture, routine);
+      yield* answer(fixture, small, yield* accept(fixture, small), true);
+      const oversized = yield* fire(fixture, routine);
+      yield* answer(fixture, oversized, yield* accept(fixture, oversized), "oversized");
+      assert.deepStrictEqual(
+        historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+          run.firingId,
+          run.status,
+          run.quiet === true,
+        ]),
+        [
+          [oversized, "completed", false],
+          [small, "completed", true],
+        ],
       );
     }),
   ),

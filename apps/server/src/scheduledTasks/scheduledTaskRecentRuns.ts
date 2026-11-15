@@ -41,6 +41,12 @@ const MAX_STORED_RUN_BYTES = 1024;
 const MAX_ROUTINE_ID_BYTES = 256;
 /** Creation times are 24-byte ISO strings the server writes; a stored one over this is not read. */
 const MAX_CREATED_AT_BYTES = 64;
+/**
+ * A quiet routine decision is always the fixed `{"replyText":"No update.","action":{"type":"no_update"}}`
+ * (56 bytes), so a larger stored decision is never quiet: it is not parsed, and its run shows its
+ * plain outcome.
+ */
+const MAX_QUIET_DECISION_BYTES = 512;
 
 const readable = (task: Pick<ScheduledTask, "id" | "createdAt">) =>
   Buffer.byteLength(task.id) <= MAX_ROUTINE_ID_BYTES &&
@@ -113,7 +119,8 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
       SELECT c.task_id, r.snapshot_json, l.input_id, r.requested_at, r.firing_id,
         length(CAST(r.snapshot_json AS BLOB)) + coalesce(length(CAST(l.input_id AS BLOB)), 0)
           > ${MAX_STORED_RUN_BYTES} AS oversized,
-        CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
+        CASE WHEN octet_length(i.decision_json) <= ${MAX_QUIET_DECISION_BYTES} AND json_valid(i.decision_json)
+          THEN json_extract(i.decision_json, '$.action.type') END
           = 'no_update' AS quiet
       FROM chosen c
       JOIN scheduled_task_runs r ON r.firing_id IN (
