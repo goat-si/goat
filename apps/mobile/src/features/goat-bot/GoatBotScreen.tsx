@@ -482,7 +482,7 @@ export function GoatBotScreen(props: {
   // Something else hands a question to the message box, which then answers it until sent.
   const inputRef = useRef<TextInputInstance>(null);
   const answering = useGoatBotAnswering(
-    visibleRows,
+    session.canSend ? visibleRows : null,
     JSON.stringify([member?.botId ?? null, taskId ?? null, draftOwner]),
   );
   const startAnswering = answering.start;
