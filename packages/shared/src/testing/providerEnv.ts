@@ -12,6 +12,7 @@ const KEPT_ENV = new Set([
   // CI sets these so the transfer budget integration test writes its report for the job summary.
   "GOAT_TRANSFER_BUDGET_REPORT_PATH",
   "GOAT_TRANSFER_BUDGET_RESULT_PATH",
+  "GOAT_TRANSFER_BUDGET_SCENARIOS_PATH",
   // CI's memory growth task, and the baseline run of the same suite.
   "GOAT_MEMORY_GROWTH",
   "GOAT_RECEIVE_BASELINE",
