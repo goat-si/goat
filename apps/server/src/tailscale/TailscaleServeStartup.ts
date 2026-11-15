@@ -4,7 +4,7 @@ import {
   disableTailscaleServe,
   ensureTailscaleServe,
   findExcludedRange,
-  readTailscaleServeRootHolders,
+  readTailscaleServeRootHolder,
   readWindowsExcludedTcpPortRanges,
   reservedPortMessage,
   suggestFreePort,
@@ -33,22 +33,6 @@ export interface TailscaleServeTarget {
 
 /** Who holds the Serve port's root: nobody, this server, only dead loopback ports, or another live one. */
 export type TailscaleServeRootHolderState = "none" | "ours" | "dead" | "other";
-
-const readRootHolder = Effect.fn("TailscaleServeStartup.readRootHolder")(function* (
-  servePort: number,
-  target: { readonly host: string; readonly port: number },
-) {
-  const net = yield* NetService.NetService;
-  const holders = yield* readTailscaleServeRootHolders(servePort, target);
-  if (holders.length === 0) return "none" as const;
-  if (holders.some((holder) => holder.ours)) return "ours" as const;
-  const live = yield* Effect.forEach(holders, (holder) =>
-    holder.ours || holder.loopback === undefined
-      ? Effect.succeed(true)
-      : net.hasListenerOnHost(holder.loopback.port, holder.loopback.host),
-  );
-  return live.includes(true) ? ("other" as const) : ("dead" as const);
-});
 
 interface TailscaleServeStartupBase {
   readonly enabled: boolean;
@@ -272,7 +256,7 @@ export const layerTailscaleServeStartup = (input: TailscaleServeStartupBase) =>
     ensure: (target) => ensureTailscaleServe(target),
     disable: (request) => disableTailscaleServe(request),
     rootHolder: (target) =>
-      readRootHolder(input.servePort, target).pipe(Effect.provide(NetService.layer)),
+      readTailscaleServeRootHolder(input.servePort, target).pipe(Effect.provide(NetService.layer)),
     excludedRange: (servePort) =>
       readWindowsExcludedTcpPortRanges().pipe(
         Effect.map((ranges) => {
