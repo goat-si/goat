@@ -6,7 +6,11 @@ import { expect, it, vi } from "vite-plus/test";
 import { bot, picker, render, screenSession, typeInto } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
 
-const asked = (options: string[], ids = true, id = "ask"): GoatBotRow => ({
+const asked = (
+  options: string[],
+  ids = true,
+  id = "ask",
+): Extract<GoatBotRow, { kind: "bot" }> => ({
   ...bot,
   id,
   text: id === "ask" ? "Which cache should the build use?" : `Question ${id}?`,
@@ -18,6 +22,7 @@ const asked = (options: string[], ids = true, id = "ask"): GoatBotRow => ({
 
 async function open(...rows: GoatBotRow[]) {
   screenSession.rows = rows;
+  screenSession.taskChips = new Map();
   screenSession.send.mockClear();
   screenSession.answer.mockClear();
   screenSession.answer.mockImplementation(() => true);
@@ -92,6 +97,8 @@ it("lets go for good when the question closes, so a later message is never sent 
   const { view, press, chip } = await open(asked(["Keep", "Clear"]));
   try {
     await press("Something else");
+    // The task's record takes the answer; its row shows the question closed.
+    screenSession.taskChips = answered("task-ask", "q-ask");
     screenSession.rows = [asked([])];
     await view.rerender(<GoatBotScreen visible />);
     expect(chip()).toBeNull();
@@ -217,3 +224,107 @@ it("holds an answer while files are in the box, and says so, since an answer can
 });
 
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+
+/** The task's newest chip, listing the questions it took answers to. */
+const answered = (taskId: string, ...questionIds: string[]) =>
+  new Map([[taskId, { answeredQuestions: questionIds.map((questionId) => ({ questionId })) }]]);
+
+it("keeps answering while the question's row is out of view, and Send still answers it (#3405)", async () => {
+  const { view, press, chip } = await open(asked(["Keep", "Clear"]));
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    // The loaded window no longer holds the question: an older part of the history.
+    screenSession.rows = [{ ...bot, id: "later", text: "Later reply", options: [] }];
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    await press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith("Use the staging cache", "task-ask", "q-ask");
+    expect(screenSession.send).not.toHaveBeenCalled();
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("keeps answering while the chat is out of view and its rows are gone, until its history is back (#3405)", async () => {
+  const { view, press, chip } = await open(asked(["Keep", "Clear"]));
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    screenSession.rows = [];
+    await view.rerender(<GoatBotScreen visible={false} />);
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    screenSession.rows = [asked(["Keep", "Clear"])];
+    await view.rerender(<GoatBotScreen visible />);
+    await press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith("Use the staging cache", "task-ask", "q-ask");
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("a pick on the same card that is queued, then accepted but not yet seen, keeps the typed answer until the task records it (#3405)", async () => {
+  const { view, press, chip } = await open(asked(["Keep", "Clear"]));
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    screenSession.rows = [{ ...asked([]), answer: "Keep", answerSending: true }];
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    screenSession.rows = [{ ...asked([]), answer: "Keep" }];
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    screenSession.taskChips = answered("task-ask", "q-ask");
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).toBeNull();
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("an earlier attempt's answered question does not end a retry's new question (#3405)", async () => {
+  const retry = { ...asked(["Keep", "Clear"]), answerQuestionId: "q-ask-2" };
+  const { view, press, chip } = await open(retry);
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    screenSession.rows = [];
+    screenSession.taskChips = answered("task-ask", "q-ask");
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    await press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith(
+      "Use the staging cache",
+      "task-ask",
+      "q-ask-2",
+    );
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
+
+it("a question its server does not name keeps answering while its row is out of view, and Send carries its task (#3405)", async () => {
+  const unnamed = { ...asked(["Keep", "Clear"]), answerQuestionId: undefined };
+  const { view, press, chip } = await open(unnamed);
+  try {
+    await press("Something else");
+    await typeInto(view.container, "Use the staging cache");
+    screenSession.rows = [];
+    await view.rerender(<GoatBotScreen visible />);
+    expect(chip()).not.toBeNull();
+    await press("Send message");
+    expect(screenSession.answer).toHaveBeenCalledWith(
+      "Use the staging cache",
+      "task-ask",
+      undefined,
+    );
+  } finally {
+    await view.unmount();
+    screenSession.rows = [];
+  }
+});
