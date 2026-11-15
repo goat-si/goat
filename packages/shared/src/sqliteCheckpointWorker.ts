@@ -1,3 +1,4 @@
+import type * as NodeSqlite from "node:sqlite";
 // @effect-diagnostics nodeBuiltinImport:off - The checkpoint worker is a raw Node worker owned by nodeSqliteClient.
 import * as NodeWorkerThreads from "node:worker_threads";
 
@@ -25,4 +26,15 @@ export const openCheckpointWorker = (
     (cause) => onError(candidate, cause),
   );
   return candidate;
+};
+
+// The writer's first statements, before callers set their own wait; a file that is not a database fails here.
+export const prepareCheckpointWriter = (writer: NodeSqlite.DatabaseSync) => {
+  writer.exec("PRAGMA busy_timeout = 5000;");
+  return {
+    version: String(writer.prepare("SELECT sqlite_version() AS version").get()?.version),
+    journalMode: writer.prepare("PRAGMA journal_mode"),
+    frames: writer.prepare("PRAGMA wal_checkpoint(NOOP)"),
+    sizeLimit: writer.prepare("PRAGMA journal_size_limit"),
+  };
 };

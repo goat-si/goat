@@ -26,6 +26,7 @@ import * as Exit from "effect/Exit";
 import * as SettlementAdmission from "./settlementAdmission.ts";
 import { TestClock } from "effect/testing";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
+import { settlementNativeSubagentTests } from "./ThreadSettlementService.native-test-cases.ts";
 import type * as Harness from "./ThreadSettlementService.test.ts";
 
 const NOW = "2026-08-27T12:00:00.000Z";
@@ -654,6 +655,14 @@ export function settlementAdmissionTests({
       }),
     ),
   );
+  settlementNativeSubagentTests({
+    makeHarness,
+    makeThread,
+    makeSnapshot,
+    startHarness,
+    appThread,
+    settledEvent,
+  });
 }
 
 function admissionWorkerTests() {

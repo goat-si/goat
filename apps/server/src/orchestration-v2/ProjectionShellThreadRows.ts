@@ -4,9 +4,11 @@ import {
   RunId,
   type OrchestrationV2ShellThreadStatus,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ShellSnapshotOptions } from "./ProjectionStore.ts";
+import type { ShellRun } from "./threadShellProjection.ts";
 
 export type ShellSubscriberOptions = Pick<
   ShellSnapshotOptions,
@@ -312,7 +314,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
               ORDER BY r.ordinal DESC, r.run_id DESC
               LIMIT 1
             )
-            -- The newest run not waiting in a held queue, matching latestUnheldRun.
+            -- The newest run not held or outlived before it started, matching latestUnheldRun.
             LEFT JOIN orchestration_v2_projection_runs presented ON presented.run_id = (
               SELECT candidate.run_id
               FROM orchestration_v2_projection_runs candidate
@@ -320,6 +322,22 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 AND NOT (
                   candidate.status = 'queued'
                   AND json_extract(candidate.payload_json, '$.queueHeld') IS 1
+                )
+                AND NOT (
+                  candidate.status = 'cancelled'
+                  AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
+                  AND candidate.completed_at IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_runs earlier
+                    WHERE earlier.thread_id = candidate.thread_id
+                      AND earlier.ordinal < candidate.ordinal
+                      AND earlier.status <> 'queued'
+                      AND NOT ${isSilentShellRun("earlier")}
+                      AND (
+                        earlier.completed_at IS NULL
+                        OR julianday(earlier.completed_at) >= julianday(candidate.completed_at)
+                      )
+                  )
                 )
                 AND NOT ${isSilentShellRun("candidate")}
               ORDER BY candidate.ordinal DESC, candidate.run_id DESC
@@ -466,6 +484,7 @@ export type ShellRunRow = {
   readonly thread_id: string;
   readonly run_id: string;
   readonly ordinal: number;
+  readonly rolled_back_at: string | null;
 };
 
 export type ShellRunItemCountRow = {
@@ -498,13 +517,16 @@ export const runMapsByThreadId = (input: {
   readonly runRows: ReadonlyArray<ShellRunRow>;
   readonly itemCountRows: ReadonlyArray<ShellRunItemCountRow>;
 }) => {
-  const runOrdinalsByThreadId = new Map<ThreadId, Map<RunId, number>>();
+  const runsByThreadId = new Map<ThreadId, Map<RunId, ShellRun>>();
   for (const row of input.runRows) {
     const threadId = ThreadId.make(row.thread_id);
     const runId = RunId.make(row.run_id);
-    const existing = runOrdinalsByThreadId.get(threadId) ?? new Map<RunId, number>();
-    existing.set(runId, row.ordinal);
-    runOrdinalsByThreadId.set(threadId, existing);
+    const existing = runsByThreadId.get(threadId) ?? new Map<RunId, ShellRun>();
+    existing.set(runId, {
+      ordinal: row.ordinal,
+      rolledBackAt: row.rolled_back_at === null ? null : DateTime.makeUnsafe(row.rolled_back_at),
+    });
+    runsByThreadId.set(threadId, existing);
   }
   const itemCountsByThreadId = new Map<ThreadId, Map<RunId, number>>();
   for (const row of input.itemCountRows) {
@@ -514,7 +536,7 @@ export const runMapsByThreadId = (input: {
     existing.set(runId, row.item_count);
     itemCountsByThreadId.set(threadId, existing);
   }
-  return { runOrdinalsByThreadId, itemCountsByThreadId };
+  return { runsByThreadId, itemCountsByThreadId };
 };
 
 export const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>

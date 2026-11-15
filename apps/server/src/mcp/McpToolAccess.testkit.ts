@@ -111,3 +111,11 @@ export const idleThreadProjection = (
     updatedAt: shell.updatedAt,
   };
 };
+
+/** A one-page timeline read with nothing before or after it. */
+export const timelinePage = <T>(items: ReadonlyArray<T>) => ({
+  items,
+  totalItems: items.length,
+  hasMore: false,
+  hasEarlier: false,
+});
