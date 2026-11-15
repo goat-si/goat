@@ -27,9 +27,10 @@ interface RecentRunRow {
 }
 
 /**
- * The most characters one stored run may bring into memory: its snapshot plus its input id. A run
- * this server writes is about 430; task ids have no length limit, and every firing id repeats one.
- * A routine with a larger run carries no history, so the read never loads more than 350 of these.
+ * The most characters one stored run may return to the server: its snapshot plus its input id. A
+ * run this server writes is about 430; task ids have no length limit, and every firing id repeats
+ * one. A routine with a larger run carries no history, so at most 350 of these (plus each row's task
+ * id) reach the server; SQLite still reads an oversized value to measure it.
  */
 export const MAX_STORED_RUN_CHARS = 1024;
 
