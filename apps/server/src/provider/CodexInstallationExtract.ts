@@ -9,7 +9,7 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 import { type CodexInstallationError, installationError } from "./CodexInstallationRelease.ts";
 
 /** The unpacked package's ceiling; the CLI, its code-mode host and rg are far smaller. */
-export const MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024;
 
 /**
  * Unpacks a verified Codex package into runtime. Every member is streamed out of tar one at a time

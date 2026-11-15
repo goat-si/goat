@@ -28,7 +28,7 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { item } from "./hostThreadsList.testkit.ts";
 
 export const threadId = ThreadId.make("caller-thread");
-export const providerInstanceId = ProviderInstanceId.make("codex");
+const providerInstanceId = ProviderInstanceId.make("codex");
 export const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("host-threads-test"),
   requestNamespace: "thread:caller",
@@ -38,7 +38,7 @@ export const scope: McpInvocationScope = {
   capabilities: new Set(["orchestration"]),
 };
 
-export const localList: OrchestratorMcpThreadListResult = {
+const localList: OrchestratorMcpThreadListResult = {
   projectId: null,
   currentThreadId: threadId,
   threads: [item("local-1", "2026-10-11T10:00:00.000Z")],

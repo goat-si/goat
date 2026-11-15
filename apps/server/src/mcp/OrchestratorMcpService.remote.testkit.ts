@@ -52,7 +52,7 @@ export const threadId = ThreadId.make("parent");
 export const parentRunId = RunId.make("parent-run");
 export const remoteThreadId = ThreadId.make("child-on-host");
 export const remoteRunId = RunId.make("launched-run-A");
-export const instanceId = ProviderInstanceId.make("remote-only");
+const instanceId = ProviderInstanceId.make("remote-only");
 export const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("origin"),
   requestNamespace: "parent-session",
