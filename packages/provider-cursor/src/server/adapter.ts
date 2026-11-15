@@ -26,7 +26,6 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
-  type ServerProviderModel,
   type ThreadId,
 } from "@goat/contracts";
 import { CursorSettings } from "../settings.ts";
@@ -54,7 +53,7 @@ import {
 } from "./agentOptions.ts";
 import { cursorContextWindowTokens, cursorSdkModelSelection } from "./sdkModel.ts";
 import { makeCursorSkillTextResolver } from "./skills.ts";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import * as SessionEnv from "./sessionEnvironment.ts";
 import { goatOrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildCursorRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -289,9 +288,7 @@ const classifyCursorModelRejection =
 
 // Cursor results can omit output; retain more streamed fallback than the persisted tail.
 const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
-// After a turn ends, a retryable stream error can make Cursor's SDK resume from
-// an older checkpoint inside the same run. When those resumes save nothing, it
-// ends the run with this error even though the answer was already delivered.
+// After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
   "Agent turn stopped after repeated resume attempts made no progress";
 
@@ -307,11 +304,12 @@ interface CursorLiveAgent {
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
 
-export interface CursorAdapterV2Options {
+export interface CursorAdapterV2Options extends SessionEnv.SessionAuth {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CursorSettings;
-  readonly environment: NodeJS.ProcessEnv;
-  readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
+  readonly environment: SessionEnv.Source;
+  /** The model catalog this key at this backend was last checked with, if any. */
+  readonly getModels?: SessionEnv.CatalogModels;
 }
 
 export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
@@ -324,11 +322,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
   const platform = yield* HostProcess.Platform;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
-  // Native history survives transport/session reopening. Unknown IDs stay silent until
-  // this adapter has advertised tools; no conversation or memory body is retained here.
   const memoryToolClaims = new Set<string>();
   const adapterOptions = options;
-  const apiKey = adapterOptions.environment.CURSOR_API_KEY?.trim() || undefined;
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
@@ -341,6 +336,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
     }),
     openSession: Effect.fn("CursorAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
+        const {
+          environment: env,
+          apiKey,
+          validate,
+        } = yield* SessionEnv.forSession(options.environment, options);
         const sessionScope = yield* Effect.scope;
         const createdAt = yield* DateTime.now;
         const session = providerSession({
@@ -1372,8 +1372,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
           switch (update.type) {
             case "text-delta":
-              // Classify each assistant message on its own, so earlier
-              // commentary does not hide a later standalone transport dump.
+              // Earlier commentary must not hide a later standalone transport dump.
               if (context.assistant.current === null) {
                 context.assistantReply = new CursorTransportFailure();
               }
@@ -1650,7 +1649,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing.cwd === openInput.runtimePolicy.cwd &&
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
             existing.mcpEndpoint === mcpSession?.endpoint &&
-            // Servers are fixed when the agent opens; computer use changes reopen it.
             existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver) &&
             existing.subagentsDisabled === cursorSubagentsDisabled(mcpSession)
           ) {
@@ -1663,7 +1661,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           const options = makeCursorAgentOptions({
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
-            models: adapterOptions.getModels?.() ?? [],
+            models: adapterOptions.getModels?.(apiKey, env) ?? [],
             runtimePolicy: openInput.runtimePolicy,
             platform,
             threadId: openInput.threadId,
@@ -1686,7 +1684,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ? { operation: "create" as const }
                 : { operation: "resume" as const, agentId: openInput.agentId }),
               storeCwd,
-              options,
+              options: yield* validate.pipe(Effect.as(options)),
+              validate,
               threadId: openInput.threadId,
               providerSessionId: input.providerSessionId,
             })
@@ -1705,7 +1704,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Ref.set(liveAgent, next);
           return next;
         });
-        const resolveCursorSkillText = makeCursorSkillTextResolver(adapterOptions.environment);
+        const resolveCursorSkillText = makeCursorSkillTextResolver(env);
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           config: McpProviderSession.McpProviderSessionConfig | undefined,
@@ -1876,7 +1875,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 options: {
                   model: cursorSdkModelSelection(
                     turnInput.modelSelection,
-                    adapterOptions.getModels?.() ?? [],
+                    adapterOptions.getModels?.(apiKey, env) ?? [],
                   ),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
                   mcpServers: mcpServers ?? {},
@@ -2083,7 +2082,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           providerSession: session,
           getModelContextWindow: (selection) =>
             selection.instanceId === adapterOptions.instanceId
-              ? cursorContextWindowTokens(selection, adapterOptions.getModels?.() ?? [])
+              ? cursorContextWindowTokens(selection, adapterOptions.getModels?.(apiKey, env) ?? [])
               : undefined,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ensureThread: Effect.fn("CursorAdapterV2.ensureThread")(
@@ -2394,14 +2393,13 @@ export const CursorAdapterV2Driver: ProviderAdapterDriver<
   defaultConfig: (): CursorSettings => DEFAULT_CURSOR_SETTINGS,
   create: Effect.fn("CursorAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<CursorSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
       return yield* makeCursorAdapterV2({
         instanceId: input.instanceId,
         settings: {
           ...input.config,
           enabled: input.enabled,
         },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: yield* SessionEnv.makeCurrent(input.environment),
       });
     },
     (effect, input) =>

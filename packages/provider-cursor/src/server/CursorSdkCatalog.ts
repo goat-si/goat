@@ -13,6 +13,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { cursorAccountIdentity } from "./accountIdentity.ts";
+import { cursorVerificationUrl } from "./sdkBackend.ts";
 
 export interface CursorSdkCatalogSnapshot {
   readonly user: SDKUser | undefined;
@@ -109,10 +111,13 @@ const isCatalogError = Schema.is(CursorSdkCatalogError);
 // Catalog discovery uses public HTTP routes so signed-in startup does not initialize the agent runtime.
 const makeLiveProbes = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
-  const baseUrl = (yield* Config.String("CURSOR_BACKEND_URL").pipe(
-    Config.withDefault("https://api.cursor.com"),
-    Effect.orDie,
-  )).replace(/\/$/, "");
+  // Production keys are served by Cursor's public API, however the production backend is written.
+  const baseUrl = cursorVerificationUrl(
+    yield* Config.String("CURSOR_BACKEND_URL").pipe(
+      Config.withDefault("https://api2.cursor.sh"),
+      Effect.orDie,
+    ),
+  );
   const request = Effect.fn("CursorSdkCatalog.request")(function* (apiKey: string, path: string) {
     const response = yield* client
       .execute(
@@ -162,14 +167,28 @@ const makeLiveProbes = Effect.gen(function* () {
   } satisfies CursorSdkCatalogProbes;
 });
 
+// The key reaches the lookup through the request, so the cache is keyed by its hash, never the key.
+const PendingApiKey = Context.Reference<string | undefined>(
+  "@goat/provider-cursor/CursorSdkCatalog/PendingApiKey",
+  { defaultValue: () => undefined },
+);
+
 export const makeCursorSdkCatalog = Effect.fn("CursorSdkCatalog.make")(function* (
   probes: CursorSdkCatalogProbes,
 ) {
-  const modelCache = yield* Cache.makeWith(probes.readModels, {
-    capacity: 32,
-    timeToLive: (exit) =>
-      Exit.isSuccess(exit) && exit.value.length > 0 ? Duration.minutes(30) : Duration.zero,
-  });
+  const modelCache = yield* Cache.makeWith(
+    (_account: string) =>
+      Effect.flatMap(PendingApiKey, (apiKey) =>
+        apiKey === undefined
+          ? Effect.die("CursorSdkCatalog: a model lookup needs its API key")
+          : probes.readModels(apiKey),
+      ),
+    {
+      capacity: 32,
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) && exit.value.length > 0 ? Duration.minutes(30) : Duration.zero,
+    },
+  );
   return CursorSdkCatalog.of({
     read: Effect.fn("CursorSdkCatalog.read")(function (apiKey) {
       return Effect.all(
@@ -181,7 +200,10 @@ export const makeCursorSdkCatalog = Effect.fn("CursorSdkCatalog.make")(function*
             () => Effect.undefined,
             (error: CursorSdkCatalogError) => Effect.fail(error),
           ),
-          models: Cache.get(modelCache, apiKey),
+          // A catalog is built for one check and so one backend; the key alone tells accounts apart.
+          models: Cache.get(modelCache, cursorAccountIdentity(apiKey, undefined)).pipe(
+            Effect.provideService(PendingApiKey, apiKey),
+          ),
         },
         { concurrency: "unbounded" },
       );

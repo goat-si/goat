@@ -195,7 +195,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
     }),
   ),
   Layer.provide(
-    Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () =>
         Effect.succeed({
           repositoryIdentity: null,
