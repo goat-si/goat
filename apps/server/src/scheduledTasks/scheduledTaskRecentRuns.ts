@@ -112,27 +112,30 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
 ) {
   const chosen = yield* encodeChosen(routines.map((routine) => [routine.id, routine.createdAt]));
   // Per routine, seven steps down scheduled_task_runs_task, however many firings it has stored.
-  // Every size guard is a CASE branch, which SQLite evaluates lazily (sqlite.org/lang_expr.html).
+  // Each size guard is a CASE branch beside the column it reads, so no plan loads a value before
+  // its check: SQLite evaluates CASE lazily (sqlite.org/lang_expr.html).
   const rows = yield* sql<RecentRunRow>`
     WITH chosen(task_id, created_at) AS (
       SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(${chosen}))
-    SELECT task_id, CASE WHEN NOT oversized THEN snapshot_json END AS snapshot_json,
-      CASE WHEN NOT oversized THEN input_id END AS input_id, quiet, oversized FROM (
-      SELECT c.task_id, r.snapshot_json, l.input_id, r.requested_at, r.firing_id,
-        octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0) > ${MAX_STORED_RUN_BYTES}
-          AS oversized,
-        CASE WHEN octet_length(i.decision_json) <= ${MAX_QUIET_DECISION_BYTES} THEN
-          CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
-        END = 'no_update' AS quiet
-      FROM chosen c
-      JOIN scheduled_task_runs r ON r.firing_id IN (
-        SELECT n.firing_id FROM scheduled_task_runs n
-        WHERE n.task_id = c.task_id AND n.task_created_at = c.created_at
-        ORDER BY n.requested_at DESC, n.firing_id DESC LIMIT ${SCHEDULED_TASK_RECENT_RUNS})
-      LEFT JOIN scheduled_task_channel_inputs l ON l.firing_id = r.firing_id
-      LEFT JOIN channel_inbox i ON i.input_id =
-        CASE WHEN octet_length(l.input_id) <= ${MAX_STORED_RUN_BYTES} THEN l.input_id END)
-    ORDER BY task_id, requested_at DESC, firing_id DESC`;
+    SELECT c.task_id,
+      CASE WHEN octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0)
+        <= ${MAX_STORED_RUN_BYTES} THEN r.snapshot_json END AS snapshot_json,
+      CASE WHEN octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0)
+        <= ${MAX_STORED_RUN_BYTES} THEN l.input_id END AS input_id,
+      CASE WHEN octet_length(i.decision_json) <= ${MAX_QUIET_DECISION_BYTES} THEN
+        CASE WHEN json_valid(i.decision_json) THEN json_extract(i.decision_json, '$.action.type') END
+      END = 'no_update' AS quiet,
+      octet_length(r.snapshot_json) + coalesce(octet_length(l.input_id), 0) > ${MAX_STORED_RUN_BYTES}
+        AS oversized
+    FROM chosen c
+    JOIN scheduled_task_runs r ON r.firing_id IN (
+      SELECT n.firing_id FROM scheduled_task_runs n
+      WHERE n.task_id = c.task_id AND n.task_created_at = c.created_at
+      ORDER BY n.requested_at DESC, n.firing_id DESC LIMIT ${SCHEDULED_TASK_RECENT_RUNS})
+    LEFT JOIN scheduled_task_channel_inputs l ON l.firing_id = r.firing_id
+    LEFT JOIN channel_inbox i ON i.input_id =
+      CASE WHEN octet_length(l.input_id) <= ${MAX_STORED_RUN_BYTES} THEN l.input_id END
+    ORDER BY c.task_id, r.requested_at DESC, r.firing_id DESC`;
   const byTask = new Map<string, Array<ScheduledTaskRecentRun>>();
   const oversized = new Set<string>();
   for (const row of rows) {
