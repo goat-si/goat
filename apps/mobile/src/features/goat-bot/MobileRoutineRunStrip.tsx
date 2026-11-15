@@ -90,8 +90,9 @@ function MobileRoutineRunPanel(props: {
   const { dot } = props;
   const state = routineRunState(dot);
   const inputId = dot.conversation?.inputId;
+  const quiet = dot.quiet === true && dot.status === "completed";
   // Only an ended run with a conversation is read; a run still going reads once the list says so.
-  const readable = state === "ended" && dot.quiet !== true && dot.dispatchFailed !== true;
+  const readable = state === "ended" && !quiet && dot.dispatchFailed !== true;
   const read = useEnvironmentQuery(
     readable && inputId !== undefined
       ? channelEnvironment.getInput({ environmentId: props.environmentId, input: { inputId } })
@@ -115,7 +116,7 @@ function MobileRoutineRunPanel(props: {
         {finished}
       </Text>
       <Text numberOfLines={6} className="text-foreground-muted">
-        {runBody({ ...props, state, inputId, read })}
+        {runBody({ ...props, state, quiet, inputId, read })}
       </Text>
     </View>
   );
@@ -127,12 +128,13 @@ function runBody(input: {
   readonly task: RunTask;
   readonly botName: string;
   readonly state: ReturnType<typeof routineRunState>;
+  readonly quiet: boolean;
   readonly inputId: string | undefined;
   readonly read: { readonly data: ChannelInputSnapshot | null; readonly error: unknown };
 }): string {
   const { dot } = input;
   if (input.state === "in-flight") return "Still running.";
-  if (dot.quiet === true && dot.status === "completed") return "No update";
+  if (input.quiet) return "No update";
   if (dot.dispatchFailed === true) {
     const error =
       input.newest && input.task.lastRun?.firingId === dot.firingId

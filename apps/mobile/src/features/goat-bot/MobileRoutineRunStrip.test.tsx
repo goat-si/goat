@@ -1,5 +1,6 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { routineRunTime } from "@goat/client-runtime/scheduledTasks";
 import { ChannelInputId, CommandId, ThreadId, type ScheduledTaskRecentRun } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -267,14 +268,66 @@ it("one run is open at a time: the open dot closes it, another moves it, and a r
   await view.unmount();
 });
 
-it("a strip mounted again, as Home's list does when the routines entry scrolls back, starts with no run open", async () => {
+it("the newest run's error shows only when it is that run's and has text", async () => {
   setup();
-  const task = { recentRuns: [run(9, "completed", { conversation: conversation("in-9") })] };
-  const first = await show(task);
-  await first.press("Run on Nov 14, 09:00, completed");
-  expect(first.dots()).toEqual([["Run on Nov 14, 09:00, completed", "true"]]);
-  await first.unmount();
-  const again = await show(task);
-  expect(again.dots()).toEqual([["Run on Nov 14, 09:00, completed", "false"]]);
-  await again.unmount();
+  const recentRuns = [run(9, "failed", { dispatchFailed: true })];
+  for (const task of [
+    { recentRuns, lastRun: { firingId: CommandId.make("firing-9") }, lastRunError: " \nmore" },
+    { recentRuns, lastRun: { firingId: CommandId.make("firing-1") }, lastRunError: "Paused." },
+  ]) {
+    const view = await show(task as Task);
+    await view.press("Run on Nov 14, 09:00, dispatch failed");
+    expect(view.text()).toContain("This run didn't reach Scout.");
+    expect(view.text()).not.toContain("Paused.");
+    await view.unmount();
+  }
+});
+
+it("names the outcome and both times, says Loading… while it reads, and reads a quiet run that did not complete", async () => {
+  setup();
+  answer("in-6", { failure: { reason: "provider", message: "The model refused." } });
+  answer("in-5", { reply: { text: "Paused, then done." } });
+  const view = await show({
+    recentRuns: [
+      run(8, "completed", { conversation: conversation("in-8") }),
+      run(7, "completed", {
+        conversation: conversation("in-7"),
+        completedAt: "2026-11-16T10:30:00.000Z",
+      }),
+      run(6, "failed", { quiet: true, conversation: conversation("in-6") }),
+      run(5, "paused_by_policy", {
+        conversation: conversation("in-5"),
+        completedAt: "2026-11-14T05:10:00.000Z",
+      }),
+    ],
+  });
+  await view.press("Run on Nov 14, 08:00, completed");
+  expect(view.text()).toContain("Completed · Nov 14, 08:00Loading…");
+  // A finish on another day says its date; the stub formatter keeps the test's month and day.
+  await view.press("Run on Nov 14, 07:00, completed");
+  expect(view.text()).toContain("Completed · Nov 14, 07:00, finished Nov 14, 10:30");
+  await view.press("Run on Nov 14, 06:00, failed");
+  expect(view.text()).toContain("The model refused.");
+  // An unknown status with a finish time has ended, so it is read.
+  await view.press("Run on Nov 14, 05:00, outcome unavailable");
+  expect(view.text()).toContain("Paused, then done.");
+  await view.unmount();
+});
+
+it("a finish on the same day says only its time", async () => {
+  setup();
+  const completedAt = "2026-11-14T12:00:05.000Z";
+  const view = await show({
+    recentRuns: [
+      {
+        ...run(12, "completed", { conversation: conversation("in-12") }),
+        completedAt,
+      },
+    ],
+  });
+  await view.press("Run on Nov 14, 12:00, completed");
+  expect(view.text()).toContain(
+    `Completed · Nov 14, 12:00, finished ${routineRunTime(completedAt, { timeOnly: true })}`,
+  );
+  await view.unmount();
 });
