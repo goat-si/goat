@@ -95,7 +95,6 @@ import {
   type AuthEnvironmentScope,
   type DiscoveredLocalServerList,
   type ServerProvider,
-  type FilesystemBrowseFailure,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -327,6 +326,10 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import {
+  filesystemBrowseFailureContext,
+  unexpectedCompatibilityError,
+} from "./workspace/filesystemBrowseFailure.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
@@ -342,9 +345,6 @@ import { isNetworkPath } from "@goat/shared/path";
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
-}
-function unexpectedCompatibilityError(error: never): never {
-  throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
 const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
   readonly threadId: ThreadId;
@@ -467,28 +467,6 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
         failure: "search_index_search_failed",
         normalizedCwd: error.cwd,
         detail: error.reason,
-      };
-    default:
-      return unexpectedCompatibilityError(error);
-  }
-}
-
-function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntriesBrowseError): {
-  readonly failure: FilesystemBrowseFailure;
-  readonly parentPath?: string;
-  readonly platform?: string;
-  readonly pathMissing?: boolean;
-} {
-  switch (error._tag) {
-    case "WorkspaceEntriesWindowsPathUnsupportedError":
-      return { failure: "windows_path_unsupported", platform: error.platform };
-    case "WorkspaceEntriesCurrentProjectRequiredError":
-      return { failure: "current_project_required" };
-    case "WorkspaceEntriesReadDirectoryError":
-      return {
-        failure: "read_directory_failed",
-        parentPath: error.parentPath,
-        ...(error.pathMissing ? { pathMissing: true } : {}),
       };
     default:
       return unexpectedCompatibilityError(error);
