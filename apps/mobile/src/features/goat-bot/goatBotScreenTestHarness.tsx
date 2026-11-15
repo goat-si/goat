@@ -577,6 +577,8 @@ export function setupComposer() {
 
 export async function typeInto(container: HTMLElement, value: string) {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+  // A person cannot type into a read-only box, so neither can a test.
+  if (input?.readOnly) throw new Error("The message box is read-only.");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
     input?.dispatchEvent(new Event("input", { bubbles: true }));

@@ -262,6 +262,33 @@ it("Send right after the destination changed sends nothing written for the old o
   }
 });
 
+it("a typed answer still answers its question after a reconnect whose saved reference lacks that question", async () => {
+  setup(main);
+  const chat = await open(<GoatBotScreen visible />);
+  screenSession.rows = [asked];
+  await chat.view.rerender(<GoatBotScreen visible />);
+  try {
+    await act(async () =>
+      chat.view.container
+        .querySelector('button[aria-label="Something else"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    await typeInto(chat.view.container, "Keep it");
+    unconfirmed({ environmentId: "env", threadId: "older-main-thread" });
+    screenSession.rows = [];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    move(main);
+    screenSession.rows = [asked];
+    await chat.view.rerender(<GoatBotScreen visible />);
+    expect(chat.view.container.querySelector('[aria-label^="Answering: "]')).not.toBeNull();
+    await chat.press("Send message");
+    expect(screenSession.send).not.toHaveBeenCalled();
+    expect(screenSession.answer).toHaveBeenCalledWith("Keep it", "task-ask", "q-ask");
+  } finally {
+    await chat.close();
+  }
+});
+
 it("answering ends and its typed answer clears when the destination changes, even with the same question still listed", async () => {
   setup(main);
   const chat = await open(<GoatBotScreen visible />);
