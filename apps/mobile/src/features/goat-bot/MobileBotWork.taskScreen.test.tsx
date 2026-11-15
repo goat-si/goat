@@ -144,6 +144,8 @@ const state = vi.hoisted(() => ({
   canUpdate: true,
   lookup: vi.fn(),
   update: vi.fn(),
+  // The task's child work, as the child read returns it.
+  childGroups: null as null | { groups: unknown[] },
 }));
 
 // The real face module draws the chip's face; only its native drawing and styling stand in.
@@ -283,11 +285,11 @@ vi.mock("../../state/query", () => ({
       : key === "routines"
         ? state.routines
         : {
-            data: null,
+            data: key === "child" ? state.childGroups : null,
             cause: null,
             error: null,
             isPending: false,
-            isSuccess: false,
+            isSuccess: key === "child" && state.childGroups !== null,
             refresh: vi.fn(),
           },
 }));
@@ -335,6 +337,7 @@ function reset() {
   state.retry.mockReset();
   state.lookup.mockReset();
   state.update.mockReset();
+  state.childGroups = null;
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
 }
 const scout = {
@@ -741,4 +744,74 @@ it("a Pin sent while the task was listed, landing during the first read after it
   await act(async () => first.settle(AsyncResult.success(lookedUp("completed"))));
   expect(lookups("env", "main", "task-old")).toBe(2);
   expect(button("Unpin")).toBeDefined();
+});
+
+it("a task's own screen names its coding threads by title, as Show work does (#3307)", async () => {
+  reset();
+  state.openThread.mockReset();
+  const long =
+    "Move every workflow that still pins Node 22 to the Node 24 runtime and drop the old cache keys";
+  const coding = (threadId: string, title: string) =>
+    decodeRow({
+      kind: "coding",
+      taskId: "task-a",
+      environmentId: "env",
+      threadId,
+      title,
+      state: "bound",
+      lastActivityAt: at,
+    });
+  Object.assign(state.task, {
+    data: {
+      rows: [
+        decodeRow({
+          kind: "task",
+          task: {
+            taskId: "task-a",
+            title: "Move the build to Node 24",
+            status: "running",
+            updatedAt: at,
+          },
+          view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: at,
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+          worker: { environmentId: "env", threadId: "worker" },
+        }),
+        coding("thread-a", "  Patch web  "),
+        coding("thread-long", long),
+        coding("thread-blank", "   "),
+      ],
+    },
+  });
+  // A thread the child read found that the list has no row for.
+  state.childGroups = {
+    groups: [
+      {
+        taskId: "task-a",
+        truncated: false,
+        children: [
+          {
+            childWorkId: "c1",
+            surface: "thread_launch",
+            state: "running",
+            destination: { threadId: "child-thread" },
+          },
+        ],
+      },
+    ],
+  };
+  await show("task-a");
+  const links = [...container.querySelectorAll("button")]
+    .filter((item) => /^(GOAT|Work) thread: /.test(item.getAttribute("aria-label") ?? ""))
+    .map((item) => [item.getAttribute("aria-label"), item.textContent]);
+  expect(links).toEqual([
+    ["Work thread: Move the build to Node 24", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    [`GOAT thread: ${long}`, long],
+    ["GOAT thread: Open work thread", "Open work thread"],
+    ["Work thread: Move the build to Node 24", "Open work thread"],
+  ]);
+  await press("Patch web");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread-a" });
 });
