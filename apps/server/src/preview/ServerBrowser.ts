@@ -106,12 +106,7 @@ import {
 } from "./ServerBrowserSessions.ts";
 import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
-import {
-  assertNavigationSucceeded,
-  assertOpenedPageLoaded,
-  loadErrorOf,
-  reportedTabUrl,
-} from "./serverBrowserLoadError.ts";
+import * as LoadError from "./serverBrowserLoadError.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
 import { makeBrowserHistorySupport } from "./BrowserHistoryRecordAction.ts";
@@ -1373,7 +1368,7 @@ const make = Effect.gen(function* () {
             () => "",
           ).then((value) => value || null),
     ]);
-    const loadError = loadErrorOf(tab, desktopChannel);
+    const loadError = LoadError.loadErrorOf(tab, desktopChannel);
     const status = {
       available: true,
       visible: capacity.visible(tab),
@@ -1399,7 +1394,7 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
-          url: reportedTabUrl(candidate, desktopChannel),
+          url: LoadError.reportedTabUrl(candidate, desktopChannel),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
@@ -1717,7 +1712,7 @@ const make = Effect.gen(function* () {
                     "load",
                     navigationTimeout,
                     tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
-                    () => assertNavigationSucceeded(tab, desktopChannel),
+                    () => LoadError.assertNavigationSucceeded(tab, desktopChannel),
                   );
                 }
               } else {
@@ -1726,7 +1721,8 @@ const make = Effect.gen(function* () {
                   dropTab(tab, false);
                 });
                 navigationSent = tab.initialNavigationSent;
-                if (url) await assertOpenedPageLoaded(tab, desktopChannel, navigationTimeout);
+                if (url)
+                  await LoadError.assertOpenedPageLoaded(tab, desktopChannel, navigationTimeout);
               }
               actionSignal.throwIfAborted();
             };
@@ -1969,7 +1965,7 @@ const make = Effect.gen(function* () {
               navigateInput.readiness ?? "load",
               navigateInput.timeoutMs ?? request.timeoutMs,
               actionGate(destination).channel,
-              () => assertNavigationSucceeded(tab, desktopChannel),
+              () => LoadError.assertNavigationSucceeded(tab, desktopChannel),
             ),
           { url: destination },
         );
@@ -2023,7 +2019,7 @@ const make = Effect.gen(function* () {
         )
           .then(ServerBrowserScreen.recheck(tab, request))
           .then((snapshot) => {
-            const loadError = loadErrorOf(tab, desktopChannel);
+            const loadError = LoadError.loadErrorOf(tab, desktopChannel);
             return loadError ? { ...snapshot, url: loadError.url, loadError } : snapshot;
           });
       }
