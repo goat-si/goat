@@ -4,6 +4,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import {
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+  DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+  DATABASE_MIGRATIONS_STARTED_MESSAGE,
+  isRunningDatabaseMigrations,
+} from "@goat/shared/databaseMigrationLog";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -154,6 +160,31 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), []);
       assert.isFalse(yield* onRestart(reopen, hasPendingMigrations()));
+    }).pipe(provide);
+  });
+
+  it.effect("brackets an upgrade's progress lines so the desktop waits for them to end", () => {
+    const { provide, reopen } = database();
+    return Effect.gen(function* () {
+      yield* seedOldGoatLedger(147);
+      const lines: Array<string> = [];
+      const logger = Logger.make(({ message }) => {
+        lines.push(Array.isArray(message) ? message.join(" ") : String(message));
+      });
+      const migrate = runMigrations().pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      );
+      yield* onRestart(reopen, migrate);
+      const finished = lines.indexOf(DATABASE_MIGRATIONS_FINISHED_MESSAGE);
+      assert.strictEqual(lines[0], DATABASE_MIGRATIONS_STARTED_MESSAGE);
+      assert.isTrue(lines.includes(DATABASE_MIGRATION_PROGRESS_MESSAGE));
+      for (let end = 1; end <= finished; end++) {
+        assert.isTrue(isRunningDatabaseMigrations(lines.slice(0, end).join("\n")));
+      }
+      assert.isFalse(isRunningDatabaseMigrations(lines.join("\n")));
+      lines.length = 0;
+      yield* onRestart(reopen, migrate);
+      assert.isFalse(lines.includes(DATABASE_MIGRATIONS_STARTED_MESSAGE));
     }).pipe(provide);
   });
 

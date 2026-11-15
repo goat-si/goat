@@ -2,6 +2,11 @@ import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
+  DATABASE_MIGRATION_PROGRESS_MESSAGE,
+  DATABASE_MIGRATIONS_FINISHED_MESSAGE,
+  DATABASE_MIGRATIONS_STARTED_MESSAGE,
+} from "@goat/shared/databaseMigrationLog";
+import {
   assertMemoryMigrationsCompatible,
   displacedUpstreamMigrations,
   FIRST_V2_MIGRATION_ID,
@@ -421,6 +426,9 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  // The desktop waits past its readiness budgets until the finished line follows this one.
+  const announced = yield* hasPendingMigrations();
+  if (announced) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const executedMigrations = yield* Effect.gen(function* () {
@@ -455,7 +463,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ];
     for (const [index, [id, name]] of pending.entries()) {
       if (latestRecordedId > 0) {
-        yield* Effect.log("Upgrading database").pipe(
+        yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
           Effect.annotateLogs({
             migration: `${id}_${name}`,
             progress: `${index + 1} of ${pending.length}`,
@@ -467,9 +475,9 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     return executed;
   }).pipe(Effect.catchTags({ MigrationError: failIfDatabaseNewerThanBuild }));
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
+  yield* migrations.length === 0 && !announced
     ? Effect.logDebug("Database schema is current")
-    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+    : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(Effect.annotateLogs({ migrations }));
 
   const sql = yield* SqlClient.SqlClient;
   const recorded = yield* sql<{
