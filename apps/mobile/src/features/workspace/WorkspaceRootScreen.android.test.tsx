@@ -62,6 +62,9 @@ vi.mock("../../components/ui/useAndroidControlSizing", () => ({
   useAndroidControlSizing: () => ({ fabClearance: 64 }),
 }));
 vi.mock("../home/HomeRouteScreen", () => ({ HomeRouteScreen: () => null }));
+vi.mock("../goat-bot/useMobileGoatBotHomeMode", () => ({
+  useMobileGoatBotHomeMode: () => ({ mode: "thread" }),
+}));
 vi.mock("../pull-requests/PullRequestFilterMenuContext", () => ({
   PullRequestFilterMenuProvider: ({ children }: { children?: ReactNode }) => children,
 }));
