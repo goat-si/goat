@@ -1,3 +1,4 @@
+import { SourceControlProviderKind } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -724,6 +725,53 @@ describe("getChangeRequestActivity dismissed reviews", () => {
         expect(activity.comments[0]?.editedAt).toBe("2026-07-04T00:00:00Z");
       }),
       Effect.provide(layerFor("<!-- Macroscope (Approvability) review body marker -->")),
+    ),
+  );
+  const failingThreadRead = (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
+    Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+      getPullRequestActivity: () => Effect.succeed({ author: null, comments: [], commits: [] }),
+      listReviewThreadComments: () => Effect.fail(error),
+    });
+  const retryAt = 1_900_000_000_000;
+  it.effect.each([
+    {
+      name: "rate limit",
+      error: new GitHubRequestPolicy.GitHubApiRateLimitError({
+        host: "github.com",
+        operation: "listReviewThreadComments",
+        retryAt,
+      }),
+    },
+    {
+      name: "rate-limit pause",
+      error: new SourceControlRateLimit.SourceControlRateLimitPausedError({
+        provider: SourceControlProviderKind.make("github"),
+        host: "github.com",
+        retryAt,
+      }),
+    },
+  ])("reports a $name during review thread reads", ({ error }) =>
+    readActivity.pipe(
+      Effect.flip,
+      Effect.map((failure) => expect(failure).toMatchObject({ reason: "rate-limited", retryAt })),
+      Effect.provide(failingThreadRead(error)),
+    ),
+  );
+  it.effect("retains partial activity for other review thread errors", () =>
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.reviewThreads).toEqual([]);
+        expect(activity.reviewThreadsTruncated).toBe(true);
+      }),
+      Effect.provide(
+        failingThreadRead(
+          new GitHubRequestPolicy.GitHubApiResponseError({
+            host: "github.com",
+            operation: "listReviewThreadComments",
+            status: 500,
+          }),
+        ),
+      ),
     ),
   );
 });
