@@ -53,8 +53,9 @@ account.
 
 Managed installation supports Apple Silicon and Intel macOS, Linux x64 or ARM64,
 and Windows x64 or ARM64. When Google's release channel is unreachable, every one
-of these installs the 1.4.5 runtime GOAT tested; musl Linux installs only Google's
-native CLI, so it needs that channel. Allow several GB of free disk space,
+of these installs the 1.4.5 runtime GOAT tested, except musl Linux: that runtime is
+built for glibc, so musl Linux installs only Google's native CLI, and while the
+channel is down setup reports that no release is available. Allow several GB of free disk space,
 especially on Linux.
 On Linux ARM64, Google's runtime needs a kernel with 4 KiB memory pages, so it
 does not run on kernels with larger pages, such as Asahi Linux or Raspberry Pi 5.

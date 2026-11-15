@@ -72,6 +72,20 @@ export function parseAntigravityCliRelease(
   };
 }
 
+/** Whether this is a musl Linux, which has its own native CLI build and no pinned runtime. */
+export const hostUsesMusl = (input: {
+  readonly fs: FileSystem.FileSystem;
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+}) =>
+  input.platform === "linux"
+    ? input.fs
+        .exists(
+          input.arch === "arm64" ? "/lib/libc.musl-aarch64.so.1" : "/lib/libc.musl-x86_64.so.1",
+        )
+        .pipe(Effect.orElseSucceed(() => false))
+    : Effect.succeed(false);
+
 /** Reads Google's CLI manifest for this host; null when it is unreachable or unusable. */
 export const lookupAntigravityCliRelease = Effect.fn("AntigravityInstallation.lookupCliRelease")(
   function* (input: {
@@ -80,12 +94,8 @@ export const lookupAntigravityCliRelease = Effect.fn("AntigravityInstallation.lo
     readonly platform: NodeJS.Platform;
     readonly arch: string;
   }) {
-    const { http, fs, platform, arch } = input;
-    const musl =
-      platform === "linux" &&
-      (yield* fs
-        .exists(arch === "arm64" ? "/lib/libc.musl-aarch64.so.1" : "/lib/libc.musl-x86_64.so.1")
-        .pipe(Effect.orElseSucceed(() => false)));
+    const { http, platform, arch } = input;
+    const musl = yield* hostUsesMusl(input);
     const target = antigravityCliTarget(platform, arch, musl);
     if (target === null) return null;
     return yield* http.get(`${ANTIGRAVITY_CLI_MANIFEST_BASE}/${target}.json`).pipe(

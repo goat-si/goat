@@ -27,6 +27,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as ServerConfig from "../config.ts";
 import {
   antigravityCliTarget,
+  hostUsesMusl,
   lookupAntigravityCliRelease,
   type AntigravityCliReleaseAsset,
 } from "./antigravityCliRelease.ts";
@@ -129,7 +130,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   // The pinned release stays the fallback whenever Google's CLI manifest offers nothing usable.
   const pinned =
     options.releaseAsset === undefined
-      ? resolveAntigravityReleaseAsset(platform, arch)
+      ? resolveAntigravityReleaseAsset(platform, arch, yield* hostUsesMusl({ fs, platform, arch }))
       : options.releaseAsset;
   let releaseAsset: AntigravityReleaseAsset | AntigravityCliReleaseAsset | null = pinned;
   const supported =

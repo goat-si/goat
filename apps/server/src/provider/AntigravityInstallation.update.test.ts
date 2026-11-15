@@ -70,6 +70,35 @@ it.layer(NodeServices.layer)("Antigravity managed CLI updates", (it) => {
       }),
   );
 
+  it.effect.each([
+    { libc: "glibc", musl: false, version: "1.4.5" },
+    { libc: "musl", musl: true, version: null },
+  ])(
+    "with Google's channel down, Linux $libc is offered the pinned glibc runtime only on glibc",
+    ({ musl, version }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { installation, requests } = yield* makeHarness({
+          native: true,
+          platform: "linux",
+          arch: "x64",
+          nativeManifest: () => null,
+          fileSystem: {
+            ...fs,
+            exists: (path) =>
+              path === "/lib/libc.musl-x86_64.so.1" ? Effect.succeed(musl) : fs.exists(path),
+          },
+        });
+        yield* installation.checkForUpdate;
+        expect((yield* installation.state).version).toBe(version);
+        if (!musl) return;
+        expect(yield* Effect.flip(installation.start)).toMatchObject({
+          detail: expect.stringContaining("No Antigravity release is available to install."),
+        });
+        expect(requests.filter((url) => url.startsWith("https://dl.google.com/"))).toEqual([]);
+      }),
+  );
+
   it.effect("installs nothing when the native download's SHA-512 differs from the manifest", () =>
     Effect.gen(function* () {
       const { installation, requests } = yield* makeHarness({
