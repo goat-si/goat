@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -249,4 +250,105 @@ it.effect("cleans up an interrupted startup and allows a retry", () =>
       }),
     ).pipe(Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime));
   }),
+);
+
+it.effect(
+  "starts a separate server for a new environment while retaining the borrowed server",
+  () =>
+    Effect.gen(function* () {
+      const testRuntime = yield* makeRuntime;
+      const host = { PATH: "/old" };
+      const release = yield* Deferred.make<void>();
+      const firstReady = yield* Deferred.make<string>();
+      const starts: string[] = [];
+      const runtime = {
+        ...testRuntime.runtime,
+        startOpenCodeServerProcess: (
+          input: Parameters<typeof testRuntime.runtime.startOpenCodeServerProcess>[0],
+        ) =>
+          Effect.sync(() => {
+            starts.push(input.environment?.PATH ?? "");
+          }).pipe(Effect.andThen(testRuntime.runtime.startOpenCodeServerProcess(input))),
+      };
+      const owner = yield* OpenCodeServerOwner.make({
+        binaryPath: "opencode",
+        directory: "/project",
+        currentEnvironment: Effect.sync(() => ({ ...host })),
+      }).pipe(Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime));
+      const first = yield* owner
+        .withServer((server) =>
+          Deferred.succeed(firstReady, server.url).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(server.url),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+      const firstUrl = yield* Deferred.await(firstReady);
+      host.PATH = "/new";
+      const secondUrl = yield* owner.withServer((server) => Effect.succeed(server.url));
+      expect(secondUrl).not.toBe(firstUrl);
+      expect(starts).toEqual(["/old", "/new"]);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(first)).toBe(firstUrl);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("restarts a session using its captured environment and executable", () =>
+  Effect.gen(function* () {
+    const testRuntime = yield* makeRuntime;
+    const host = { PATH: "/old" };
+    let executable = "/old/opencode";
+    const running: Array<Ref.Ref<boolean>> = [];
+    const starts: Array<{ path: string | undefined; executable: string }> = [];
+    const runtime = {
+      ...testRuntime.runtime,
+      startOpenCodeServerProcess: (
+        input: Parameters<typeof testRuntime.runtime.startOpenCodeServerProcess>[0],
+      ) =>
+        Effect.gen(function* () {
+          starts.push({ path: input.environment?.PATH, executable: input.binaryPath });
+          const alive = yield* Ref.make(true);
+          running.push(alive);
+          const server = yield* testRuntime.runtime.startOpenCodeServerProcess(input);
+          return { ...server, isRunning: Ref.get(alive) };
+        }),
+    };
+    const owner = yield* OpenCodeServerOwner.make({
+      binaryPath: "opencode",
+      directory: "/project",
+      currentEnvironment: Effect.sync(() => host),
+    }).pipe(
+      Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
+      Effect.provideService(SpawnExecutableResolution, () => executable),
+    );
+    const launch = yield* owner.captureLaunch;
+    const first = yield* owner.withServer((server) => Effect.succeed(server.url), launch);
+    host.PATH = "/new";
+    executable = "/new/opencode";
+    yield* Ref.set(running[0]!, false);
+    const replacement = yield* owner.withServer((server) => Effect.succeed(server.url), launch);
+    expect(replacement).not.toBe(first);
+    expect(starts).toEqual([
+      { path: "/old", executable: "/old/opencode" },
+      { path: "/old", executable: "/old/opencode" },
+    ]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("bounds idle environment-specific servers by closing the oldest idle entry", () =>
+  Effect.gen(function* () {
+    const testRuntime = yield* makeRuntime;
+    const host = { PATH: "/fixture", PROFILE: "0" };
+    const owner = yield* OpenCodeServerOwner.make({
+      binaryPath: "opencode",
+      directory: "/project",
+      currentEnvironment: Effect.sync(() => host),
+    }).pipe(Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, testRuntime.runtime));
+    for (let i = 0; i < 33; i++) {
+      host.PROFILE = String(i);
+      yield* owner.withServer(() => Effect.void);
+    }
+    expect(yield* Ref.get(testRuntime.starts)).toBe(33);
+    expect(yield* Ref.get(testRuntime.closes)).toBe(1);
+  }).pipe(Effect.scoped),
 );

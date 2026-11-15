@@ -27,6 +27,8 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import { ACP_LOCAL_PRESETS } from "../localPresets.ts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
@@ -47,6 +49,127 @@ const layer = Layer.mergeAll(
     HttpClient.HttpClient,
     HttpClient.make(() => Effect.die("unexpected registry request")),
   ),
+);
+
+it.live(
+  "regression #3079: each Devin session's terminals use the host PATH current when that session started",
+  () =>
+    Effect.gen(function* () {
+      const host = { PATH: "/old" };
+      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      type Create = Parameters<Runtime["handleCreateTerminal"]>[0];
+      type Output = Parameters<Runtime["handleTerminalOutput"]>[0];
+      type Wait = Parameters<Runtime["handleTerminalWaitForExit"]>[0];
+      const handlers: { create?: Create; output?: Output; wait?: Wait }[] = [];
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const catalog = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir: process.cwd(),
+        toolsDir: process.cwd(),
+      });
+      const instanceId = ProviderInstanceId.make("devin-path-test");
+      const adapter = yield* makeAcpRegistryAdapterV2({
+        instanceId,
+        settings: yield* decodeSettings({ agentId: "devin" }),
+        environment: { ...host },
+        currentEnvironment: Effect.sync(() => host),
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: (input) =>
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              AcpSessionRuntime.layer({
+                ...input,
+                spawn: {
+                  command: process.execPath,
+                  args: [
+                    NodePath.resolve(
+                      import.meta.dirname,
+                      "../../../../apps/server/scripts/acp-mock-agent.ts",
+                    ),
+                  ],
+                  cwd: input.cwd,
+                  env: { GOAT_ACP_SESSION_LIFECYCLE: "1" },
+                },
+                authMethodId: "test",
+              }).pipe(
+                Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+              ),
+            );
+            const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+              Effect.provide(context),
+            );
+            const captured: (typeof handlers)[number] = {};
+            handlers.push(captured);
+            return {
+              ...runtime,
+              handleCreateTerminal: (handler) =>
+                Effect.sync(() => {
+                  captured.create = handler;
+                }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
+              handleTerminalOutput: (handler) =>
+                Effect.sync(() => {
+                  captured.output = handler;
+                }).pipe(Effect.andThen(runtime.handleTerminalOutput(handler))),
+              handleTerminalWaitForExit: (handler) =>
+                Effect.sync(() => {
+                  captured.wait = handler;
+                }).pipe(Effect.andThen(runtime.handleTerminalWaitForExit(handler))),
+            };
+          }),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+            Layer.mock(AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator)({
+              withForegroundStartup: (_key, effect) => effect,
+              publishAvailableCommands: () => Effect.void,
+              publishLiveConfiguration: () => Effect.void,
+            }),
+          ),
+        ),
+      );
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" };
+      for (const name of ["a", "b"]) {
+        if (name === "b") host.PATH = "/new";
+        const threadId = ThreadId.make(`devin-path-${name}`);
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`devin-path-${name}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      }
+      for (const [index, expected] of ["/old", "/new"].entries()) {
+        const captured = handlers[index];
+        if (!captured?.create || !captured.output || !captured.wait)
+          return yield* Effect.die("terminal handlers missing");
+        for (const override of [undefined, "/request"]) {
+          const sessionId = "mock-session-1";
+          const terminal = yield* captured.create(
+            {
+              sessionId,
+              command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(process.env.PATH)'`,
+              ...(override === undefined ? {} : { env: [{ name: "PATH", value: override }] }),
+            },
+            { requestId: "create", method: "terminal/create" },
+          );
+          yield* captured.wait(
+            { sessionId, ...terminal },
+            { requestId: "wait", method: "terminal/wait_for_exit" },
+          );
+          const output = yield* captured.output(
+            { sessionId, ...terminal },
+            { requestId: "output", method: "terminal/output" },
+          );
+          assert.equal(output.output, override ?? expected);
+        }
+      }
+    }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
 describe.skipIf(binary === "")("Oh My Pi through the ACP registry adapter", () => {

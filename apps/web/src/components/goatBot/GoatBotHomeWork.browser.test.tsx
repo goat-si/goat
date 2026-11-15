@@ -244,6 +244,93 @@ it("a row names its pull requests and their state on the control that opens it",
   expect(older.element().textContent).not.toMatch(/#|more/);
 });
 
+it("a row says when it last moved: compact on screen, in words to a screen reader", async () => {
+  vi.setSystemTime(Date.parse("2026-11-09T12:00:30.000Z"));
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const rows = setup([
+    taskRow("task-now", "Just started", "running", "2026-11-09T12:00:10.000Z"),
+    taskRow("task-min", "Four minutes", "running", "2026-11-09T11:56:00.000Z"),
+    {
+      ...taskRow("task-hour", "One hour", "running", "2026-11-09T10:30:00.000Z"),
+      pullRequests: [{ repository: "goat-si/goat", number: 42, state: "open", watching: false }],
+    } as Row,
+    taskRow("task-days", "Three days", "running", "2026-11-06T11:00:00.000Z"),
+  ]);
+  await using screen = await render(view(rows));
+  for (const name of [
+    /^Just started\W+Working\W+just now$/,
+    /^Four minutes\W+Working\W+4 minutes ago$/,
+    /^One hour\W+Working\W+1 hour ago\W+Pull request goat-si\/goat#42, open$/,
+    /^Three days\W+Working\W+3 days ago$/,
+  ])
+    await expect.element(screen.getByRole("button", { name })).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Four minutes/ }).element().textContent).toContain(
+    "4m",
+  );
+});
+
+it("a row whose pull requests are all counted, not listed, says how many", async () => {
+  const rows = setup([
+    {
+      ...taskRow("task-a", "Counted only", "running", "2026-11-09T01:00:00.000Z"),
+      pullRequestsOmitted: 3,
+    } as Row,
+  ]);
+  await using screen = await render(view(rows));
+  const control = screen.getByRole("button", { name: /^Counted only.*3 more pull requests$/ });
+  await expect.element(control).toBeVisible();
+  expect(control.element().textContent).toContain("+3 more");
+});
+
+it("in the 230px panel a pinned row keeps its pin, and each chip keeps its number and state", async () => {
+  const at = "2026-11-09T01:00:00.000Z";
+  const row = taskRow("task-pin", "Pinned with long repository names", "running", at);
+  const rows = setup([
+    {
+      ...row,
+      view: { ...row.view, pinnedAt: at },
+      pullRequests: [
+        {
+          repository: "goat-si/a-very-long-repository-name-for-chips",
+          number: 3301,
+          state: "closed",
+          watching: false,
+        },
+        {
+          repository: "another-organization/another-quite-long-repository",
+          number: 77,
+          state: "merged",
+          watching: false,
+        },
+      ],
+    } as Row,
+  ]);
+  await using screen = await render(
+    <div data-panel style={{ width: 230 }}>
+      {view(rows)}
+    </div>,
+  );
+  await expect.element(screen.getByRole("button", { name: /^Pinned with long/ })).toBeVisible();
+  const panel = document.querySelector("[data-panel]")?.getBoundingClientRect();
+  const pin = document.querySelector("[data-work-pin]");
+  expect(panel).toBeDefined();
+  expect(pin).not.toBeNull();
+  const shown = [
+    pin,
+    ...["#3301", "Closed", "#77", "Merged"].map((text) =>
+      screen.getByText(text, { exact: true }).element(),
+    ),
+  ];
+  for (const element of shown) {
+    const box = element?.getBoundingClientRect();
+    expect(box?.width).toBeGreaterThan(0);
+    expect(box?.left).toBeGreaterThanOrEqual(panel?.left ?? Number.NaN);
+    expect(box?.right).toBeLessThanOrEqual((panel?.right ?? Number.NaN) + 0.5);
+    if (element instanceof HTMLElement)
+      expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
+  }
+});
+
 it("ends a long list with a centred Show more row that shows the rest", async () => {
   const rows = setup(
     Array.from({ length: 7 }, (_, index) =>
