@@ -16,6 +16,12 @@ import * as Schema from "effect/Schema";
 import { act, useSyncExternalStore } from "react";
 import { expect, it, vi } from "vite-plus/test";
 // Home's work signals on bot rows are not under test here.
+// Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("./useKeptPerComputer", () => ({
+  useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
+    live.data,
+  useComputerReadable: () => true,
+}));
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
 

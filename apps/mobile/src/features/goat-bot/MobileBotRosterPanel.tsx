@@ -31,6 +31,7 @@ import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileBotManage } from "./useMobileBotManage";
+import { useComputerReadable } from "./useKeptPerComputer";
 
 export function MobileBotRoster(props: {
   header?: ReactNode;
@@ -40,7 +41,9 @@ export function MobileBotRoster(props: {
   visible?: boolean;
 }) {
   const roster = useMobileBotRoster();
-  const preview = useMobileBotPreview(useMobileGoatBotHomeMode().botRef);
+  const botRef = useMobileGoatBotHomeMode().botRef;
+  const preview = useMobileBotPreview(botRef);
+  const mainReadable = useComputerReadable(botRef?.environmentId ?? null);
   const mainName = goatBotName(roster.groups.main);
   const manage = useMobileBotManage(roster.environmentId, mainName);
   const [editing, setEditing] = useState<BotProfile | null>(null);
@@ -206,6 +209,8 @@ export function MobileBotRoster(props: {
         }
         slackEnabled={roster.slackEnabled}
         preview={preview?.text}
+        offline={roster.environmentId !== null && !roster.connected}
+        mainUnreadable={!mainReadable}
         unread={preview?.unread}
         mainEnvironmentId={environmentId}
         onOpenBot={props.onOpenBot}

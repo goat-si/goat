@@ -5,23 +5,31 @@ import { Atom, type AtomRegistry } from "effect/reactivity";
 import { useContext, useEffect } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
+import { useEnvironments } from "../../state/environments";
 import type { EnvironmentQueryView } from "../../state/query";
 
-// The last successful answer of a read, per computer, so the bot list and open asks still read while
-// that computer is offline. Kept while the computer is in the app's catalog: leaving the catalog,
-// by any path, forgets it, and an answer denying access does too.
-const KINDS = ["bots", "asks"] as const;
+// The last successful answer of a read, per computer, so the bot list, open asks and each member's
+// status still read while that computer is offline. Kept while the computer is in the app's
+// catalog: leaving the catalog, by any path, forgets it, and an answer denying access does too.
+const KINDS = ["bots", "asks", "status"] as const;
 type Kind = (typeof KINDS)[number];
 let generation = 0;
 const keptAtom = Atom.family((_key: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
 const NO_KEPT = Atom.make<unknown>(null);
-const keyOf = (kind: Kind, environmentId: EnvironmentId) =>
-  `${generation}:${kind}:${environmentId}`;
+const keyOf = (kind: Kind, environmentId: EnvironmentId, part?: string) =>
+  `${generation}:${kind}:${environmentId}${part === undefined ? "" : `:${part}`}`;
+// Whether the computer's bot list last answered that this phone may not read it. Until a read
+// succeeds again, nothing of that computer is shown, kept or live.
+const deniedAtom = Atom.family((_key: string) => Atom.make(false).pipe(Atom.keepAlive));
+const NOT_DENIED = Atom.make(false);
+const deniedKeyOf = (environmentId: EnvironmentId) => `${generation}:${environmentId}`;
 // How many times each computer has left the catalog, per registry. A write prepared before a
 // removal is dropped, even when the same computer has been added again since.
 const removals = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, number>>();
 const removalsOf = (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) =>
   removals.get(registry)?.get(environmentId) ?? 0;
+// The per-bot keys written for each computer, so forgetting the computer reaches every one.
+const parts = new WeakMap<AtomRegistry.AtomRegistry, Map<EnvironmentId, Set<string>>>();
 
 export function resetKeptPerComputerForTests() {
   generation += 1;
@@ -29,6 +37,10 @@ export function resetKeptPerComputerForTests() {
 
 function forget(registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) {
   for (const kind of KINDS) registry.set(keptAtom(keyOf(kind, environmentId)), null);
+  for (const key of parts.get(registry)?.get(environmentId) ?? [])
+    registry.set(keptAtom(key), null);
+  parts.get(registry)?.delete(environmentId);
+  registry.set(deniedAtom(deniedKeyOf(environmentId)), false);
 }
 
 /**
@@ -65,20 +77,29 @@ export function useKeptPerComputer<A>(
   environmentId: EnvironmentId | null,
   live: EnvironmentQueryView<A>,
   offline: boolean,
+  /** Keeps one answer per part of the computer (a member's status, by bot id). */
+  part?: string,
 ): A | null {
   const registry = useContext(RegistryContext);
-  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
-  const listed = environmentId !== null && catalog.entries.has(environmentId);
-  const atom = environmentId === null ? NO_KEPT : keptAtom(keyOf(kind, environmentId));
+  const readable = useComputerReadable(environmentId);
+  const setComputerDenied = useAtomSet(
+    (environmentId === null
+      ? NOT_DENIED
+      : deniedAtom(deniedKeyOf(environmentId))) as Atom.Writable<boolean>,
+  );
+  const key = environmentId === null ? null : keyOf(kind, environmentId, part);
+  const atom = key === null ? NO_KEPT : keptAtom(key);
   const stored = useAtomValue(atom) as A | null;
   const store = useAtomSet(atom as Atom.Writable<unknown>);
-  const settled = listed && live.isSuccess ? live.data : null;
+  const settled = live.isSuccess ? live.data : null;
   const denied = accessDenied(live.cause);
   const removalsAtRender = environmentId === null ? 0 : removalsOf(registry, environmentId);
   // oxlint-disable-next-line goat/react-effect-budget -- Remember each computer's last answer so it still reads after that computer drops.
   useEffect(() => {
-    if (environmentId === null) return;
-    if (denied) {
+    if (environmentId === null || key === null) return;
+    // The bot list speaks for the whole computer: refused, nothing of it shows until a read succeeds.
+    if (kind === "bots" && (denied || settled !== null)) setComputerDenied(denied);
+    if (denied || !readable) {
       if (stored !== null) store(null);
       return;
     }
@@ -87,8 +108,47 @@ export function useKeptPerComputer<A>(
     const unchanged =
       registry.get(environmentCatalog.catalogValueAtom).entries.has(environmentId) &&
       removalsOf(registry, environmentId) === removalsAtRender;
-    if (unchanged && settled !== null && settled !== stored) store(settled);
-  }, [registry, environmentId, settled, stored, denied, store, removalsAtRender]);
+    if (!unchanged || settled === null || settled === stored) return;
+    if (part !== undefined) {
+      const computers = parts.get(registry) ?? new Map<EnvironmentId, Set<string>>();
+      parts.set(registry, computers);
+      computers.set(environmentId, (computers.get(environmentId) ?? new Set()).add(key));
+    }
+    store(settled);
+  }, [
+    registry,
+    environmentId,
+    key,
+    kind,
+    part,
+    settled,
+    stored,
+    denied,
+    readable,
+    store,
+    setComputerDenied,
+    removalsAtRender,
+  ]);
+  // A refused read still holds its earlier answer; it is not shown.
+  if (denied || !readable) return null;
   if (!offline || live.data !== null) return live.data;
-  return listed ? stored : null;
+  return stored;
+}
+
+/**
+ * Whether this phone may still read the computer: it is in the app's catalog, its connection is not
+ * refused for its credential or scope (a revoked phone only ever sees that), and its bot list was
+ * not last refused. Kept answers and cached messages from it show only while this holds.
+ */
+export function useComputerReadable(environmentId: EnvironmentId | null): boolean {
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const { presentationById } = useEnvironments();
+  const denied = useAtomValue(
+    environmentId === null ? NOT_DENIED : deniedAtom(deniedKeyOf(environmentId)),
+  );
+  if (environmentId === null || !catalog.entries.has(environmentId) || denied) return false;
+  const connection = presentationById.get(environmentId)?.connection;
+  const reason =
+    connection !== undefined && "failure" in connection ? connection.failure?.reason : null;
+  return reason !== "authentication" && reason !== "permission";
 }

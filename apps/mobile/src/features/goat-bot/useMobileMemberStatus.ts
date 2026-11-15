@@ -1,18 +1,19 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { GoatBotRowStatus } from "@goat/client-runtime/goatBot";
 import type { BotProfile, ChannelGetBotStatusResult } from "@goat/contracts";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { channelEnvironment } from "../../state/channels";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
+import { useKeptPerComputer } from "./useKeptPerComputer";
 
 /**
  * How many of a member's tasks wait on a person, its conversation's newest message, and whether
  * that message is the bot's and arrived after the last visit. One cached read per member, read
- * again only when that member's conversation changes or is visited. \`status\` is what its row face
- * reads, null until the server has answered.
+ * again when its conversation changes or is visited; offline, the last answer kept for it, and
+ * nothing once access is refused or the computer removed. \`status\` is what its row face reads.
  */
 export function useMobileMemberStatus(bot: BotProfile): {
   readonly waitingCount: number;
@@ -24,12 +25,15 @@ export function useMobileMemberStatus(bot: BotProfile): {
   readonly latest: ChannelGetBotStatusResult["latest"];
   readonly unread: boolean;
   readonly status: GoatBotRowStatus | null;
+  /** What the row shows was read before the computer went offline, and may be out of date. */
+  readonly kept: boolean;
 } {
   const { presentationById } = useEnvironments();
   const presentation = presentationById.get(bot.environmentId);
+  const offline = presentation?.connection.phase !== "connected";
   const supported =
     bot.state !== "deleted" &&
-    presentation?.connection.phase === "connected" &&
+    !offline &&
     presentation.serverConfig?.environment.capabilities.goatBotMembers === true;
   const status = useEnvironmentQuery(
     supported
@@ -47,14 +51,34 @@ export function useMobileMemberStatus(bot: BotProfile): {
   useEffect(() => {
     if (supported && revision !== null) refresh();
   }, [supported, revision, refresh]);
-  const latest = status.data?.latest;
+  // Kept: only the count and the newest message, never the work it saw going, which may have stopped.
+  const answer = status.data;
+  const row = useMemo(
+    () =>
+      answer === null
+        ? null
+        : {
+            waitingCount: answer.waitingCount,
+            ...(answer.latest === undefined ? {} : { latest: answer.latest }),
+          },
+    [answer],
+  );
+  const shown = useKeptPerComputer(
+    "status",
+    bot.state === "deleted" ? null : bot.environmentId,
+    { ...status, data: row },
+    offline,
+    bot.botId,
+  );
+  const kept = shown !== null && answer === null;
+  const data = shown === null ? null : kept ? shown : answer;
+  const latest = data?.latest;
   // A server that records no visits (lastVisitedAt absent) cannot say what was read.
   const tracksVisits = shell !== null && shell.lastVisitedAt !== undefined;
   const unread =
     tracksVisits &&
     latest?.author === "bot" &&
     (lastVisitedAt === null || Date.parse(latest.at) > Date.parse(lastVisitedAt));
-  const data = status.data ?? null;
   const capabilities = presentation?.serverConfig?.environment.capabilities;
   // A count that ignores visits never clears when the person reads the member's chat.
   const visitAware =
@@ -67,7 +91,7 @@ export function useMobileMemberStatus(bot: BotProfile): {
     waitingState:
       supported && (!visitAware || status.error !== null)
         ? "unavailable"
-        : data !== null
+        : data !== null && !kept
           ? "ready"
           : "pending",
     latest,
@@ -78,7 +102,8 @@ export function useMobileMemberStatus(bot: BotProfile): {
         : {
             waitingCount: data.waitingCount,
             latest: data.latest,
-            ...(data.tasks === undefined ? {} : { tasks: data.tasks }),
+            ...(kept || answer?.tasks === undefined ? {} : { tasks: answer.tasks }),
           },
+    kept,
   };
 }

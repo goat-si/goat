@@ -7,6 +7,12 @@ import * as Schema from "effect/Schema";
 // The roster's member rows through the real member-status hook: only the status read underneath
 // it, the thread shells and the native views stand in.
 // Home's work signals are not under test here.
+// Keeping answers for offline is not under test here: the live answer, from a readable computer.
+vi.mock("./useKeptPerComputer", () => ({
+  useKeptPerComputer: (_kind: string, _environmentId: unknown, live: { data: unknown }) =>
+    live.data,
+  useComputerReadable: () => true,
+}));
 vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },

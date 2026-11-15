@@ -77,6 +77,7 @@ vi.mock("react-native", () => ({
   },
 }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
+vi.mock("./useKeptPerComputer", () => ({ useComputerReadable: () => true }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ botRef: null }),
 }));
