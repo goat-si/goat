@@ -6,7 +6,11 @@ import { expect, it, vi } from "vite-plus/test";
 import { bot, picker, render, screenSession, typeInto } from "./goatBotScreenTestHarness";
 import { GoatBotScreen } from "./GoatBotScreen";
 
-const asked = (options: string[], ids = true, id = "ask"): GoatBotRow => ({
+const asked = (
+  options: string[],
+  ids = true,
+  id = "ask",
+): Extract<GoatBotRow, { kind: "bot" }> => ({
   ...bot,
   id,
   text: id === "ask" ? "Which cache should the build use?" : `Question ${id}?`,
