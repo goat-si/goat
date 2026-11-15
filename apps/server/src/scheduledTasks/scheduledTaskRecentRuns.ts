@@ -4,11 +4,12 @@
  */
 import {
   ChannelInputId,
+  SCHEDULED_TASK_RECENT_RUN_BYTES,
   SCHEDULED_TASK_RECENT_RUN_ROUTINES,
   SCHEDULED_TASK_RECENT_RUNS,
   ScheduledTaskRun,
   type ScheduledTask,
-  type ScheduledTaskRecentRun,
+  ScheduledTaskRecentRun,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -24,6 +25,17 @@ interface RecentRunRow {
 
 const decodeSnapshot = Schema.decodeUnknownOption(Schema.fromJsonString(ScheduledTaskRun));
 const decodeInputId = Schema.decodeUnknownOption(ChannelInputId);
+const encodeHistory = Schema.encodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(ScheduledTaskRecentRun)),
+);
+/** `,"recentRuns":` around each routine's encoded history. */
+const KEY_BYTES = 14;
+
+/** The bytes a routine's history adds to the encoded list, exactly as the wire encodes it. */
+function historyBytes(runs: ReadonlyArray<ScheduledTaskRecentRun>): number {
+  const json = encodeHistory(runs);
+  return Option.isSome(json) ? KEY_BYTES + Buffer.byteLength(json.value) : Infinity;
+}
 const encodeChosen = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(Schema.Tuple([Schema.String, Schema.String]))),
 );
@@ -80,8 +92,10 @@ export const readRecentRuns = Effect.fn("ScheduledTaskRecentRuns.read")(function
 });
 
 /**
- * Gives the first SCHEDULED_TASK_RECENT_RUN_ROUTINES GOAT Bot routines, in list order, their
- * recent runs. Later routines and other tasks get no key, and so does every task when the read fails.
+ * Gives GOAT Bot routines, in list order, their recent runs: at most
+ * SCHEDULED_TASK_RECENT_RUN_ROUTINES of them, stopping before the history would pass
+ * SCHEDULED_TASK_RECENT_RUN_BYTES. Later routines and other tasks get no key, and so does every
+ * task when the read fails.
  */
 export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(function* (
   sql: SqlClient.SqlClient,
@@ -100,8 +114,17 @@ export const withRecentRuns = Effect.fn("ScheduledTaskRecentRuns.attach")(functi
     ),
   );
   if (Option.isNone(byTask)) return tasks;
-  const ids = new Set<string>(chosen.map((task) => task.id));
-  return tasks.map((task) =>
-    ids.has(task.id) ? { ...task, recentRuns: byTask.value.get(task.id) ?? [] } : task,
-  );
+  const carried = new Map<string, ReadonlyArray<ScheduledTaskRecentRun>>();
+  let budget = SCHEDULED_TASK_RECENT_RUN_BYTES;
+  for (const task of chosen) {
+    const runs = byTask.value.get(task.id) ?? [];
+    const bytes = historyBytes(runs);
+    if (bytes > budget) break;
+    budget -= bytes;
+    carried.set(task.id, runs);
+  }
+  return tasks.map((task) => {
+    const recentRuns = carried.get(task.id);
+    return recentRuns === undefined ? task : { ...task, recentRuns };
+  });
 });

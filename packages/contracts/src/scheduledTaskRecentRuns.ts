@@ -7,6 +7,8 @@ import { ChannelInputId } from "./channelCommon.ts";
 export const SCHEDULED_TASK_RECENT_RUNS = 7;
 /** GOAT Bot routines whose history one list carries, newest created first; the rest carry none. */
 export const SCHEDULED_TASK_RECENT_RUN_ROUTINES = 50;
+/** Encoded bytes of history one list carries; the routines past it carry none, in list order. */
+export const SCHEDULED_TASK_RECENT_RUN_BYTES = 128 * 1024;
 
 /** One recent firing of a GOAT Bot routine, for its row's history. */
 export const ScheduledTaskRecentRun = Schema.Struct({

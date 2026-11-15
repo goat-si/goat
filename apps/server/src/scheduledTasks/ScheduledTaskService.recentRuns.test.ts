@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   ChannelInputId,
   CommandId,
+  SCHEDULED_TASK_RECENT_RUN_BYTES,
   SCHEDULED_TASK_RECENT_RUN_ROUTINES,
   SCHEDULED_TASK_RECENT_RUNS,
   ScheduledTaskId,
@@ -258,6 +259,37 @@ it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   ),
 );
 
+it.effect("history stops at its byte budget: later routines carry none, however small", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      // Task ids have no maximum length, and every firing id and input id repeats the task id.
+      const long = (letter: string) => `goat-bot-check-in:${letter}-${"x".repeat(9_000)}`;
+      const routines = [
+        yield* saveRoutine(fixture, long("a")),
+        yield* saveRoutine(fixture, long("b")),
+        yield* saveRoutine(fixture, long("c")),
+        yield* saveRoutine(fixture, "goat-bot-check-in:d"),
+      ];
+      for (const routine of routines.slice(0, 3))
+        for (let index = 0; index < 3; index++) {
+          const firingId = yield* fire(fixture, routine);
+          yield* answer(fixture, firingId, yield* accept(fixture, firingId), false);
+        }
+      const listed = yield* fixture.service.list();
+      assert.deepStrictEqual(
+        routines.map((routine) => historyOf(listed, routine.id)?.length),
+        [3, 3, undefined, undefined],
+      );
+      const bytes = (tasks: ReadonlyArray<ScheduledTask>) =>
+        new TextEncoder().encode(encodeList({ tasks })).length;
+      const added =
+        bytes(listed.tasks) - bytes(listed.tasks.map(({ recentRuns: _recent, ...task }) => task));
+      assert.isAtMost(added, SCHEDULED_TASK_RECENT_RUN_BYTES);
+      assert.isAbove(added, SCHEDULED_TASK_RECENT_RUN_BYTES / 2);
+    }),
+  ),
+);
+
 /** Every list the subscription pushes, in order. */
 const watchList = (fixture: Fixture) =>
   Effect.gen(function* () {
@@ -309,10 +341,10 @@ it.effect("a refused firing pushes one list after each step", () =>
   ),
 );
 
-it.effect("history adds at most 128 KB to fifty routines with seven runs each", () =>
+it.effect("fifty routines with seven runs each and typical ids fit the history budget", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {
-      // The longest ids a routine produces: a UUID bot thread inside every firing id.
+      // Long but typical ids: a UUID bot thread inside every task id and firing id.
       const thread = ThreadId.make("4f9c2a7e-1b3d-4c8e-9a6f-2d5b7e0c1a93");
       const template = yield* saveRoutine(fixture);
       const tasks = Array.from({ length: SCHEDULED_TASK_RECENT_RUN_ROUTINES }, (_, routine) => {
@@ -337,7 +369,7 @@ it.effect("history adds at most 128 KB to fifty routines with seven runs each", 
         timeZone: "Asia/Seoul",
       });
       const after = bytes({ tasks, timeZone: "Asia/Seoul" });
-      assert.isAtMost(after - before, 128 * 1024);
+      assert.isAtMost(after - before, SCHEDULED_TASK_RECENT_RUN_BYTES);
     }),
   ),
 );
