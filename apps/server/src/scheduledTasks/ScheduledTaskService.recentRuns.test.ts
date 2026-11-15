@@ -183,6 +183,34 @@ it.effect(
     ),
 );
 
+it.effect(
+  "a routine with more than seven firings in flight keeps them all and lists the seven most recent",
+  () =>
+    withWebhookService((fixture) =>
+      Effect.gen(function* () {
+        const routine = yield* saveRoutine(fixture);
+        const running: Array<CommandId> = [];
+        // An accepted firing runs until the bot answers; the next can be admitted meanwhile.
+        for (let index = 0; index < SCHEDULED_TASK_RECENT_RUNS + 2; index++) {
+          const firingId = yield* fire(fixture, routine);
+          yield* accept(fixture, firingId);
+          running.unshift(firingId);
+        }
+        assert.lengthOf(
+          yield* fixture.sql`SELECT 1 FROM scheduled_task_runs WHERE task_id = ${routine.id}`,
+          SCHEDULED_TASK_RECENT_RUNS + 2,
+        );
+        assert.deepStrictEqual(
+          historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+            run.firingId,
+            run.status,
+          ]),
+          running.slice(0, SCHEDULED_TASK_RECENT_RUNS).map((id) => [id, "running"]),
+        );
+      }),
+    ),
+);
+
 it.effect("a run that cannot be read is left out, and the rest of the list stays", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {

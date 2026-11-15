@@ -280,8 +280,8 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
   const prune = Effect.fn("ScheduledTaskRuns.prune")(function* (
     row: Pick<Row, "task_id" | "task_created_at">,
   ) {
-    // A bot routine keeps its seven most recent firings, in flight or finished: exactly what its
-    // history strip shows. Other tasks show only their last run, so they keep one finished firing.
+    // A bot routine keeps its seven most recent firings, what its history strip shows. Only finished
+    // firings are deleted, so more than seven can stay while they run. Other tasks keep one.
     yield* sql`DELETE FROM scheduled_task_runs
       WHERE task_id=${row.task_id} AND task_created_at=${row.task_created_at} AND dispatch_bookkept_at IS NOT NULL
       AND dispatch_status <> 'dispatching' AND status IN ('completed','failed','interrupted','cancelled','rolled_back')

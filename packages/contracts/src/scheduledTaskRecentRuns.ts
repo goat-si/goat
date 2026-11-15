@@ -3,7 +3,11 @@ import * as Schema from "effect/Schema";
 import { CommandId, IsoDateTime, ThreadId } from "./baseSchemas.ts";
 import { ChannelInputId } from "./channelCommon.ts";
 
-/** Firings a GOAT Bot routine keeps, whatever their state, and the most its list entry carries. */
+/**
+ * Firings a GOAT Bot routine keeps, in flight or finished, and the most its list entry carries. A
+ * firing still in flight is never deleted, so more can stay stored while they run; the list
+ * carries the newest of them.
+ */
 export const SCHEDULED_TASK_RECENT_RUNS = 7;
 /** GOAT Bot routines whose history one list carries, newest created first; the rest carry none. */
 export const SCHEDULED_TASK_RECENT_RUN_ROUTINES = 50;
