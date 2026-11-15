@@ -413,6 +413,7 @@ export const make = Effect.gen(function* () {
     ...(cloudLookup === undefined ? {} : { findCloudSessionPullRequest: cloudLookup }),
     unavailableRequirement: UNAVAILABLE_REQUIREMENT,
     readsPublicHostWithoutCheckout: true,
+    batchesReads: true,
     mergeMessageRewrite: removeAgentCredits,
     getRoutingIdentity: (input) =>
       cli.getRoutingIdentity(input).pipe(Effect.mapError(fail("routeIdentity"))),

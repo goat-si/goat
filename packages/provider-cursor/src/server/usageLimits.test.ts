@@ -339,4 +339,138 @@ describe("Cursor usage limits", () => {
       }
     }),
   );
+
+  it.effect("does not exchange an API key at Cursor's service for a private backend", () =>
+    Effect.gen(function* () {
+      const limits = yield* withNodeServices(
+        readCursorUsageLimits(
+          { apiEndpoint: "" },
+          { CURSOR_API_KEY: "api-key", CURSOR_BACKEND_URL: "https://private.invalid" },
+          true,
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("must not send a private backend's key to Cursor")),
+          ),
+        ),
+      );
+      expect(limits.unavailable?.reason).toBe("unsupported");
+      expect(limits.unavailable?.message).toContain("default Cursor backend");
+    }),
+  );
+
+  it.effect("does not send a private backend's access token to Cursor's usage endpoint", () =>
+    Effect.gen(function* () {
+      const limits = yield* withNodeServices(
+        readCursorUsageLimits(
+          { apiEndpoint: "" },
+          { CURSOR_AUTH_TOKEN: "private-token", CURSOR_BACKEND_URL: "https://private.invalid" },
+          true,
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("must not send a private backend's token to Cursor")),
+          ),
+        ),
+      );
+      expect(limits.unavailable?.reason).toBe("unsupported");
+      expect(limits.unavailable?.message).toContain("default Cursor backend");
+    }),
+  );
+
+  it.effect("keeps a private backend's token from Cursor's endpoint however it is written", () =>
+    Effect.gen(function* () {
+      for (const [apiEndpoint, environment] of [
+        ["", { CURSOR_API_ENDPOINT: "https://api2.cursor.sh:443" }],
+        ["", { CURSOR_API_ENDPOINT: "HTTPS://API2.CURSOR.SH" }],
+        ["", { CURSOR_API_ENDPOINT: "https://api2.cursor.sh/" }],
+        ["HTTPS://Api2.Cursor.sh:443/", {}],
+      ] as const) {
+        const limits = yield* withNodeServices(
+          readCursorUsageLimits(
+            { apiEndpoint },
+            {
+              ...environment,
+              CURSOR_AUTH_TOKEN: "private-token",
+              CURSOR_BACKEND_URL: "https://private.invalid",
+            },
+            true,
+          ).pipe(
+            Effect.provideService(HostProcess.Platform, "linux"),
+            Effect.provideService(
+              HttpClient.HttpClient,
+              HttpClient.make(() =>
+                Effect.die("must not send a private backend's token to Cursor's usage endpoint"),
+              ),
+            ),
+          ),
+        );
+        expect(limits.unavailable?.reason).toBe("unsupported");
+        expect(limits.unavailable?.message).toContain("default Cursor backend");
+      }
+    }),
+  );
+
+  it.effect("treats Cursor's backend written with other letter case or :443 as Cursor's", () =>
+    Effect.gen(function* () {
+      const requested: Array<string> = [];
+      yield* withNodeServices(
+        readCursorUsageLimits(
+          { apiEndpoint: "" },
+          { CURSOR_API_KEY: "api-key", CURSOR_BACKEND_URL: "HTTPS://API2.Cursor.sh:443/" },
+          true,
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) => {
+              requested.push(request.url);
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json(
+                    request.url.endsWith("/auth/exchange_user_api_key")
+                      ? { accessToken: "api-key-access-token" }
+                      : { planUsage: { totalPercentUsed: 37 } },
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      );
+      expect(requested).toContain("https://api2.cursor.sh/auth/exchange_user_api_key");
+    }),
+  );
+
+  it.effect("does not send the server's CLI login to an instance's own usage endpoint", () =>
+    withNodeServices(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        yield* fs.makeDirectory(path.join(directory, "cursor"));
+        yield* fs.writeFileString(
+          path.join(directory, "cursor", "auth.json"),
+          '{"accessToken":"server-login-token"}',
+        );
+        const limits = yield* readCursorUsageLimits(
+          { apiEndpoint: "https://usage.private.invalid" },
+          { XDG_CONFIG_HOME: directory, HOME: directory, AGENT_CLI_CREDENTIAL_STORE: "file" },
+          true,
+          false,
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("must not send the server's CLI login")),
+          ),
+        );
+        expect(limits.unavailable?.reason).toBe("unsupported");
+        expect(limits.unavailable?.message).toContain("CURSOR_AUTH_TOKEN");
+      }).pipe(Effect.scoped),
+    ),
+  );
 });

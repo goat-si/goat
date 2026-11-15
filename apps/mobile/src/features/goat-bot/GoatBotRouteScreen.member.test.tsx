@@ -71,8 +71,14 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
     environments: [{ environmentId: "env", connected: true }],
   }),
 }));
+// The member the route names: Scout unless a test adds another.
+const members = vi.hoisted(() => new Map<string, unknown>());
 vi.mock("./useMobileBotRoster", () => ({
-  useMobileGoatBotMember: () => ({ member: scout, main: null, missing: false }),
+  useMobileGoatBotMember: (botId?: string) => ({
+    member: (botId === undefined ? undefined : members.get(botId)) ?? scout,
+    main: null,
+    missing: false,
+  }),
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
@@ -119,7 +125,7 @@ vi.mock("../../components/ui/Button", () => ({
 vi.mock("../workspace/WorkspaceTabsContext", () => ({ useWorkspaceTabs: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 
-import { device, list, render, screenSession } from "./goatBotScreenTestHarness";
+import { device, list, render, screenSession, typeInto } from "./goatBotScreenTestHarness";
 import { GoatBotRouteScreen } from "./GoatBotRouteScreen";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 
@@ -240,5 +246,29 @@ it("reading a member's chat clears its roster dot, and a reply under Control Cen
   } finally {
     await view.unmount();
     vi.useRealTimers();
+  }
+});
+
+it("selecting Ada beside Scout's chat reuses the route, and Scout's text is not in Ada's box", async () => {
+  device.focused = true;
+  device.setAppState("active");
+  server.shells.set("scout", { lastVisitedAt: at(1), updatedAt: at(1) });
+  server.shells.set("ada", { lastVisitedAt: at(1), updatedAt: at(1) });
+  conversation([reply("hello", 1, "Hi, I'm Scout.")]);
+  const ada = { ...scout, botId: "ada", name: "Ada", sessionThreadId: "ada" } as BotProfile;
+  members.set("ada", ada);
+  const view = await render(<GoatBotRouteScreen {...route} />);
+  try {
+    await typeInto(view.container, "Meant for Scout");
+    const adaRoute = { route: { params: { botId: "ada" } } } as unknown as Parameters<
+      typeof GoatBotRouteScreen
+    >[0];
+    await view.rerender(<GoatBotRouteScreen {...adaRoute} />);
+    const box = view.container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+    expect(box).not.toBeNull();
+    expect(box?.value).toBe("");
+  } finally {
+    await view.unmount();
+    members.delete("ada");
   }
 });

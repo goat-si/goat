@@ -16,19 +16,21 @@ export interface GoatBotAnswerTarget {
 }
 
 /**
- * Which question the message box answers. It lets go when the person sends or stops answering,
- * when another question's row or a drafted request takes the box, and for good when the question
- * closes or the screen shows another conversation, so a later message never goes to that task.
+ * Which question the message box answers, until sent, stopped, replaced, or its question closes or
+ * the conversation changes, so a later message never goes to that task. Rows are null while
+ * nothing can be sent (a reconnect showing a saved reference): the hold waits for them.
  */
-export function useGoatBotAnswering(rows: ReadonlyArray<GoatBotRow>, conversation: string) {
+export function useGoatBotAnswering(rows: ReadonlyArray<GoatBotRow> | null, conversation: string) {
   const [held, setHeld] = useState<{
     readonly target: GoatBotAnswerTarget;
     readonly conversation: string;
   } | null>(null);
-  const asked = held === null ? undefined : rows.find((row) => row.id === held.target.rowId);
+  const asked =
+    held === null || rows === null ? undefined : rows.find((row) => row.id === held.target.rowId);
   if (
     held !== null &&
-    (held.conversation !== conversation || asked?.kind !== "bot" || asked.options.length === 0)
+    (held.conversation !== conversation ||
+      (rows !== null && (asked?.kind !== "bot" || asked.options.length === 0)))
   ) {
     setHeld(null);
   }
