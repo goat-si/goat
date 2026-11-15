@@ -7,7 +7,9 @@ import {
   SCHEDULED_TASK_RECENT_RUN_BYTES,
   SCHEDULED_TASK_RECENT_RUN_ROUTINES,
   SCHEDULED_TASK_RECENT_RUNS,
-  ScheduledTaskRun,
+  CommandId,
+  IsoDateTime,
+  ThreadId,
   type ScheduledTask,
   ScheduledTaskRecentRun,
 } from "@goat/contracts";
@@ -23,7 +25,17 @@ interface RecentRunRow {
   readonly quiet: number | null;
 }
 
-const decodeSnapshot = Schema.decodeUnknownOption(Schema.fromJsonString(ScheduledTaskRun));
+// Only the fields the history sends, with any status: a later server may have stored one this
+// server does not know, and the wire carries it as a string.
+const StoredRun = Schema.Struct({
+  firingId: CommandId,
+  dispatchStatus: Schema.String,
+  status: Schema.String,
+  threadId: Schema.NullOr(ThreadId),
+  requestedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+const decodeSnapshot = Schema.decodeUnknownOption(Schema.fromJsonString(StoredRun));
 const decodeInputId = Schema.decodeUnknownOption(ChannelInputId);
 const encodeHistory = Schema.encodeUnknownOption(
   Schema.fromJsonString(Schema.Array(ScheduledTaskRecentRun)),

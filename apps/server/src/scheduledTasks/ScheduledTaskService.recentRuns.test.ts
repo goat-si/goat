@@ -248,6 +248,31 @@ it.effect(
     ),
 );
 
+it.effect("a run stored with a status this server does not know stays in the history", () =>
+  withWebhookService((fixture) =>
+    Effect.gen(function* () {
+      const routine = yield* saveRoutine(fixture);
+      const older = yield* fire(fixture, routine);
+      yield* refuse(fixture, older);
+      const newer = yield* fire(fixture, routine);
+      yield* refuse(fixture, newer);
+      // As a later server could have written it before this one was started again.
+      yield* fixture.sql`UPDATE scheduled_task_runs SET snapshot_json = json_set(snapshot_json, '$.status', 'paused_by_policy')
+        WHERE firing_id = ${older}`;
+      assert.deepStrictEqual(
+        historyOf(yield* fixture.service.list(), routine.id)?.map((run) => [
+          run.firingId,
+          run.status,
+        ]),
+        [
+          [newer, "failed"],
+          [older, "paused_by_policy"],
+        ],
+      );
+    }),
+  ),
+);
+
 it.effect("only the first fifty GOAT Bot routines carry a history", () =>
   withWebhookService((fixture) =>
     Effect.gen(function* () {
